@@ -30,6 +30,7 @@ type connection struct {
 const (
 	mysqlErrDuplicate  = 1062
 	mysqlErrForeignKey = 1452
+	mysqlErrDeadlock   = 1213
 )
 
 func migrateFlow(db *sql.DB) error {
@@ -69,6 +70,9 @@ func migrateFlow(db *sql.DB) error {
 		return err
 	}
 	if err := migrateRuns(db); err != nil {
+		return err
+	}
+	if err := migrateInstances(db); err != nil {
 		return err
 	}
 	return migrateAgent(db)

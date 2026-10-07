@@ -5,6 +5,7 @@ const RUN_LABELS: Record<FlowRunStatus, string> = {
   done: 'Done',
   failed: 'Failed',
   interrupted: 'Interrupted',
+  terminated: 'Terminated',
 }
 
 const STEP_LABELS: Record<StepStatus, string> = {
@@ -12,6 +13,7 @@ const STEP_LABELS: Record<StepStatus, string> = {
   waiting: 'Waiting for review',
   done: 'Done',
   error: 'Failed',
+  duplicate: 'Already processed',
 }
 
 const formatTime = (s: string) =>
@@ -152,8 +154,8 @@ function Step({ step: s, objects }: { step: RunStep; objects: FlowRunDetail['obj
         {s.kind === 'human' && s.outcome && (
           <Block label="Decision" text={decisionText(s.outcome, objects[0]?.name, s.instructions)} />
         )}
-        {s.error && <Block label="Error" text={s.error} failed />}
-        {s.kind !== 'human' && s.status === 'done' && <Block label="Output" text={s.output || '(empty)'} />}
+        {s.error && <Block label={s.status === 'duplicate' ? 'Duplicate' : 'Error'} text={s.error} failed={s.status !== 'duplicate'} />}
+        {s.kind !== 'human' && (s.status === 'done' || s.status === 'duplicate') && <Block label="Output" text={s.output || '(empty)'} />}
         {s.kind !== 'human' && objects.length > 0 && (
           <p className="panel-note">
             Generated {objects.map((o) => (o.state ? `${o.name} (${o.state})` : o.name)).join(', ')}

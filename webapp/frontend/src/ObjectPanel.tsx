@@ -11,8 +11,10 @@ const SAVE_DELAY_MS = 500
 export default function ObjectPanel({
   name,
   attributes,
+  persistent,
   editable,
   content,
+  onPersistentChange,
   onRename,
   onAdd,
   onUpdate,
@@ -21,14 +23,16 @@ export default function ObjectPanel({
 }: {
   name: string
   attributes: ObjectAttribute[]
+  persistent: boolean
   // False while a run is in progress.
   editable: boolean
   // What the object held at the end of the latest run, if it was generated.
   content?: string
   onRename: (name: string) => void
   // Each resolves to whether the server took the change.
+  onPersistentChange: (persistent: boolean) => Promise<boolean>
   onAdd: (name: string) => Promise<boolean>
-  onUpdate: (id: number, patch: { name?: string; definition?: string }) => Promise<boolean>
+  onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean }) => Promise<boolean>
   onRemove: (id: number) => Promise<boolean>
   onClose: () => void
 }) {
@@ -75,6 +79,20 @@ export default function ObjectPanel({
           onKeyDown={(e) => e.key === 'Enter' && commitObjectName()}
         />
       </label>
+      <label className="panel-check">
+        <input
+          type="checkbox"
+          checked={persistent}
+          disabled={!editable}
+          onChange={(e) => onPersistentChange(e.target.checked)}
+        />
+        <span>Store what runs generate</span>
+      </label>
+      <p className="panel-note">
+        Each run that ends done keeps what it generated this object with. A unique attribute's value can be stored only
+        once: a step generating a value another run stored terminates its run, so nothing is processed twice. Values
+        are compared ignoring case and spacing; empty ones never collide.
+      </p>
       <section className="attributes" aria-label="Attributes">
         <div className="attributes-title">
           <ExhibitionIcon size={14} />
@@ -89,6 +107,7 @@ export default function ObjectPanel({
             key={a.id}
             attribute={a}
             editable={editable}
+            persistent={persistent}
             taken={attributes.filter((o) => o.id !== a.id).map((o) => o.name)}
             onUpdate={(patch) => onUpdate(a.id, patch)}
             onRemove={() => onRemove(a.id)}
@@ -127,15 +146,18 @@ export default function ObjectPanel({
 function AttributeRow({
   attribute,
   editable,
+  persistent,
   taken,
   onUpdate,
   onRemove,
 }: {
   attribute: ObjectAttribute
   editable: boolean
+  // Unique only matters while the object is persistent.
+  persistent: boolean
   // The names of the object's other attributes.
   taken: string[]
-  onUpdate: (patch: { name?: string; definition?: string }) => Promise<boolean>
+  onUpdate: (patch: { name?: string; definition?: string; unique?: boolean }) => Promise<boolean>
   onRemove: () => Promise<boolean>
 }) {
   const [name, setName] = useState(attribute.name)
@@ -201,6 +223,18 @@ function AttributeRow({
         </button>
       </div>
       {clash && <small className="panel-warning">Another attribute has that name.</small>}
+      <label
+        className="panel-check"
+        title={persistent ? undefined : 'Store what runs generate to make an attribute unique'}
+      >
+        <input
+          type="checkbox"
+          checked={attribute.unique}
+          disabled={!editable || !persistent}
+          onChange={(e) => onUpdate({ unique: e.target.checked })}
+        />
+        <span>Unique</span>
+      </label>
       <textarea
         value={definition}
         rows={2}

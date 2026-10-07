@@ -195,12 +195,18 @@ export default function ProcessPanel({
       )}
       {review && <ReviewForm review={review} />}
       {run?.status === 'active' && <p className="panel-note">Running…</p>}
-      {run?.error && (
-        <div className="panel-run">
-          <span>Last run failed</span>
-          <pre className="failed">{run.error}</pre>
-        </div>
-      )}
+      {run?.error &&
+        (run.status === 'duplicate' ? (
+          <div className="panel-run">
+            <span>Already processed; the run was terminated</span>
+            <pre>{run.error}</pre>
+          </div>
+        ) : (
+          <div className="panel-run">
+            <span>Last run failed</span>
+            <pre className="failed">{run.error}</pre>
+          </div>
+        ))}
       {run?.output && (
         <div className="panel-run">
           <span>{kind === 'human' ? 'Last decision' : 'Last run output'}</span>

@@ -207,6 +207,11 @@ body {
   background: #cf222e;
 }
 
+.status-dot.terminated,
+.status-dot.duplicate {
+  background: #8250df;
+}
+
 .run-badge {
   margin-left: 6px;
   padding: 1px 8px;
@@ -230,6 +235,11 @@ body {
 .run-badge.failed {
   color: #82071e;
   background: #ffebe9;
+}
+
+.run-badge.terminated {
+  color: #6639ba;
+  background: #fbefff;
 }
 
 .run-panel {
@@ -366,6 +376,17 @@ body {
   gap: 6px;
   font-size: 13px;
   font-weight: 600;
+}
+
+.panel-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.panel-check:has(input:disabled) {
+  color: #8c959f;
 }
 
 .panel-field-grow {
@@ -755,6 +776,12 @@ body {
 .process-node.error {
   background: #ffebe9;
   border-color: #cf222e;
+}
+
+/* Generated a unique value another run already stored. */
+.process-node.duplicate {
+  background: #fbefff;
+  border-color: #8250df;
 }
 
 /* A human process waiting for a decision. */

@@ -42,6 +42,9 @@ export type FlowObject = {
   y: number
   // Set when resized; null draws the default width.
   width: number | null
+  // Runs store what they generate it with, and its unique attributes tell
+  // whether another run already stored a value.
+  persistent: boolean
   states: ObjectState[]
   attributes: ObjectAttribute[]
 }
@@ -54,6 +57,10 @@ export type ObjectAttribute = {
   object: number
   name: string
   definition: string
+  // No two values the object stores share this attribute's value; a step
+  // generating one another run stored terminates its run. Only matters
+  // while the object is persistent.
+  unique: boolean
 }
 
 // A situation an object can be in, such as approved or changes requested.
@@ -133,7 +140,9 @@ export function listObjects(): Promise<FlowObject[]> {
   return request('/api/objects')
 }
 
-export function createObject(o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width'> & { width?: number | null }): Promise<FlowObject> {
+export function createObject(
+  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent'> & { width?: number | null },
+): Promise<FlowObject> {
   return request('/api/objects', { method: 'POST', body: JSON.stringify(o) })
 }
 
@@ -187,7 +196,7 @@ export function createAttribute(object: number, a: { name: string; definition: s
   return request(`/api/objects/${object}/attributes`, { method: 'POST', body: JSON.stringify(a) })
 }
 
-export function updateAttribute(id: number, patch: Partial<Pick<ObjectAttribute, 'name' | 'definition'>>): Promise<ObjectAttribute> {
+export function updateAttribute(id: number, patch: Partial<Pick<ObjectAttribute, 'name' | 'definition' | 'unique'>>): Promise<ObjectAttribute> {
   return request(`/api/attributes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -206,7 +215,21 @@ export type RunResult = {
   output: string
   error: string
   objects?: Record<string, string>
+  // Set when what the step generated holds a unique value another run
+  // stored; the server terminated the run.
+  duplicate?: Duplicate
 }
+
+// A unique value a step generated that another run already stored.
+export type Duplicate = {
+  object: string
+  attribute: string
+  value: string
+  // The run that stored it.
+  run: number
+}
+
+export const duplicateText = (d: Duplicate) => `${d.object} with ${d.attribute} ${d.value} was already stored by run #${d.run}.`
 
 export type Models = {
   // pi's default model as provider/id, empty if pi picks one itself.
@@ -252,7 +275,8 @@ export function runProcess(
   })
 }
 
-export type FlowRunStatus = 'running' | 'done' | 'failed' | 'interrupted'
+// The server terminates a run whose step generated a duplicate.
+export type FlowRunStatus = 'running' | 'done' | 'failed' | 'interrupted' | 'terminated'
 
 // One execution of the flow from the start node.
 export type FlowRun = {
@@ -262,7 +286,7 @@ export type FlowRun = {
   finishedAt: string | null
 }
 
-export type StepStatus = 'active' | 'waiting' | 'done' | 'error'
+export type StepStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate'
 
 // One execution of a process in a run, with the process as it was then.
 export type RunStep = {
@@ -315,7 +339,7 @@ export function getRun(id: number): Promise<FlowRunDetail> {
 }
 
 // keepalive lets the request finish while the page unloads.
-export function endRun(id: number, status: Exclude<FlowRunStatus, 'running'>, keepalive = false): Promise<FlowRun> {
+export function endRun(id: number, status: Exclude<FlowRunStatus, 'running' | 'terminated'>, keepalive = false): Promise<FlowRun> {
   return request(`/api/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ status }), keepalive })
 }
 
@@ -331,6 +355,6 @@ export function finishStep(
   run: number,
   id: number,
   result: { status: 'done' | 'error'; output?: string; error?: string; state?: number; instructions?: string },
-): Promise<void> {
+): Promise<{ duplicate: Duplicate } | undefined> {
   return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(result) })
 }

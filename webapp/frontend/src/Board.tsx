@@ -47,6 +47,7 @@ import {
   deleteObject,
   deleteProcess,
   deleteState,
+  duplicateText,
   endRun,
   finishStep,
   getRun,
@@ -69,6 +70,7 @@ import {
   updateStart,
   type ChangeRequest,
   type Connection,
+  type Duplicate,
   type FlowObject,
   type FlowRun,
   type FlowRunDetail,
@@ -278,7 +280,7 @@ export default function Board() {
       position: { x: o.x, y: o.y },
       width: o.width ?? NODE_SIZE.object.width,
       deletable: false,
-      data: { name: o.name, states: o.states, attributes: o.attributes, editing },
+      data: { name: o.name, states: o.states, attributes: o.attributes, persistent: o.persistent, editing },
     }),
     [],
   )
@@ -399,7 +401,7 @@ export default function Board() {
       const draft: FlowNode =
         type === 'process'
           ? { ...base, type, data: { name: '', kind: 'agent', prompt: '', script: '', model: '', thinking: '', editing: true } }
-          : { ...base, type, data: { name: '', states: [], attributes: [], editing: true } }
+          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
     [screenToFlowPosition, setNodes],
@@ -779,7 +781,23 @@ export default function Board() {
     }
   }
 
-  const changeAttribute = async (objectId: string, id: number, patch: { name?: string; definition?: string }) => {
+  const setPersistent = async (objectId: string, persistent: boolean) => {
+    if (running) return false
+    try {
+      await updateObject(objectIdOf(objectId), { persistent })
+      updateObjectData(objectId, { persistent })
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
+  const changeAttribute = async (
+    objectId: string,
+    id: number,
+    patch: { name?: string; definition?: string; unique?: boolean },
+  ) => {
     try {
       const attribute = await updateAttribute(id, patch)
       setAttributes(objectId, (as) => as.map((a) => (a.id === id ? attribute : a)))
@@ -864,23 +882,28 @@ export default function Board() {
   // processes are still simulated. Each execution is recorded as a step of
   // the flow run; the server records agent steps itself. Returns what the
   // process printed and, for output objects with attributes, what each holds;
-  // or null if it failed.
+  // or null if it failed. A duplicate means the server terminated the run.
   const execute = async (
     run: number,
     id: string,
     inputs: RunInput[],
     changeRequest?: ChangeRequest,
-  ): Promise<{ output: string; objects?: Record<string, string> } | null> => {
+  ): Promise<{ output: string; objects?: Record<string, string>; duplicate?: Duplicate } | null> => {
     const node = getNode(id)
     if (node?.type !== 'process' || node.data.kind !== 'agent') {
       const step = await startStep(run, { process: Number(id), status: 'active', inputs }).catch(report)
       await sleep(SIMULATED_RUN_MS)
-      updateData(id, { status: 'done' })
-      if (step) await finishStep(run, step.id, { status: 'done', output: '' }).catch(report)
-      return { output: '' }
+      const finished = step ? await finishStep(run, step.id, { status: 'done', output: '' }).catch(report) : undefined
+      const duplicate = finished?.duplicate
+      updateData(id, duplicate ? { status: 'duplicate', runError: duplicateText(duplicate) } : { status: 'done' })
+      return { output: '', duplicate }
     }
     try {
       const res = await runProcess(Number(id), inputs, changeRequest, run)
+      if (res.duplicate) {
+        updateData(id, { status: 'duplicate', output: res.output, runError: duplicateText(res.duplicate) })
+        return { output: res.output, objects: res.objects, duplicate: res.duplicate }
+      }
       updateData(id, { status: res.ok ? 'done' : 'error', output: res.output, runError: res.error })
       return res.ok ? { output: res.output, objects: res.objects } : null
     } catch (err) {
@@ -908,6 +931,9 @@ export default function Board() {
   // Instructions they leave go as a change request to the processes taking
   // the object in that state. Each decision starts a fresh pass, so review
   // loops can repeat while cycles without a human still run once per pass.
+  //
+  // A step generating a unique value another run stored terminates the run:
+  // no further process starts, and reviews still waiting end undecided.
   const onRun = async () => {
     if (!startTarget) return
     type End = { object: string; state: number | null }
@@ -968,9 +994,18 @@ export default function Board() {
       })
 
     let failed = false
+    let terminated = false
+    const terminate = () => {
+      terminated = true
+      for (const [id, resolve] of decisions.current) {
+        updateData(id, { status: undefined, review: undefined })
+        resolve({ state: null, instructions: '' })
+      }
+      decisions.current.clear()
+    }
     // trigger: the object whose entering a state the process takes it in made it run.
     const runProcess = async (run: number, id: string, visited: Set<string>, trigger?: string): Promise<void> => {
-      if (visited.has(id)) return
+      if (terminated || visited.has(id)) return
       visited.add(id)
       updateData(id, { status: 'active', output: undefined, runError: undefined })
       const given = plainInputs(id)
@@ -993,6 +1028,8 @@ export default function Board() {
       if (human) {
         const step = await startStep(run, { process: Number(id), status: 'waiting', inputs: given }).catch(report)
         const { state, instructions } = await decide(id, given)
+        // Ending the run closes the step.
+        if (terminated) return
         if (step) {
           await finishStep(run, step.id, { status: 'done', state: state ?? undefined, instructions }).catch(report)
         }
@@ -1020,6 +1057,8 @@ export default function Board() {
         values.set(object, { content, state })
         showObject(object, { content, state })
       }
+      if (result.duplicate) terminate()
+      if (terminated) return
       const next = produced.flatMap(({ object }) =>
         (takers.get(object) ?? []).filter((t) => t.state === null && ready(t.process)).map((t) => t.process),
       )
@@ -1216,6 +1255,8 @@ export default function Board() {
             key={objectPanelNode.id}
             name={objectPanelNode.data.name}
             attributes={objectPanelNode.data.attributes}
+            persistent={objectPanelNode.data.persistent}
+            onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
             editable={!running}
             content={objectPanelNode.data.content}
             onRename={(name) => commitName(objectPanelNode.id, name)}

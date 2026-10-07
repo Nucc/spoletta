@@ -11,6 +11,8 @@ export type ObjectNodeData = {
   states: ObjectState[]
   // Edited in the side panel; only the names show on the node.
   attributes: ObjectAttribute[]
+  // Runs store what they generate it with; see FlowObject.
+  persistent: boolean
   // True while a new object is being named or an existing one renamed.
   editing: boolean
   // True while a new state is being named.

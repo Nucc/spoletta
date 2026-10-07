@@ -63,6 +63,9 @@ type runResult struct {
 	// process generates objects with attributes; the others hold the output.
 	// The worker leaves it out.
 	Objects map[int64]string `json:"objects,omitempty"`
+	// Set when what the step generated holds a unique value another run
+	// stored; its run is terminated.
+	Duplicate *duplicate `json:"duplicate,omitempty"`
 }
 
 func migrateAgent(db *sql.DB) error {
@@ -164,9 +167,11 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 				status = stepDone
 			}
 			// The request may be gone, but the step still has to end.
-			if err := finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects); err != nil {
+			dup, err := finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects)
+			if err != nil {
 				log.Printf("record step %d: %v", stepID, err)
 			}
+			res.Duplicate = dup
 		}
 		if r.Context().Err() != nil {
 			return

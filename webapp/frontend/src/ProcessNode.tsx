@@ -23,7 +23,7 @@ export type ProcessNodeData = {
   review?: RunInput[]
 }
 
-export type RunStatus = 'active' | 'waiting' | 'done' | 'error'
+export type RunStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate'
 
 export type ProcessNodeType = Node<ProcessNodeData, 'process'>
 
@@ -40,6 +40,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   waiting: 'Waiting for review',
   done: 'Done',
   error: 'Failed',
+  duplicate: 'Already processed',
 }
 
 // What the card says under the name: the kind, and an agent's model.

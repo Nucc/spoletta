@@ -18,7 +18,9 @@ type object struct {
 	X    float64 `json:"x"`
 	Y    float64 `json:"y"`
 	// Set when resized; null draws the default width.
-	Width      *float64      `json:"width"`
+	Width *float64 `json:"width"`
+	// Runs store what they generate it with; see instances.go.
+	Persistent bool          `json:"persistent"`
 	States     []objectState `json:"states"`
 	Attributes []attribute   `json:"attributes"`
 }
@@ -118,7 +120,7 @@ func migrateObjects(db *sql.DB) error {
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT id, name, x, y, width FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width)
+	err := db.QueryRowContext(ctx, "SELECT id, name, x, y, width, persistent FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent)
 	if err != nil {
 		return o, err
 	}
@@ -149,7 +151,7 @@ func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 
 func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/objects", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, name, x, y, width FROM objects ORDER BY id")
+		rows, err := db.QueryContext(r.Context(), "SELECT id, name, x, y, width, persistent FROM objects ORDER BY id")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -159,7 +161,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width); err != nil {
+			if err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -232,6 +234,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			X     *float64 `json:"x"`
 			Width *float64 `json:"width"`
 			Y     *float64 `json:"y"`
+			// Turning it off keeps what was stored.
+			Persistent *bool `json:"persistent"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -249,8 +253,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width) WHERE id = ?",
-			patch.Name, patch.X, patch.Y, patch.Width, id)
+			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent) WHERE id = ?",
+			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, id)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -268,7 +272,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeJSON(w, http.StatusOK, o)
 	})
 
-	// Its links go with it; runs keep what it held.
+	// Its links go with it; runs keep what it held, and stored instances stay.
 	mux.HandleFunc("DELETE /api/objects/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {

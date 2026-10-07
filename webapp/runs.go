@@ -172,14 +172,48 @@ var errNotFound = errors.New("not found")
 // Finishes a step. A successful step generates its process's output objects,
 // each in the state its link names. Objects with attributes hold their part
 // of the output, given in contents by object id; the others hold all of it.
-func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, errMsg string, contents map[int64]string) error {
-	_, err := db.ExecContext(ctx,
+//
+// While the run goes on, persistent objects are stored too. If one holds a
+// unique value another run stored, nothing is stored, the step ends as a
+// duplicate and its run as terminated; the duplicate is returned.
+func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, errMsg string, contents map[int64]string) (*duplicate, error) {
+	// Parallel steps storing values can still deadlock; the loser rolled
+	// back everything, so it can go again.
+	for attempt := 1; ; attempt++ {
+		dup, err := finishStepOnce(ctx, db, stepID, status, output, errMsg, contents)
+		if !mysqlErrorIs(err, mysqlErrDeadlock) || attempt == 3 {
+			return dup, err
+		}
+	}
+}
+
+// Read committed takes no gap locks, which would make parallel runs
+// replacing their own instances deadlock on the same empty range.
+func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, output, errMsg string, contents map[int64]string) (*duplicate, error) {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	// Locking the run orders this against a parallel step terminating it.
+	var runID int64
+	var runStatus string
+	err = tx.QueryRowContext(ctx,
+		"SELECT r.id, r.status FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
+		Scan(&runID, &runStatus)
+	if err != nil {
+		return nil, err
+	}
+	_, err = tx.ExecContext(ctx,
 		"UPDATE run_steps SET status = ?, output = ?, error = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
 		status, output, errMsg, stepID)
-	if err != nil || status != stepDone {
-		return err
+	if err != nil {
+		return nil, err
 	}
-	_, err = db.ExecContext(ctx,
+	if status != stepDone {
+		return nil, tx.Commit()
+	}
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO run_objects (run_id, step_id, object_id, name, state, content)
 		SELECT s.run_id, s.id, o.id, o.name, COALESCE(st.name, ''), ? FROM run_steps s
 		JOIN object_links l ON l.process_id = s.process_id AND l.direction = 'output'
@@ -189,15 +223,42 @@ func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, e
 		ORDER BY o.id`,
 		output, stepID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for object, content := range contents {
-		_, err := db.ExecContext(ctx, "UPDATE run_objects SET content = ? WHERE step_id = ? AND object_id = ?", content, stepID, object)
+		_, err := tx.ExecContext(ctx, "UPDATE run_objects SET content = ? WHERE step_id = ? AND object_id = ?", content, stepID, object)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	// A step finishing after its run ended stores nothing.
+	if runStatus != runRunning {
+		return nil, tx.Commit()
+	}
+
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT store"); err != nil {
+		return nil, err
+	}
+	dup, err := storeInstances(ctx, tx, runID, stepID)
+	if err != nil {
+		return nil, err
+	}
+	if dup != nil {
+		// The step keeps what it generated, for the history.
+		if _, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT store"); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE run_steps SET status = ?, error = ? WHERE id = ?", stepDuplicate, dup.message(), stepID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE runs SET status = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ?", runTerminated, runID); err != nil {
+			return nil, err
+		}
+		if err := releaseRun(ctx, tx, runID); err != nil {
+			return nil, err
+		}
+	}
+	return dup, tx.Commit()
 }
 
 // The name of a state a human step can decide on: one its process's output
@@ -407,6 +468,14 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		// It may have ended otherwise already, such as terminated; only a
+		// run that ended done keeps the values it stored.
+		if rn.Status != runDone && rn.Status != runRunning {
+			if err := releaseRun(r.Context(), db, id); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
 		writeJSON(w, http.StatusOK, rn)
 	})
 
@@ -504,7 +573,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		if err := finishStep(r.Context(), db, id, patch.Status, patch.Output, patch.Error, nil); err != nil {
+		dup, err := finishStep(r.Context(), db, id, patch.Status, patch.Output, patch.Error, nil)
+		if err != nil {
 			serverError(w, err)
 			return
 		}
@@ -513,6 +583,12 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 				serverError(w, err)
 				return
 			}
+		}
+		if dup != nil {
+			writeJSON(w, http.StatusOK, struct {
+				Duplicate *duplicate `json:"duplicate"`
+			}{dup})
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

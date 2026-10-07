@@ -1,11 +1,18 @@
+FROM docker.io/library/golang:1.25-alpine AS build
+
+WORKDIR /src
+COPY go.mod ./
+COPY *.go ./
+RUN CGO_ENABLED=0 go build -o /out/worker .
+
+# pi is an npm package, so the worker runs on a Node image.
 FROM docker.io/library/node:22-alpine
 
 # git and bash give the agent's tools something to work with.
 RUN apk add --no-cache bash git
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 
-WORKDIR /app
-COPY server.mjs /app/server.mjs
+COPY --from=build /out/worker /usr/local/bin/worker
 
 EXPOSE 8090
-CMD ["node", "/app/server.mjs"]
+CMD ["worker"]

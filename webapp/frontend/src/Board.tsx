@@ -13,6 +13,8 @@ import {
   type IsValidConnection,
   type NodeMouseHandler,
   type OnConnect,
+  type OnConnectEnd,
+  type OnConnectStart,
   type OnEdgesDelete,
   type OnNodeDrag,
   type XYPosition,
@@ -515,6 +517,44 @@ export default function Board() {
       setEdges((es) => [...es, linkEdge(l, human)])
     } catch (err) {
       report(err)
+    }
+  }
+
+  // While a link is being drawn, the kind of node it can end on, which lights
+  // up under the pointer.
+  const [linkingTo, setLinkingTo] = useState<'process' | 'object' | null>(null)
+  const onConnectStart: OnConnectStart = (_, { nodeId, handleId, handleType }) => {
+    if (!nodeId) return
+    if (handleType === 'source') setLinkingTo(isProcess(nodeId) ? 'object' : 'process')
+    else if (stateOfHandle(handleId) !== null) setLinkingTo('process')
+  }
+
+  // A link dropped on a node rather than on one of its handles goes to the
+  // node, or to the state whose row it was dropped on. A human's link can't
+  // end on a state, so it falls back to the object. A state's two handles
+  // look alike, so a link drawn from its way in to a process is taken as one
+  // from its way out: the process takes the object in that state.
+  const onConnectEnd: OnConnectEnd = (event, { isValid, fromHandle }) => {
+    setLinkingTo(null)
+    if (isValid || !fromHandle) return
+    let sourceHandle = fromHandle.id ?? null
+    if (fromHandle.type === 'target') {
+      const state = stateOfHandle(fromHandle.id)
+      if (state === null) return
+      sourceHandle = stateSourceHandle(state)
+    }
+    const { clientX, clientY } = 'changedTouches' in event ? event.changedTouches[0] : event
+    const below = document.elementFromPoint(clientX, clientY)
+    const target = below?.closest<HTMLElement>('.react-flow__node')?.dataset.id
+    if (!target) return
+    const row = below?.closest<HTMLElement>('[data-state]')?.dataset.state
+    const candidates = [...(row ? [stateTargetHandle(Number(row))] : []), null]
+    for (const targetHandle of candidates) {
+      const connection = { source: fromHandle.nodeId, sourceHandle, target, targetHandle }
+      if (isValidConnection(connection)) {
+        onConnect(connection)
+        return
+      }
     }
   }
 
@@ -1112,7 +1152,7 @@ export default function Board() {
             setRunId(id)
           }}
         />
-        <div className="canvas" ref={wrapper}>
+        <div className={`canvas${linkingTo ? ` linking-to-${linkingTo}` : ''}`} ref={wrapper}>
           <BoardActionsContext.Provider value={actions}>
             <ReactFlow
               nodes={nodes}
@@ -1122,6 +1162,8 @@ export default function Board() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              onConnectStart={onConnectStart}
+              onConnectEnd={onConnectEnd}
               onEdgesDelete={onEdgesDelete}
               isValidConnection={isValidConnection}
               onNodeDoubleClick={onNodeDoubleClick}

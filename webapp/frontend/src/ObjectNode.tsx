@@ -127,7 +127,7 @@ function StatePill({ objectId, state, active }: { objectId: string; state: Objec
   const [editing, setEditing] = useState(false)
 
   return (
-    <div className="state-row">
+    <div className="state-row" data-state={state.id}>
       <Handle type="target" position={Position.Left} id={stateTargetHandle(state.id)} />
       <Handle type="source" position={Position.Right} id={stateSourceHandle(state.id)} />
       <span

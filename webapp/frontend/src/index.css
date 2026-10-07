@@ -729,6 +729,18 @@ body {
   box-shadow: 0 0 0 3px rgba(26, 127, 55, 0.2);
 }
 
+/* A link being drawn connects wherever it is dropped on a node it can end on. */
+.linking-to-process .process-node:hover,
+.linking-to-object .object-node:hover {
+  border-color: #1f6feb;
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
+}
+
+.linking-to-object .state-row:hover .state-pill {
+  outline: 2px solid #1f6feb;
+  outline-offset: 1px;
+}
+
 .process-node.active {
   background: #fff8c5;
   border-color: #bf8700;

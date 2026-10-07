@@ -21,7 +21,7 @@ import {
 } from '@xyflow/react'
 import { BoardActionsContext, type BoardActions } from './actions'
 import ContextMenu, { type MenuItem } from './ContextMenu'
-import { CopyIcon, LayoutIcon, PencilIcon, PlayIcon, PlusIcon, TrashIcon } from './icons'
+import { CopyIcon, HistoryIcon, LayoutIcon, PencilIcon, PlayIcon, PlusIcon, SaveIcon, TrashIcon } from './icons'
 import { RANK_GAP, tidy } from './layout'
 import LinkEdge, { type LinkEdgeData, type LinkEdgeType } from './LinkEdge'
 import ObjectNode, {
@@ -35,6 +35,7 @@ import ObjectPanel from './ObjectPanel'
 import ProcessPanel from './ProcessPanel'
 import StartNode, { type StartNodeType } from './StartNode'
 import { decisionText, RunList, RunPanel } from './Runs'
+import { VersionPanel } from './Versions'
 import {
   createAttribute,
   createLink,
@@ -58,8 +59,11 @@ import {
   listObjects,
   listProcesses,
   listRuns,
+  listVersions,
   renameState,
+  restoreVersion,
   runProcess,
+  saveVersion,
   setLinkRoute,
   setLinkStates,
   startRun,
@@ -73,6 +77,7 @@ import {
   type Duplicate,
   type FlowObject,
   type FlowRun,
+  type Versions,
   type FlowRunDetail,
   type Link,
   type Models,
@@ -200,6 +205,10 @@ export default function Board() {
   // The run open in the side panel, and its steps once loaded.
   const [runId, setRunId] = useState<number | null>(null)
   const [runDetail, setRunDetail] = useState<FlowRunDetail | null>(null)
+  const [versions, setVersions] = useState<Versions>({ current: null, versions: [] })
+  const [versionsOpen, setVersionsOpen] = useState(false)
+  // Set while a save or a jump to another version is under way.
+  const [versioning, setVersioning] = useState(false)
   // The node whose context menu is open, and where.
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const { getNode, getNodes, screenToFlowPosition, fitView } = useReactFlow<FlowNode>()
@@ -307,21 +316,59 @@ export default function Board() {
 
   const refreshRuns = useCallback(() => listRuns().then(setRuns).catch(report), [report])
 
+  const refreshVersions = useCallback(() => listVersions().then(setVersions).catch(report), [report])
+
+  const loadBoard = useCallback(
+    () =>
+      Promise.all([listProcesses(), listObjects(), getStart(), listConnections(), listLinks()]).then(
+        ([ps, os, start, cs, ls]) => {
+          const humans = new Set(ps.filter((p) => p.kind === 'human').map((p) => p.id))
+          setNodes([toStartNode(start), ...ps.map((p) => toNode(p)), ...os.map((o) => toObjectNode(o))])
+          setEdges([
+            ...(start.target !== null ? [startEdge(start.target, start.route)] : []),
+            ...cs.map(connectionEdge),
+            ...ls.map((l) => linkEdge(l, humans.has(l.process))),
+          ])
+        },
+      ),
+    [setNodes, setEdges, toNode, toObjectNode],
+  )
+
   useEffect(() => {
     listModels().then(setModels).catch(report)
     refreshRuns()
-    Promise.all([listProcesses(), listObjects(), getStart(), listConnections(), listLinks()])
-      .then(([ps, os, start, cs, ls]) => {
-        const humans = new Set(ps.filter((p) => p.kind === 'human').map((p) => p.id))
-        setNodes([toStartNode(start), ...ps.map((p) => toNode(p)), ...os.map((o) => toObjectNode(o))])
-        setEdges([
-          ...(start.target !== null ? [startEdge(start.target, start.route)] : []),
-          ...cs.map(connectionEdge),
-          ...ls.map((l) => linkEdge(l, humans.has(l.process))),
-        ])
-      })
-      .catch(report)
-  }, [setNodes, setEdges, toNode, toObjectNode, report, refreshRuns])
+    refreshVersions()
+    loadBoard().catch(report)
+  }, [loadBoard, report, refreshRuns, refreshVersions])
+
+  const onSave = async () => {
+    setVersioning(true)
+    try {
+      await saveVersion()
+      await refreshVersions()
+    } catch (err) {
+      report(err)
+    } finally {
+      setVersioning(false)
+    }
+  }
+
+  // Brings the board back to a saved version. The run shown on the board
+  // belongs to the board it left, so it closes.
+  const onRestore = async (id: number) => {
+    setVersioning(true)
+    try {
+      await restoreVersion(id)
+      setPanelId(null)
+      setMenu(null)
+      setRunId(null)
+      await Promise.all([loadBoard(), refreshVersions()])
+    } catch (err) {
+      report(err)
+    } finally {
+      setVersioning(false)
+    }
+  }
 
   // A run can't continue without the page that drives it.
   useEffect(() => {
@@ -1081,6 +1128,7 @@ export default function Board() {
     liveRun.current = run.id
     setRuns((rs) => [run, ...rs])
     setRunId(run.id)
+    setVersionsOpen(false)
     setRunning(true)
     decisions.current.clear()
     setNodes((ns) =>
@@ -1165,6 +1213,29 @@ export default function Board() {
         >
           Processes connect through the objects they generate and take. Right-click a node for more.
         </span>
+        <div className="versioning">
+          <button onClick={onSave} disabled={running || versioning} title="Save the board as a new version">
+            <SaveIcon /> Save
+          </button>
+          <button
+            className={`version-toggle${versionsOpen ? ' open' : ''}`}
+            aria-expanded={versionsOpen}
+            onClick={() => {
+              if (!versionsOpen) {
+                setPanelId(null)
+                refreshVersions()
+              }
+              setVersionsOpen(!versionsOpen)
+            }}
+            title="Show every saved version"
+          >
+            <HistoryIcon />
+            {versions.current === null ? 'Not saved' : `Version ${versions.current}`}
+            {versions.versions.length > 0 && versions.current !== versions.versions[0].id && (
+              <span className="version-latest">latest {versions.versions[0].id}</span>
+            )}
+          </button>
+        </div>
         <button
           className="play"
           onClick={onRun}
@@ -1188,6 +1259,7 @@ export default function Board() {
           selected={runId}
           onSelect={(id) => {
             setPanelId(null)
+            setVersionsOpen(false)
             setRunId(id)
           }}
         />
@@ -1266,8 +1338,19 @@ export default function Board() {
             onClose={() => setPanelId(null)}
           />
         )}
-        {/* A node being edited or reviewed takes the panel; the run shows again once it closes. */}
-        {!panelNode && !objectPanelNode && runDetail && <RunPanel run={runDetail} onClose={() => setRunId(null)} />}
+        {/* A node being edited or reviewed takes the panel; the versions or run show again once it closes. */}
+        {!panelNode && !objectPanelNode && versionsOpen && (
+          <VersionPanel
+            versions={versions.versions}
+            current={versions.current}
+            disabled={running || versioning}
+            onRestore={onRestore}
+            onClose={() => setVersionsOpen(false)}
+          />
+        )}
+        {!panelNode && !objectPanelNode && !versionsOpen && runDetail && (
+          <RunPanel run={runDetail} onClose={() => setRunId(null)} />
+        )}
       </div>
     </div>
   )

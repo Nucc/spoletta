@@ -358,3 +358,33 @@ export function finishStep(
 ): Promise<{ duplicate: Duplicate } | undefined> {
   return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(result) })
 }
+
+// A saved snapshot of the whole board. Saving always adds a version on top;
+// jumping to an older one keeps every other version.
+export type Version = {
+  id: number
+  // The version the board was on when this one was saved; older than the
+  // previous version when saved after jumping back.
+  basedOn: number | null
+  createdAt: string
+}
+
+export type Versions = {
+  // The version the board was last saved as or jumped to; null before the first save.
+  current: number | null
+  // Newest first.
+  versions: Version[]
+}
+
+export function listVersions(): Promise<Versions> {
+  return request('/api/versions')
+}
+
+export function saveVersion(): Promise<Version> {
+  return request('/api/versions', { method: 'POST' })
+}
+
+// Rewrites the board as the version has it.
+export function restoreVersion(id: number): Promise<void> {
+  return request(`/api/versions/${id}/restore`, { method: 'POST' })
+}

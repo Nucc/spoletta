@@ -101,3 +101,17 @@ export const LayoutIcon = () => (
     <path d="M8 5.25V8M4.25 10.75V8h7.5v2.75" />
   </Icon>
 )
+
+export const SaveIcon = () => (
+  <Icon>
+    <path d="M2.75 2.75h8.5l2 2v8.5h-10.5z" />
+    <path d="M5.25 2.75v3h5v-3M5.25 13.25v-4h5.5v4" />
+  </Icon>
+)
+
+export const HistoryIcon = () => (
+  <Icon>
+    <path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9" />
+    <path d="M2.25 2.5v2.75H5M8 5v3l2 1.5" />
+  </Icon>
+)

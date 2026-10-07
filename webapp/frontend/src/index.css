@@ -86,6 +86,107 @@ body {
   cursor: not-allowed;
 }
 
+.toolbar button:disabled {
+  color: #8c959f;
+  cursor: not-allowed;
+}
+
+/* Save and the version the board is on, next to play. */
+.toolbar .versioning {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.toolbar .versioning + .play {
+  margin-left: 0;
+}
+
+.toolbar .version-toggle.open {
+  background: #ddf4ff;
+  border-color: #54aeff;
+}
+
+.version-latest {
+  padding: 0 6px;
+  font-size: 12px;
+  color: #656d76;
+  background: #f6f8fa;
+  border-radius: 10px;
+}
+
+.version-panel {
+  overflow-y: auto;
+}
+
+.version-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.version-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.version-item:hover:not(:disabled) {
+  background: #f6f8fa;
+}
+
+.version-item:disabled {
+  cursor: default;
+}
+
+.version-item.current {
+  background: #ddf4ff;
+}
+
+.version-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.version-item time {
+  font-size: 12px;
+  color: #656d76;
+}
+
+.version-tag {
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 400;
+  border-radius: 10px;
+}
+
+.version-tag.latest {
+  color: #1a7f37;
+  background: #dafbe1;
+}
+
+.version-tag.current {
+  color: #0550ae;
+  background: #fff;
+  border: 1px solid #54aeff;
+}
+
 .error {
   padding: 8px 16px;
   background: #ffebe9;

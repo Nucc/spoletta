@@ -55,10 +55,13 @@ func main() {
 	}
 	defer db.Close()
 
+	if err := migrate(db); err != nil {
+		log.Fatal(err)
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "webapp is running")
-	})
+	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
+	registerProcessRoutes(mux, db)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		var version string
 		if err := db.QueryRowContext(r.Context(), "SELECT VERSION()").Scan(&version); err != nil {

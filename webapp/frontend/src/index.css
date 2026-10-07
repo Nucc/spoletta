@@ -1,0 +1,92 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #1f2328;
+  background: #f6f7f9;
+}
+
+.board {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid #d8dee4;
+}
+
+.toolbar h1 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.toolbar button {
+  padding: 6px 12px;
+  font: inherit;
+  border: 1px solid #1f6feb;
+  border-radius: 6px;
+  background: #1f6feb;
+  color: #fff;
+  cursor: pointer;
+}
+
+.toolbar .hint {
+  color: #656d76;
+  font-size: 13px;
+}
+
+.error {
+  padding: 8px 16px;
+  background: #ffebe9;
+  color: #82071e;
+  border-bottom: 1px solid #ff8182;
+  cursor: pointer;
+}
+
+.canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+.process-node {
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: #fff;
+  border: 2px solid #1f6feb;
+  border-radius: 4px;
+  text-align: center;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.process-node.selected {
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
+}
+
+.process-name-input {
+  width: 100%;
+  padding: 4px;
+  font: inherit;
+  text-align: center;
+  border: 1px solid #d8dee4;
+  border-radius: 4px;
+}

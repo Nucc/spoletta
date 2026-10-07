@@ -19,6 +19,7 @@ import ObjectNode, { type ObjectNodeData, type ObjectNodeType } from './ObjectNo
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
 import ProcessPanel from './ProcessPanel'
 import StartNode, { type StartNodeType } from './StartNode'
+import { RunList, RunPanel } from './Runs'
 import {
   createLink,
   createObject,
@@ -26,6 +27,9 @@ import {
   deleteConnection,
   deleteLink,
   deleteRoute,
+  endRun,
+  finishStep,
+  getRun,
   getStart,
   listConnections,
   listLinks,
@@ -33,14 +37,19 @@ import {
   listObjects,
   listProcesses,
   listRoutes,
+  listRuns,
   runProcess,
   setRoute,
+  startRun,
+  startStep,
   updateObject,
   updateProcess,
   updateStart,
   type ChangeRequest,
   type Connection,
   type FlowObject,
+  type FlowRun,
+  type FlowRunDetail,
   type Link,
   type Models,
   type Outcome,
@@ -75,6 +84,9 @@ const markerEnd = { type: MarkerType.ArrowClosed }
 
 // Script processes don't execute yet; they just occupy their slot in the run.
 const SIMULATED_RUN_MS = 3000
+
+// How often an open run that is still going is refreshed.
+const RUN_REFRESH_MS = 1500
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -146,11 +158,17 @@ export default function Board() {
   const [running, setRunning] = useState(false)
   const [panelId, setPanelId] = useState<string | null>(null)
   const [models, setModels] = useState<Models | null>(null)
+  const [runs, setRuns] = useState<FlowRun[]>([])
+  // The run open in the side panel, and its steps once loaded.
+  const [runId, setRunId] = useState<number | null>(null)
+  const [runDetail, setRunDetail] = useState<FlowRunDetail | null>(null)
   const { getNode, screenToFlowPosition } = useReactFlow<FlowNode>()
   const wrapper = useRef<HTMLDivElement>(null)
   const draftSeq = useRef(0)
   // Resolves the decision of each human process waiting during a run.
   const decisions = useRef(new Map<string, (d: Decision) => void>())
+  // The run in progress, so it can be marked interrupted if the page closes.
+  const liveRun = useRef<number | null>(null)
 
   const report = useCallback((err: unknown) => {
     console.error(err)
@@ -253,8 +271,11 @@ export default function Board() {
     [onCommit, onCancel],
   )
 
+  const refreshRuns = useCallback(() => listRuns().then(setRuns).catch(report), [report])
+
   useEffect(() => {
     listModels().then(setModels).catch(report)
+    refreshRuns()
     Promise.all([listProcesses(), listObjects(), getStart(), listConnections(), listLinks(), listRoutes()])
       .then(([ps, os, start, cs, ls, rs]) => {
         setNodes([toStartNode(start), ...ps.map(toNode), ...os.map(toObjectNode)])
@@ -266,7 +287,72 @@ export default function Board() {
         ])
       })
       .catch(report)
-  }, [setNodes, setEdges, toNode, toObjectNode, report])
+  }, [setNodes, setEdges, toNode, toObjectNode, report, refreshRuns])
+
+  // A run can't continue without the page that drives it.
+  useEffect(() => {
+    const onHide = () => {
+      if (liveRun.current !== null) endRun(liveRun.current, 'interrupted', true).catch(() => {})
+    }
+    window.addEventListener('pagehide', onHide)
+    return () => window.removeEventListener('pagehide', onHide)
+  }, [])
+
+  // Loads the open run, and keeps refreshing it while it goes on.
+  useEffect(() => {
+    setRunDetail(null)
+    if (runId === null) return
+    let stopped = false
+    let timer: number | undefined
+    const load = async () => {
+      try {
+        const detail = await getRun(runId)
+        if (stopped) return
+        setRunDetail(detail)
+        if (detail.status === 'running') timer = window.setTimeout(load, RUN_REFRESH_MS)
+      } catch (err) {
+        report(err)
+      }
+    }
+    load()
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+    }
+  }, [runId, report])
+
+  // Shows a finished run on the board: each process as its last step in the
+  // run left it, each object with the content it last got.
+  const finishedRun = runDetail && runDetail.status !== 'running' ? runDetail : null
+  useEffect(() => {
+    if (!finishedRun || running) return
+    const steps = new Map(finishedRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
+    const contents = new Map(
+      finishedRun.objects.flatMap((o) => (o.object === null ? [] : [[objectNodeId(o.object), o.content] as const])),
+    )
+    setNodes((ns) =>
+      ns.map((n): FlowNode => {
+        if (n.type === 'process') {
+          const s = steps.get(n.id)
+          const output =
+            s?.kind === 'human' && s.outcome
+              ? s.outcome === 'approved'
+                ? 'Approved'
+                : `Changes requested:\n${s.instructions}`
+              : s?.output
+          return {
+            ...n,
+            data: { ...n.data, status: s?.status, output: output || undefined, runError: s?.error || undefined, review: undefined },
+          }
+        }
+        if (n.type === 'object') {
+          const content = contents.get(n.id)
+          return { ...n, data: { ...n.data, status: content === undefined ? undefined : 'done', content } }
+        }
+        return n
+      }),
+    )
+  }, [finishedRun, running, setNodes])
 
   const addDraft = useCallback(
     (type: 'process' | 'object', screenX: number, screenY: number) => {
@@ -380,16 +466,24 @@ export default function Board() {
   // processes are still simulated. Once a process succeeds, the processes it
   // connects to run in parallel; a failure stops its branch. Every process
   // runs at most once, so cycles terminate.
-  // Returns what the process printed, or null if it failed.
-  const execute = async (id: string, inputs: RunInput[], changeRequest?: ChangeRequest): Promise<string | null> => {
+  // Each execution is recorded as a step of the flow run; the server records
+  // agent steps itself. Returns what the process printed, or null if it failed.
+  const execute = async (
+    run: number,
+    id: string,
+    inputs: RunInput[],
+    changeRequest?: ChangeRequest,
+  ): Promise<string | null> => {
     const node = getNode(id)
     if (node?.type !== 'process' || node.data.kind !== 'agent') {
+      const step = await startStep(run, { process: Number(id), status: 'active', inputs }).catch(report)
       await sleep(SIMULATED_RUN_MS)
       updateData(id, { status: 'done' })
+      if (step) await finishStep(run, step.id, { status: 'done', output: '' }).catch(report)
       return ''
     }
     try {
-      const res = await runProcess(Number(id), inputs, changeRequest)
+      const res = await runProcess(Number(id), inputs, changeRequest, run)
       updateData(id, { status: res.ok ? 'done' : 'error', output: res.output, runError: res.error })
       return res.ok ? res.output : null
     } catch (err) {
@@ -441,7 +535,8 @@ export default function Board() {
         setPanelId((open) => open ?? id)
       })
 
-    const runProcess = async (id: string, visited: Set<string>, changeRequest?: ChangeRequest): Promise<void> => {
+    let failed = false
+    const runProcess = async (run: number, id: string, visited: Set<string>, changeRequest?: ChangeRequest): Promise<void> => {
       if (visited.has(id)) return
       visited.add(id)
       updateData(id, { status: 'active', output: undefined, runError: undefined })
@@ -451,17 +546,24 @@ export default function Board() {
 
       const node = getNode(id)
       if (node?.type === 'process' && node.data.kind === 'human') {
+        const step = await startStep(run, { process: Number(id), status: 'waiting', inputs: given }).catch(report)
         const { outcome, instructions } = await decide(id, given)
+        if (step) {
+          await finishStep(run, step.id, { status: 'done', outcome, instructions }).catch(report)
+        }
         const next = routes.get(routeKey(id, outcome))
         if (!next) return
         const request =
           outcome === 'changes' ? { reviewer: node.data.name, instructions, reviewed: given } : undefined
-        await runProcess(next, new Set(), request)
+        await runProcess(run, next, new Set(), request)
         return
       }
 
-      const output = await execute(id, given, changeRequest)
-      if (output === null) return
+      const output = await execute(run, id, given, changeRequest)
+      if (output === null) {
+        failed = true
+        return
+      }
       const produced = outputs.get(id) ?? []
       for (const o of produced) {
         contents.set(o, output)
@@ -470,9 +572,19 @@ export default function Board() {
       const ready = produced
         .flatMap((o) => consumers.get(o) ?? [])
         .filter((p) => (inputs.get(p) ?? []).every((o) => contents.has(o)))
-      await Promise.all([...new Set([...ready, ...(successors.get(id) ?? [])])].map((p) => runProcess(p, visited)))
+      await Promise.all([...new Set([...ready, ...(successors.get(id) ?? [])])].map((p) => runProcess(run, p, visited)))
     }
 
+    let run: FlowRun
+    try {
+      run = await startRun()
+    } catch (err) {
+      report(err)
+      return
+    }
+    liveRun.current = run.id
+    setRuns((rs) => [run, ...rs])
+    setRunId(run.id)
     setRunning(true)
     decisions.current.clear()
     setNodes((ns) =>
@@ -485,9 +597,15 @@ export default function Board() {
       }),
     )
     try {
-      await runProcess(startTarget, new Set())
+      await runProcess(run.id, startTarget, new Set())
+    } catch (err) {
+      failed = true
+      report(err)
     } finally {
+      liveRun.current = null
+      await endRun(run.id, failed ? 'failed' : 'done').catch(report)
       setRunning(false)
+      refreshRuns()
     }
   }
 
@@ -540,6 +658,14 @@ export default function Board() {
         </div>
       )}
       <div className="workspace">
+        <RunList
+          runs={runs}
+          selected={runId}
+          onSelect={(id) => {
+            setPanelId(null)
+            setRunId(id)
+          }}
+        />
         <div className="canvas" ref={wrapper}>
           <ReactFlow
             nodes={nodes}
@@ -593,6 +719,8 @@ export default function Board() {
             onError={report}
           />
         )}
+        {/* A process being edited or reviewed takes the panel; the run shows again once it closes. */}
+        {!panelNode && runDetail && <RunPanel run={runDetail} onClose={() => setRunId(null)} />}
       </div>
     </div>
   )

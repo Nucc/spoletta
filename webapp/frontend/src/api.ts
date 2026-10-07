@@ -173,15 +173,97 @@ export type ChangeRequest = {
   reviewed: RunInput[]
 }
 
+// Runs an agent process; with a flow run id, the server records it as a step of that run.
 export function runProcess(
   id: number,
   inputs: RunInput[],
   changeRequest?: ChangeRequest,
+  run?: number,
   signal?: AbortSignal,
 ): Promise<RunResult> {
   return request(`/api/processes/${id}/run`, {
     method: 'POST',
-    body: JSON.stringify({ inputs, changeRequest }),
+    body: JSON.stringify({ run, inputs, changeRequest }),
     signal,
   })
+}
+
+export type FlowRunStatus = 'running' | 'done' | 'failed' | 'interrupted'
+
+// One execution of the flow from the start node.
+export type FlowRun = {
+  id: number
+  status: FlowRunStatus
+  startedAt: string
+  finishedAt: string | null
+}
+
+export type StepStatus = 'active' | 'waiting' | 'done' | 'error'
+
+// One execution of a process in a run, with the process as it was then.
+export type RunStep = {
+  id: number
+  // Null once the process is deleted.
+  process: number | null
+  processName: string
+  kind: ProcessKind
+  model: string
+  thinking: ThinkingLevel | ''
+  // For agents, the prompt as sent, inputs and change request included.
+  prompt: string
+  inputs: RunInput[]
+  changeRequest: ChangeRequest | null
+  status: StepStatus
+  output: string
+  error: string
+  // For human steps.
+  outcome: Outcome | ''
+  instructions: string
+  startedAt: string
+  finishedAt: string | null
+}
+
+// The content an object got from the step that generated it.
+export type RunObject = {
+  id: number
+  step: number
+  // Null once the object is deleted.
+  object: number | null
+  name: string
+  content: string
+}
+
+export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[] }
+
+export function listRuns(): Promise<FlowRun[]> {
+  return request('/api/runs')
+}
+
+export function startRun(): Promise<FlowRun> {
+  return request('/api/runs', { method: 'POST' })
+}
+
+export function getRun(id: number): Promise<FlowRunDetail> {
+  return request(`/api/runs/${id}`)
+}
+
+// keepalive lets the request finish while the page unloads.
+export function endRun(id: number, status: Exclude<FlowRunStatus, 'running'>, keepalive = false): Promise<FlowRun> {
+  return request(`/api/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ status }), keepalive })
+}
+
+// Records a script or human step; agent steps are recorded by runProcess.
+export function startStep(
+  run: number,
+  step: { process: number; status: 'active' | 'waiting'; inputs: RunInput[] },
+): Promise<{ id: number }> {
+  return request(`/api/runs/${run}/steps`, { method: 'POST', body: JSON.stringify(step) })
+}
+
+export function finishStep(
+  run: number,
+  id: number,
+  result: { status: 'done' | 'error'; output?: string; error?: string; outcome?: Outcome; instructions?: string },
+): Promise<void> {
+  return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(result) })
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -74,6 +75,8 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 
 		var body struct {
+			// The flow run this is a step of, if any; the step is recorded in it.
+			Run           *int64         `json:"run"`
 			Inputs        []runInput     `json:"inputs"`
 			ChangeRequest *changeRequest `json:"changeRequest"`
 		}
@@ -107,18 +110,47 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 		// Problems with the process itself are run failures, so they show up on the node like any other.
-		if strings.TrimSpace(run.Prompt) == "" {
-			writeJSON(w, http.StatusOK, runResult{Error: "the process has no prompt"})
-			return
-		}
-		run.Prompt = withChangeRequest(withInputs(run.Prompt, body.Inputs), body.ChangeRequest)
-
 		var res runResult
-		if err := callWorker(r.Context(), http.MethodPost, workerURL+"/run", run, &res); err != nil {
-			if r.Context().Err() != nil {
+		if strings.TrimSpace(run.Prompt) == "" {
+			res.Error = "the process has no prompt"
+		} else {
+			run.Prompt = withChangeRequest(withInputs(run.Prompt, body.Inputs), body.ChangeRequest)
+		}
+
+		var stepID int64
+		if body.Run != nil {
+			stepID, err = startStep(r.Context(), db, *body.Run, id, stepActive, run.Prompt, body.Inputs, body.ChangeRequest)
+			if mysqlErrorIs(err, mysqlErrForeignKey) {
+				http.Error(w, "run not found", http.StatusBadRequest)
 				return
 			}
-			res = runResult{Error: "worker unavailable: " + err.Error()}
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+		}
+
+		if res.Error == "" {
+			if err := callWorker(r.Context(), http.MethodPost, workerURL+"/run", run, &res); err != nil {
+				if r.Context().Err() != nil {
+					res = runResult{Error: "the run was cancelled"}
+				} else {
+					res = runResult{Error: "worker unavailable: " + err.Error()}
+				}
+			}
+		}
+		if stepID != 0 {
+			status := stepError
+			if res.OK {
+				status = stepDone
+			}
+			// The request may be gone, but the step still has to end.
+			if err := finishStep(context.Background(), db, stepID, status, res.Output, res.Error); err != nil {
+				log.Printf("record step %d: %v", stepID, err)
+			}
+		}
+		if r.Context().Err() != nil {
+			return
 		}
 		writeJSON(w, http.StatusOK, res)
 	})

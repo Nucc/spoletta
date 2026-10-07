@@ -36,21 +36,34 @@ body {
 }
 
 .toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 12px;
   font: inherit;
-  border: 1px solid #1f6feb;
-  border-radius: 6px;
-  background: #1f6feb;
-  color: #fff;
+  font-size: 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
   cursor: pointer;
 }
 
+.toolbar button:hover {
+  background: #f6f8fa;
+}
+
 .toolbar .hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #656d76;
   font-size: 13px;
 }
 
 .toolbar .play {
+  flex-shrink: 0;
   margin-left: auto;
   display: flex;
   align-items: center;
@@ -61,6 +74,10 @@ body {
   border-color: #1a7f37;
   border-radius: 50%;
   background: #1a7f37;
+}
+
+.toolbar .play:not(:disabled) {
+  color: #fff;
 }
 
 .toolbar .play:disabled {
@@ -249,9 +266,24 @@ body {
   white-space: nowrap;
 }
 
-.step .process-kind {
-  position: static;
-  transform: none;
+.process-kind {
+  padding: 1px 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 8px;
+  color: #6639ba;
+  background: #fbefff;
+}
+
+.process-kind.script {
+  color: #0550ae;
+  background: #ddf4ff;
+}
+
+.process-kind.human {
+  color: #953800;
+  background: #fff1e5;
 }
 
 .step-meta {
@@ -392,117 +424,6 @@ body {
   font-weight: 400;
 }
 
-/* OPM process: an ellipse. Sizes must match NODE_SIZE in Board.tsx. */
-.process-node {
-  width: 160px;
-  height: 90px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 14px 22px 8px;
-  background: #fff;
-  border: 2px solid #1f6feb;
-  border-radius: 50%;
-  text-align: center;
-  font-size: 14px;
-  word-break: break-word;
-  position: relative;
-}
-
-.process-kind {
-  position: absolute;
-  /* Low enough to stay inside the ellipse's curve. */
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 1px 6px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-radius: 8px;
-  color: #0550ae;
-  background: #ddf4ff;
-}
-
-.process-kind.script {
-  color: #6639ba;
-  background: #fbefff;
-}
-
-.process-kind.human {
-  color: #953800;
-  background: #fff1e5;
-}
-
-/* Outcome handles of a human process. Labels sit outside the ellipse. */
-.process-node .react-flow__handle.outcome {
-  width: 10px;
-  height: 10px;
-}
-
-.process-node .react-flow__handle.outcome.approved {
-  background: #1a7f37;
-}
-
-.process-node .react-flow__handle.outcome.changes {
-  background: #bc4c00;
-}
-
-.outcome-label {
-  position: absolute;
-  font-size: 10px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.outcome.approved .outcome-label {
-  left: 12px;
-  top: -14px;
-  color: #1a7f37;
-}
-
-.outcome.changes .outcome-label {
-  left: 12px;
-  top: 2px;
-  color: #bc4c00;
-}
-
-.react-flow__edge.route.approved .react-flow__edge-path {
-  stroke: #1a7f37;
-}
-
-.react-flow__edge.route.changes .react-flow__edge-path {
-  stroke: #bc4c00;
-  stroke-dasharray: 6 4;
-}
-
-.process-node.selected {
-  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
-}
-
-.process-node.active {
-  background: #fff8c5;
-  border-color: #bf8700;
-  animation: process-pulse 1s ease-in-out infinite;
-}
-
-.process-node.done {
-  background: #dafbe1;
-  border-color: #1a7f37;
-}
-
-.process-node.error {
-  background: #ffebe9;
-  border-color: #cf222e;
-}
-
-/* A human process waiting for a decision. */
-.process-node.waiting {
-  background: #fff1e5;
-  border-color: #bc4c00;
-  animation: waiting-pulse 1.4s ease-in-out infinite;
-}
-
 @keyframes process-pulse {
   50% {
     box-shadow: 0 0 0 6px rgba(191, 135, 0, 0.25);
@@ -536,51 +457,34 @@ body {
 
 .review-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }
 
+/* One button per state the reviewer can set. */
 .review-actions button {
   padding: 6px 12px;
   font: inherit;
   font-size: 14px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #8c959f;
   border-radius: 6px;
   cursor: pointer;
 }
 
-.review-actions .approve {
+.review-actions button:hover {
   color: #fff;
-  background: #1a7f37;
-  border: 1px solid #1a7f37;
-}
-
-.review-actions .request-changes {
-  color: #bc4c00;
-  background: #fff;
-  border: 1px solid #bc4c00;
-}
-
-.review-actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.start-node {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
   background: #1f2328;
-}
-
-.start-node.selected {
-  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
+  border-color: #1f2328;
 }
 
 .name-input {
   width: 100%;
-  padding: 4px;
+  padding: 3px 6px;
   font: inherit;
-  text-align: center;
+  font-weight: 600;
   border: 1px solid #d8dee4;
   border-radius: 4px;
 }
@@ -636,25 +540,466 @@ body {
   text-overflow: ellipsis;
 }
 
-/* OPM object: a rectangle. Sizes must match NODE_SIZE in Board.tsx. */
+
+/* Nodes are cards: an icon tile, a name with a subtitle, and buttons. OPM's
+   shapes carry over as corners: a process is rounded as far as its height
+   allows, an object keeps square corners. Cards fill the width the board
+   gives their node; the process height must match NODE_SIZE in Board.tsx. */
+.process-node,
+.object-node,
+.start-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  box-shadow: 0 1px 2px rgba(31, 35, 40, 0.06), 0 2px 8px rgba(31, 35, 40, 0.05);
+  font-size: 14px;
+}
+
+.process-node {
+  width: 100%;
+  height: 64px;
+  padding: 0 10px 0 12px;
+  border-radius: 32px;
+}
+
 .object-node {
-  width: 140px;
-  height: 60px;
+  width: 100%;
+  min-height: 56px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 2px;
+  border-width: 1.5px;
+  border-color: #8c959f;
+}
+
+.start-node {
+  height: 44px;
+  padding: 0 16px 0 6px;
+  border-radius: 22px;
+  font-weight: 600;
+}
+
+.node-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 10px;
+  border-radius: 50%;
+  color: #fff;
+  background: #8250df;
+}
+
+.process-node.script .node-icon {
+  background: #0969da;
+}
+
+.process-node.human .node-icon {
+  background: #e16f24;
+}
+
+.object-node .node-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  background: #1a7f37;
+}
+
+.start-node .node-icon {
+  width: 32px;
+  height: 32px;
+  background: #1f2328;
+}
+
+.node-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.node-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-subtitle {
+  font-size: 12px;
+  color: #656d76;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-buttons {
+  display: flex;
+  flex-shrink: 0;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+
+.process-node:hover .node-buttons,
+.object-node:hover .node-buttons,
+.selected .node-buttons {
+  opacity: 1;
+}
+
+.node-buttons button {
+  display: flex;
+  padding: 5px;
+  color: #57606a;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.node-buttons button:hover:not(:disabled) {
+  color: #1f2328;
+  background: #f3f4f6;
+}
+
+.node-buttons button:last-child:hover:not(:disabled) {
+  color: #cf222e;
+}
+
+.node-buttons button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Adds what comes next; sits on the line a link would leave by. */
+.node-append {
+  position: absolute;
+  left: 50%;
+  bottom: -34px;
+  transform: translateX(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #57606a;
   background: #fff;
-  border: 2px solid #1a7f37;
-  text-align: center;
-  font-size: 14px;
-  word-break: break-word;
+  border: 1px solid #d0d7de;
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.process-node:hover .node-append,
+.object-node:hover .node-append,
+.selected .node-append {
+  opacity: 1;
+}
+
+.node-append:hover {
+  color: #fff;
+  background: #1f2328;
+  border-color: #1f2328;
+}
+
+.react-flow__handle {
+  width: 8px;
+  height: 8px;
+  background: #8c959f;
+  border: 2px solid #fff;
+}
+
+.process-node.selected,
+.start-node.selected {
+  border-color: #1f6feb;
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.2);
 }
 
 .object-node.selected {
-  box-shadow: 0 0 0 3px rgba(26, 127, 55, 0.3);
+  border-color: #1a7f37;
+  box-shadow: 0 0 0 3px rgba(26, 127, 55, 0.2);
+}
+
+.process-node.active {
+  background: #fff8c5;
+  border-color: #bf8700;
+  animation: process-pulse 1s ease-in-out infinite;
+}
+
+.process-node.done {
+  background: #f0fff4;
+  border-color: #1a7f37;
+}
+
+.process-node.error {
+  background: #ffebe9;
+  border-color: #cf222e;
+}
+
+/* A human process waiting for a decision. */
+.process-node.waiting {
+  background: #fff1e5;
+  border-color: #bc4c00;
+  animation: waiting-pulse 1.4s ease-in-out infinite;
 }
 
 .object-node.done {
-  background: #dafbe1;
+  background: #f0fff4;
+}
+
+.react-flow__edge-path {
+  stroke: #8c959f;
+  stroke-width: 1.5;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #1f6feb;
+}
+
+/* A human's link to a state it can decide on. */
+.react-flow__edge.decision .react-flow__edge-path {
+  stroke: #e16f24;
+  stroke-dasharray: 5 4;
+}
+
+.object-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* OPM states: rounded boxes inside the object, each with its own handles. */
+.object-states {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.state-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #1f2328;
+  background: #f6f8fa;
+  border: 1px solid #8c959f;
+  border-radius: 10px;
+}
+
+.state-pill.active {
+  color: #fff;
+  background: #1a7f37;
+  border-color: #1a7f37;
+}
+
+.state-pill.editing {
+  padding: 1px;
+}
+
+.state-pill .name-input {
+  width: 110px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.state-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-pill .react-flow__handle {
+  width: 7px;
+  height: 7px;
+  border-width: 1.5px;
+}
+
+.state-remove {
+  display: none;
+  padding: 0 0 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.state-pill:hover .state-remove {
+  display: inline;
+}
+
+/* Inserts a step into a link, at its midpoint. */
+.edge-insert {
+  position: absolute;
+  pointer-events: all;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #57606a;
+  background: #fff;
+  border: 1.5px solid #8c959f;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.edge-insert:hover {
+  color: #fff;
+  background: #1f2328;
+  border-color: #1f2328;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 10;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.15);
+}
+
+.context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  color: #1f2328;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.context-menu button:hover:not(:disabled),
+.context-menu button:focus-visible {
+  background: #f3f4f6;
+  outline: none;
+}
+
+.context-menu button.danger {
+  color: #cf222e;
+}
+
+.context-menu button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The states a human decides between, on its link to the object. */
+.decision {
+  position: absolute;
+  pointer-events: all;
+}
+
+.decision-pill {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #fff;
+  background: #e16f24;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.decision-pill.empty {
+  color: #953800;
+  background: #fff1e5;
+  border: 1px dashed #e16f24;
+}
+
+.decision-menu {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 10;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.15);
+}
+
+.decision-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  white-space: nowrap;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.decision-menu label:hover {
+  background: #f3f4f6;
+}
+
+/* Grips on the segments of a selected link; dragging one moves the segment sideways. */
+.segment-grip {
+  position: absolute;
+  pointer-events: all;
+  background: #fff;
+  border: 1.5px solid #1f6feb;
+  border-radius: 4px;
+  touch-action: none;
+}
+
+.segment-grip.horizontal {
+  width: 22px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.segment-grip.vertical {
+  width: 8px;
+  height: 22px;
+  cursor: ew-resize;
+}
+
+.segment-grip:hover {
+  background: #1f6feb;
+}
+
+/* Drag a card's left or right edge to change its width. */
+.react-flow__resize-control.line.width-resizer {
+  border-color: transparent;
+  border-width: 3px;
+}
+
+.react-flow__node:hover .react-flow__resize-control.line.width-resizer,
+.react-flow__node.selected .react-flow__resize-control.line.width-resizer {
+  border-color: rgba(31, 111, 235, 0.35);
+}
+
+.react-flow__resize-control.line.width-resizer:hover {
+  border-color: #1f6feb;
 }

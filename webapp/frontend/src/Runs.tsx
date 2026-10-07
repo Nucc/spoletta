@@ -25,6 +25,14 @@ function formatDuration(start: string, end: string | null): string {
   return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
+// What a human decided: the state they set the object to, with their
+// instructions. Steps from before states hold approved or changes, and no object.
+export function decisionText(outcome: string, object: string | undefined, instructions: string): string {
+  const legacy: Record<string, string> = { approved: 'Approved', changes: 'Changes requested' }
+  const head = object ? `Set ${object} to ${outcome}` : (legacy[outcome] ?? outcome)
+  return instructions ? `${head}:\n${instructions}` : head
+}
+
 // Every run of the flow, newest first.
 export function RunList({
   runs,
@@ -118,13 +126,22 @@ function Step({ step: s, objects }: { step: RunStep; objects: FlowRunDetail['obj
           </p>
         )}
         {s.inputs.map((input, i) => (
-          <Block key={i} label={`Input: ${input.name}`} text={input.content} />
+          <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} />
         ))}
         {s.changeRequest && (
-          <Block
-            label={`Changes requested by ${s.changeRequest.reviewer}`}
-            text={s.changeRequest.instructions}
-          />
+          <>
+            {s.changeRequest.reviewed.map((input, i) => (
+              <Block key={i} label={`Reviewed: ${input.name}`} text={input.content} />
+            ))}
+            <Block
+              label={
+                s.changeRequest.state
+                  ? `Marked ${s.changeRequest.state} by ${s.changeRequest.reviewer}`
+                  : `Changes requested by ${s.changeRequest.reviewer}`
+              }
+              text={s.changeRequest.instructions}
+            />
+          </>
         )}
         {s.prompt && (
           <details className="step-prompt">
@@ -133,15 +150,14 @@ function Step({ step: s, objects }: { step: RunStep; objects: FlowRunDetail['obj
           </details>
         )}
         {s.kind === 'human' && s.outcome && (
-          <Block
-            label="Decision"
-            text={s.outcome === 'approved' ? 'Approved' : `Changes requested:\n${s.instructions}`}
-          />
+          <Block label="Decision" text={decisionText(s.outcome, objects[0]?.name, s.instructions)} />
         )}
         {s.error && <Block label="Error" text={s.error} failed />}
         {s.kind !== 'human' && s.status === 'done' && <Block label="Output" text={s.output || '(empty)'} />}
-        {objects.length > 0 && (
-          <p className="panel-note">Generated {objects.map((o) => o.name).join(', ')}</p>
+        {s.kind !== 'human' && objects.length > 0 && (
+          <p className="panel-note">
+            Generated {objects.map((o) => (o.state ? `${o.name} (${o.state})` : o.name)).join(', ')}
+          </p>
         )}
       </div>
     </details>

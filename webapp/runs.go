@@ -21,7 +21,7 @@ type run struct {
 }
 
 // A step is one execution of a process in a run. A process can run several
-// times in one run when a human routes changes back to it. The process's
+// times in one run when a human's decision leads back to it. The process's
 // name and settings are copied, so the history survives later edits.
 type step struct {
 	ID          int64  `json:"id"`
@@ -37,19 +37,22 @@ type step struct {
 	Status        string         `json:"status"`
 	Output        string         `json:"output"`
 	Error         string         `json:"error"`
-	// For human steps: approved or changes, and the reviewer's instructions.
+	// For human steps: the name of the state the human set, and their
+	// instructions. Steps from before states hold approved or changes.
 	Outcome      string     `json:"outcome"`
 	Instructions string     `json:"instructions"`
 	StartedAt    time.Time  `json:"startedAt"`
 	FinishedAt   *time.Time `json:"finishedAt"`
 }
 
-// The content an object got in a run from the step that generated it.
+// The content and state an object got in a run from the step that generated
+// it, or the state a human step set it to.
 type runObject struct {
 	ID      int64  `json:"id"`
 	Step    int64  `json:"step"`
 	Object  *int64 `json:"object"`
 	Name    string `json:"name"`
+	State   string `json:"state"`
 	Content string `json:"content"`
 }
 
@@ -96,7 +99,7 @@ func migrateRuns(db *sql.DB) error {
 			status VARCHAR(16) NOT NULL,
 			output LONGTEXT NOT NULL,
 			error TEXT NOT NULL,
-			outcome VARCHAR(16) NOT NULL DEFAULT '',
+			outcome VARCHAR(255) NOT NULL DEFAULT '',
 			instructions TEXT NOT NULL,
 			started_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 			finished_at TIMESTAMP(3) NULL,
@@ -109,11 +112,14 @@ func migrateRuns(db *sql.DB) error {
 			step_id BIGINT NOT NULL,
 			object_id BIGINT NULL,
 			name VARCHAR(255) NOT NULL,
+			state VARCHAR(255) NOT NULL DEFAULT '',
 			content LONGTEXT NOT NULL,
 			FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE,
 			FOREIGN KEY (step_id) REFERENCES run_steps(id) ON DELETE CASCADE,
 			FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE SET NULL
 		)`,
+		// Outcomes used to be approved or changes; now they name states.
+		"ALTER TABLE run_steps MODIFY outcome VARCHAR(255) NOT NULL DEFAULT ''",
 		// Runs are driven by a browser; whatever was in flight when the server
 		// went down can't continue. Their open steps end first, while the runs
 		// still read as running.
@@ -127,7 +133,7 @@ func migrateRuns(db *sql.DB) error {
 			return err
 		}
 	}
-	return nil
+	return addColumn(db, "run_objects", "state", "VARCHAR(255) NOT NULL DEFAULT '' AFTER name")
 }
 
 // Starts a step of a run, copying the process's current settings into it.
@@ -164,7 +170,7 @@ func startStep(ctx context.Context, db *sql.DB, runID, processID int64, status, 
 var errNotFound = errors.New("not found")
 
 // Finishes a step. A successful step generates its process's output objects,
-// which all hold what it printed.
+// which all hold what it printed, each in the state its link names.
 func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, errMsg string) error {
 	_, err := db.ExecContext(ctx,
 		"UPDATE run_steps SET status = ?, output = ?, error = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
@@ -173,13 +179,46 @@ func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, e
 		return err
 	}
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO run_objects (run_id, step_id, object_id, name, content)
-		SELECT s.run_id, s.id, o.id, o.name, ? FROM run_steps s
+		`INSERT INTO run_objects (run_id, step_id, object_id, name, state, content)
+		SELECT s.run_id, s.id, o.id, o.name, COALESCE(st.name, ''), ? FROM run_steps s
 		JOIN object_links l ON l.process_id = s.process_id AND l.direction = 'output'
 		JOIN objects o ON o.id = l.object_id
+		LEFT JOIN object_states st ON st.id = l.state_id
 		WHERE s.id = ? AND s.kind <> 'human'
 		ORDER BY o.id`,
 		output, stepID)
+	return err
+}
+
+// The name of a state a human step can decide on: one its process's output
+// links list. Empty if the state isn't one of them.
+func decisionState(ctx context.Context, db *sql.DB, stepID, stateID int64) (string, error) {
+	var name string
+	err := db.QueryRowContext(ctx,
+		`SELECT st.name FROM run_steps s
+		JOIN object_links l ON l.process_id = s.process_id AND l.direction = 'output'
+		JOIN link_states ls ON ls.link_id = l.id AND ls.state_id = ?
+		JOIN object_states st ON st.id = ls.state_id
+		WHERE s.id = ? AND s.kind = 'human'`,
+		stateID, stepID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
+}
+
+// Records the state a human step set its object to. The object keeps the
+// content it last got in the run.
+func recordDecision(ctx context.Context, db *sql.DB, stepID, stateID int64) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO run_objects (run_id, step_id, object_id, name, state, content)
+		SELECT s.run_id, s.id, o.id, o.name, st.name,
+			COALESCE((SELECT ro.content FROM run_objects ro WHERE ro.run_id = s.run_id AND ro.object_id = o.id ORDER BY ro.id DESC LIMIT 1), '')
+		FROM run_steps s
+		JOIN object_states st ON st.id = ?
+		JOIN objects o ON o.id = st.object_id
+		WHERE s.id = ?`,
+		stateID, stepID)
 	return err
 }
 
@@ -293,7 +332,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		orows, err := db.QueryContext(r.Context(),
-			"SELECT id, step_id, object_id, name, content FROM run_objects WHERE run_id = ? ORDER BY id", id)
+			"SELECT id, step_id, object_id, name, state, content FROM run_objects WHERE run_id = ? ORDER BY id", id)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -301,7 +340,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		defer orows.Close()
 		for orows.Next() {
 			var o runObject
-			if err := orows.Scan(&o.ID, &o.Step, &o.Object, &o.Name, &o.Content); err != nil {
+			if err := orows.Scan(&o.ID, &o.Step, &o.Object, &o.Name, &o.State, &o.Content); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -400,7 +439,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		}{stepID})
 	})
 
-	// Finishes a script or human step; a human step also records the decision.
+	// Finishes a script or human step; a human step also records the state it
+	// decided on.
 	mux.HandleFunc("PATCH /api/runs/{run}/steps/{id}", func(w http.ResponseWriter, r *http.Request) {
 		runID, err1 := strconv.ParseInt(r.PathValue("run"), 10, 64)
 		id, err2 := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -412,7 +452,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			Status       string `json:"status"`
 			Output       string `json:"output"`
 			Error        string `json:"error"`
-			Outcome      string `json:"outcome"`
+			State        *int64 `json:"state"`
 			Instructions string `json:"instructions"`
 		}
 		err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunRequestBytes)).Decode(&patch)
@@ -422,10 +462,6 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		if patch.Status != stepDone && patch.Status != stepError {
 			http.Error(w, "status must be done or error", http.StatusBadRequest)
-			return
-		}
-		if patch.Outcome != "" && patch.Outcome != outcomeApproved && patch.Outcome != outcomeChanges {
-			http.Error(w, "outcome must be approved or changes", http.StatusBadRequest)
 			return
 		}
 
@@ -441,8 +477,19 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "no open step with that id in this run", http.StatusConflict)
 			return
 		}
+		var outcome string
+		if patch.State != nil {
+			if outcome, err = decisionState(r.Context(), db, id, *patch.State); err != nil {
+				serverError(w, err)
+				return
+			}
+			if outcome == "" {
+				http.Error(w, "the step's process can't decide on that state", http.StatusBadRequest)
+				return
+			}
+		}
 		_, err = db.ExecContext(r.Context(), "UPDATE run_steps SET outcome = ?, instructions = ? WHERE id = ?",
-			patch.Outcome, patch.Instructions, id)
+			outcome, patch.Instructions, id)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -450,6 +497,12 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		if err := finishStep(r.Context(), db, id, patch.Status, patch.Output, patch.Error); err != nil {
 			serverError(w, err)
 			return
+		}
+		if patch.State != nil {
+			if err := recordDecision(r.Context(), db, id, *patch.State); err != nil {
+				serverError(w, err)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

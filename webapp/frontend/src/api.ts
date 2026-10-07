@@ -1,5 +1,5 @@
-// A human process is a review step: a person checks its inputs and approves
-// them or requests changes, and the matching route says what runs next.
+// A human process is a review step: a person checks its inputs and decides
+// by setting an object to one of the states the process's output links name.
 export type ProcessKind = 'agent' | 'script' | 'human'
 
 export type Process = {
@@ -15,6 +15,8 @@ export type Process = {
   thinking: ThinkingLevel | ''
   x: number
   y: number
+  // Set when resized; null draws the default width.
+  width: number | null
 }
 
 export type Start = {
@@ -22,6 +24,8 @@ export type Start = {
   y: number
   // Process the flow starts with, if connected.
   target: number | null
+  // Where its link runs, if moved by hand; cleared when the target changes.
+  route: number[] | null
 }
 
 export type Connection = {
@@ -36,16 +40,34 @@ export type FlowObject = {
   name: string
   x: number
   y: number
+  // Set when resized; null draws the default width.
+  width: number | null
+  states: ObjectState[]
+}
+
+// A situation an object can be in, such as approved or changes requested.
+export type ObjectState = {
+  id: number
+  object: number
+  name: string
 }
 
 // 'output': the process generates the object. 'input': the process takes it as input.
 export type LinkDirection = 'output' | 'input'
 
+// A link naming a state generates the object in that state (output), or
+// runs the process when the object enters that state (input). A human
+// process's output link names no state but lists the states it decides
+// between; other links list none.
 export type Link = {
   id: number
   process: number
   object: number
   direction: LinkDirection
+  state: number | null
+  states: number[]
+  // Where the link's segments run, if moved by hand; see route.ts.
+  route: number[] | null
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -64,12 +86,16 @@ export function listProcesses(): Promise<Process[]> {
   return request('/api/processes')
 }
 
-export function createProcess(p: Omit<Process, 'id'>): Promise<Process> {
+export function createProcess(p: Omit<Process, 'id' | 'width'> & { width?: number | null }): Promise<Process> {
   return request('/api/processes', { method: 'POST', body: JSON.stringify(p) })
 }
 
 export function updateProcess(id: number, patch: Partial<Omit<Process, 'id'>>): Promise<Process> {
   return request(`/api/processes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function deleteProcess(id: number): Promise<void> {
+  return request(`/api/processes/${id}`, { method: 'DELETE' })
 }
 
 export function getStart(): Promise<Start> {
@@ -96,47 +122,54 @@ export function listObjects(): Promise<FlowObject[]> {
   return request('/api/objects')
 }
 
-export function createObject(o: Omit<FlowObject, 'id'>): Promise<FlowObject> {
+export function createObject(o: Omit<FlowObject, 'id' | 'states' | 'width'> & { width?: number | null }): Promise<FlowObject> {
   return request('/api/objects', { method: 'POST', body: JSON.stringify(o) })
 }
 
-export function updateObject(id: number, patch: Partial<Omit<FlowObject, 'id'>>): Promise<FlowObject> {
+export function updateObject(id: number, patch: Partial<Omit<FlowObject, 'id' | 'states'>>): Promise<FlowObject> {
   return request(`/api/objects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function deleteObject(id: number): Promise<void> {
+  return request(`/api/objects/${id}`, { method: 'DELETE' })
 }
 
 export function listLinks(): Promise<Link[]> {
   return request('/api/links')
 }
 
-export function createLink(l: Omit<Link, 'id'>): Promise<Link> {
+// Without a state, the link names none; without states, it lists none.
+export function createLink(
+  l: Omit<Link, 'id' | 'state' | 'states' | 'route'> & { state?: number | null; states?: number[] },
+): Promise<Link> {
   return request('/api/links', { method: 'POST', body: JSON.stringify(l) })
+}
+
+// Sets where a link's segments run; null goes back to the default route.
+export function setLinkRoute(id: number, route: number[] | null): Promise<void> {
+  return request(`/api/links/${id}`, { method: 'PATCH', body: JSON.stringify({ route }) })
+}
+
+// Replaces the states a human's output link decides between.
+export function setLinkStates(id: number, states: number[]): Promise<void> {
+  return request(`/api/links/${id}/states`, { method: 'PUT', body: JSON.stringify({ states }) })
 }
 
 export function deleteLink(id: number): Promise<void> {
   return request(`/api/links/${id}`, { method: 'DELETE' })
 }
 
-export type Outcome = 'approved' | 'changes'
-
-// Which process runs after a human process decides on the given outcome.
-export type Route = {
-  id: number
-  process: number
-  outcome: Outcome
-  target: number
+export function createState(object: number, name: string): Promise<ObjectState> {
+  return request(`/api/objects/${object}/states`, { method: 'POST', body: JSON.stringify({ name }) })
 }
 
-export function listRoutes(): Promise<Route[]> {
-  return request('/api/routes')
+export function renameState(id: number, name: string): Promise<ObjectState> {
+  return request(`/api/states/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
 }
 
-// Replaces the process's previous route for the same outcome.
-export function setRoute(r: Omit<Route, 'id'>): Promise<Route> {
-  return request('/api/routes', { method: 'PUT', body: JSON.stringify(r) })
-}
-
-export function deleteRoute(id: number): Promise<void> {
-  return request(`/api/routes/${id}`, { method: 'DELETE' })
+// The links naming the state go with it.
+export function deleteState(id: number): Promise<void> {
+  return request(`/api/states/${id}`, { method: 'DELETE' })
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -160,15 +193,20 @@ export function listModels(): Promise<Models> {
   return request('/api/models')
 }
 
-// An object the process takes as input, with what the process that generated it printed.
+// An object the process takes as input, with what the process that generated
+// it printed and the state it is in, if any.
 export type RunInput = {
   name: string
+  state?: string
   content: string
 }
 
-// Sent to the process a human routed back to: what they reviewed and what to change.
+// Sent to a process taking an object in the state a human set it to, when
+// the human left instructions: what they reviewed and what to do with it.
+// Requests from before states have no state.
 export type ChangeRequest = {
   reviewer: string
+  state?: string
   instructions: string
   reviewed: RunInput[]
 }
@@ -216,20 +254,23 @@ export type RunStep = {
   status: StepStatus
   output: string
   error: string
-  // For human steps.
-  outcome: Outcome | ''
+  // For human steps: the name of the state the human set; steps from before
+  // states hold approved or changes.
+  outcome: string
   instructions: string
   startedAt: string
   finishedAt: string | null
 }
 
-// The content an object got from the step that generated it.
+// The content and state an object got from the step that generated it, or
+// the state a human step set it to.
 export type RunObject = {
   id: number
   step: number
   // Null once the object is deleted.
   object: number | null
   name: string
+  state: string
   content: string
 }
 
@@ -263,7 +304,7 @@ export function startStep(
 export function finishStep(
   run: number,
   id: number,
-  result: { status: 'done' | 'error'; output?: string; error?: string; outcome?: Outcome; instructions?: string },
+  result: { status: 'done' | 'error'; output?: string; error?: string; state?: number; instructions?: string },
 ): Promise<void> {
   return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(result) })
 }

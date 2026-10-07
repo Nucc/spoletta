@@ -3,7 +3,6 @@ import {
   THINKING_LEVELS,
   updateProcess,
   type Models,
-  type Outcome,
   type ProcessKind,
   type RunInput,
   type ThinkingLevel,
@@ -30,9 +29,10 @@ const KINDS: { value: ProcessKind; label: string }[] = [
 // A human process waiting for its decision during a run.
 export type Review = {
   inputs: RunInput[]
-  // Outcomes that have a route; requesting changes needs somewhere to send them.
-  routed: Outcome[]
-  onDecide: (outcome: Outcome, instructions: string) => void
+  // The states the process's output links name, which it decides between.
+  options: { state: number; object: string; name: string }[]
+  // Null when there are no states to set, which ends the branch.
+  onDecide: (state: number | null, instructions: string) => void
 }
 
 // Edits one process; mount with key={id} so switching processes resets the form.
@@ -50,7 +50,7 @@ export default function ProcessPanel({
   initial: Fields
   // Models pi offers, or null while they load.
   models: Models | null
-  // Outcome of this process in the latest flow run, if it has run.
+  // How this process did in the latest flow run, if it has run.
   run?: { status?: RunStatus; output?: string; error?: string }
   review?: Review
   onChange: (fields: Fields) => void
@@ -213,7 +213,8 @@ export default function ProcessPanel({
 
 function ReviewForm({ review }: { review: Review }) {
   const [instructions, setInstructions] = useState('')
-  const canRequestChanges = review.routed.includes('changes') && instructions.trim() !== ''
+  // Name the object only when the decision is about more than one.
+  const objects = new Set(review.options.map((o) => o.object))
 
   return (
     <section className="review" aria-label="Review">
@@ -223,38 +224,38 @@ function ReviewForm({ review }: { review: Review }) {
       ) : (
         review.inputs.map((input, i) => (
           <div key={i} className="panel-run">
-            <span>{input.name}</span>
+            <span>
+              {input.name}
+              {input.state && ` (${input.state})`}
+            </span>
             <pre>{input.content}</pre>
           </div>
         ))
       )}
       <label className="panel-field">
-        <span>Change request</span>
+        <span>Instructions</span>
         <textarea
           rows={3}
           value={instructions}
-          placeholder="What should be changed? Sent to the process the changes route leads to."
+          placeholder="Optional. Passed with the object to the processes that take it in the state you set."
           onChange={(e) => setInstructions(e.target.value)}
         />
       </label>
-      {!review.routed.includes('changes') && (
-        <small className="panel-note">Connect the changes handle to a process to request changes.</small>
+      {review.options.length === 0 ? (
+        <small className="panel-note">
+          Link this process to an object and pick, on the link, the states it decides between. Without any, the branch ends here.
+        </small>
+      ) : (
+        <span className="panel-note">Set to:</span>
       )}
       <div className="review-actions">
-        <button
-          className="request-changes"
-          disabled={!canRequestChanges}
-          onClick={() => review.onDecide('changes', instructions.trim())}
-        >
-          Request changes
-        </button>
-        <button
-          className="approve"
-          title={review.routed.includes('approved') ? undefined : 'No approved route: the branch ends here'}
-          onClick={() => review.onDecide('approved', '')}
-        >
-          Approve
-        </button>
+        {review.options.length === 0 && <button onClick={() => review.onDecide(null, instructions.trim())}>Done</button>}
+        {review.options.map((o) => (
+          <button key={o.state} onClick={() => review.onDecide(o.state, instructions.trim())}>
+            {objects.size > 1 && `${o.object}: `}
+            {o.name}
+          </button>
+        ))}
       </div>
     </section>
   )

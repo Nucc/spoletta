@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
-import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
-import type { Outcome, ProcessKind, RunInput, ThinkingLevel } from './api'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Handle, Position, useNodeConnections, type Node, type NodeProps } from '@xyflow/react'
+import { useBoardActions } from './actions'
+import type { ProcessKind, RunInput, ThinkingLevel } from './api'
+import { AgentIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, TrashIcon } from './icons'
+import WidthResizer from './WidthResizer'
 
 export type ProcessNodeData = {
   name: string
   kind: ProcessKind
-  // Edited in the side panel, never rendered on the node.
+  // Edited in the side panel; only the model shows on the node.
   prompt: string
   script: string
   model: string
@@ -18,51 +21,93 @@ export type ProcessNodeData = {
   runError?: string
   // While a human process waits for a decision: the inputs under review.
   review?: RunInput[]
-  onCommit: (id: string, name: string) => void
-  onCancel: (id: string) => void
 }
 
 export type RunStatus = 'active' | 'waiting' | 'done' | 'error'
 
 export type ProcessNodeType = Node<ProcessNodeData, 'process'>
 
-// A human process leaves through one handle per outcome; ids match Outcome.
-export const OUTCOME_HANDLES: { id: Outcome; position: Position; label: string }[] = [
-  { id: 'approved', position: Position.Right, label: 'approved' },
-  { id: 'changes', position: Position.Bottom, label: 'changes' },
-]
+export const KIND_ICONS: Record<ProcessKind, () => ReactNode> = {
+  agent: AgentIcon,
+  script: ScriptIcon,
+  human: HumanIcon,
+}
 
+const KIND_LABELS: Record<ProcessKind, string> = { agent: 'Agent', script: 'Script', human: 'Human review' }
+
+const STATUS_LABELS: Record<RunStatus, string> = {
+  active: 'Running',
+  waiting: 'Waiting for review',
+  done: 'Done',
+  error: 'Failed',
+}
+
+// What the card says under the name: the kind, and an agent's model.
+function subtitle(data: ProcessNodeData): string {
+  if (data.status) return STATUS_LABELS[data.status]
+  if (data.kind !== 'agent') return KIND_LABELS[data.kind]
+  return `Agent · ${data.model ? data.model.slice(data.model.indexOf('/') + 1) : 'default model'}`
+}
+
+// OPM process: a rounded card, its corners as round as the card is tall, with
+// an icon for who carries it out. Inputs arrive on top, outputs leave below.
 export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeType>) {
+  const actions = useBoardActions()
   const human = data.kind === 'human'
-  const updateNodeInternals = useUpdateNodeInternals()
-
-  // The handles differ between kinds; React Flow must re-measure them.
-  useEffect(() => updateNodeInternals(id), [id, human, updateNodeInternals])
+  const draft = id.startsWith('draft-')
+  const leaf = useNodeConnections({ handleType: 'source' }).length === 0
+  const KindIcon = KIND_ICONS[data.kind]
 
   return (
-    <div className={`process-node${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}`}>
-      <Handle type="target" position={Position.Left} />
-      {human ? (
-        OUTCOME_HANDLES.map((h) => (
-          <Handle key={h.id} id={h.id} type="source" position={h.position} className={`outcome ${h.id}`}>
-            <span className="outcome-label">{h.label}</span>
-          </Handle>
-        ))
-      ) : (
-        <Handle type="source" position={Position.Right} />
+    <div className={`process-node ${data.kind}${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}`}>
+      <WidthResizer id={id} minWidth={160} />
+      <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Bottom} />
+      <span className="node-icon">
+        <KindIcon />
+      </span>
+      <div className="node-text">
+        {data.editing ? (
+          <NameInput
+            initial={data.name}
+            placeholder="Process name"
+            onCommit={(name) => actions.commitName(id, name)}
+            onCancel={() => actions.cancelName(id)}
+          />
+        ) : (
+          <>
+            <span className="node-name">{data.name}</span>
+            <span className="node-subtitle">{subtitle(data)}</span>
+          </>
+        )}
+      </div>
+      {!draft && (
+        <span className="node-buttons nodrag">
+          <button title="Settings" aria-label="Settings" onClick={() => actions.openPanel(id)}>
+            <GearIcon />
+          </button>
+          <button
+            title="Delete"
+            aria-label="Delete"
+            disabled={!actions.editable}
+            onClick={() => actions.remove(id)}
+          >
+            <TrashIcon />
+          </button>
+        </span>
       )}
-      <span className={`process-kind ${data.kind}`}>{data.kind}</span>
-      {data.editing ? (
-        <NameInput
-          initial={data.name}
-          placeholder="Process name"
-          onCommit={(name) => data.onCommit(id, name)}
-          onCancel={() => data.onCancel(id)}
-        />
-      ) : (
-        <span className="process-name">{data.name}</span>
-      )}
+      {/* A human process only links to states, so nothing is appended below it. */}
+      {leaf && !human && !draft && actions.editable && <AppendButton id={id} title="Add the object this process generates" />}
     </div>
+  )
+}
+
+export function AppendButton({ id, title }: { id: string; title: string }) {
+  const actions = useBoardActions()
+  return (
+    <button className="node-append nodrag" title={title} aria-label={title} onClick={() => actions.append(id)}>
+      <PlusIcon />
+    </button>
   )
 }
 
@@ -82,9 +127,20 @@ export function NameInput({
   // Enter/Escape unmount the input, which fires blur; don't handle it twice.
   const done = useRef(false)
 
+  // React Flow hides a new node until it has measured it, and hidden inputs
+  // can't take focus, so keep trying for a few frames.
   useEffect(() => {
-    ref.current?.focus()
-    ref.current?.select()
+    let tries = 0
+    let frame = 0
+    const focus = () => {
+      const input = ref.current
+      if (!input) return
+      input.focus()
+      input.select()
+      if (document.activeElement !== input && ++tries < 10) frame = requestAnimationFrame(focus)
+    }
+    focus()
+    return () => cancelAnimationFrame(frame)
   }, [])
 
   const finish = (commit: boolean) => {

@@ -64,7 +64,7 @@ func main() {
 	registerProcessRoutes(mux, db)
 	registerFlowRoutes(mux, db)
 	registerObjectRoutes(mux, db)
-	registerRouteRoutes(mux, db)
+	registerStateRoutes(mux, db)
 	registerRunRoutes(mux, db)
 	registerAgentRoutes(mux, db, env("WORKER_URL", "http://127.0.0.1:8090"))
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

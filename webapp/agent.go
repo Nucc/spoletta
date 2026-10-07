@@ -24,16 +24,20 @@ type agentModels struct {
 	Models  []string `json:"models"`
 }
 
-// An object a process takes as input, with the output of the process that generated it.
+// An object a process takes as input, with the output of the process that
+// generated it and the state it is in, if any.
 type runInput struct {
 	Name    string `json:"name"`
+	State   string `json:"state,omitempty"`
 	Content string `json:"content"`
 }
 
-// Sent when a human process requested changes and routed back to this one:
-// the work the human reviewed and what they want changed.
+// Sent when a human process set an object to a state this process takes it
+// in, and left instructions: the work the human reviewed, the state they set
+// it to and what they want done. Requests from before states have no state.
 type changeRequest struct {
 	Reviewer     string     `json:"reviewer"`
+	State        string     `json:"state,omitempty"`
 	Instructions string     `json:"instructions"`
 	Reviewed     []runInput `json:"reviewed"`
 }
@@ -166,23 +170,35 @@ func withInputs(prompt string, inputs []runInput) string {
 	b.WriteString(prompt)
 	b.WriteString("\n\nYour inputs follow, one <input> element per object.\n")
 	for _, in := range inputs {
-		fmt.Fprintf(&b, "\n<input name=\"%s\">\n%s\n</input>\n", html.EscapeString(in.Name), in.Content)
+		fmt.Fprintf(&b, "\n<input name=\"%s\"%s>\n%s\n</input>\n", html.EscapeString(in.Name), stateAttr(in.State), in.Content)
 	}
 	return b.String()
 }
 
+func stateAttr(state string) string {
+	if state == "" {
+		return ""
+	}
+	return fmt.Sprintf(" state=\"%s\"", html.EscapeString(state))
+}
+
 // Appends the work a human reviewed and their instructions, so the agent
-// revises that work rather than starting over.
+// works on that rather than starting over.
 func withChangeRequest(prompt string, cr *changeRequest) string {
 	if cr == nil {
 		return prompt
 	}
 	var b strings.Builder
 	b.WriteString(prompt)
-	fmt.Fprintf(&b, "\n\nThe reviewer %q requested changes. Revise the work below following their instructions.\n",
-		cr.Reviewer)
+	if cr.State == "" {
+		fmt.Fprintf(&b, "\n\nThe reviewer %q requested changes. Revise the work below following their instructions.\n",
+			cr.Reviewer)
+	} else {
+		fmt.Fprintf(&b, "\n\nThe reviewer %q marked the work below as %q. Act on it following their instructions.\n",
+			cr.Reviewer, cr.State)
+	}
 	for _, in := range cr.Reviewed {
-		fmt.Fprintf(&b, "\n<reviewed name=\"%s\">\n%s\n</reviewed>\n", html.EscapeString(in.Name), in.Content)
+		fmt.Fprintf(&b, "\n<reviewed name=\"%s\"%s>\n%s\n</reviewed>\n", html.EscapeString(in.Name), stateAttr(in.State), in.Content)
 	}
 	fmt.Fprintf(&b, "\n<change_request>\n%s\n</change_request>\n", cr.Instructions)
 	return b.String()

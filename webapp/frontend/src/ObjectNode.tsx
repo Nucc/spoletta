@@ -102,46 +102,49 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
 
 // OPM state: a rounded box inside its object, entered from the left and left
 // from the right, so links to and from states stand apart from the object's
-// own. Double-click to rename it.
+// own. Its handles sit on the object's edges, level with it, so its links
+// run clear of the object. Double-click to rename it.
 function StatePill({ objectId, state, active }: { objectId: string; state: ObjectState; active: boolean }) {
   const actions = useBoardActions()
   const [editing, setEditing] = useState(false)
 
   return (
-    <span
-      className={`state-pill${active ? ' active' : ''}${editing ? ' editing' : ''}`}
-      onDoubleClick={(e) => {
-        e.stopPropagation()
-        if (actions.editable) setEditing(true)
-      }}
-    >
+    <div className="state-row">
       <Handle type="target" position={Position.Left} id={stateTargetHandle(state.id)} />
       <Handle type="source" position={Position.Right} id={stateSourceHandle(state.id)} />
-      {editing ? (
-        <NameInput
-          initial={state.name}
-          placeholder="State"
-          onCommit={(name) => {
-            setEditing(false)
-            if (name !== state.name) actions.renameState(objectId, state.id, name)
-          }}
-          onCancel={() => setEditing(false)}
-        />
-      ) : (
-        <>
-          <span className="state-name">{state.name}</span>
-          {actions.editable && (
-            <button
-              className="state-remove nodrag"
-              title="Delete state"
-              aria-label={`Delete state ${state.name}`}
-              onClick={() => actions.removeState(objectId, state.id)}
-            >
-              ×
-            </button>
-          )}
-        </>
-      )}
-    </span>
+      <span
+        className={`state-pill${active ? ' active' : ''}${editing ? ' editing' : ''}`}
+        onDoubleClick={(e) => {
+          e.stopPropagation()
+          if (actions.editable) setEditing(true)
+        }}
+      >
+        {editing ? (
+          <NameInput
+            initial={state.name}
+            placeholder="State"
+            onCommit={(name) => {
+              setEditing(false)
+              if (name !== state.name) actions.renameState(objectId, state.id, name)
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+          <>
+            <span className="state-name">{state.name}</span>
+            {actions.editable && (
+              <button
+                className="state-remove nodrag"
+                title="Delete state"
+                aria-label={`Delete state ${state.name}`}
+                onClick={() => actions.removeState(objectId, state.id)}
+              >
+                ×
+              </button>
+            )}
+          </>
+        )}
+      </span>
+    </div>
   )
 }

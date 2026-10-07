@@ -785,8 +785,17 @@ body {
   gap: 6px;
 }
 
-.state-pill {
+/* A state's line across its object: its handles sit on the object's edges,
+   level with the pill. The negative margins undo the object's padding. */
+.state-row {
   position: relative;
+  align-self: stretch;
+  display: flex;
+  margin: 0 -10px;
+  padding: 0 10px;
+}
+
+.state-pill {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -821,7 +830,7 @@ body {
   white-space: nowrap;
 }
 
-.state-pill .react-flow__handle {
+.state-row .react-flow__handle {
   width: 7px;
   height: 7px;
   border-width: 1.5px;

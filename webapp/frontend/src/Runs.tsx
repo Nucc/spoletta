@@ -65,6 +65,7 @@ export function RunList({
                   <span className="run-item-status">{RUN_LABELS[r.status]}</span>
                 </span>
                 <time dateTime={r.startedAt}>
+                  {r.version !== null && `v${r.version} · `}
                   {formatTime(r.startedAt)}
                   {r.finishedAt && ` · ${formatDuration(r.startedAt, r.finishedAt)}`}
                 </time>
@@ -92,6 +93,13 @@ export function RunPanel({ run, onClose }: { run: FlowRunDetail; onClose: () => 
       <p className="panel-note">
         Started {formatTime(run.startedAt)}
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
+      </p>
+      <p className="panel-note">
+        {run.version === null
+          ? 'Ran before versions were kept, so the board shows it as the board is now.'
+          : run.status === 'running'
+            ? `Running on version ${run.version}.`
+            : `Ran on version ${run.version}, which the board shows until the run closes.`}
       </p>
       {run.steps.length === 0 ? (
         <p className="panel-note">No process has run yet.</p>

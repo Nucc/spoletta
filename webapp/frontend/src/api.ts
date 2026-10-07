@@ -282,6 +282,9 @@ export type FlowRunStatus = 'running' | 'done' | 'failed' | 'interrupted' | 'ter
 export type FlowRun = {
   id: number
   status: FlowRunStatus
+  // The version of the board it ran on; starting a run saves a board changed
+  // since its version as a new one. Null for runs from before versions were kept.
+  version: number | null
   startedAt: string
   finishedAt: string | null
 }
@@ -291,7 +294,8 @@ export type StepStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate'
 // One execution of a process in a run, with the process as it was then.
 export type RunStep = {
   id: number
-  // Null once the process is deleted.
+  // Kept once the process is deleted; null only for steps whose process was
+  // deleted before that.
   process: number | null
   processName: string
   kind: ProcessKind
@@ -317,7 +321,7 @@ export type RunStep = {
 export type RunObject = {
   id: number
   step: number
-  // Null once the object is deleted.
+  // Kept once the object is deleted, as a step's process is.
   object: number | null
   name: string
   state: string
@@ -387,4 +391,45 @@ export function saveVersion(): Promise<Version> {
 // Rewrites the board as the version has it.
 export function restoreVersion(id: number): Promise<void> {
   return request(`/api/versions/${id}/restore`, { method: 'POST' })
+}
+
+// The whole board, as the board's endpoints give it or a version saved it.
+export type BoardContents = {
+  processes: Process[]
+  objects: FlowObject[]
+  start: Start
+  connections: Connection[]
+  links: Link[]
+}
+
+type Snapshot = {
+  processes: Process[]
+  objects: Omit<FlowObject, 'states' | 'attributes'>[]
+  states: ObjectState[]
+  attributes: ObjectAttribute[]
+  // state is 0 when the link names none.
+  links: (Omit<Link, 'state' | 'states'> & { state: number })[]
+  linkStates: { link: number; state: number }[]
+  connections: Connection[]
+  start: Start
+}
+
+// The board as the version has it, without changing the board.
+export async function getVersionBoard(id: number): Promise<BoardContents> {
+  const s: Snapshot = await request(`/api/versions/${id}`)
+  return {
+    processes: s.processes,
+    objects: s.objects.map((o) => ({
+      ...o,
+      states: s.states.filter((st) => st.object === o.id),
+      attributes: s.attributes.filter((a) => a.object === o.id),
+    })),
+    start: s.start,
+    connections: s.connections,
+    links: s.links.map((l) => ({
+      ...l,
+      state: l.state || null,
+      states: s.linkStates.filter((ls) => ls.link === l.id).map((ls) => ls.state),
+    })),
+  }
 }

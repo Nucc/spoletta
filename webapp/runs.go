@@ -14,8 +14,11 @@ import (
 // the flow and records each process it executes as a step; agent steps are
 // recorded by the run endpoint, which knows the exact prompt sent.
 type run struct {
-	ID         int64      `json:"id"`
-	Status     string     `json:"status"`
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+	// The version of the board the run ran on; null for runs from before
+	// versions were recorded.
+	Version    *int64     `json:"version"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
@@ -24,7 +27,10 @@ type run struct {
 // times in one run when a human's decision leads back to it. The process's
 // name and settings are copied, so the history survives later edits.
 type step struct {
-	ID          int64  `json:"id"`
+	ID int64 `json:"id"`
+	// The process's id, kept after it is deleted, since the run's version
+	// still has it. Null only for steps whose process was deleted before ids
+	// were kept.
 	Process     *int64 `json:"process"`
 	ProcessName string `json:"processName"`
 	Kind        string `json:"kind"`
@@ -48,8 +54,9 @@ type step struct {
 // The content and state an object got in a run from the step that generated
 // it, or the state a human step set it to.
 type runObject struct {
-	ID      int64  `json:"id"`
-	Step    int64  `json:"step"`
+	ID   int64 `json:"id"`
+	Step int64 `json:"step"`
+	// Kept after the object is deleted, as a step's process is.
 	Object  *int64 `json:"object"`
 	Name    string `json:"name"`
 	State   string `json:"state"`
@@ -133,7 +140,28 @@ func migrateRuns(db *sql.DB) error {
 			return err
 		}
 	}
-	return addColumn(db, "run_objects", "state", "VARCHAR(255) NOT NULL DEFAULT '' AFTER name")
+	for _, c := range []struct{ table, name, def string }{
+		{"run_objects", "state", "VARCHAR(255) NOT NULL DEFAULT '' AFTER name"},
+		{"runs", "version_id", "BIGINT NULL AFTER status"},
+		// Ids that outlive the process or object: deleting it, or jumping to a
+		// version without it, nulls the foreign keys, yet the run's version
+		// still has it.
+		{"run_steps", "process_ref", "BIGINT NULL AFTER process_id"},
+		{"run_objects", "object_ref", "BIGINT NULL AFTER object_id"},
+	} {
+		if err := addColumn(db, c.table, c.name, c.def); err != nil {
+			return err
+		}
+	}
+	for _, s := range []string{
+		"UPDATE run_steps SET process_ref = process_id WHERE process_ref IS NULL AND process_id IS NOT NULL",
+		"UPDATE run_objects SET object_ref = object_id WHERE object_ref IS NULL AND object_id IS NOT NULL",
+	} {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Starts a step of a run, copying the process's current settings into it.
@@ -152,8 +180,8 @@ func startStep(ctx context.Context, db *sql.DB, runID, processID int64, status, 
 		}
 	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO run_steps (run_id, process_id, process_name, kind, model, thinking, prompt, inputs, change_request, status, output, error, instructions)
-		SELECT ?, id, name, kind, model, thinking, ?, ?, ?, ?, '', '', '' FROM processes WHERE id = ?`,
+		`INSERT INTO run_steps (run_id, process_id, process_ref, process_name, kind, model, thinking, prompt, inputs, change_request, status, output, error, instructions)
+		SELECT ?, id, id, name, kind, model, thinking, ?, ?, ?, ?, '', '', '' FROM processes WHERE id = ?`,
 		runID, prompt, in, crJSON, status, processID)
 	if err != nil {
 		return 0, err
@@ -214,8 +242,8 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 		return nil, tx.Commit()
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO run_objects (run_id, step_id, object_id, name, state, content)
-		SELECT s.run_id, s.id, o.id, o.name, COALESCE(st.name, ''), ? FROM run_steps s
+		`INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content)
+		SELECT s.run_id, s.id, o.id, o.id, o.name, COALESCE(st.name, ''), ? FROM run_steps s
 		JOIN object_links l ON l.process_id = s.process_id AND l.direction = 'output'
 		JOIN objects o ON o.id = l.object_id
 		LEFT JOIN object_states st ON st.id = l.state_id
@@ -282,8 +310,8 @@ func decisionState(ctx context.Context, db *sql.DB, stepID, stateID int64) (stri
 // content it last got in the run.
 func recordDecision(ctx context.Context, db *sql.DB, stepID, stateID int64) error {
 	_, err := db.ExecContext(ctx,
-		`INSERT INTO run_objects (run_id, step_id, object_id, name, state, content)
-		SELECT s.run_id, s.id, o.id, o.name, st.name,
+		`INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content)
+		SELECT s.run_id, s.id, o.id, o.id, o.name, st.name,
 			COALESCE((SELECT ro.content FROM run_objects ro WHERE ro.run_id = s.run_id AND ro.object_id = o.id ORDER BY ro.id DESC LIMIT 1), '')
 		FROM run_steps s
 		JOIN object_states st ON st.id = ?
@@ -295,7 +323,7 @@ func recordDecision(ctx context.Context, db *sql.DB, stepID, stateID int64) erro
 
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, status, started_at, finished_at FROM runs ORDER BY id DESC LIMIT 200")
+		rows, err := db.QueryContext(r.Context(), "SELECT id, status, version_id, started_at, finished_at FROM runs ORDER BY id DESC LIMIT 200")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -305,7 +333,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		rs := []run{}
 		for rows.Next() {
 			var rn run
-			if err := rows.Scan(&rn.ID, &rn.Status, &rn.StartedAt, &rn.FinishedAt); err != nil {
+			if err := rows.Scan(&rn.ID, &rn.Status, &rn.Version, &rn.StartedAt, &rn.FinishedAt); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -320,19 +348,37 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 
 	getRun := func(ctx context.Context, id int64) (run, error) {
 		var rn run
-		err := db.QueryRowContext(ctx, "SELECT id, status, started_at, finished_at FROM runs WHERE id = ?", id).
-			Scan(&rn.ID, &rn.Status, &rn.StartedAt, &rn.FinishedAt)
+		err := db.QueryRowContext(ctx, "SELECT id, status, version_id, started_at, finished_at FROM runs WHERE id = ?", id).
+			Scan(&rn.ID, &rn.Status, &rn.Version, &rn.StartedAt, &rn.FinishedAt)
 		return rn, err
 	}
 
+	// Starts a run on the board as it is: a board changed since its version
+	// is saved as a new one first, so the run's version shows what it ran.
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
-		res, err := db.ExecContext(r.Context(), "INSERT INTO runs (status) VALUES (?)", runRunning)
+		ctx := r.Context()
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		version, err := saveVersion(ctx, tx, true)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		res, err := tx.ExecContext(ctx, "INSERT INTO runs (status, version_id) VALUES (?, ?)", runRunning, version)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		id, err := res.LastInsertId()
 		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if err := tx.Commit(); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -368,7 +414,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		}{run: rn, Steps: []step{}, Objects: []runObject{}}
 
 		rows, err := db.QueryContext(r.Context(),
-			`SELECT id, process_id, process_name, kind, model, thinking, prompt, inputs, change_request,
+			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
 				status, output, error, outcome, instructions, started_at, finished_at
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
@@ -403,7 +449,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		orows, err := db.QueryContext(r.Context(),
-			"SELECT id, step_id, object_id, name, state, content FROM run_objects WHERE run_id = ? ORDER BY id", id)
+			"SELECT id, step_id, COALESCE(object_ref, object_id), name, state, content FROM run_objects WHERE run_id = ? ORDER BY id", id)
 		if err != nil {
 			serverError(w, err)
 			return

@@ -53,6 +53,7 @@ import {
   finishStep,
   getRun,
   getStart,
+  getVersionBoard,
   listConnections,
   listLinks,
   listModels,
@@ -72,6 +73,7 @@ import {
   updateObject,
   updateProcess,
   updateStart,
+  type BoardContents,
   type ChangeRequest,
   type Connection,
   type Duplicate,
@@ -185,6 +187,11 @@ const linkEdge = (l: Link, human: boolean): LinkEdgeType => {
     data: { link: l, insertable: !(output && human), decision: output && human, routable: true, route: l.route },
   }
 }
+
+const fetchBoard = (): Promise<BoardContents> =>
+  Promise.all([listProcesses(), listObjects(), getStart(), listConnections(), listLinks()]).then(
+    ([processes, objects, start, connections, links]) => ({ processes, objects, start, connections, links }),
+  )
 
 const toStartNode = (s: Start): StartNodeType => ({
   id: START_ID,
@@ -318,21 +325,20 @@ export default function Board() {
 
   const refreshVersions = useCallback(() => listVersions().then(setVersions).catch(report), [report])
 
-  const loadBoard = useCallback(
-    () =>
-      Promise.all([listProcesses(), listObjects(), getStart(), listConnections(), listLinks()]).then(
-        ([ps, os, start, cs, ls]) => {
-          const humans = new Set(ps.filter((p) => p.kind === 'human').map((p) => p.id))
-          setNodes([toStartNode(start), ...ps.map((p) => toNode(p)), ...os.map((o) => toObjectNode(o))])
-          setEdges([
-            ...(start.target !== null ? [startEdge(start.target, start.route)] : []),
-            ...cs.map(connectionEdge),
-            ...ls.map((l) => linkEdge(l, humans.has(l.process))),
-          ])
-        },
-      ),
+  const showBoard = useCallback(
+    ({ processes: ps, objects: os, start, connections: cs, links: ls }: BoardContents) => {
+      const humans = new Set(ps.filter((p) => p.kind === 'human').map((p) => p.id))
+      setNodes([toStartNode(start), ...ps.map((p) => toNode(p)), ...os.map((o) => toObjectNode(o))])
+      setEdges([
+        ...(start.target !== null ? [startEdge(start.target, start.route)] : []),
+        ...cs.map(connectionEdge),
+        ...ls.map((l) => linkEdge(l, humans.has(l.process))),
+      ])
+    },
     [setNodes, setEdges, toNode, toObjectNode],
   )
+
+  const loadBoard = useCallback(() => fetchBoard().then(showBoard), [showBoard])
 
   useEffect(() => {
     listModels().then(setModels).catch(report)
@@ -402,11 +408,38 @@ export default function Board() {
     }
   }, [runId, report])
 
+  // A finished run shows on the board it ran on, its version, which can't be
+  // edited while the run is open. Runs from before versions were kept show
+  // on the board as it is. The run list can still have the run running after
+  // it ends; the run's own details can't, but they reload when another run opens.
+  const finishedRun = runDetail && runDetail.status !== 'running' ? runDetail : null
+  const openRun = runs.find((r) => r.id === runId)
+  const runFinished = (openRun && openRun.status !== 'running') || finishedRun?.id === runId
+  const runVersion = !running && runFinished ? (openRun?.version ?? null) : null
+  // The version the board shows, null for the board itself.
+  const [shownVersion, setShownVersion] = useState<number | null>(null)
+  const reviewing = shownVersion !== null
+  useEffect(() => {
+    if (runVersion === shownVersion) return
+    let stale = false
+    ;(runVersion === null ? fetchBoard() : getVersionBoard(runVersion))
+      .then((board) => {
+        if (stale) return
+        setPanelId(null)
+        setMenu(null)
+        showBoard(board)
+        setShownVersion(runVersion)
+      })
+      .catch(report)
+    return () => {
+      stale = true
+    }
+  }, [runVersion, shownVersion, showBoard, report])
+
   // Shows a finished run on the board: each process as its last step in the
   // run left it, each object with the content and state it last got.
-  const finishedRun = runDetail && runDetail.status !== 'running' ? runDetail : null
   useEffect(() => {
-    if (!finishedRun || running) return
+    if (!finishedRun || finishedRun.id !== runId || running || shownVersion !== runVersion) return
     const steps = new Map(finishedRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
     const objects = new Map(finishedRun.objects.flatMap((o) => (o.object === null ? [] : [[objectNodeId(o.object), o] as const])))
     setNodes((ns) =>
@@ -432,7 +465,7 @@ export default function Board() {
         return n
       }),
     )
-  }, [finishedRun, running, setNodes])
+  }, [finishedRun, runId, running, shownVersion, runVersion, setNodes])
 
   const addDraft = useCallback(
     (type: 'process' | 'object', screenX: number, screenY: number) => {
@@ -460,7 +493,7 @@ export default function Board() {
   }
 
   const onPaneDoubleClick = (e: MouseEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).classList.contains('react-flow__pane')) {
+    if (!reviewing && (e.target as HTMLElement).classList.contains('react-flow__pane')) {
       addDraft(e.shiftKey ? 'object' : 'process', e.clientX, e.clientY)
     }
   }
@@ -871,7 +904,7 @@ export default function Board() {
 
   const onNodeContextMenu: NodeMouseHandler<FlowNode> = (e, node) => {
     e.preventDefault()
-    if (node.type !== 'start' && !isDraft(node.id)) setMenu({ id: node.id, x: e.clientX, y: e.clientY })
+    if (!reviewing && node.type !== 'start' && !isDraft(node.id)) setMenu({ id: node.id, x: e.clientX, y: e.clientY })
   }
 
   const menuItems = (id: string): MenuItem[] => [
@@ -917,13 +950,15 @@ export default function Board() {
       setDecisionStates: (edgeId, states) => latest.current.setDecisionStates(edgeId, states),
       setRoute: (edgeId, route, save) => latest.current.setRoute(edgeId, route, save),
       resize: (id, x, width) => latest.current.resize(id, x, width),
-      editable: !running,
+      editable: !running && !reviewing,
     }),
-    [running, updateObjectData],
+    [running, reviewing, updateObjectData],
   )
 
   const startTarget = edges.find((e) => e.id === START_EDGE_ID)?.target
-  const canRun = startTarget !== undefined && !running
+  // Set while going back from a run's version to the board, to run it then.
+  const [queuedRun, setQueuedRun] = useState(false)
+  const canRun = (reviewing || startTarget !== undefined) && !running && !queuedRun
 
   // Agent processes run their prompt in the worker's pi harness; script
   // processes are still simulated. Each execution is recorded as a step of
@@ -1126,6 +1161,8 @@ export default function Board() {
       return
     }
     liveRun.current = run.id
+    // Starting the run may have saved the board as a new version.
+    refreshVersions()
     setRuns((rs) => [run, ...rs])
     setRunId(run.id)
     setVersionsOpen(false)
@@ -1154,6 +1191,22 @@ export default function Board() {
       refreshRuns()
     }
   }
+
+  // The flow runs as the board has it, so a run's version shown on the board
+  // makes way for the board first.
+  const onPlay = () => {
+    if (!reviewing) {
+      onRun()
+      return
+    }
+    setRunId(null)
+    setQueuedRun(true)
+  }
+  useEffect(() => {
+    if (!queuedRun || reviewing) return
+    setQueuedRun(false)
+    onRun()
+  })
 
   // The states a human process can set: those its output links list.
   const decisionOptions = (id: string) =>
@@ -1200,13 +1253,13 @@ export default function Board() {
         <h1>
           <FlowBuilderIcon /> Flow Builder
         </h1>
-        <button onClick={() => addAtViewportCenter('process')}>
+        <button onClick={() => addAtViewportCenter('process')} disabled={reviewing}>
           <PlusIcon /> Process
         </button>
-        <button onClick={() => addAtViewportCenter('object')}>
+        <button onClick={() => addAtViewportCenter('object')} disabled={reviewing}>
           <PlusIcon /> Object
         </button>
-        <button onClick={onTidy} title="Lay the board out from the top">
+        <button onClick={onTidy} disabled={reviewing} title="Lay the board out from the top">
           <LayoutIcon /> Tidy up
         </button>
         <span
@@ -1216,7 +1269,7 @@ export default function Board() {
           Processes connect through the objects they generate and take. Right-click a node for more.
         </span>
         <div className="versioning">
-          <button onClick={onSave} disabled={running || versioning} title="Save the board as a new version">
+          <button onClick={onSave} disabled={running || versioning || reviewing} title="Save the board as a new version">
             <SaveIcon /> Save
           </button>
           <button
@@ -1240,7 +1293,7 @@ export default function Board() {
         </div>
         <button
           className="play"
-          onClick={onRun}
+          onClick={onPlay}
           disabled={!canRun}
           aria-label="Run flow"
           title={
@@ -1281,16 +1334,25 @@ export default function Board() {
               isValidConnection={isValidConnection}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeContextMenu={onNodeContextMenu}
-              onEdgeDoubleClick={(_, edge) => !running && edge.data?.route && setRoute(edge.id, null, true)}
+              onEdgeDoubleClick={(_, edge) => !running && !reviewing && edge.data?.route && setRoute(edge.id, null, true)}
               onPaneClick={() => setPanelId(null)}
               onNodeDragStop={onNodeDragStop}
               onDoubleClick={onPaneDoubleClick}
               zoomOnDoubleClick={false}
+              nodesDraggable={!reviewing}
+              nodesConnectable={!reviewing}
+              deleteKeyCode={reviewing ? null : undefined}
             >
               <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
               <Controls />
             </ReactFlow>
           </BoardActionsContext.Provider>
+          {reviewing && openRun && (
+            <div className="review-banner" role="status">
+              Run #{openRun.id} ran on version {shownVersion}; this is the board as it was then.
+              <button onClick={() => setRunId(null)}>Back to the board</button>
+            </div>
+          )}
           {menu && (
             <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
           )}
@@ -1308,6 +1370,7 @@ export default function Board() {
               thinking: panelNode.data.thinking,
             }}
             models={models}
+            readOnly={reviewing}
             run={{ status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
             review={
               panelNode.data.review && {
@@ -1331,7 +1394,7 @@ export default function Board() {
             attributes={objectPanelNode.data.attributes}
             persistent={objectPanelNode.data.persistent}
             onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
-            editable={!running}
+            editable={!running && !reviewing}
             content={objectPanelNode.data.content}
             onRename={(name) => commitName(objectPanelNode.id, name)}
             onAdd={(name) => addAttribute(objectPanelNode.id, name)}

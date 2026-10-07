@@ -40,6 +40,7 @@ export default function ProcessPanel({
   id,
   initial,
   models,
+  readOnly = false,
   run,
   review,
   onChange,
@@ -50,6 +51,8 @@ export default function ProcessPanel({
   initial: Fields
   // Models pi offers, or null while they load.
   models: Models | null
+  // Shows the process without letting it change, such as as a past run's version has it.
+  readOnly?: boolean
   // How this process did in the latest flow run, if it has run.
   run?: { status?: RunStatus; output?: string; error?: string }
   review?: Review
@@ -105,14 +108,14 @@ export default function ProcessPanel({
   return (
     <aside className="panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
-        <h2>Process</h2>
+        <h2>Process{readOnly && <span className="run-badge">read-only</span>}</h2>
         <button className="panel-close" onClick={onClose} aria-label="Close panel">
           ×
         </button>
       </header>
       <label className="panel-field">
         <span>Name</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} />
+        <input value={name} readOnly={readOnly} onChange={(e) => setName(e.target.value)} />
         {name.trim() === '' && <small className="panel-warning">Name can't be empty.</small>}
       </label>
       <div className="panel-field" role="radiogroup" aria-label="Type">
@@ -124,6 +127,7 @@ export default function ProcessPanel({
               role="radio"
               aria-checked={kind === k.value}
               className={kind === k.value ? 'selected' : ''}
+              disabled={readOnly}
               onClick={() => setKind(k.value)}
             >
               {k.label}
@@ -135,7 +139,7 @@ export default function ProcessPanel({
         <div className="panel-row">
           <label className="panel-field">
             <span>Model</span>
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
+            <select value={model} disabled={readOnly} onChange={(e) => setModel(e.target.value)}>
               <option value="">Default{models?.default ? ` (${models.default})` : ''}</option>
               {/* A model dropped from pi's list stays selectable so it isn't silently replaced. */}
               {model !== '' && !models?.models.includes(model) && <option value={model}>{model}</option>}
@@ -148,7 +152,7 @@ export default function ProcessPanel({
           </label>
           <label className="panel-field">
             <span>Thinking</span>
-            <select value={thinking} onChange={(e) => setThinking(e.target.value as ThinkingLevel | '')}>
+            <select value={thinking} disabled={readOnly} onChange={(e) => setThinking(e.target.value as ThinkingLevel | '')}>
               <option value="">Default</option>
               {THINKING_LEVELS.map((t) => (
                 <option key={t} value={t}>
@@ -164,6 +168,7 @@ export default function ProcessPanel({
           <span>Prompt</span>
           <textarea
             ref={bodyRef}
+            readOnly={readOnly}
             value={prompt}
             placeholder="Describe what this process should do…"
             onChange={(e) => setPrompt(e.target.value)}
@@ -175,6 +180,7 @@ export default function ProcessPanel({
           <span>Reviewer instructions</span>
           <textarea
             ref={bodyRef}
+            readOnly={readOnly}
             value={prompt}
             rows={review ? 3 : undefined}
             placeholder="What should the reviewer check before approving?"
@@ -186,6 +192,7 @@ export default function ProcessPanel({
           <span>Script</span>
           <textarea
             ref={bodyRef}
+            readOnly={readOnly}
             value={script}
             placeholder="Script to run for this process…"
             spellCheck={false}

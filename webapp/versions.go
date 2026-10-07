@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -282,6 +283,58 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 	return err
 }
 
+// Whether two snapshots hold the same board. Compared as decoded JSON, since
+// the database rewrites stored JSON's spacing, key order and numbers.
+func sameSnapshot(a, b []byte) (bool, error) {
+	var x, y any
+	if err := json.Unmarshal(a, &x); err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(b, &y); err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(x, y), nil
+}
+
+// Saves the board as a new version on top of the one it is on, and makes it
+// current. With reuse, a board unchanged since its current version stays on
+// it instead; the version saved or kept is returned.
+func saveVersion(ctx context.Context, tx *sql.Tx, reuse bool) (int64, error) {
+	var current *int64
+	// Locked so that two saves can't both be based on the same version unnoticed.
+	if err := tx.QueryRowContext(ctx, "SELECT version_id FROM flow_current WHERE id = 1 FOR UPDATE").Scan(&current); err != nil {
+		return 0, err
+	}
+	s, err := takeSnapshot(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	body, err := json.Marshal(s)
+	if err != nil {
+		return 0, err
+	}
+	if reuse && current != nil {
+		var saved []byte
+		if err := tx.QueryRowContext(ctx, "SELECT snapshot FROM flow_versions WHERE id = ?", *current).Scan(&saved); err != nil {
+			return 0, err
+		}
+		same, err := sameSnapshot(body, saved)
+		if err != nil || same {
+			return *current, err
+		}
+	}
+	res, err := tx.ExecContext(ctx, "INSERT INTO flow_versions (based_on, snapshot) VALUES (?, ?)", current, body)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE flow_current SET version_id = ? WHERE id = 1", id)
+	return id, err
+}
+
 func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/versions", func(w http.ResponseWriter, r *http.Request) {
 		res := struct {
@@ -324,35 +377,11 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 		defer tx.Rollback()
 
 		var v version
-		// Locked so that two saves can't both be based on the same version unnoticed.
-		if err := tx.QueryRowContext(ctx, "SELECT version_id FROM flow_current WHERE id = 1 FOR UPDATE").Scan(&v.BasedOn); err != nil {
+		if v.ID, err = saveVersion(ctx, tx, false); err != nil {
 			serverError(w, err)
 			return
 		}
-		s, err := takeSnapshot(ctx, tx)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		body, err := json.Marshal(s)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO flow_versions (based_on, snapshot) VALUES (?, ?)", v.BasedOn, body)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		if v.ID, err = res.LastInsertId(); err != nil {
-			serverError(w, err)
-			return
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE flow_current SET version_id = ? WHERE id = 1", v.ID); err != nil {
-			serverError(w, err)
-			return
-		}
-		if err := tx.QueryRowContext(ctx, "SELECT created_at FROM flow_versions WHERE id = ?", v.ID).Scan(&v.CreatedAt); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT based_on, created_at FROM flow_versions WHERE id = ?", v.ID).Scan(&v.BasedOn, &v.CreatedAt); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -361,6 +390,31 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, v)
+	})
+
+	// The board as the version has it, such as for showing a run on the board it ran on.
+	mux.HandleFunc("GET /api/versions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var body []byte
+		err = db.QueryRowContext(r.Context(), "SELECT snapshot FROM flow_versions WHERE id = ?", id).Scan(&body)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "version not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		var s snapshot
+		if err := json.Unmarshal(body, &s); err != nil {
+			serverError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, s)
 	})
 
 	mux.HandleFunc("POST /api/versions/{id}/restore", func(w http.ResponseWriter, r *http.Request) {

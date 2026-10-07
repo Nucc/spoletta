@@ -206,6 +206,7 @@ body {
 }
 
 .canvas {
+  position: relative;
   flex: 1;
   min-width: 0;
 }
@@ -1284,4 +1285,28 @@ body {
 
 .react-flow__resize-control.line.width-resizer:hover {
   border-color: #1f6feb;
+}
+
+/* Says the board shows the version an open run ran on, which can't be edited. */
+.review-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 32px);
+  padding: 6px 6px 6px 14px;
+  font-size: 13px;
+  color: #0550ae;
+  background: #ddf4ff;
+  border: 1px solid #54aeff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(31, 35, 40, 0.12);
+}
+
+.review-banner button {
+  flex-shrink: 0;
 }

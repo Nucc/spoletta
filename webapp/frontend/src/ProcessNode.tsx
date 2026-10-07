@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
-import type { ProcessKind } from './api'
+import type { ProcessKind, ThinkingLevel } from './api'
 
 export type ProcessNodeData = {
   name: string
@@ -8,6 +8,8 @@ export type ProcessNodeData = {
   // Edited in the side panel, never rendered on the node.
   prompt: string
   script: string
+  model: string
+  thinking: ThinkingLevel | ''
   editing: boolean
   // Set while a flow run is in progress or after it has passed this process.
   status?: RunStatus

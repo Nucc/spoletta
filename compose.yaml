@@ -17,11 +17,27 @@ services:
       retries: 20
 
   # Runs pi agent harnesses for agent processes. Only the webapp reaches it,
-  # so its port isn't published.
+  # so its port isn't published. It uses the models and model settings from
+  # your pi config (PI_CONFIG_DIR, ~/.pi/agent by default) and credentials
+  # from the environment `podman compose up` runs in; restart it after
+  # changing either.
   worker:
     build: ./worker
     environment:
-      PORT: "8090"
+      - PORT=8090
+      - PI_SKIP_VERSION_CHECK=1
+      - PI_TELEMETRY=0
+      # Passed through from the host when set. Add any other variables your
+      # models.json references.
+      - OPENAI_API_KEY
+      - ANTHROPIC_API_KEY
+      - GEMINI_API_KEY
+      - OPENROUTER_API_KEY
+    volumes:
+      # Only these two files: the agent can read anything mounted, and the
+      # rest of the directory holds sessions and OAuth tokens.
+      - ${PI_CONFIG_DIR:-~/.pi/agent}/models.json:/pi-host/models.json:ro
+      - ${PI_CONFIG_DIR:-~/.pi/agent}/settings.json:/pi-host/settings.json:ro
     restart: unless-stopped
 
   webapp:

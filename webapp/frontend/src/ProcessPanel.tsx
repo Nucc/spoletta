@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { updateProcess, type ProcessKind } from './api'
+import { THINKING_LEVELS, updateProcess, type Models, type ProcessKind, type ThinkingLevel } from './api'
 import type { RunStatus } from './ProcessNode'
 
-type Fields = { name: string; kind: ProcessKind; prompt: string; script: string }
+type Fields = {
+  name: string
+  kind: ProcessKind
+  prompt: string
+  script: string
+  model: string
+  thinking: ThinkingLevel | ''
+}
 
 const SAVE_DELAY_MS = 500
 
@@ -15,6 +22,7 @@ const KINDS: { value: ProcessKind; label: string }[] = [
 export default function ProcessPanel({
   id,
   initial,
+  models,
   run,
   onChange,
   onClose,
@@ -22,6 +30,8 @@ export default function ProcessPanel({
 }: {
   id: number
   initial: Fields
+  // Models pi offers, or null while they load.
+  models: Models | null
   // Outcome of this process in the latest flow run, if it has run.
   run?: { status?: RunStatus; output?: string; error?: string }
   onChange: (fields: Fields) => void
@@ -32,6 +42,8 @@ export default function ProcessPanel({
   const [kind, setKind] = useState(initial.kind)
   const [prompt, setPrompt] = useState(initial.prompt)
   const [script, setScript] = useState(initial.script)
+  const [model, setModel] = useState(initial.model)
+  const [thinking, setThinking] = useState(initial.thinking)
   const saved = useRef(initial)
   const pending = useRef<Partial<Fields> | null>(null)
   const timer = useRef<number>(undefined)
@@ -53,6 +65,8 @@ export default function ProcessPanel({
     if (kind !== saved.current.kind) patch.kind = kind
     if (prompt !== saved.current.prompt) patch.prompt = prompt
     if (script !== saved.current.script) patch.script = script
+    if (model !== saved.current.model) patch.model = model
+    if (thinking !== saved.current.thinking) patch.thinking = thinking
     if (Object.keys(patch).length === 0) return
 
     saved.current = { ...saved.current, ...patch }
@@ -60,7 +74,7 @@ export default function ProcessPanel({
     onChange(saved.current)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(flush, SAVE_DELAY_MS)
-  }, [name, kind, prompt, script])
+  }, [name, kind, prompt, script, model, thinking])
 
   useEffect(() => flush, [])
 
@@ -98,6 +112,34 @@ export default function ProcessPanel({
           ))}
         </div>
       </div>
+      {kind === 'agent' && (
+        <div className="panel-row">
+          <label className="panel-field">
+            <span>Model</span>
+            <select value={model} onChange={(e) => setModel(e.target.value)}>
+              <option value="">Default{models?.default ? ` (${models.default})` : ''}</option>
+              {/* A model dropped from pi's list stays selectable so it isn't silently replaced. */}
+              {model !== '' && !models?.models.includes(model) && <option value={model}>{model}</option>}
+              {models?.models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="panel-field">
+            <span>Thinking</span>
+            <select value={thinking} onChange={(e) => setThinking(e.target.value as ThinkingLevel | '')}>
+              <option value="">Default</option>
+              {THINKING_LEVELS.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
       {kind === 'agent' ? (
         <label key="agent" className="panel-field panel-field-grow">
           <span>Prompt</span>
@@ -120,7 +162,7 @@ export default function ProcessPanel({
           />
         </label>
       )}
-      {run?.status === 'active' && <p className="settings-note">Running…</p>}
+      {run?.status === 'active' && <p className="panel-note">Running…</p>}
       {run?.error && (
         <div className="panel-run">
           <span>Last run failed</span>

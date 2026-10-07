@@ -11,13 +11,16 @@ import (
 )
 
 type process struct {
-	ID     int64   `json:"id"`
-	Name   string  `json:"name"`
-	Kind   string  `json:"kind"`
-	Prompt string  `json:"prompt"`
-	Script string  `json:"script"`
-	X      float64 `json:"x"`
-	Y      float64 `json:"y"`
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Prompt string `json:"prompt"`
+	Script string `json:"script"`
+	// Model ("provider/id") and thinking level for agent processes; empty uses the pi default.
+	Model    string  `json:"model"`
+	Thinking string  `json:"thinking"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
 }
 
 // A process is either run by an agent from its prompt or executes its script.
@@ -30,6 +33,25 @@ func validKind(k string) bool {
 	return k == kindAgent || k == kindScript
 }
 
+var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+func validThinking(t string) bool {
+	if t == "" {
+		return true
+	}
+	for _, l := range thinkingLevels {
+		if t == l {
+			return true
+		}
+	}
+	return false
+}
+
+// Model ids are passed to pi as arguments; a leading dash would read as an option.
+func validModel(m string) bool {
+	return !strings.HasPrefix(m, "-") && len(m) <= 255
+}
+
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS processes (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -37,6 +59,8 @@ func migrate(db *sql.DB) error {
 		kind VARCHAR(16) NOT NULL DEFAULT 'agent',
 		prompt TEXT NOT NULL,
 		script TEXT NOT NULL,
+		model VARCHAR(255) NOT NULL DEFAULT '',
+		thinking VARCHAR(16) NOT NULL DEFAULT '',
 		x DOUBLE NOT NULL DEFAULT 0,
 		y DOUBLE NOT NULL DEFAULT 0,
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -48,6 +72,8 @@ func migrate(db *sql.DB) error {
 		{"prompt", "TEXT NOT NULL AFTER name"},
 		{"kind", "VARCHAR(16) NOT NULL DEFAULT 'agent' AFTER name"},
 		{"script", "TEXT NOT NULL AFTER prompt"},
+		{"model", "VARCHAR(255) NOT NULL DEFAULT '' AFTER script"},
+		{"thinking", "VARCHAR(16) NOT NULL DEFAULT '' AFTER model"},
 	} {
 		if err := addProcessColumn(db, c.name, c.def); err != nil {
 			return err
@@ -70,7 +96,7 @@ func addProcessColumn(db *sql.DB, name, def string) error {
 
 func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/processes", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, name, kind, prompt, script, x, y FROM processes ORDER BY id")
+		rows, err := db.QueryContext(r.Context(), "SELECT id, name, kind, prompt, script, model, thinking, x, y FROM processes ORDER BY id")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -80,7 +106,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		ps := []process{}
 		for rows.Next() {
 			var p process
-			if err := rows.Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.X, &p.Y); err != nil {
+			if err := rows.Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -111,9 +137,13 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "kind must be agent or script", http.StatusBadRequest)
 			return
 		}
+		if !validModel(p.Model) || !validThinking(p.Thinking) {
+			http.Error(w, "invalid model or thinking level", http.StatusBadRequest)
+			return
+		}
 
-		res, err := db.ExecContext(r.Context(), "INSERT INTO processes (name, kind, prompt, script, x, y) VALUES (?, ?, ?, ?, ?, ?)",
-			p.Name, p.Kind, p.Prompt, p.Script, p.X, p.Y)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO processes (name, kind, prompt, script, model, thinking, x, y) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -133,12 +163,14 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var patch struct {
-			Name   *string  `json:"name"`
-			Kind   *string  `json:"kind"`
-			Prompt *string  `json:"prompt"`
-			Script *string  `json:"script"`
-			X      *float64 `json:"x"`
-			Y      *float64 `json:"y"`
+			Name     *string  `json:"name"`
+			Kind     *string  `json:"kind"`
+			Prompt   *string  `json:"prompt"`
+			Script   *string  `json:"script"`
+			Model    *string  `json:"model"`
+			Thinking *string  `json:"thinking"`
+			X        *float64 `json:"x"`
+			Y        *float64 `json:"y"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -154,19 +186,23 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "kind must be agent or script", http.StatusBadRequest)
 			return
 		}
+		if (patch.Model != nil && !validModel(*patch.Model)) || (patch.Thinking != nil && !validThinking(*patch.Thinking)) {
+			http.Error(w, "invalid model or thinking level", http.StatusBadRequest)
+			return
+		}
 
 		// COALESCE keeps the stored value for fields absent from the patch.
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE processes SET name = COALESCE(?, name), kind = COALESCE(?, kind), prompt = COALESCE(?, prompt), script = COALESCE(?, script), x = COALESCE(?, x), y = COALESCE(?, y) WHERE id = ?",
-			patch.Name, patch.Kind, patch.Prompt, patch.Script, patch.X, patch.Y, id)
+			"UPDATE processes SET name = COALESCE(?, name), kind = COALESCE(?, kind), prompt = COALESCE(?, prompt), script = COALESCE(?, script), model = COALESCE(?, model), thinking = COALESCE(?, thinking), x = COALESCE(?, x), y = COALESCE(?, y) WHERE id = ?",
+			patch.Name, patch.Kind, patch.Prompt, patch.Script, patch.Model, patch.Thinking, patch.X, patch.Y, id)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 
 		var p process
-		err = db.QueryRowContext(r.Context(), "SELECT id, name, kind, prompt, script, x, y FROM processes WHERE id = ?", id).
-			Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.X, &p.Y)
+		err = db.QueryRowContext(r.Context(), "SELECT id, name, kind, prompt, script, model, thinking, x, y FROM processes WHERE id = ?", id).
+			Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "process not found", http.StatusNotFound)
 			return

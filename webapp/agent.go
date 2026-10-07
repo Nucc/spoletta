@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -12,21 +13,14 @@ import (
 	"strings"
 )
 
-// Agent settings configure the pi harness that runs agent processes. They
-// live in a one-row table. The API key is write-only: responses only say
-// whether one is stored and how it ends.
-type agentSettings struct {
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	Thinking  string `json:"thinking"`
-	HasAPIKey bool   `json:"hasApiKey"`
-	KeyHint   string `json:"keyHint"`
+// Agent processes run in the worker's pi harness, which takes its models,
+// defaults and credentials from the user's pi setup.
+
+// The models offered for agent processes: pi's enabledModels and its default.
+type agentModels struct {
+	Default string   `json:"default"`
+	Models  []string `json:"models"`
 }
-
-// Keep in sync with API_KEY_ENV in worker/server.mjs.
-var agentProviders = []string{"anthropic", "openai", "google", "openrouter", "mistral", "groq", "xai", "deepseek"}
-
-var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 type runResult struct {
 	OK     bool   `json:"ok"`
@@ -35,99 +29,19 @@ type runResult struct {
 }
 
 func migrateAgent(db *sql.DB) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS agent_settings (
-			id TINYINT PRIMARY KEY,
-			provider VARCHAR(64) NOT NULL DEFAULT 'anthropic',
-			model VARCHAR(255) NOT NULL DEFAULT '',
-			thinking VARCHAR(16) NOT NULL DEFAULT 'medium',
-			api_key TEXT NOT NULL
-		)`,
-		"INSERT IGNORE INTO agent_settings (id, api_key) VALUES (1, '')",
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func contains(list []string, v string) bool {
-	for _, s := range list {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
-
-func keyHint(key string) string {
-	if len(key) < 8 {
-		return ""
-	}
-	return key[len(key)-4:]
+	// Agent settings used to live here, API key included; pi's config replaced them.
+	_, err := db.Exec("DROP TABLE IF EXISTS agent_settings")
+	return err
 }
 
 func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
-	getSettings := func(w http.ResponseWriter, r *http.Request) {
-		var s agentSettings
-		var key string
-		err := db.QueryRowContext(r.Context(), "SELECT provider, model, thinking, api_key FROM agent_settings WHERE id = 1").
-			Scan(&s.Provider, &s.Model, &s.Thinking, &key)
-		if err != nil {
-			serverError(w, err)
+	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, r *http.Request) {
+		var models agentModels
+		if err := callWorker(r.Context(), http.MethodGet, workerURL+"/models", nil, &models); err != nil {
+			http.Error(w, "worker unavailable: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		s.HasAPIKey = key != ""
-		s.KeyHint = keyHint(key)
-		writeJSON(w, http.StatusOK, s)
-	}
-
-	mux.HandleFunc("GET /api/agent-settings", getSettings)
-
-	mux.HandleFunc("PATCH /api/agent-settings", func(w http.ResponseWriter, r *http.Request) {
-		var patch struct {
-			Provider *string `json:"provider"`
-			Model    *string `json:"model"`
-			Thinking *string `json:"thinking"`
-			// An empty key keeps the stored one; clearing goes through clearApiKey.
-			APIKey      *string `json:"apiKey"`
-			ClearAPIKey bool    `json:"clearApiKey"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if patch.Provider != nil && !contains(agentProviders, *patch.Provider) {
-			http.Error(w, "unsupported provider", http.StatusBadRequest)
-			return
-		}
-		if patch.Thinking != nil && !contains(thinkingLevels, *patch.Thinking) {
-			http.Error(w, "invalid thinking level", http.StatusBadRequest)
-			return
-		}
-		if patch.Model != nil {
-			*patch.Model = strings.TrimSpace(*patch.Model)
-		}
-		if patch.APIKey != nil {
-			if *patch.APIKey = strings.TrimSpace(*patch.APIKey); *patch.APIKey == "" {
-				patch.APIKey = nil
-			}
-		}
-		if patch.ClearAPIKey {
-			empty := ""
-			patch.APIKey = &empty
-		}
-
-		_, err := db.ExecContext(r.Context(),
-			"UPDATE agent_settings SET provider = COALESCE(?, provider), model = COALESCE(?, model), thinking = COALESCE(?, thinking), api_key = COALESCE(?, api_key) WHERE id = 1",
-			patch.Provider, patch.Model, patch.Thinking, patch.APIKey)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		getSettings(w, r)
+		writeJSON(w, http.StatusOK, models)
 	})
 
 	// Runs an agent process's prompt in the worker and waits for the result.
@@ -139,8 +53,17 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 
-		var kind, prompt string
-		err = db.QueryRowContext(r.Context(), "SELECT kind, prompt FROM processes WHERE id = ?", id).Scan(&kind, &prompt)
+		var kind string
+		run := struct {
+			// Identify the process in the worker's logs.
+			ProcessID   int64  `json:"processId"`
+			ProcessName string `json:"processName"`
+			Prompt      string `json:"prompt"`
+			Model       string `json:"model"`
+			Thinking    string `json:"thinking"`
+		}{ProcessID: id}
+		err = db.QueryRowContext(r.Context(), "SELECT name, kind, prompt, model, thinking FROM processes WHERE id = ?", id).
+			Scan(&run.ProcessName, &kind, &run.Prompt, &run.Model, &run.Thinking)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "process not found", http.StatusNotFound)
 			return
@@ -153,68 +76,51 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			http.Error(w, "only agent processes can be run", http.StatusBadRequest)
 			return
 		}
-
-		var run struct {
-			Prompt   string `json:"prompt"`
-			Provider string `json:"provider"`
-			Model    string `json:"model"`
-			Thinking string `json:"thinking"`
-			APIKey   string `json:"apiKey"`
-		}
-		err = db.QueryRowContext(r.Context(), "SELECT provider, model, thinking, api_key FROM agent_settings WHERE id = 1").
-			Scan(&run.Provider, &run.Model, &run.Thinking, &run.APIKey)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		// Configuration problems are run failures, so they show up on the node like any other.
-		run.Prompt = prompt
-		switch {
-		case strings.TrimSpace(prompt) == "":
+		// Problems with the process itself are run failures, so they show up on the node like any other.
+		if strings.TrimSpace(run.Prompt) == "" {
 			writeJSON(w, http.StatusOK, runResult{Error: "the process has no prompt"})
 			return
-		case run.Model == "" || run.APIKey == "":
-			writeJSON(w, http.StatusOK, runResult{Error: "the agent is not configured; set a model and API key in settings"})
-			return
 		}
 
-		res, err := callWorker(r, workerURL, run)
-		if err != nil {
+		var res runResult
+		if err := callWorker(r.Context(), http.MethodPost, workerURL+"/run", run, &res); err != nil {
 			if r.Context().Err() != nil {
 				return
 			}
-			writeJSON(w, http.StatusOK, runResult{Error: "worker unavailable: " + err.Error()})
-			return
+			res = runResult{Error: "worker unavailable: " + err.Error()}
 		}
 		writeJSON(w, http.StatusOK, res)
 	})
 }
 
-func callWorker(r *http.Request, workerURL string, run any) (runResult, error) {
-	body, err := json.Marshal(run)
-	if err != nil {
-		return runResult{}, err
+// No client timeout: agent runs can take minutes, and the worker enforces its own limit.
+func callWorker(ctx context.Context, method, url string, in, out any) error {
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, workerURL+"/run", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
-		return runResult{}, err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// No client timeout: agent runs can take minutes, and the worker enforces its own limit.
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return runResult{}, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return runResult{}, fmt.Errorf("status %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
+		return fmt.Errorf("status %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
 	}
-	var res runResult
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return runResult{}, fmt.Errorf("decode response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode response: %w", err)
 	}
-	return res, nil
+	return nil
 }

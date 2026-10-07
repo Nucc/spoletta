@@ -8,6 +8,9 @@ export type Process = {
   prompt: string
   // Used when kind is 'script'.
   script: string
+  // Model (provider/id) and thinking level for agents; empty means pi's default.
+  model: string
+  thinking: ThinkingLevel | ''
   x: number
   y: number
 }
@@ -71,20 +74,7 @@ export function deleteConnection(id: number): Promise<void> {
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
-export type AgentSettings = {
-  provider: string
-  model: string
-  thinking: ThinkingLevel
-  // The key itself is never sent back, only whether one is stored and its last characters.
-  hasApiKey: boolean
-  keyHint: string
-}
-
-export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'provider' | 'model' | 'thinking'>> & {
-  // Omitted or empty keeps the stored key.
-  apiKey?: string
-  clearApiKey?: boolean
-}
+export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 export type RunResult = {
   ok: boolean
@@ -92,12 +82,15 @@ export type RunResult = {
   error: string
 }
 
-export function getAgentSettings(): Promise<AgentSettings> {
-  return request('/api/agent-settings')
+export type Models = {
+  // pi's default model as provider/id, empty if pi picks one itself.
+  default: string
+  // pi's enabledModels.
+  models: string[]
 }
 
-export function updateAgentSettings(patch: AgentSettingsPatch): Promise<AgentSettings> {
-  return request('/api/agent-settings', { method: 'PATCH', body: JSON.stringify(patch) })
+export function listModels(): Promise<Models> {
+  return request('/api/models')
 }
 
 export function runProcess(id: number, signal?: AbortSignal): Promise<RunResult> {

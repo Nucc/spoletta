@@ -1,6 +1,7 @@
 export type Process = {
   id: number
   name: string
+  prompt: string
   x: number
   y: number
 }

@@ -3,6 +3,8 @@ import type { Node, NodeProps } from '@xyflow/react'
 
 export type ProcessNodeData = {
   name: string
+  // Edited in the side panel, never rendered on the node.
+  prompt: string
   editing: boolean
   onCommit: (id: string, name: string) => void
   onCancel: (id: string) => void

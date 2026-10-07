@@ -58,9 +58,82 @@ body {
   cursor: pointer;
 }
 
-.canvas {
+.workspace {
   flex: 1;
   min-height: 0;
+  display: flex;
+}
+
+.canvas {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel {
+  width: 420px;
+  max-width: 50vw;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: #fff;
+  border-left: 1px solid #d8dee4;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel-header h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.panel-close {
+  padding: 0 6px;
+  font-size: 22px;
+  line-height: 1;
+  color: #656d76;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.panel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.panel-field-grow {
+  flex: 1;
+  min-height: 0;
+}
+
+.panel-field input,
+.panel-field textarea {
+  padding: 8px;
+  font: inherit;
+  font-weight: 400;
+  font-size: 14px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.panel-field textarea {
+  flex: 1;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.5;
+}
+
+.panel-warning {
+  color: #82071e;
+  font-weight: 400;
 }
 
 .process-node {

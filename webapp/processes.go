@@ -11,26 +11,40 @@ import (
 )
 
 type process struct {
-	ID   int64   `json:"id"`
-	Name string  `json:"name"`
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
+	ID     int64   `json:"id"`
+	Name   string  `json:"name"`
+	Prompt string  `json:"prompt"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
 }
 
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS processes (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY,
 		name VARCHAR(255) NOT NULL,
+		prompt TEXT NOT NULL,
 		x DOUBLE NOT NULL DEFAULT 0,
 		y DOUBLE NOT NULL DEFAULT 0,
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`)
+	if err != nil {
+		return err
+	}
+
+	// Tables created before prompts existed lack the column; MySQL has no ADD COLUMN IF NOT EXISTS.
+	var n int
+	err = db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'processes' AND COLUMN_NAME = 'prompt'`).Scan(&n)
+	if err != nil || n > 0 {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE processes ADD COLUMN prompt TEXT NOT NULL AFTER name")
 	return err
 }
 
 func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/processes", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, name, x, y FROM processes ORDER BY id")
+		rows, err := db.QueryContext(r.Context(), "SELECT id, name, prompt, x, y FROM processes ORDER BY id")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -40,7 +54,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		ps := []process{}
 		for rows.Next() {
 			var p process
-			if err := rows.Scan(&p.ID, &p.Name, &p.X, &p.Y); err != nil {
+			if err := rows.Scan(&p.ID, &p.Name, &p.Prompt, &p.X, &p.Y); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -65,7 +79,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 
-		res, err := db.ExecContext(r.Context(), "INSERT INTO processes (name, x, y) VALUES (?, ?, ?)", p.Name, p.X, p.Y)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO processes (name, prompt, x, y) VALUES (?, ?, ?, ?)", p.Name, p.Prompt, p.X, p.Y)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -85,9 +99,10 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var patch struct {
-			Name *string  `json:"name"`
-			X    *float64 `json:"x"`
-			Y    *float64 `json:"y"`
+			Name   *string  `json:"name"`
+			Prompt *string  `json:"prompt"`
+			X      *float64 `json:"x"`
+			Y      *float64 `json:"y"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -102,16 +117,16 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 
 		// COALESCE keeps the stored value for fields absent from the patch.
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE processes SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y) WHERE id = ?",
-			patch.Name, patch.X, patch.Y, id)
+			"UPDATE processes SET name = COALESCE(?, name), prompt = COALESCE(?, prompt), x = COALESCE(?, x), y = COALESCE(?, y) WHERE id = ?",
+			patch.Name, patch.Prompt, patch.X, patch.Y, id)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 
 		var p process
-		err = db.QueryRowContext(r.Context(), "SELECT id, name, x, y FROM processes WHERE id = ?", id).
-			Scan(&p.ID, &p.Name, &p.X, &p.Y)
+		err = db.QueryRowContext(r.Context(), "SELECT id, name, prompt, x, y FROM processes WHERE id = ?", id).
+			Scan(&p.ID, &p.Name, &p.Prompt, &p.X, &p.Y)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "process not found", http.StatusNotFound)
 			return

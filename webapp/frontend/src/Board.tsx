@@ -10,6 +10,7 @@ import {
   type OnNodeDrag,
 } from '@xyflow/react'
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
+import ProcessPanel from './ProcessPanel'
 import { createProcess, listProcesses, updateProcess, type Process } from './api'
 
 const nodeTypes = { process: ProcessNode }
@@ -20,6 +21,7 @@ const DRAFT_PREFIX = 'draft-'
 export default function Board() {
   const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNodeType>([])
   const [error, setError] = useState<string | null>(null)
+  const [panelId, setPanelId] = useState<string | null>(null)
   const { getNode, screenToFlowPosition } = useReactFlow<ProcessNodeType>()
   const wrapper = useRef<HTMLDivElement>(null)
   const draftSeq = useRef(0)
@@ -35,16 +37,9 @@ export default function Board() {
     [setNodes],
   )
 
-  const onCancel = useCallback(
-    (id: string) => {
-      if (id.startsWith(DRAFT_PREFIX)) {
-        setNodes((ns) => ns.filter((n) => n.id !== id))
-      } else {
-        updateData(id, { editing: false })
-      }
-    },
-    [setNodes, updateData],
-  )
+  // Inline name editing only happens for freshly created (draft) processes;
+  // existing ones are edited in the side panel.
+  const onCancel = useCallback((id: string) => setNodes((ns) => ns.filter((n) => n.id !== id)), [setNodes])
 
   const onCommit = useCallback(
     async (id: string, name: string) => {
@@ -52,12 +47,8 @@ export default function Board() {
       const node = getNode(id)
       if (!node) return
       try {
-        if (id.startsWith(DRAFT_PREFIX)) {
-          const created = await createProcess({ name, x: node.position.x, y: node.position.y })
-          setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: String(created.id) } : n)))
-        } else {
-          await updateProcess(Number(id), { name })
-        }
+        const created = await createProcess({ name, prompt: '', x: node.position.x, y: node.position.y })
+        setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: String(created.id) } : n)))
       } catch (err) {
         report(err)
       }
@@ -70,7 +61,7 @@ export default function Board() {
       id: String(p.id),
       type: 'process',
       position: { x: p.x, y: p.y },
-      data: { name: p.name, editing: false, onCommit, onCancel },
+      data: { name: p.name, prompt: p.prompt, editing: false, onCommit, onCancel },
     }),
     [onCommit, onCancel],
   )
@@ -92,7 +83,7 @@ export default function Board() {
           type: 'process',
           position: { x: center.x - NODE_SIZE / 2, y: center.y - NODE_SIZE / 2 },
           selected: true,
-          data: { name: '', editing: true, onCommit, onCancel },
+          data: { name: '', prompt: '', editing: true, onCommit, onCancel },
         },
       ])
     },
@@ -111,8 +102,10 @@ export default function Board() {
   }
 
   const onNodeDoubleClick: NodeMouseHandler<ProcessNodeType> = (_, node) => {
-    updateData(node.id, { editing: true })
+    if (!node.id.startsWith(DRAFT_PREFIX)) setPanelId(node.id)
   }
+
+  const panelNode = panelId ? nodes.find((n) => n.id === panelId) : undefined
 
   const onNodeDragStop: OnNodeDrag<ProcessNodeType> = (_, __, dragged) => {
     for (const n of dragged) {
@@ -126,27 +119,42 @@ export default function Board() {
       <header className="toolbar">
         <h1>Flow Builder</h1>
         <button onClick={addAtViewportCenter}>+ Process</button>
-        <span className="hint">Double-click the canvas to add a process, double-click a process to rename it.</span>
+        <span className="hint">
+          Double-click the canvas to add a process, double-click a process to edit its name and prompt.
+        </span>
       </header>
       {error && (
         <div className="error" onClick={() => setError(null)}>
           {error} (click to dismiss)
         </div>
       )}
-      <div className="canvas" ref={wrapper}>
-        <ReactFlow
-          nodes={nodes}
-          nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          onNodeDoubleClick={onNodeDoubleClick}
-          onNodeDragStop={onNodeDragStop}
-          onDoubleClick={onPaneDoubleClick}
-          zoomOnDoubleClick={false}
-          deleteKeyCode={null}
-        >
-          <Background />
-          <Controls />
-        </ReactFlow>
+      <div className="workspace">
+        <div className="canvas" ref={wrapper}>
+          <ReactFlow
+            nodes={nodes}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onNodeDoubleClick={onNodeDoubleClick}
+            onPaneClick={() => setPanelId(null)}
+            onNodeDragStop={onNodeDragStop}
+            onDoubleClick={onPaneDoubleClick}
+            zoomOnDoubleClick={false}
+            deleteKeyCode={null}
+          >
+            <Background />
+            <Controls />
+          </ReactFlow>
+        </div>
+        {panelNode && (
+          <ProcessPanel
+            key={panelNode.id}
+            id={Number(panelNode.id)}
+            initial={{ name: panelNode.data.name, prompt: panelNode.data.prompt }}
+            onChange={(fields) => updateData(panelNode.id, fields)}
+            onClose={() => setPanelId(null)}
+            onError={report}
+          />
+        )}
       </div>
     </div>
   )

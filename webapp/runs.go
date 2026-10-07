@@ -170,8 +170,9 @@ func startStep(ctx context.Context, db *sql.DB, runID, processID int64, status, 
 var errNotFound = errors.New("not found")
 
 // Finishes a step. A successful step generates its process's output objects,
-// which all hold what it printed, each in the state its link names.
-func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, errMsg string) error {
+// each in the state its link names. Objects with attributes hold their part
+// of the output, given in contents by object id; the others hold all of it.
+func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, errMsg string, contents map[int64]string) error {
 	_, err := db.ExecContext(ctx,
 		"UPDATE run_steps SET status = ?, output = ?, error = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
 		status, output, errMsg, stepID)
@@ -187,7 +188,16 @@ func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, e
 		WHERE s.id = ? AND s.kind <> 'human'
 		ORDER BY o.id`,
 		output, stepID)
-	return err
+	if err != nil {
+		return err
+	}
+	for object, content := range contents {
+		_, err := db.ExecContext(ctx, "UPDATE run_objects SET content = ? WHERE step_id = ? AND object_id = ?", content, stepID, object)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // The name of a state a human step can decide on: one its process's output
@@ -494,7 +504,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		if err := finishStep(r.Context(), db, id, patch.Status, patch.Output, patch.Error); err != nil {
+		if err := finishStep(r.Context(), db, id, patch.Status, patch.Output, patch.Error, nil); err != nil {
 			serverError(w, err)
 			return
 		}

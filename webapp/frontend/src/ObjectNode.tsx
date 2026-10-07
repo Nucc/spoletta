@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
 import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
-import type { ObjectState } from './api'
-import { ObjectIcon, TrashIcon } from './icons'
+import type { ObjectAttribute, ObjectState } from './api'
+import { ExhibitionIcon, GearIcon, ObjectIcon, TrashIcon } from './icons'
 import { AppendButton, NameInput } from './ProcessNode'
 import WidthResizer from './WidthResizer'
 
 export type ObjectNodeData = {
   name: string
   states: ObjectState[]
+  // Edited in the side panel; only the names show on the node.
+  attributes: ObjectAttribute[]
   // True while a new object is being named or an existing one renamed.
   editing: boolean
   // True while a new state is being named.
@@ -30,7 +32,8 @@ export const stateSourceHandle = (state: number) => `state-out-${state}`
 
 // OPM object: a square-cornered card that processes generate (link in on
 // top) and take as input (link out below). Its states sit inside it, as in
-// OPM, each with its own links in and out.
+// OPM, each with its own links in and out. The attributes it exhibits are
+// listed below them; OPM would draw each as an object of its own.
 export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeType>) {
   const actions = useBoardActions()
   const draft = id.startsWith('draft-')
@@ -72,6 +75,9 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
         </div>
         {!draft && (
           <span className="node-buttons nodrag">
+            <button title="Settings" aria-label="Settings" onClick={() => actions.openPanel(id)}>
+              <GearIcon />
+            </button>
             <button title="Delete" aria-label="Delete" disabled={!actions.editable} onClick={() => actions.remove(id)}>
               <TrashIcon />
             </button>
@@ -93,6 +99,18 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
               />
             </span>
           )}
+        </div>
+      )}
+      {data.attributes.length > 0 && (
+        <div className="object-attributes" title="Attributes: what an agent generating this object replies with">
+          <ExhibitionIcon />
+          <ul>
+            {data.attributes.map((a) => (
+              <li key={a.id} title={a.definition || undefined}>
+                {a.name}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {leaf && !draft && actions.editable && <AppendButton id={id} title="Add a process that takes this object" />}

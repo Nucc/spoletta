@@ -43,6 +43,17 @@ export type FlowObject = {
   // Set when resized; null draws the default width.
   width: number | null
   states: ObjectState[]
+  attributes: ObjectAttribute[]
+}
+
+// Something an object exhibits, such as a ticket's subject. An agent
+// generating an object with attributes replies with a JSON object holding
+// exactly those, each as its definition says.
+export type ObjectAttribute = {
+  id: number
+  object: number
+  name: string
+  definition: string
 }
 
 // A situation an object can be in, such as approved or changes requested.
@@ -122,11 +133,11 @@ export function listObjects(): Promise<FlowObject[]> {
   return request('/api/objects')
 }
 
-export function createObject(o: Omit<FlowObject, 'id' | 'states' | 'width'> & { width?: number | null }): Promise<FlowObject> {
+export function createObject(o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width'> & { width?: number | null }): Promise<FlowObject> {
   return request('/api/objects', { method: 'POST', body: JSON.stringify(o) })
 }
 
-export function updateObject(id: number, patch: Partial<Omit<FlowObject, 'id' | 'states'>>): Promise<FlowObject> {
+export function updateObject(id: number, patch: Partial<Omit<FlowObject, 'id' | 'states' | 'attributes'>>): Promise<FlowObject> {
   return request(`/api/objects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -172,14 +183,29 @@ export function deleteState(id: number): Promise<void> {
   return request(`/api/states/${id}`, { method: 'DELETE' })
 }
 
+export function createAttribute(object: number, a: { name: string; definition: string }): Promise<ObjectAttribute> {
+  return request(`/api/objects/${object}/attributes`, { method: 'POST', body: JSON.stringify(a) })
+}
+
+export function updateAttribute(id: number, patch: Partial<Pick<ObjectAttribute, 'name' | 'definition'>>): Promise<ObjectAttribute> {
+  return request(`/api/attributes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function deleteAttribute(id: number): Promise<void> {
+  return request(`/api/attributes/${id}`, { method: 'DELETE' })
+}
+
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 export type RunResult = {
   ok: boolean
+  // When the process generates objects with attributes, the reply as checked
+  // JSON; each such object holds its part, given in objects by object id.
   output: string
   error: string
+  objects?: Record<string, string>
 }
 
 export type Models = {

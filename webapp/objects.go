@@ -10,15 +10,17 @@ import (
 	"strings"
 )
 
-// An object is an OPM object: a named thing that processes generate and take as input.
+// An object is an OPM object: a named thing that processes generate and take
+// as input. Its attributes say what an agent generating it must reply with.
 type object struct {
 	ID   int64   `json:"id"`
 	Name string  `json:"name"`
 	X    float64 `json:"x"`
 	Y    float64 `json:"y"`
 	// Set when resized; null draws the default width.
-	Width  *float64      `json:"width"`
-	States []objectState `json:"states"`
+	Width      *float64      `json:"width"`
+	States     []objectState `json:"states"`
+	Attributes []attribute   `json:"attributes"`
 }
 
 // A link ties an object to a process: the process generates it (output) or
@@ -59,6 +61,9 @@ func migrateObjects(db *sql.DB) error {
 		return err
 	}
 	if err := migrateStates(db); err != nil {
+		return err
+	}
+	if err := migrateAttributes(db); err != nil {
 		return err
 	}
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS object_links (
@@ -112,7 +117,7 @@ func migrateObjects(db *sql.DB) error {
 }
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
-	o := object{States: []objectState{}}
+	o := object{States: []objectState{}, Attributes: []attribute{}}
 	err := db.QueryRowContext(ctx, "SELECT id, name, x, y, width FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width)
 	if err != nil {
 		return o, err
@@ -129,7 +134,17 @@ func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 		}
 		o.States = append(o.States, s)
 	}
-	return o, rows.Err()
+	if err := rows.Err(); err != nil {
+		return o, err
+	}
+	attrs, err := listAttributes(ctx, db, id)
+	if err != nil {
+		return o, err
+	}
+	if attrs[id] != nil {
+		o.Attributes = attrs[id]
+	}
+	return o, nil
 }
 
 func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
@@ -159,9 +174,17 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		attrs, err := listAttributes(r.Context(), db, 0)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		for i := range objs {
 			if objs[i].States = states[objs[i].ID]; objs[i].States == nil {
 				objs[i].States = []objectState{}
+			}
+			if objs[i].Attributes = attrs[objs[i].ID]; objs[i].Attributes == nil {
+				objs[i].Attributes = []attribute{}
 			}
 		}
 		writeJSON(w, http.StatusOK, objs)
@@ -189,6 +212,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		o.States = []objectState{}
+		o.Attributes = []attribute{}
 		if o.ID, err = res.LastInsertId(); err != nil {
 			serverError(w, err)
 			return

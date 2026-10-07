@@ -851,6 +851,135 @@ body {
   display: inline;
 }
 
+/* The attributes an object exhibits, under OPM's exhibition symbol. */
+.object-attributes {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding-top: 6px;
+  color: #57606a;
+  border-top: 1px dashed #d0d7de;
+}
+
+.object-attributes svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.object-attributes ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #1f2328;
+}
+
+.object-attributes li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The object panel's attribute editor. */
+.attributes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.attributes-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.attribute {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.attribute-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attribute input,
+.attribute textarea,
+.attribute-add input {
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.attribute-name {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-weight: 600;
+}
+
+.attribute textarea {
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.attribute-remove {
+  display: flex;
+  padding: 6px;
+  color: #656d76;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.attribute-remove:hover:not(:disabled) {
+  color: #cf222e;
+  background: #ffebe9;
+}
+
+.attribute-add {
+  display: flex;
+  gap: 6px;
+}
+
+.attribute-add input {
+  flex: 1;
+}
+
+.attribute-add button {
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 14px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.attribute-add button:disabled,
+.attribute-remove:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 /* Inserts a step into a link, at its midpoint. */
 .edge-insert {
   position: absolute;

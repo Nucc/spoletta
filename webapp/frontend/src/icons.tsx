@@ -46,6 +46,15 @@ export const ObjectIcon = () => (
   </Icon>
 )
 
+// OPM's exhibition-characterization symbol: a triangle with a smaller,
+// filled one inside, linking a thing to the attributes it exhibits.
+export const ExhibitionIcon = ({ size = 12 }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="M8 2.5L14 13.5H2z" />
+    <path d="M8 7.5l2.6 4.5H5.4z" fill="currentColor" strokeWidth="1" />
+  </Icon>
+)
+
 export const PlayIcon = () => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
     <path d="M4 2.5v11l9-5.5z" fill="currentColor" />

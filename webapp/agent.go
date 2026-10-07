@@ -42,6 +42,16 @@ type changeRequest struct {
 	Reviewed     []runInput `json:"reviewed"`
 }
 
+// What the worker runs.
+type agentRun struct {
+	// Identify the process in the worker's logs.
+	ProcessID   int64  `json:"processId"`
+	ProcessName string `json:"processName"`
+	Prompt      string `json:"prompt"`
+	Model       string `json:"model"`
+	Thinking    string `json:"thinking"`
+}
+
 // Inputs are capped so a runaway output can't grow every prompt downstream without bound.
 const maxRunRequestBytes = 10 << 20
 
@@ -49,6 +59,10 @@ type runResult struct {
 	OK     bool   `json:"ok"`
 	Output string `json:"output"`
 	Error  string `json:"error"`
+	// What each output object with attributes holds, by object id, when the
+	// process generates objects with attributes; the others hold the output.
+	// The worker leaves it out.
+	Objects map[int64]string `json:"objects,omitempty"`
 }
 
 func migrateAgent(db *sql.DB) error {
@@ -91,14 +105,7 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 
 		var kind string
-		run := struct {
-			// Identify the process in the worker's logs.
-			ProcessID   int64  `json:"processId"`
-			ProcessName string `json:"processName"`
-			Prompt      string `json:"prompt"`
-			Model       string `json:"model"`
-			Thinking    string `json:"thinking"`
-		}{ProcessID: id}
+		run := agentRun{ProcessID: id}
 		err = db.QueryRowContext(r.Context(), "SELECT name, kind, prompt, model, thinking FROM processes WHERE id = ?", id).
 			Scan(&run.ProcessName, &kind, &run.Prompt, &run.Model, &run.Thinking)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -115,10 +122,21 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		// Problems with the process itself are run failures, so they show up on the node like any other.
 		var res runResult
-		if strings.TrimSpace(run.Prompt) == "" {
+		contract, msg, err := contractFor(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		switch {
+		case strings.TrimSpace(run.Prompt) == "":
 			res.Error = "the process has no prompt"
-		} else {
+		case msg != "":
+			res.Error = msg
+		default:
 			run.Prompt = withChangeRequest(withInputs(run.Prompt, body.Inputs), body.ChangeRequest)
+			if contract != nil {
+				run.Prompt = contract.withContract(run.Prompt)
+			}
 		}
 
 		var stepID int64
@@ -135,12 +153,9 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 
 		if res.Error == "" {
-			if err := callWorker(r.Context(), http.MethodPost, workerURL+"/run", run, &res); err != nil {
-				if r.Context().Err() != nil {
-					res = runResult{Error: "the run was cancelled"}
-				} else {
-					res = runResult{Error: "worker unavailable: " + err.Error()}
-				}
+			res = runAgent(r.Context(), workerURL, run)
+			if contract != nil && res.OK {
+				res = followContract(r.Context(), db, workerURL, run, contract, res, stepID)
 			}
 		}
 		if stepID != 0 {
@@ -149,7 +164,7 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 				status = stepDone
 			}
 			// The request may be gone, but the step still has to end.
-			if err := finishStep(context.Background(), db, stepID, status, res.Output, res.Error); err != nil {
+			if err := finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects); err != nil {
 				log.Printf("record step %d: %v", stepID, err)
 			}
 		}
@@ -158,6 +173,39 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		writeJSON(w, http.StatusOK, res)
 	})
+}
+
+func runAgent(ctx context.Context, workerURL string, run agentRun) runResult {
+	var res runResult
+	if err := callWorker(ctx, http.MethodPost, workerURL+"/run", run, &res); err != nil {
+		if ctx.Err() != nil {
+			return runResult{Error: "the run was cancelled"}
+		}
+		return runResult{Error: "worker unavailable: " + err.Error()}
+	}
+	return res
+}
+
+// Checks an agent's reply against the attributes of the objects it
+// generates. A reply that breaks the contract gets one more try, and the
+// step records the prompt of that try, which holds the rejected reply.
+func followContract(ctx context.Context, db *sql.DB, workerURL string, run agentRun, c *outputContract, res runResult, stepID int64) runResult {
+	out, objects, err := c.parse(res.Output)
+	if err != nil {
+		run.Prompt = withRetry(run.Prompt, res.Output, err)
+		if stepID != 0 {
+			if _, err := db.ExecContext(ctx, "UPDATE run_steps SET prompt = ? WHERE id = ?", run.Prompt, stepID); err != nil {
+				log.Printf("record retry of step %d: %v", stepID, err)
+			}
+		}
+		if res = runAgent(ctx, workerURL, run); !res.OK {
+			return res
+		}
+		if out, objects, err = c.parse(res.Output); err != nil {
+			return runResult{Output: res.Output, Error: "The reply didn't follow the output format twice. The last time " + err.Error() + "."}
+		}
+	}
+	return runResult{OK: true, Output: out, Objects: objects}
 }
 
 // Appends each input object to the prompt, tagged with its name so the agent

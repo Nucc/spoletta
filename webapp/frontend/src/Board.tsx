@@ -29,14 +29,17 @@ import ObjectNode, {
   type ObjectNodeType,
 } from './ObjectNode'
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
+import ObjectPanel from './ObjectPanel'
 import ProcessPanel from './ProcessPanel'
 import StartNode, { type StartNodeType } from './StartNode'
 import { decisionText, RunList, RunPanel } from './Runs'
 import {
+  createAttribute,
   createLink,
   createObject,
   createProcess,
   createState,
+  deleteAttribute,
   deleteConnection,
   deleteLink,
   deleteObject,
@@ -58,6 +61,7 @@ import {
   setLinkStates,
   startRun,
   startStep,
+  updateAttribute,
   updateObject,
   updateProcess,
   updateStart,
@@ -68,6 +72,7 @@ import {
   type FlowRunDetail,
   type Link,
   type Models,
+  type ObjectAttribute,
   type ObjectState,
   type Process,
   type ProcessKind,
@@ -271,7 +276,7 @@ export default function Board() {
       position: { x: o.x, y: o.y },
       width: o.width ?? NODE_SIZE.object.width,
       deletable: false,
-      data: { name: o.name, states: o.states, editing },
+      data: { name: o.name, states: o.states, attributes: o.attributes, editing },
     }),
     [],
   )
@@ -392,7 +397,7 @@ export default function Board() {
       const draft: FlowNode =
         type === 'process'
           ? { ...base, type, data: { name: '', kind: 'agent', prompt: '', script: '', model: '', thinking: '', editing: true } }
-          : { ...base, type, data: { name: '', states: [], editing: true } }
+          : { ...base, type, data: { name: '', states: [], attributes: [], editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
     [screenToFlowPosition, setNodes],
@@ -410,12 +415,11 @@ export default function Board() {
   }
 
   const onNodeDoubleClick: NodeMouseHandler<FlowNode> = (_, node) => {
-    if (isDraft(node.id)) return
-    if (node.type === 'process') setPanelId(node.id)
-    if (node.type === 'object') updateObjectData(node.id, { editing: true })
+    if (!isDraft(node.id) && node.type !== 'start') setPanelId(node.id)
   }
 
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
+  const objectPanelNode = nodes.find((n): n is ObjectNodeType => n.type === 'object' && n.id === panelId)
 
   const savePositions = (positions: Map<string, XYPosition>) => {
     for (const [id, { x, y }] of positions) {
@@ -716,6 +720,50 @@ export default function Board() {
     setEdges((es) => es.map((e) => (e.id === edgeId ? { ...e, data: { ...e.data, link: { ...l, states } } } : e)))
   }
 
+  const setAttributes = (objectId: string, update: (attributes: ObjectAttribute[]) => ObjectAttribute[]) =>
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === objectId && n.type === 'object' ? { ...n, data: { ...n.data, attributes: update(n.data.attributes) } } : n,
+      ),
+    )
+
+  const addAttribute = async (objectId: string, name: string) => {
+    if (running) return false
+    try {
+      const attribute = await createAttribute(objectIdOf(objectId), { name, definition: '' })
+      setAttributes(objectId, (as) => [...as, attribute])
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
+  const changeAttribute = async (objectId: string, id: number, patch: { name?: string; definition?: string }) => {
+    try {
+      const attribute = await updateAttribute(id, patch)
+      setAttributes(objectId, (as) => as.map((a) => (a.id === id ? attribute : a)))
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
+  const removeAttribute = async (objectId: string, id: number) => {
+    const node = getNode(objectId)
+    const attribute = node?.type === 'object' ? node.data.attributes.find((a) => a.id === id) : undefined
+    if (!attribute || running || !window.confirm(`Delete attribute “${attribute.name}”?`)) return false
+    try {
+      await deleteAttribute(id)
+    } catch (err) {
+      report(err)
+      return false
+    }
+    setAttributes(objectId, (as) => as.filter((a) => a.id !== id))
+    return true
+  }
+
   const onNodeContextMenu: NodeMouseHandler<FlowNode> = (e, node) => {
     e.preventDefault()
     if (node.type !== 'start' && !isDraft(node.id)) setMenu({ id: node.id, x: e.clientX, y: e.clientY })
@@ -775,25 +823,26 @@ export default function Board() {
   // Agent processes run their prompt in the worker's pi harness; script
   // processes are still simulated. Each execution is recorded as a step of
   // the flow run; the server records agent steps itself. Returns what the
-  // process printed, or null if it failed.
+  // process printed and, for output objects with attributes, what each holds;
+  // or null if it failed.
   const execute = async (
     run: number,
     id: string,
     inputs: RunInput[],
     changeRequest?: ChangeRequest,
-  ): Promise<string | null> => {
+  ): Promise<{ output: string; objects?: Record<string, string> } | null> => {
     const node = getNode(id)
     if (node?.type !== 'process' || node.data.kind !== 'agent') {
       const step = await startStep(run, { process: Number(id), status: 'active', inputs }).catch(report)
       await sleep(SIMULATED_RUN_MS)
       updateData(id, { status: 'done' })
       if (step) await finishStep(run, step.id, { status: 'done', output: '' }).catch(report)
-      return ''
+      return { output: '' }
     }
     try {
       const res = await runProcess(Number(id), inputs, changeRequest, run)
       updateData(id, { status: res.ok ? 'done' : 'error', output: res.output, runError: res.error })
-      return res.ok ? res.output : null
+      return res.ok ? { output: res.output, objects: res.objects } : null
     } catch (err) {
       updateData(id, { status: 'error', runError: err instanceof Error ? err.message : String(err) })
       return null
@@ -801,7 +850,8 @@ export default function Board() {
   }
 
   // A process that succeeds generates its output objects, which hold what it
-  // printed, each in the state its link names or in none. Then the processes
+  // printed, or for an object with attributes its part of the checked reply,
+  // each in the state its link names or in none. Then the processes
   // taking those objects run, in parallel:
   // - A link without a state takes the object whatever state it is in. Its
   //   process runs once every object it takes that way exists; objects no
@@ -919,15 +969,16 @@ export default function Board() {
         return
       }
 
-      const output = await execute(run, id, given, changeRequest)
-      if (output === null) {
+      const result = await execute(run, id, given, changeRequest)
+      if (result === null) {
         failed = true
         return
       }
       const produced = outputs.get(id) ?? []
       for (const { object, state } of produced) {
-        values.set(object, { content: output, state })
-        showObject(object, { content: output, state })
+        const content = result.objects?.[objectIdOf(object)] ?? result.output
+        values.set(object, { content, state })
+        showObject(object, { content, state })
       }
       const next = produced.flatMap(({ object }) =>
         (takers.get(object) ?? []).filter((t) => t.state === null && ready(t.process)).map((t) => t.process),
@@ -1031,7 +1082,7 @@ export default function Board() {
         </button>
         <span
           className="hint"
-          title="Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Right-click an object to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node for more; select a connection and press Delete to remove it."
+          title="Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it."
         >
           Processes connect through the objects they generate and take. Right-click a node for more.
         </span>
@@ -1118,8 +1169,22 @@ export default function Board() {
             onError={report}
           />
         )}
-        {/* A process being edited or reviewed takes the panel; the run shows again once it closes. */}
-        {!panelNode && runDetail && <RunPanel run={runDetail} onClose={() => setRunId(null)} />}
+        {objectPanelNode && (
+          <ObjectPanel
+            key={objectPanelNode.id}
+            name={objectPanelNode.data.name}
+            attributes={objectPanelNode.data.attributes}
+            editable={!running}
+            content={objectPanelNode.data.content}
+            onRename={(name) => commitName(objectPanelNode.id, name)}
+            onAdd={(name) => addAttribute(objectPanelNode.id, name)}
+            onUpdate={(id, patch) => changeAttribute(objectPanelNode.id, id, patch)}
+            onRemove={(id) => removeAttribute(objectPanelNode.id, id)}
+            onClose={() => setPanelId(null)}
+          />
+        )}
+        {/* A node being edited or reviewed takes the panel; the run shows again once it closes. */}
+        {!panelNode && !objectPanelNode && runDetail && <RunPanel run={runDetail} onClose={() => setRunId(null)} />}
       </div>
     </div>
   )

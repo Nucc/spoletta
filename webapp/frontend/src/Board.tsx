@@ -3,26 +3,82 @@ import type { MouseEvent } from 'react'
 import {
   Background,
   Controls,
+  MarkerType,
   ReactFlow,
+  useEdgesState,
   useNodesState,
   useReactFlow,
+  type Edge,
+  type IsValidConnection,
   type NodeMouseHandler,
+  type OnConnect,
+  type OnEdgesDelete,
   type OnNodeDrag,
 } from '@xyflow/react'
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
 import ProcessPanel from './ProcessPanel'
-import { createProcess, listProcesses, updateProcess, type Process } from './api'
+import StartNode, { type StartNodeType } from './StartNode'
+import {
+  createConnection,
+  createProcess,
+  deleteConnection,
+  getStart,
+  listConnections,
+  listProcesses,
+  updateProcess,
+  updateStart,
+  type Connection,
+  type Process,
+  type Start,
+} from './api'
 
-const nodeTypes = { process: ProcessNode }
+type FlowNode = ProcessNodeType | StartNodeType
+
+const nodeTypes = { process: ProcessNode, start: StartNode }
 
 const NODE_SIZE = 120
 const DRAFT_PREFIX = 'draft-'
+const START_ID = 'start'
+const START_EDGE_ID = 'start-edge'
+const CONNECTION_PREFIX = 'conn-'
+
+const markerEnd = { type: MarkerType.ArrowClosed }
+
+const SIMULATED_RUN_MS = 3000
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const isDraft =(id: string) => id.startsWith(DRAFT_PREFIX)
+
+const startEdge = (target: number | string): Edge => ({
+  id: START_EDGE_ID,
+  source: START_ID,
+  target: String(target),
+  markerEnd,
+})
+
+const connectionEdge = (c: Connection): Edge => ({
+  id: `${CONNECTION_PREFIX}${c.id}`,
+  source: String(c.source),
+  target: String(c.target),
+  markerEnd,
+})
+
+const toStartNode = (s: Start): StartNodeType => ({
+  id: START_ID,
+  type: 'start',
+  position: { x: s.x, y: s.y },
+  deletable: false,
+  data: {},
+})
 
 export default function Board() {
-  const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNodeType>([])
+  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [error, setError] = useState<string | null>(null)
+  const [running, setRunning] = useState(false)
   const [panelId, setPanelId] = useState<string | null>(null)
-  const { getNode, screenToFlowPosition } = useReactFlow<ProcessNodeType>()
+  const { getNode, screenToFlowPosition } = useReactFlow<FlowNode>()
   const wrapper = useRef<HTMLDivElement>(null)
   const draftSeq = useRef(0)
 
@@ -33,7 +89,9 @@ export default function Board() {
 
   const updateData = useCallback(
     (id: string, data: Partial<ProcessNodeData>) =>
-      setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...data } } : n))),
+      setNodes((ns) =>
+        ns.map((n) => (n.id === id && n.type === 'process' ? { ...n, data: { ...n.data, ...data } } : n)),
+      ),
     [setNodes],
   )
 
@@ -61,16 +119,20 @@ export default function Board() {
       id: String(p.id),
       type: 'process',
       position: { x: p.x, y: p.y },
+      deletable: false,
       data: { name: p.name, prompt: p.prompt, editing: false, onCommit, onCancel },
     }),
     [onCommit, onCancel],
   )
 
   useEffect(() => {
-    listProcesses()
-      .then((ps) => setNodes(ps.map(toNode)))
+    Promise.all([listProcesses(), getStart(), listConnections()])
+      .then(([ps, start, cs]) => {
+        setNodes([toStartNode(start), ...ps.map(toNode)])
+        setEdges([...(start.target !== null ? [startEdge(start.target)] : []), ...cs.map(connectionEdge)])
+      })
       .catch(report)
-  }, [setNodes, toNode, report])
+  }, [setNodes, setEdges, toNode, report])
 
   const addDraft = useCallback(
     (screenX: number, screenY: number) => {
@@ -83,6 +145,7 @@ export default function Board() {
           type: 'process',
           position: { x: center.x - NODE_SIZE / 2, y: center.y - NODE_SIZE / 2 },
           selected: true,
+          deletable: false,
           data: { name: '', prompt: '', editing: true, onCommit, onCancel },
         },
       ])
@@ -101,16 +164,82 @@ export default function Board() {
     }
   }
 
-  const onNodeDoubleClick: NodeMouseHandler<ProcessNodeType> = (_, node) => {
-    if (!node.id.startsWith(DRAFT_PREFIX)) setPanelId(node.id)
+  const onNodeDoubleClick: NodeMouseHandler<FlowNode> = (_, node) => {
+    if (node.type === 'process' && !isDraft(node.id)) setPanelId(node.id)
   }
 
-  const panelNode = panelId ? nodes.find((n) => n.id === panelId) : undefined
+  const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
 
-  const onNodeDragStop: OnNodeDrag<ProcessNodeType> = (_, __, dragged) => {
+  const onNodeDragStop: OnNodeDrag<FlowNode> = (_, __, dragged) => {
     for (const n of dragged) {
-      if (n.id.startsWith(DRAFT_PREFIX)) continue
-      updateProcess(Number(n.id), { x: n.position.x, y: n.position.y }).catch(report)
+      const pos = { x: n.position.x, y: n.position.y }
+      if (n.type === 'start') updateStart(pos).catch(report)
+      else if (!isDraft(n.id)) updateProcess(Number(n.id), pos).catch(report)
+    }
+  }
+
+  // Drafts get a new id once saved, which would orphan their edges, so they
+  // can't be connected until they have a name.
+  const isValidConnection: IsValidConnection = (c) =>
+    c.source !== c.target &&
+    c.target !== START_ID &&
+    !isDraft(c.source) &&
+    !isDraft(c.target) &&
+    !edges.some((e) => e.source === c.source && e.target === c.target)
+
+  const onConnect: OnConnect = async ({ source, target }) => {
+    try {
+      if (source === START_ID) {
+        // The initial node has a single outgoing transition; a new one replaces it.
+        await updateStart({ target: Number(target) })
+        setEdges((es) => [...es.filter((e) => e.id !== START_EDGE_ID), startEdge(target)])
+      } else {
+        const c = await createConnection({ source: Number(source), target: Number(target) })
+        setEdges((es) => [...es, connectionEdge(c)])
+      }
+    } catch (err) {
+      report(err)
+    }
+  }
+
+  const onEdgesDelete: OnEdgesDelete = (deleted) => {
+    for (const e of deleted) {
+      const req =
+        e.id === START_EDGE_ID
+          ? updateStart({ target: null })
+          : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length)))
+      req.catch(report)
+    }
+  }
+
+  const startTarget = edges.find((e) => e.id === START_EDGE_ID)?.target
+  const canRun = startTarget !== undefined && !running
+
+  // Simulated run: each process is active for a while and finishes without
+  // output, then the processes it connects to run in parallel. Every process
+  // runs at most once, so cycles terminate.
+  const onRun = async () => {
+    if (!startTarget) return
+    const successors = new Map<string, string[]>()
+    for (const e of edges) {
+      if (e.source !== START_ID) successors.set(e.source, [...(successors.get(e.source) ?? []), e.target])
+    }
+    const visited = new Set<string>()
+    const runProcess = async (id: string): Promise<void> => {
+      if (visited.has(id)) return
+      visited.add(id)
+      updateData(id, { status: 'active' })
+      await sleep(SIMULATED_RUN_MS)
+      updateData(id, { status: 'done' })
+      await Promise.all((successors.get(id) ?? []).map(runProcess))
+    }
+
+    setRunning(true)
+    setNodes((ns) => ns.map((n) => (n.type === 'process' ? { ...n, data: { ...n.data, status: undefined } } : n)))
+    try {
+      await runProcess(startTarget)
+    } finally {
+      setRunning(false)
     }
   }
 
@@ -120,8 +249,22 @@ export default function Board() {
         <h1>Flow Builder</h1>
         <button onClick={addAtViewportCenter}>+ Process</button>
         <span className="hint">
-          Double-click the canvas to add a process, double-click a process to edit its name and prompt.
+          Double-click the canvas to add a process, double-click a process to edit it. Drag between
+          handles to connect; select a connection and press Delete to remove it.
         </span>
+        <button
+          className="play"
+          onClick={onRun}
+          disabled={!canRun}
+          aria-label="Run flow"
+          title={
+            running ? 'Running…' : canRun ? 'Run flow' : 'Connect the start node to a process first'
+          }
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M4 2.5v11l9-5.5z" fill="currentColor" />
+          </svg>
+        </button>
       </header>
       {error && (
         <div className="error" onClick={() => setError(null)}>
@@ -132,14 +275,18 @@ export default function Board() {
         <div className="canvas" ref={wrapper}>
           <ReactFlow
             nodes={nodes}
+            edges={edges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onEdgesDelete={onEdgesDelete}
+            isValidConnection={isValidConnection}
             onNodeDoubleClick={onNodeDoubleClick}
             onPaneClick={() => setPanelId(null)}
             onNodeDragStop={onNodeDragStop}
             onDoubleClick={onPaneDoubleClick}
             zoomOnDoubleClick={false}
-            deleteKeyCode={null}
           >
             <Background />
             <Controls />

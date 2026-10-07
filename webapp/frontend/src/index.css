@@ -50,6 +50,25 @@ body {
   font-size: 13px;
 }
 
+.toolbar .play {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-color: #1a7f37;
+  border-radius: 50%;
+  background: #1a7f37;
+}
+
+.toolbar .play:disabled {
+  border-color: #d8dee4;
+  background: #d8dee4;
+  cursor: not-allowed;
+}
+
 .error {
   padding: 8px 16px;
   background: #ffebe9;
@@ -152,6 +171,34 @@ body {
 }
 
 .process-node.selected {
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
+}
+
+.process-node.active {
+  background: #fff8c5;
+  border-color: #bf8700;
+  animation: process-pulse 1s ease-in-out infinite;
+}
+
+.process-node.done {
+  background: #dafbe1;
+  border-color: #1a7f37;
+}
+
+@keyframes process-pulse {
+  50% {
+    box-shadow: 0 0 0 6px rgba(191, 135, 0, 0.25);
+  }
+}
+
+.start-node {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #1f2328;
+}
+
+.start-node.selected {
   box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
 }
 

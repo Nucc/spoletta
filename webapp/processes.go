@@ -30,10 +30,16 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := addPromptColumn(db); err != nil {
+		return err
+	}
+	return migrateFlow(db)
+}
 
-	// Tables created before prompts existed lack the column; MySQL has no ADD COLUMN IF NOT EXISTS.
+// Tables created before prompts existed lack the column; MySQL has no ADD COLUMN IF NOT EXISTS.
+func addPromptColumn(db *sql.DB) error {
 	var n int
-	err = db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS
+	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS
 		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'processes' AND COLUMN_NAME = 'prompt'`).Scan(&n)
 	if err != nil || n > 0 {
 		return err

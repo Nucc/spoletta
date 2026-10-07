@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { THINKING_LEVELS, updateProcess, type Models, type ProcessKind, type ThinkingLevel } from './api'
+import {
+  THINKING_LEVELS,
+  updateProcess,
+  type Models,
+  type Outcome,
+  type ProcessKind,
+  type RunInput,
+  type ThinkingLevel,
+} from './api'
 import type { RunStatus } from './ProcessNode'
 
 type Fields = {
@@ -16,7 +24,16 @@ const SAVE_DELAY_MS = 500
 const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'agent', label: 'Agent' },
   { value: 'script', label: 'Script' },
+  { value: 'human', label: 'Human' },
 ]
+
+// A human process waiting for its decision during a run.
+export type Review = {
+  inputs: RunInput[]
+  // Outcomes that have a route; requesting changes needs somewhere to send them.
+  routed: Outcome[]
+  onDecide: (outcome: Outcome, instructions: string) => void
+}
 
 // Edits one process; mount with key={id} so switching processes resets the form.
 export default function ProcessPanel({
@@ -24,6 +41,7 @@ export default function ProcessPanel({
   initial,
   models,
   run,
+  review,
   onChange,
   onClose,
   onError,
@@ -34,6 +52,7 @@ export default function ProcessPanel({
   models: Models | null
   // Outcome of this process in the latest flow run, if it has run.
   run?: { status?: RunStatus; output?: string; error?: string }
+  review?: Review
   onChange: (fields: Fields) => void
   onClose: () => void
   onError: (err: unknown) => void
@@ -150,6 +169,18 @@ export default function ProcessPanel({
             onChange={(e) => setPrompt(e.target.value)}
           />
         </label>
+      ) : kind === 'human' ? (
+        // The prompt doubles as the reviewer's instructions; switching kinds keeps it.
+        <label key="human" className={`panel-field${review ? '' : ' panel-field-grow'}`}>
+          <span>Reviewer instructions</span>
+          <textarea
+            ref={bodyRef}
+            value={prompt}
+            rows={review ? 3 : undefined}
+            placeholder="What should the reviewer check before approving?"
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+        </label>
       ) : (
         <label key="script" className="panel-field panel-field-grow">
           <span>Script</span>
@@ -162,6 +193,7 @@ export default function ProcessPanel({
           />
         </label>
       )}
+      {review && <ReviewForm review={review} />}
       {run?.status === 'active' && <p className="panel-note">Running…</p>}
       {run?.error && (
         <div className="panel-run">
@@ -171,10 +203,59 @@ export default function ProcessPanel({
       )}
       {run?.output && (
         <div className="panel-run">
-          <span>Last run output</span>
+          <span>{kind === 'human' ? 'Last decision' : 'Last run output'}</span>
           <pre>{run.output}</pre>
         </div>
       )}
     </aside>
+  )
+}
+
+function ReviewForm({ review }: { review: Review }) {
+  const [instructions, setInstructions] = useState('')
+  const canRequestChanges = review.routed.includes('changes') && instructions.trim() !== ''
+
+  return (
+    <section className="review" aria-label="Review">
+      <span className="review-title">Waiting for your review</span>
+      {review.inputs.length === 0 ? (
+        <p className="panel-note">This process has no generated inputs to review.</p>
+      ) : (
+        review.inputs.map((input, i) => (
+          <div key={i} className="panel-run">
+            <span>{input.name}</span>
+            <pre>{input.content}</pre>
+          </div>
+        ))
+      )}
+      <label className="panel-field">
+        <span>Change request</span>
+        <textarea
+          rows={3}
+          value={instructions}
+          placeholder="What should be changed? Sent to the process the changes route leads to."
+          onChange={(e) => setInstructions(e.target.value)}
+        />
+      </label>
+      {!review.routed.includes('changes') && (
+        <small className="panel-note">Connect the changes handle to a process to request changes.</small>
+      )}
+      <div className="review-actions">
+        <button
+          className="request-changes"
+          disabled={!canRequestChanges}
+          onClick={() => review.onDecide('changes', instructions.trim())}
+        >
+          Request changes
+        </button>
+        <button
+          className="approve"
+          title={review.routed.includes('approved') ? undefined : 'No approved route: the branch ends here'}
+          onClick={() => review.onDecide('approved', '')}
+        >
+          Approve
+        </button>
+      </div>
+    </section>
   )
 }

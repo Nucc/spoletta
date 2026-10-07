@@ -1,10 +1,12 @@
-export type ProcessKind = 'agent' | 'script'
+// A human process is a review step: a person checks its inputs and approves
+// them or requests changes, and the matching route says what runs next.
+export type ProcessKind = 'agent' | 'script' | 'human'
 
 export type Process = {
   id: number
   name: string
   kind: ProcessKind
-  // Used when kind is 'agent'.
+  // The agent's prompt when kind is 'agent', the reviewer's instructions when 'human'.
   prompt: string
   // Used when kind is 'script'.
   script: string
@@ -114,6 +116,29 @@ export function deleteLink(id: number): Promise<void> {
   return request(`/api/links/${id}`, { method: 'DELETE' })
 }
 
+export type Outcome = 'approved' | 'changes'
+
+// Which process runs after a human process decides on the given outcome.
+export type Route = {
+  id: number
+  process: number
+  outcome: Outcome
+  target: number
+}
+
+export function listRoutes(): Promise<Route[]> {
+  return request('/api/routes')
+}
+
+// Replaces the process's previous route for the same outcome.
+export function setRoute(r: Omit<Route, 'id'>): Promise<Route> {
+  return request('/api/routes', { method: 'PUT', body: JSON.stringify(r) })
+}
+
+export function deleteRoute(id: number): Promise<void> {
+  return request(`/api/routes/${id}`, { method: 'DELETE' })
+}
+
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -141,6 +166,22 @@ export type RunInput = {
   content: string
 }
 
-export function runProcess(id: number, inputs: RunInput[], signal?: AbortSignal): Promise<RunResult> {
-  return request(`/api/processes/${id}/run`, { method: 'POST', body: JSON.stringify({ inputs }), signal })
+// Sent to the process a human routed back to: what they reviewed and what to change.
+export type ChangeRequest = {
+  reviewer: string
+  instructions: string
+  reviewed: RunInput[]
+}
+
+export function runProcess(
+  id: number,
+  inputs: RunInput[],
+  changeRequest?: ChangeRequest,
+  signal?: AbortSignal,
+): Promise<RunResult> {
+  return request(`/api/processes/${id}/run`, {
+    method: 'POST',
+    body: JSON.stringify({ inputs, changeRequest }),
+    signal,
+  })
 }

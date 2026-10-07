@@ -184,6 +184,19 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "direction must be output or input", http.StatusBadRequest)
 			return
 		}
+		if l.Direction == directionOutput {
+			var kind string
+			err := db.QueryRowContext(r.Context(), "SELECT kind FROM processes WHERE id = ?", l.Process).Scan(&kind)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				serverError(w, err)
+				return
+			}
+			// Missing processes fail on the foreign key below.
+			if kind == kindHuman {
+				http.Error(w, "human processes don't generate objects; they route to the next process", http.StatusBadRequest)
+				return
+			}
+		}
 
 		res, err := db.ExecContext(r.Context(), "INSERT INTO object_links (process_id, object_id, direction) VALUES (?, ?, ?)",
 			l.Process, l.Object, l.Direction)

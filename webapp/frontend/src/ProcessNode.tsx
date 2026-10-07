@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
-import type { ProcessKind, ThinkingLevel } from './api'
+import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
+import type { Outcome, ProcessKind, RunInput, ThinkingLevel } from './api'
 
 export type ProcessNodeData = {
   name: string
@@ -16,19 +16,41 @@ export type ProcessNodeData = {
   // What the last run of this process printed, or why it failed.
   output?: string
   runError?: string
+  // While a human process waits for a decision: the inputs under review.
+  review?: RunInput[]
   onCommit: (id: string, name: string) => void
   onCancel: (id: string) => void
 }
 
-export type RunStatus = 'active' | 'done' | 'error'
+export type RunStatus = 'active' | 'waiting' | 'done' | 'error'
 
 export type ProcessNodeType = Node<ProcessNodeData, 'process'>
 
+// A human process leaves through one handle per outcome; ids match Outcome.
+export const OUTCOME_HANDLES: { id: Outcome; position: Position; label: string }[] = [
+  { id: 'approved', position: Position.Right, label: 'approved' },
+  { id: 'changes', position: Position.Bottom, label: 'changes' },
+]
+
 export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeType>) {
+  const human = data.kind === 'human'
+  const updateNodeInternals = useUpdateNodeInternals()
+
+  // The handles differ between kinds; React Flow must re-measure them.
+  useEffect(() => updateNodeInternals(id), [id, human, updateNodeInternals])
+
   return (
     <div className={`process-node${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}`}>
       <Handle type="target" position={Position.Left} />
-      <Handle type="source" position={Position.Right} />
+      {human ? (
+        OUTCOME_HANDLES.map((h) => (
+          <Handle key={h.id} id={h.id} type="source" position={h.position} className={`outcome ${h.id}`}>
+            <span className="outcome-label">{h.label}</span>
+          </Handle>
+        ))
+      ) : (
+        <Handle type="source" position={Position.Right} />
+      )}
       <span className={`process-kind ${data.kind}`}>{data.kind}</span>
       {data.editing ? (
         <NameInput

@@ -221,6 +221,53 @@ body {
   background: #fbefff;
 }
 
+.process-kind.human {
+  color: #953800;
+  background: #fff1e5;
+}
+
+/* Outcome handles of a human process. Labels sit outside the ellipse. */
+.process-node .react-flow__handle.outcome {
+  width: 10px;
+  height: 10px;
+}
+
+.process-node .react-flow__handle.outcome.approved {
+  background: #1a7f37;
+}
+
+.process-node .react-flow__handle.outcome.changes {
+  background: #bc4c00;
+}
+
+.outcome-label {
+  position: absolute;
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.outcome.approved .outcome-label {
+  left: 12px;
+  top: -14px;
+  color: #1a7f37;
+}
+
+.outcome.changes .outcome-label {
+  left: 12px;
+  top: 2px;
+  color: #bc4c00;
+}
+
+.react-flow__edge.route.approved .react-flow__edge-path {
+  stroke: #1a7f37;
+}
+
+.react-flow__edge.route.changes .react-flow__edge-path {
+  stroke: #bc4c00;
+  stroke-dasharray: 6 4;
+}
+
 .process-node.selected {
   box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
 }
@@ -241,10 +288,73 @@ body {
   border-color: #cf222e;
 }
 
+/* A human process waiting for a decision. */
+.process-node.waiting {
+  background: #fff1e5;
+  border-color: #bc4c00;
+  animation: waiting-pulse 1.4s ease-in-out infinite;
+}
+
 @keyframes process-pulse {
   50% {
     box-shadow: 0 0 0 6px rgba(191, 135, 0, 0.25);
   }
+}
+
+@keyframes waiting-pulse {
+  50% {
+    box-shadow: 0 0 0 6px rgba(188, 76, 0, 0.25);
+  }
+}
+
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #fb8f44;
+  border-radius: 8px;
+  background: #fff8f2;
+}
+
+.review-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #953800;
+}
+
+.review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.review-actions button {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.review-actions .approve {
+  color: #fff;
+  background: #1a7f37;
+  border: 1px solid #1a7f37;
+}
+
+.review-actions .request-changes {
+  color: #bc4c00;
+  background: #fff;
+  border: 1px solid #bc4c00;
+}
+
+.review-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .start-node {

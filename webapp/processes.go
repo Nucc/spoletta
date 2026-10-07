@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,14 +24,19 @@ type process struct {
 	Y        float64 `json:"y"`
 }
 
-// A process is either run by an agent from its prompt or executes its script.
+// A process is either run by an agent from its prompt, executes its script,
+// or is handled by a human, who reviews its inputs following its prompt and
+// approves them or requests changes.
 const (
 	kindAgent  = "agent"
 	kindScript = "script"
+	kindHuman  = "human"
 )
 
+const invalidKindMessage = "kind must be agent, script or human"
+
 func validKind(k string) bool {
-	return k == kindAgent || k == kindScript
+	return k == kindAgent || k == kindScript || k == kindHuman
 }
 
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -134,7 +140,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			p.Kind = kindAgent
 		}
 		if !validKind(p.Kind) {
-			http.Error(w, "kind must be agent or script", http.StatusBadRequest)
+			http.Error(w, invalidKindMessage, http.StatusBadRequest)
 			return
 		}
 		if !validModel(p.Model) || !validThinking(p.Thinking) {
@@ -183,7 +189,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		if patch.Kind != nil && !validKind(*patch.Kind) {
-			http.Error(w, "kind must be agent or script", http.StatusBadRequest)
+			http.Error(w, invalidKindMessage, http.StatusBadRequest)
 			return
 		}
 		if (patch.Model != nil && !validModel(*patch.Model)) || (patch.Thinking != nil && !validThinking(*patch.Thinking)) {
@@ -199,6 +205,12 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		if patch.Kind != nil {
+			if err := dropMismatchedEdges(r.Context(), db, id, *patch.Kind); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
 
 		var p process
 		err = db.QueryRowContext(r.Context(), "SELECT id, name, kind, prompt, script, model, thinking, x, y FROM processes WHERE id = ?", id).
@@ -213,6 +225,25 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		writeJSON(w, http.StatusOK, p)
 	})
+}
+
+// A human process leaves only through its routes, while other processes
+// leave through the objects they generate and older direct connections.
+// Changing kind deletes whichever of these the new kind doesn't have.
+func dropMismatchedEdges(ctx context.Context, db *sql.DB, id int64, kind string) error {
+	stmts := []string{"DELETE FROM routes WHERE process_id = ?"}
+	if kind == kindHuman {
+		stmts = []string{
+			"DELETE FROM object_links WHERE process_id = ? AND direction = 'output'",
+			"DELETE FROM connections WHERE source_id = ?",
+		}
+	}
+	for _, s := range stmts {
+		if _, err := db.ExecContext(ctx, s, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

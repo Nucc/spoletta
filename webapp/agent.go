@@ -29,6 +29,14 @@ type runInput struct {
 	Content string `json:"content"`
 }
 
+// Sent when a human process requested changes and routed back to this one:
+// the work the human reviewed and what they want changed.
+type changeRequest struct {
+	Reviewer     string     `json:"reviewer"`
+	Instructions string     `json:"instructions"`
+	Reviewed     []runInput `json:"reviewed"`
+}
+
 // Inputs are capped so a runaway output can't grow every prompt downstream without bound.
 const maxRunRequestBytes = 10 << 20
 
@@ -55,8 +63,9 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	})
 
 	// Runs an agent process's prompt in the worker and waits for the result.
-	// The body may list the process's input objects, which are appended to
-	// the prompt. Closing the request cancels the run.
+	// The body may list the process's input objects and a human's change
+	// request, which are appended to the prompt. Closing the request cancels
+	// the run.
 	mux.HandleFunc("POST /api/processes/{id}/run", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
@@ -65,7 +74,8 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 
 		var body struct {
-			Inputs []runInput `json:"inputs"`
+			Inputs        []runInput     `json:"inputs"`
+			ChangeRequest *changeRequest `json:"changeRequest"`
 		}
 		err = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunRequestBytes)).Decode(&body)
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -101,7 +111,7 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			writeJSON(w, http.StatusOK, runResult{Error: "the process has no prompt"})
 			return
 		}
-		run.Prompt = withInputs(run.Prompt, body.Inputs)
+		run.Prompt = withChangeRequest(withInputs(run.Prompt, body.Inputs), body.ChangeRequest)
 
 		var res runResult
 		if err := callWorker(r.Context(), http.MethodPost, workerURL+"/run", run, &res); err != nil {
@@ -126,6 +136,23 @@ func withInputs(prompt string, inputs []runInput) string {
 	for _, in := range inputs {
 		fmt.Fprintf(&b, "\n<input name=\"%s\">\n%s\n</input>\n", html.EscapeString(in.Name), in.Content)
 	}
+	return b.String()
+}
+
+// Appends the work a human reviewed and their instructions, so the agent
+// revises that work rather than starting over.
+func withChangeRequest(prompt string, cr *changeRequest) string {
+	if cr == nil {
+		return prompt
+	}
+	var b strings.Builder
+	b.WriteString(prompt)
+	fmt.Fprintf(&b, "\n\nThe reviewer %q requested changes. Revise the work below following their instructions.\n",
+		cr.Reviewer)
+	for _, in := range cr.Reviewed {
+		fmt.Fprintf(&b, "\n<reviewed name=\"%s\">\n%s\n</reviewed>\n", html.EscapeString(in.Name), in.Content)
+	}
+	fmt.Fprintf(&b, "\n<change_request>\n%s\n</change_request>\n", cr.Instructions)
 	return b.String()
 }
 

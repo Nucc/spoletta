@@ -33,6 +33,7 @@ export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNod
       {data.editing ? (
         <NameInput
           initial={data.name}
+          placeholder="Process name"
           onCommit={(name) => data.onCommit(id, name)}
           onCancel={() => data.onCancel(id)}
         />
@@ -43,12 +44,14 @@ export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNod
   )
 }
 
-function NameInput({
+export function NameInput({
   initial,
+  placeholder,
   onCommit,
   onCancel,
 }: {
   initial: string
+  placeholder: string
   onCommit: (name: string) => void
   onCancel: () => void
 }) {
@@ -73,9 +76,9 @@ function NameInput({
   return (
     <input
       ref={ref}
-      className="process-name-input nodrag"
+      className="name-input nodrag"
       value={value}
-      placeholder="Process name"
+      placeholder={placeholder}
       onChange={(e) => setValue(e.target.value)}
       onKeyDown={(e) => {
         if (e.key === 'Enter') finish(true)

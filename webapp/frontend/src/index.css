@@ -184,16 +184,17 @@ body {
   font-weight: 400;
 }
 
+/* OPM process: an ellipse. Sizes must match NODE_SIZE in Board.tsx. */
 .process-node {
-  width: 120px;
-  height: 120px;
+  width: 160px;
+  height: 90px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px;
+  padding: 14px 22px 8px;
   background: #fff;
   border: 2px solid #1f6feb;
-  border-radius: 4px;
+  border-radius: 50%;
   text-align: center;
   font-size: 14px;
   word-break: break-word;
@@ -202,7 +203,8 @@ body {
 
 .process-kind {
   position: absolute;
-  top: 6px;
+  /* Low enough to stay inside the ellipse's curve. */
+  top: 10px;
   left: 50%;
   transform: translateX(-50%);
   padding: 1px 6px;
@@ -256,7 +258,7 @@ body {
   box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
 }
 
-.process-name-input {
+.name-input {
   width: 100%;
   padding: 4px;
   font: inherit;
@@ -314,4 +316,27 @@ body {
 .panel-row select {
   width: 100%;
   text-overflow: ellipsis;
+}
+
+/* OPM object: a rectangle. Sizes must match NODE_SIZE in Board.tsx. */
+.object-node {
+  width: 140px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  background: #fff;
+  border: 2px solid #1a7f37;
+  text-align: center;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.object-node.selected {
+  box-shadow: 0 0 0 3px rgba(26, 127, 55, 0.3);
+}
+
+.object-node.done {
+  background: #dafbe1;
 }

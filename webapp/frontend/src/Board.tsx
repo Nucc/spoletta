@@ -15,35 +15,53 @@ import {
   type OnEdgesDelete,
   type OnNodeDrag,
 } from '@xyflow/react'
+import ObjectNode, { type ObjectNodeData, type ObjectNodeType } from './ObjectNode'
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
 import ProcessPanel from './ProcessPanel'
 import StartNode, { type StartNodeType } from './StartNode'
 import {
-  createConnection,
+  createLink,
+  createObject,
   createProcess,
   deleteConnection,
+  deleteLink,
   getStart,
   listConnections,
+  listLinks,
   listModels,
+  listObjects,
   listProcesses,
   runProcess,
+  updateObject,
   updateProcess,
   updateStart,
   type Connection,
+  type FlowObject,
+  type Link,
   type Models,
   type Process,
+  type RunInput,
   type Start,
 } from './api'
 
-type FlowNode = ProcessNodeType | StartNodeType
+type FlowNode = ProcessNodeType | ObjectNodeType | StartNodeType
 
-const nodeTypes = { process: ProcessNode, start: StartNode }
+const nodeTypes = { process: ProcessNode, object: ObjectNode, start: StartNode }
 
-const NODE_SIZE = 120
+// Must match .process-node and .object-node in index.css; used to center new nodes.
+const NODE_SIZE = {
+  process: { width: 160, height: 90 },
+  object: { width: 140, height: 60 },
+}
 const DRAFT_PREFIX = 'draft-'
 const START_ID = 'start'
 const START_EDGE_ID = 'start-edge'
+// Direct process-to-process connections predate objects. New ones can't be
+// drawn, but existing ones still show, run and can be deleted.
 const CONNECTION_PREFIX = 'conn-'
+const LINK_PREFIX = 'link-'
+// Objects and processes have separate id sequences, so object node ids are prefixed.
+const OBJECT_PREFIX = 'obj-'
 
 const markerEnd = { type: MarkerType.ArrowClosed }
 
@@ -52,7 +70,12 @@ const SIMULATED_RUN_MS = 3000
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-const isDraft =(id: string) => id.startsWith(DRAFT_PREFIX)
+const isDraft = (id: string) => id.startsWith(DRAFT_PREFIX)
+const isObject = (id: string) => id.startsWith(OBJECT_PREFIX)
+const isProcess = (id: string) => id !== START_ID && !isObject(id) && !isDraft(id)
+
+const objectNodeId = (id: number) => `${OBJECT_PREFIX}${id}`
+const objectIdOf = (nodeId: string) => Number(nodeId.slice(OBJECT_PREFIX.length))
 
 const startEdge = (target: number | string): Edge => ({
   id: START_EDGE_ID,
@@ -67,6 +90,19 @@ const connectionEdge = (c: Connection): Edge => ({
   target: String(c.target),
   markerEnd,
 })
+
+// An output link points from the process to the object it generates, an
+// input link from the object to the process that takes it.
+const linkEdge = (l: Link): Edge => {
+  const process = String(l.process)
+  const object = objectNodeId(l.object)
+  return {
+    id: `${LINK_PREFIX}${l.id}`,
+    source: l.direction === 'output' ? process : object,
+    target: l.direction === 'output' ? object : process,
+    markerEnd,
+  }
+}
 
 const toStartNode = (s: Start): StartNodeType => ({
   id: START_ID,
@@ -100,6 +136,14 @@ export default function Board() {
     [setNodes],
   )
 
+  const updateObjectData = useCallback(
+    (id: string, data: Partial<ObjectNodeData>) =>
+      setNodes((ns) =>
+        ns.map((n) => (n.id === id && n.type === 'object' ? { ...n, data: { ...n.data, ...data } } : n)),
+      ),
+    [setNodes],
+  )
+
   // Inline name editing only happens for freshly created (draft) processes;
   // existing ones are edited in the side panel.
   const onCancel = useCallback((id: string) => setNodes((ns) => ns.filter((n) => n.id !== id)), [setNodes])
@@ -117,6 +161,46 @@ export default function Board() {
       }
     },
     [getNode, setNodes, updateData, report],
+  )
+
+  // New objects are named inline like processes; existing ones are renamed
+  // inline too, since a name is all an object has.
+  const onObjectCommit = useCallback(
+    async (id: string, name: string) => {
+      updateObjectData(id, { name, editing: false })
+      try {
+        if (!isDraft(id)) {
+          await updateObject(objectIdOf(id), { name })
+          return
+        }
+        const node = getNode(id)
+        if (!node) return
+        const created = await createObject({ name, x: node.position.x, y: node.position.y })
+        setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: objectNodeId(created.id) } : n)))
+      } catch (err) {
+        report(err)
+      }
+    },
+    [getNode, setNodes, updateObjectData, report],
+  )
+
+  const onObjectCancel = useCallback(
+    (id: string) => {
+      if (isDraft(id)) setNodes((ns) => ns.filter((n) => n.id !== id))
+      else updateObjectData(id, { editing: false })
+    },
+    [setNodes, updateObjectData],
+  )
+
+  const toObjectNode = useCallback(
+    (o: FlowObject): ObjectNodeType => ({
+      id: objectNodeId(o.id),
+      type: 'object',
+      position: { x: o.x, y: o.y },
+      deletable: false,
+      data: { name: o.name, editing: false, onCommit: onObjectCommit, onCancel: onObjectCancel },
+    }),
+    [onObjectCommit, onObjectCancel],
   )
 
   const toNode = useCallback(
@@ -142,46 +226,56 @@ export default function Board() {
 
   useEffect(() => {
     listModels().then(setModels).catch(report)
-    Promise.all([listProcesses(), getStart(), listConnections()])
-      .then(([ps, start, cs]) => {
-        setNodes([toStartNode(start), ...ps.map(toNode)])
-        setEdges([...(start.target !== null ? [startEdge(start.target)] : []), ...cs.map(connectionEdge)])
+    Promise.all([listProcesses(), listObjects(), getStart(), listConnections(), listLinks()])
+      .then(([ps, os, start, cs, ls]) => {
+        setNodes([toStartNode(start), ...ps.map(toNode), ...os.map(toObjectNode)])
+        setEdges([
+          ...(start.target !== null ? [startEdge(start.target)] : []),
+          ...cs.map(connectionEdge),
+          ...ls.map(linkEdge),
+        ])
       })
       .catch(report)
-  }, [setNodes, setEdges, toNode, report])
+  }, [setNodes, setEdges, toNode, toObjectNode, report])
 
   const addDraft = useCallback(
-    (screenX: number, screenY: number) => {
+    (type: 'process' | 'object', screenX: number, screenY: number) => {
       const center = screenToFlowPosition({ x: screenX, y: screenY })
-      const id = `${DRAFT_PREFIX}${++draftSeq.current}`
-      setNodes((ns) => [
-        ...ns.map((n) => ({ ...n, selected: false })),
-        {
-          id,
-          type: 'process',
-          position: { x: center.x - NODE_SIZE / 2, y: center.y - NODE_SIZE / 2 },
-          selected: true,
-          deletable: false,
-          data: { name: '', kind: 'agent', prompt: '', script: '', model: '', thinking: '', editing: true, onCommit, onCancel },
-        },
-      ])
+      const { width, height } = NODE_SIZE[type]
+      const base = {
+        id: `${DRAFT_PREFIX}${++draftSeq.current}`,
+        position: { x: center.x - width / 2, y: center.y - height / 2 },
+        selected: true,
+        deletable: false,
+      }
+      const draft: FlowNode =
+        type === 'process'
+          ? {
+              ...base,
+              type,
+              data: { name: '', kind: 'agent', prompt: '', script: '', model: '', thinking: '', editing: true, onCommit, onCancel },
+            }
+          : { ...base, type, data: { name: '', editing: true, onCommit: onObjectCommit, onCancel: onObjectCancel } }
+      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
-    [screenToFlowPosition, setNodes, onCommit, onCancel],
+    [screenToFlowPosition, setNodes, onCommit, onCancel, onObjectCommit, onObjectCancel],
   )
 
-  const addAtViewportCenter = () => {
+  const addAtViewportCenter = (type: 'process' | 'object') => {
     const rect = wrapper.current?.getBoundingClientRect()
-    if (rect) addDraft(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    if (rect) addDraft(type, rect.left + rect.width / 2, rect.top + rect.height / 2)
   }
 
   const onPaneDoubleClick = (e: MouseEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).classList.contains('react-flow__pane')) {
-      addDraft(e.clientX, e.clientY)
+      addDraft(e.shiftKey ? 'object' : 'process', e.clientX, e.clientY)
     }
   }
 
   const onNodeDoubleClick: NodeMouseHandler<FlowNode> = (_, node) => {
-    if (node.type === 'process' && !isDraft(node.id)) setPanelId(node.id)
+    if (isDraft(node.id)) return
+    if (node.type === 'process') setPanelId(node.id)
+    if (node.type === 'object') updateObjectData(node.id, { editing: true })
   }
 
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
@@ -190,18 +284,22 @@ export default function Board() {
     for (const n of dragged) {
       const pos = { x: n.position.x, y: n.position.y }
       if (n.type === 'start') updateStart(pos).catch(report)
-      else if (!isDraft(n.id)) updateProcess(Number(n.id), pos).catch(report)
+      else if (isDraft(n.id)) continue
+      else if (n.type === 'object') updateObject(objectIdOf(n.id), pos).catch(report)
+      else updateProcess(Number(n.id), pos).catch(report)
     }
   }
 
-  // Drafts get a new id once saved, which would orphan their edges, so they
-  // can't be connected until they have a name.
-  const isValidConnection: IsValidConnection = (c) =>
-    c.source !== c.target &&
-    c.target !== START_ID &&
-    !isDraft(c.source) &&
-    !isDraft(c.target) &&
-    !edges.some((e) => e.source === c.source && e.target === c.target)
+  // As in OPM, processes connect through objects: a process generates an
+  // object, which another process takes as input. The start node points at a
+  // process. Drafts get a new id once saved, which would orphan their edges,
+  // so they can't be connected until they have a name.
+  const isValidConnection: IsValidConnection = ({ source, target }) => {
+    if (isDraft(source) || isDraft(target)) return false
+    if (edges.some((e) => e.source === source && e.target === target)) return false
+    if (source === START_ID || isObject(source)) return isProcess(target)
+    return isProcess(source) && isObject(target)
+  }
 
   const onConnect: OnConnect = async ({ source, target }) => {
     try {
@@ -210,8 +308,10 @@ export default function Board() {
         await updateStart({ target: Number(target) })
         setEdges((es) => [...es.filter((e) => e.id !== START_EDGE_ID), startEdge(target)])
       } else {
-        const c = await createConnection({ source: Number(source), target: Number(target) })
-        setEdges((es) => [...es, connectionEdge(c)])
+        const l = isObject(source)
+          ? await createLink({ process: Number(target), object: objectIdOf(source), direction: 'input' })
+          : await createLink({ process: Number(source), object: objectIdOf(target), direction: 'output' })
+        setEdges((es) => [...es, linkEdge(l)])
       }
     } catch (err) {
       report(err)
@@ -223,7 +323,9 @@ export default function Board() {
       const req =
         e.id === START_EDGE_ID
           ? updateStart({ target: null })
-          : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length)))
+          : e.id.startsWith(LINK_PREFIX)
+            ? deleteLink(Number(e.id.slice(LINK_PREFIX.length)))
+            : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length)))
       req.catch(report)
     }
   }
@@ -235,43 +337,77 @@ export default function Board() {
   // processes are still simulated. Once a process succeeds, the processes it
   // connects to run in parallel; a failure stops its branch. Every process
   // runs at most once, so cycles terminate.
-  const execute = async (id: string): Promise<boolean> => {
+  // Returns what the process printed, or null if it failed.
+  const execute = async (id: string, inputs: RunInput[]): Promise<string | null> => {
     const node = getNode(id)
     if (node?.type !== 'process' || node.data.kind !== 'agent') {
       await sleep(SIMULATED_RUN_MS)
       updateData(id, { status: 'done' })
-      return true
+      return ''
     }
     try {
-      const res = await runProcess(Number(id))
+      const res = await runProcess(Number(id), inputs)
       updateData(id, { status: res.ok ? 'done' : 'error', output: res.output, runError: res.error })
-      return res.ok
+      return res.ok ? res.output : null
     } catch (err) {
       updateData(id, { status: 'error', runError: err instanceof Error ? err.message : String(err) })
-      return false
+      return null
     }
   }
 
+  // A process that succeeds generates its output objects, which hold what it
+  // printed. A process taking objects as input runs once all of them exist,
+  // and gets the generated ones' contents with its prompt; objects no process
+  // generates are given, so they exist from the start. Processes still
+  // connected directly run right after their predecessor.
   const onRun = async () => {
     if (!startTarget) return
+    const add = (m: Map<string, string[]>, k: string, v: string) => m.set(k, [...(m.get(k) ?? []), v])
+    const outputs = new Map<string, string[]>()
+    const inputs = new Map<string, string[]>()
+    const consumers = new Map<string, string[]>()
     const successors = new Map<string, string[]>()
     for (const e of edges) {
-      if (e.source !== START_ID) successors.set(e.source, [...(successors.get(e.source) ?? []), e.target])
+      if (e.source === START_ID) continue
+      if (isObject(e.target)) add(outputs, e.source, e.target)
+      else if (isObject(e.source)) {
+        add(inputs, e.target, e.source)
+        add(consumers, e.source, e.target)
+      } else add(successors, e.source, e.target)
     }
+    const generated = new Set([...outputs.values()].flat())
+    const names = new Map(nodes.flatMap((n) => (n.type === 'object' ? [[n.id, n.data.name] as const] : [])))
+    // Object node id to its content; an object exists once it has an entry.
+    const contents = new Map([...names.keys()].filter((o) => !generated.has(o)).map((o) => [o, '']))
+
     const visited = new Set<string>()
     const runProcess = async (id: string): Promise<void> => {
       if (visited.has(id)) return
       visited.add(id)
       updateData(id, { status: 'active', output: undefined, runError: undefined })
-      if (!(await execute(id))) return
-      await Promise.all((successors.get(id) ?? []).map(runProcess))
+      const given = (inputs.get(id) ?? [])
+        .filter((o) => generated.has(o) && contents.has(o))
+        .map((o) => ({ name: names.get(o) ?? '', content: contents.get(o) ?? '' }))
+      const output = await execute(id, given)
+      if (output === null) return
+      const produced = outputs.get(id) ?? []
+      for (const o of produced) {
+        contents.set(o, output)
+        updateObjectData(o, { status: 'done', content: output })
+      }
+      const ready = produced
+        .flatMap((o) => consumers.get(o) ?? [])
+        .filter((p) => (inputs.get(p) ?? []).every((o) => contents.has(o)))
+      await Promise.all([...new Set([...ready, ...(successors.get(id) ?? [])])].map(runProcess))
     }
 
     setRunning(true)
     setNodes((ns) =>
-      ns.map((n) =>
-        n.type === 'process' ? { ...n, data: { ...n.data, status: undefined, output: undefined, runError: undefined } } : n,
-      ),
+      ns.map((n): FlowNode => {
+        if (n.type === 'process') return { ...n, data: { ...n.data, status: undefined, output: undefined, runError: undefined } }
+        if (n.type === 'object') return { ...n, data: { ...n.data, status: undefined, content: undefined } }
+        return n
+      }),
     )
     try {
       await runProcess(startTarget)
@@ -284,10 +420,12 @@ export default function Board() {
     <div className="board">
       <header className="toolbar">
         <h1>Flow Builder</h1>
-        <button onClick={addAtViewportCenter}>+ Process</button>
+        <button onClick={() => addAtViewportCenter('process')}>+ Process</button>
+        <button onClick={() => addAtViewportCenter('object')}>+ Object</button>
         <span className="hint">
-          Double-click the canvas to add a process, double-click a process to edit it. Drag between
-          handles to connect; select a connection and press Delete to remove it.
+          Double-click the canvas to add a process, Shift+double-click to add an object. Connect a
+          process to the objects it generates, and objects to the processes that take them as input.
+          Double-click to edit; select a connection and press Delete to remove it.
         </span>
         <button
           className="play"

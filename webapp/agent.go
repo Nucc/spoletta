@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"strconv"
@@ -21,6 +22,15 @@ type agentModels struct {
 	Default string   `json:"default"`
 	Models  []string `json:"models"`
 }
+
+// An object a process takes as input, with the output of the process that generated it.
+type runInput struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// Inputs are capped so a runaway output can't grow every prompt downstream without bound.
+const maxRunRequestBytes = 10 << 20
 
 type runResult struct {
 	OK     bool   `json:"ok"`
@@ -45,11 +55,21 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	})
 
 	// Runs an agent process's prompt in the worker and waits for the result.
-	// Closing the request cancels the run.
+	// The body may list the process's input objects, which are appended to
+	// the prompt. Closing the request cancels the run.
 	mux.HandleFunc("POST /api/processes/{id}/run", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
 			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		var body struct {
+			Inputs []runInput `json:"inputs"`
+		}
+		err = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunRequestBytes)).Decode(&body)
+		if err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -81,6 +101,7 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			writeJSON(w, http.StatusOK, runResult{Error: "the process has no prompt"})
 			return
 		}
+		run.Prompt = withInputs(run.Prompt, body.Inputs)
 
 		var res runResult
 		if err := callWorker(r.Context(), http.MethodPost, workerURL+"/run", run, &res); err != nil {
@@ -91,6 +112,21 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		writeJSON(w, http.StatusOK, res)
 	})
+}
+
+// Appends each input object to the prompt, tagged with its name so the agent
+// can tell them apart and match them to the prompt's wording.
+func withInputs(prompt string, inputs []runInput) string {
+	if len(inputs) == 0 {
+		return prompt
+	}
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString("\n\nYour inputs follow, one <input> element per object.\n")
+	for _, in := range inputs {
+		fmt.Fprintf(&b, "\n<input name=\"%s\">\n%s\n</input>\n", html.EscapeString(in.Name), in.Content)
+	}
+	return b.String()
 }
 
 // No client timeout: agent runs can take minutes, and the worker enforces its own limit.

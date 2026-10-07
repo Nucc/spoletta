@@ -28,6 +28,24 @@ export type Connection = {
   target: number
 }
 
+// An OPM object: something a process generates and other processes take as input.
+export type FlowObject = {
+  id: number
+  name: string
+  x: number
+  y: number
+}
+
+// 'output': the process generates the object. 'input': the process takes it as input.
+export type LinkDirection = 'output' | 'input'
+
+export type Link = {
+  id: number
+  process: number
+  object: number
+  direction: LinkDirection
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
@@ -72,6 +90,30 @@ export function deleteConnection(id: number): Promise<void> {
   return request(`/api/connections/${id}`, { method: 'DELETE' })
 }
 
+export function listObjects(): Promise<FlowObject[]> {
+  return request('/api/objects')
+}
+
+export function createObject(o: Omit<FlowObject, 'id'>): Promise<FlowObject> {
+  return request('/api/objects', { method: 'POST', body: JSON.stringify(o) })
+}
+
+export function updateObject(id: number, patch: Partial<Omit<FlowObject, 'id'>>): Promise<FlowObject> {
+  return request(`/api/objects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function listLinks(): Promise<Link[]> {
+  return request('/api/links')
+}
+
+export function createLink(l: Omit<Link, 'id'>): Promise<Link> {
+  return request('/api/links', { method: 'POST', body: JSON.stringify(l) })
+}
+
+export function deleteLink(id: number): Promise<void> {
+  return request(`/api/links/${id}`, { method: 'DELETE' })
+}
+
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -93,6 +135,12 @@ export function listModels(): Promise<Models> {
   return request('/api/models')
 }
 
-export function runProcess(id: number, signal?: AbortSignal): Promise<RunResult> {
-  return request(`/api/processes/${id}/run`, { method: 'POST', signal })
+// An object the process takes as input, with what the process that generated it printed.
+export type RunInput = {
+  name: string
+  content: string
+}
+
+export function runProcess(id: number, inputs: RunInput[], signal?: AbortSignal): Promise<RunResult> {
+  return request(`/api/processes/${id}/run`, { method: 'POST', body: JSON.stringify({ inputs }), signal })
 }

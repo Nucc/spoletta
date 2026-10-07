@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
+import type { ProcessKind } from './api'
 
 export type ProcessNodeData = {
   name: string
+  kind: ProcessKind
   // Edited in the side panel, never rendered on the node.
   prompt: string
+  script: string
   editing: boolean
   // Set while a flow run is in progress or after it has passed this process.
   status?: RunStatus
@@ -21,6 +24,7 @@ export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNod
     <div className={`process-node${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}`}>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <span className={`process-kind ${data.kind}`}>{data.kind}</span>
       {data.editing ? (
         <NameInput
           initial={data.name}

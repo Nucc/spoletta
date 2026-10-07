@@ -150,6 +150,34 @@ body {
   line-height: 1.5;
 }
 
+.segmented {
+  display: flex;
+  align-self: flex-start;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.segmented button {
+  padding: 6px 14px;
+  font: inherit;
+  font-weight: 400;
+  font-size: 14px;
+  color: #1f2328;
+  background: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.segmented button + button {
+  border-left: 1px solid #d8dee4;
+}
+
+.segmented button.selected {
+  color: #fff;
+  background: #1f6feb;
+}
+
 .panel-warning {
   color: #82071e;
   font-weight: 400;
@@ -168,6 +196,26 @@ body {
   text-align: center;
   font-size: 14px;
   word-break: break-word;
+  position: relative;
+}
+
+.process-kind {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 8px;
+  color: #0550ae;
+  background: #ddf4ff;
+}
+
+.process-kind.script {
+  color: #6639ba;
+  background: #fbefff;
 }
 
 .process-node.selected {

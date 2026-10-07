@@ -105,7 +105,7 @@ export default function Board() {
       const node = getNode(id)
       if (!node) return
       try {
-        const created = await createProcess({ name, prompt: '', x: node.position.x, y: node.position.y })
+        const created = await createProcess({ name, kind: 'agent', prompt: '', script: '', x: node.position.x, y: node.position.y })
         setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: String(created.id) } : n)))
       } catch (err) {
         report(err)
@@ -120,7 +120,7 @@ export default function Board() {
       type: 'process',
       position: { x: p.x, y: p.y },
       deletable: false,
-      data: { name: p.name, prompt: p.prompt, editing: false, onCommit, onCancel },
+      data: { name: p.name, kind: p.kind, prompt: p.prompt, script: p.script, editing: false, onCommit, onCancel },
     }),
     [onCommit, onCancel],
   )
@@ -146,7 +146,7 @@ export default function Board() {
           position: { x: center.x - NODE_SIZE / 2, y: center.y - NODE_SIZE / 2 },
           selected: true,
           deletable: false,
-          data: { name: '', prompt: '', editing: true, onCommit, onCancel },
+          data: { name: '', kind: 'agent', prompt: '', script: '', editing: true, onCommit, onCancel },
         },
       ])
     },
@@ -296,7 +296,12 @@ export default function Board() {
           <ProcessPanel
             key={panelNode.id}
             id={Number(panelNode.id)}
-            initial={{ name: panelNode.data.name, prompt: panelNode.data.prompt }}
+            initial={{
+              name: panelNode.data.name,
+              kind: panelNode.data.kind,
+              prompt: panelNode.data.prompt,
+              script: panelNode.data.script,
+            }}
             onChange={(fields) => updateData(panelNode.id, fields)}
             onClose={() => setPanelId(null)}
             onError={report}

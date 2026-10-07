@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { updateProcess } from './api'
+import { updateProcess, type ProcessKind } from './api'
 
-type Fields = { name: string; prompt: string }
+type Fields = { name: string; kind: ProcessKind; prompt: string; script: string }
 
 const SAVE_DELAY_MS = 500
+
+const KINDS: { value: ProcessKind; label: string }[] = [
+  { value: 'agent', label: 'Agent' },
+  { value: 'script', label: 'Script' },
+]
 
 // Edits one process; mount with key={id} so switching processes resets the form.
 export default function ProcessPanel({
@@ -20,11 +25,13 @@ export default function ProcessPanel({
   onError: (err: unknown) => void
 }) {
   const [name, setName] = useState(initial.name)
+  const [kind, setKind] = useState(initial.kind)
   const [prompt, setPrompt] = useState(initial.prompt)
+  const [script, setScript] = useState(initial.script)
   const saved = useRef(initial)
   const pending = useRef<Partial<Fields> | null>(null)
   const timer = useRef<number>(undefined)
-  const promptRef = useRef<HTMLTextAreaElement>(null)
+  const bodyRef = useRef<HTMLTextAreaElement>(null)
 
   const flush = () => {
     window.clearTimeout(timer.current)
@@ -39,7 +46,9 @@ export default function ProcessPanel({
     const trimmed = name.trim()
     const patch: Partial<Fields> = {}
     if (trimmed !== '' && trimmed !== saved.current.name) patch.name = trimmed
+    if (kind !== saved.current.kind) patch.kind = kind
     if (prompt !== saved.current.prompt) patch.prompt = prompt
+    if (script !== saved.current.script) patch.script = script
     if (Object.keys(patch).length === 0) return
 
     saved.current = { ...saved.current, ...patch }
@@ -47,13 +56,14 @@ export default function ProcessPanel({
     onChange(saved.current)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(flush, SAVE_DELAY_MS)
-  }, [name, prompt])
+  }, [name, kind, prompt, script])
 
   useEffect(() => flush, [])
 
+  // Both bodies are kept, so switching type back and forth loses nothing.
   useEffect(() => {
-    promptRef.current?.focus()
-  }, [])
+    bodyRef.current?.focus()
+  }, [kind])
 
   return (
     <aside className="panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
@@ -68,15 +78,44 @@ export default function ProcessPanel({
         <input value={name} onChange={(e) => setName(e.target.value)} />
         {name.trim() === '' && <small className="panel-warning">Name can't be empty.</small>}
       </label>
-      <label className="panel-field panel-field-grow">
-        <span>Prompt</span>
-        <textarea
-          ref={promptRef}
-          value={prompt}
-          placeholder="Describe what this process should do…"
-          onChange={(e) => setPrompt(e.target.value)}
-        />
-      </label>
+      <div className="panel-field" role="radiogroup" aria-label="Type">
+        <span>Type</span>
+        <div className="segmented">
+          {KINDS.map((k) => (
+            <button
+              key={k.value}
+              role="radio"
+              aria-checked={kind === k.value}
+              className={kind === k.value ? 'selected' : ''}
+              onClick={() => setKind(k.value)}
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {kind === 'agent' ? (
+        <label key="agent" className="panel-field panel-field-grow">
+          <span>Prompt</span>
+          <textarea
+            ref={bodyRef}
+            value={prompt}
+            placeholder="Describe what this process should do…"
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+        </label>
+      ) : (
+        <label key="script" className="panel-field panel-field-grow">
+          <span>Script</span>
+          <textarea
+            ref={bodyRef}
+            value={script}
+            placeholder="Script to run for this process…"
+            spellCheck={false}
+            onChange={(e) => setScript(e.target.value)}
+          />
+        </label>
+      )}
     </aside>
   )
 }

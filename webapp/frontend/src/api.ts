@@ -1,7 +1,13 @@
+export type ProcessKind = 'agent' | 'script'
+
 export type Process = {
   id: number
   name: string
+  kind: ProcessKind
+  // Used when kind is 'agent'.
   prompt: string
+  // Used when kind is 'script'.
+  script: string
   x: number
   y: number
 }

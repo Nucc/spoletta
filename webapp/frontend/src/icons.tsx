@@ -55,6 +55,21 @@ export const ExhibitionIcon = ({ size = 12 }: { size?: number }) => (
   </Icon>
 )
 
+// The app's mark: a start node feeding a process, which hands its result
+// on to the next step, drawn white on a filled tile. public/favicon.svg
+// is the same drawing.
+export const FlowBuilderIcon = ({ size = 24 }: { size?: number }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+    <rect width="24" height="24" rx="6" fill="#0969da" />
+    <g fill="none" stroke="#fff" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8.5 7.5h4M15.5 10v6.5h-4" />
+      <rect x="12.5" y="5" width="6" height="5" rx="1.5" />
+      <rect x="5.5" y="14" width="6" height="5" rx="1.5" />
+    </g>
+    <circle cx="6.5" cy="7.5" r="2" fill="#fff" />
+  </svg>
+)
+
 export const PlayIcon = () => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
     <path d="M4 2.5v11l9-5.5z" fill="currentColor" />

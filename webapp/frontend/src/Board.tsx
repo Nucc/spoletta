@@ -21,7 +21,7 @@ import {
 } from '@xyflow/react'
 import { BoardActionsContext, type BoardActions } from './actions'
 import ContextMenu, { type MenuItem } from './ContextMenu'
-import { CopyIcon, HistoryIcon, LayoutIcon, PencilIcon, PlayIcon, PlusIcon, SaveIcon, TrashIcon } from './icons'
+import { CopyIcon, FlowBuilderIcon, HistoryIcon, LayoutIcon, PencilIcon, PlayIcon, PlusIcon, SaveIcon, TrashIcon } from './icons'
 import { RANK_GAP, tidy } from './layout'
 import LinkEdge, { type LinkEdgeData, type LinkEdgeType } from './LinkEdge'
 import ObjectNode, {
@@ -1197,7 +1197,9 @@ export default function Board() {
   return (
     <div className="board">
       <header className="toolbar">
-        <h1>Flow Builder</h1>
+        <h1>
+          <FlowBuilderIcon /> Flow Builder
+        </h1>
         <button onClick={() => addAtViewportCenter('process')}>
           <PlusIcon /> Process
         </button>

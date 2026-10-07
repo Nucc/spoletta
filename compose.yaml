@@ -16,8 +16,12 @@ services:
       timeout: 5s
       retries: 20
 
+  # Runs pi agent harnesses for agent processes. Only the webapp reaches it,
+  # so its port isn't published.
   worker:
     build: ./worker
+    environment:
+      PORT: "8090"
     restart: unless-stopped
 
   webapp:
@@ -29,11 +33,14 @@ services:
       DB_USER: ${MYSQL_USER:-app}
       DB_PASSWORD: ${MYSQL_PASSWORD:-apppass}
       PORT: "8080"
+      WORKER_URL: http://worker:8090
     ports:
       - "8080:8080"
     depends_on:
       mysql:
         condition: service_healthy
+      worker:
+        condition: service_started
     restart: unless-stopped
 
 volumes:

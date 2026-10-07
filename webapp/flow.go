@@ -54,7 +54,7 @@ func migrateFlow(db *sql.DB) error {
 			return err
 		}
 	}
-	return nil
+	return migrateAgent(db)
 }
 
 func registerFlowRoutes(mux *http.ServeMux, db *sql.DB) {

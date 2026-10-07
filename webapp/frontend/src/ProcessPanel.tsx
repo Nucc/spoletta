@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { updateProcess, type ProcessKind } from './api'
+import type { RunStatus } from './ProcessNode'
 
 type Fields = { name: string; kind: ProcessKind; prompt: string; script: string }
 
@@ -14,12 +15,15 @@ const KINDS: { value: ProcessKind; label: string }[] = [
 export default function ProcessPanel({
   id,
   initial,
+  run,
   onChange,
   onClose,
   onError,
 }: {
   id: number
   initial: Fields
+  // Outcome of this process in the latest flow run, if it has run.
+  run?: { status?: RunStatus; output?: string; error?: string }
   onChange: (fields: Fields) => void
   onClose: () => void
   onError: (err: unknown) => void
@@ -115,6 +119,19 @@ export default function ProcessPanel({
             onChange={(e) => setScript(e.target.value)}
           />
         </label>
+      )}
+      {run?.status === 'active' && <p className="settings-note">Running…</p>}
+      {run?.error && (
+        <div className="panel-run">
+          <span>Last run failed</span>
+          <pre className="failed">{run.error}</pre>
+        </div>
+      )}
+      {run?.output && (
+        <div className="panel-run">
+          <span>Last run output</span>
+          <pre>{run.output}</pre>
+        </div>
       )}
     </aside>
   )

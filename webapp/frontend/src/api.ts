@@ -68,3 +68,38 @@ export function createConnection(c: Omit<Connection, 'id'>): Promise<Connection>
 export function deleteConnection(id: number): Promise<void> {
   return request(`/api/connections/${id}`, { method: 'DELETE' })
 }
+
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export type AgentSettings = {
+  provider: string
+  model: string
+  thinking: ThinkingLevel
+  // The key itself is never sent back, only whether one is stored and its last characters.
+  hasApiKey: boolean
+  keyHint: string
+}
+
+export type AgentSettingsPatch = Partial<Pick<AgentSettings, 'provider' | 'model' | 'thinking'>> & {
+  // Omitted or empty keeps the stored key.
+  apiKey?: string
+  clearApiKey?: boolean
+}
+
+export type RunResult = {
+  ok: boolean
+  output: string
+  error: string
+}
+
+export function getAgentSettings(): Promise<AgentSettings> {
+  return request('/api/agent-settings')
+}
+
+export function updateAgentSettings(patch: AgentSettingsPatch): Promise<AgentSettings> {
+  return request('/api/agent-settings', { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function runProcess(id: number, signal?: AbortSignal): Promise<RunResult> {
+  return request(`/api/processes/${id}/run`, { method: 'POST', signal })
+}

@@ -11,11 +11,14 @@ export type ProcessNodeData = {
   editing: boolean
   // Set while a flow run is in progress or after it has passed this process.
   status?: RunStatus
+  // What the last run of this process printed, or why it failed.
+  output?: string
+  runError?: string
   onCommit: (id: string, name: string) => void
   onCancel: (id: string) => void
 }
 
-export type RunStatus = 'active' | 'done'
+export type RunStatus = 'active' | 'done' | 'error'
 
 export type ProcessNodeType = Node<ProcessNodeData, 'process'>
 

@@ -1,7 +1,11 @@
-FROM docker.io/library/alpine:3.20
+FROM docker.io/library/node:22-alpine
+
+# git and bash give the agent's tools something to work with.
+RUN apk add --no-cache bash git
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 
 WORKDIR /app
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+COPY server.mjs /app/server.mjs
 
-CMD ["/app/entrypoint.sh"]
+EXPOSE 8090
+CMD ["node", "/app/server.mjs"]

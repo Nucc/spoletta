@@ -1,5 +1,6 @@
-// Runs pi agent harnesses on behalf of the webapp. Each POST /run spawns one
-// non-interactive pi process in a fresh scratch directory and replies once it exits.
+// Runs pi agent harnesses and scripts on behalf of the webapp. Each POST /run
+// spawns one non-interactive pi process in a fresh scratch directory, each
+// POST /script one bash script, and replies once it exits.
 package main
 
 import (
@@ -50,6 +51,24 @@ type runRequest struct {
 	Model       string `json:"model"`
 	Thinking    string `json:"thinking"`
 }
+
+// A script process's script, with the objects it takes.
+type scriptRequest struct {
+	// Identify the process in the logs.
+	ProcessID   int64         `json:"processId"`
+	ProcessName string        `json:"processName"`
+	Script      string        `json:"script"`
+	Inputs      []scriptInput `json:"inputs"`
+}
+
+type scriptInput struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// Scripts' inputs and outputs can be lists of many items, so they may be
+// larger than prompts.
+const maxScriptBytes = 10 << 20
 
 type runResult struct {
 	OK     bool   `json:"ok"`
@@ -111,6 +130,25 @@ func main() {
 		started := time.Now()
 		res := runPi(r.Context(), run, timeout)
 		logRun(run, res, time.Since(started))
+		if r.Context().Err() == nil {
+			reply(w, http.StatusOK, res)
+		}
+	})
+
+	mux.HandleFunc("POST /script", func(w http.ResponseWriter, r *http.Request) {
+		var run scriptRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxScriptBytes)).Decode(&run); err != nil {
+			reply(w, http.StatusBadRequest, map[string]string{"error": "invalid request: " + err.Error()})
+			return
+		}
+		if strings.TrimSpace(run.Script) == "" {
+			reply(w, http.StatusBadRequest, map[string]string{"error": "script is required"})
+			return
+		}
+
+		started := time.Now()
+		res := runScript(r.Context(), run, timeout)
+		logOutcome(processLabel(run.ProcessID, run.ProcessName), "bash", res, time.Since(started))
 		if r.Context().Err() == nil {
 			reply(w, http.StatusOK, res)
 		}
@@ -279,25 +317,121 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult
 	return runResult{OK: true, Output: output}
 }
 
+// Characters kept in an input's file name; others become underscores.
+var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// Runs a script with bash in a fresh scratch directory, which is its working
+// directory. Each object it takes is a file in the directory $INPUTS points
+// to, named after the object: spaces and other characters unsafe in a file
+// name become underscores, so Jira Ticket is $INPUTS/Jira_Ticket. What the
+// script prints is its output; a non-zero exit fails it, with what it printed
+// to stderr as the error. Like pi, it runs in a process group of its own,
+// which a cancelled request or the timeout kills.
+func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) runResult {
+	cwd, err := os.MkdirTemp("", "script-")
+	if err != nil {
+		return runResult{Error: "create scratch directory: " + err.Error()}
+	}
+	defer os.RemoveAll(cwd)
+	inputs := filepath.Join(cwd, ".inputs")
+	if err := os.Mkdir(inputs, 0o755); err != nil {
+		return runResult{Error: "create inputs directory: " + err.Error()}
+	}
+	for _, in := range run.Inputs {
+		name := strings.Trim(unsafeName.ReplaceAllString(in.Name, "_"), "._")
+		if name == "" {
+			name = "input"
+		}
+		if err := os.WriteFile(filepath.Join(inputs, name), []byte(in.Content), 0o644); err != nil {
+			return runResult{Error: "write input " + in.Name + ": " + err.Error()}
+		}
+	}
+	script := filepath.Join(cwd, ".script")
+	if err := os.WriteFile(script, []byte(run.Script), 0o644); err != nil {
+		return runResult{Error: "write script: " + err.Error()}
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, "bash", script)
+	cmd.Dir = cwd
+	cmd.Env = append(os.Environ(), "INPUTS="+inputs)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 10 * time.Second
+	stdout := &cappedBuffer{max: maxScriptBytes}
+	stderr := &cappedBuffer{max: 64 << 10}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
+	if err := cmd.Start(); err != nil {
+		return runResult{Error: "failed to start bash: " + err.Error()}
+	}
+	err = cmd.Wait()
+	output := strings.TrimSpace(stdout.String())
+	switch {
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
+		return runResult{Output: output, Error: "timed out"}
+	case ctx.Err() != nil:
+		return runResult{Output: output, Error: "cancelled"}
+	case stdout.over:
+		return runResult{Error: fmt.Sprintf("the script printed more than %d MB", maxScriptBytes>>20)}
+	case err != nil:
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = "the script failed: " + err.Error()
+		} else if exit, ok := err.(*exec.ExitError); ok {
+			msg += fmt.Sprintf("\n(exit status %d)", exit.ExitCode())
+		}
+		return runResult{Output: output, Error: msg}
+	}
+	return runResult{OK: true, Output: output}
+}
+
+// Keeps the last max bytes written to it, which for errors hold the lines
+// that matter; output past the cap fails the script.
+type cappedBuffer struct {
+	bytes.Buffer
+	max  int
+	over bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	b.Buffer.Write(p)
+	if b.Len() > b.max {
+		b.over = true
+		b.Next(b.Len() - b.max)
+	}
+	return len(p), nil
+}
+
+func processLabel(id int64, name string) string {
+	if id == 0 {
+		return "run"
+	}
+	label := fmt.Sprintf("process %d", id)
+	if name != "" {
+		label += fmt.Sprintf(" %q", name)
+	}
+	return label
+}
+
 // Logs the outcome followed by the agent's output (or error), each line
 // prefixed so multi-line output stays attributable when runs interleave.
 func logRun(run runRequest, res runResult, d time.Duration) {
-	label := "run"
-	if run.ProcessID != 0 {
-		label = fmt.Sprintf("process %d", run.ProcessID)
-		if run.ProcessName != "" {
-			label += fmt.Sprintf(" %q", run.ProcessName)
-		}
-	}
 	model := run.Model
 	if model == "" {
 		model = "default model"
 	}
+	logOutcome(processLabel(run.ProcessID, run.ProcessName), model, res, d)
+}
+
+func logOutcome(label, with string, res runResult, d time.Duration) {
 	outcome := "failed"
 	if res.OK {
 		outcome = "succeeded"
 	}
-	log.Printf("worker: %s with %s %s in %dms", label, model, outcome, d.Milliseconds())
+	log.Printf("worker: %s with %s %s in %dms", label, with, outcome, d.Milliseconds())
 	for _, s := range []struct{ name, text string }{{"output", res.Output}, {"error", res.Error}} {
 		if s.text == "" {
 			continue

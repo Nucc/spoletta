@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 // The engine executes runs in the server, so a run goes on without the page
@@ -50,9 +49,6 @@ import (
 // end the outer run: a duplicate, or a stop, just ends that branch. Otherwise
 // its processes' steps are steps of the run it is in.
 
-// Script processes don't execute yet; they just occupy their slot in the run.
-const simulatedRunTime = 3 * time.Second
-
 // What a human decided on a review: the state they set, if they had any to
 // choose from, and their instructions.
 type decision struct {
@@ -63,11 +59,11 @@ type decision struct {
 type engine struct {
 	db        *sql.DB
 	workerURL string
-	// A slot per agent step that can run at once, across all runs; reviews
-	// waiting take none.
-	agents chan struct{}
-	mu     sync.Mutex
-	runs   map[int64]*liveRun
+	// A slot per agent or script step that can run at once in the worker,
+	// across all runs; reviews waiting take none.
+	slots chan struct{}
+	mu    sync.Mutex
+	runs  map[int64]*liveRun
 }
 
 // A run in progress.
@@ -77,8 +73,8 @@ type liveRun struct {
 	reviews map[int64]chan decision
 }
 
-func newEngine(db *sql.DB, workerURL string, parallelAgents int) *engine {
-	return &engine{db: db, workerURL: workerURL, agents: make(chan struct{}, parallelAgents), runs: map[int64]*liveRun{}}
+func newEngine(db *sql.DB, workerURL string, parallelSteps int) *engine {
+	return &engine{db: db, workerURL: workerURL, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{}}
 }
 
 // Executes a run of the whole flow, on the top board of version's board, in
@@ -882,43 +878,28 @@ func (w *walk) runHuman(id int64, given []runInput) {
 	all(next)
 }
 
-// Executes a process as a step of the run. False if it failed; a duplicate
-// is a result, and terminates the run.
+// Executes an agent or script process as a step of the run, once a slot in
+// the worker is free. False if it failed; a duplicate is a result, and
+// terminates the run.
 func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool) {
-	if w.kinds[id] == kindAgent {
-		select {
-		case w.e.agents <- struct{}{}:
-		case <-w.ctx.Done():
-			return runResult{}, false
-		}
-		res, err := runAgentStep(w.ctx, w.e.db, w.e.workerURL, w.run, id, inputs, cr)
-		<-w.e.agents
-		if err != nil {
-			if w.ctx.Err() == nil {
-				log.Printf("run process %d in run %d: %v", id, w.run, err)
-			}
-			return res, false
-		}
-		return res, res.OK || res.Duplicate != nil
+	select {
+	case w.e.slots <- struct{}{}:
+	case <-w.ctx.Done():
+		return runResult{}, false
 	}
-
-	stepID, err := startStep(w.ctx, w.e.db, w.run, id, stepActive, "", inputs, nil)
+	var res runResult
+	var err error
+	if w.kinds[id] == kindAgent {
+		res, err = runAgentStep(w.ctx, w.e.db, w.e.workerURL, w.run, id, inputs, cr)
+	} else {
+		res, err = runScriptStep(w.ctx, w.e.db, w.e.workerURL, w.run, id, inputs)
+	}
+	<-w.e.slots
 	if err != nil {
 		if w.ctx.Err() == nil {
-			log.Printf("record process %d in run %d: %v", id, w.run, err)
+			log.Printf("run process %d in run %d: %v", id, w.run, err)
 		}
-		return runResult{}, false
+		return res, false
 	}
-	select {
-	case <-time.After(simulatedRunTime):
-	case <-w.ctx.Done():
-		// Stopping the run ended the step.
-		return runResult{}, false
-	}
-	dup, err := finishStep(context.Background(), w.e.db, stepID, stepDone, "", "", nil)
-	if err != nil {
-		log.Printf("record step %d: %v", stepID, err)
-		return runResult{}, false
-	}
-	return runResult{OK: true, Duplicate: dup}, true
+	return res, res.OK || res.Duplicate != nil
 }

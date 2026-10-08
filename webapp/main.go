@@ -69,11 +69,12 @@ func main() {
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
 	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
-	parallelAgents, err := strconv.Atoi(env("PARALLEL_AGENTS", "3"))
-	if err != nil || parallelAgents < 1 {
-		log.Fatalf("PARALLEL_AGENTS must be a positive number")
+	// How many agent and script steps run in the worker at once.
+	parallelSteps, err := strconv.Atoi(env("PARALLEL_STEPS", "3"))
+	if err != nil || parallelSteps < 1 {
+		log.Fatalf("PARALLEL_STEPS must be a positive number")
 	}
-	registerRunRoutes(mux, db, newEngine(db, workerURL, parallelAgents))
+	registerRunRoutes(mux, db, newEngine(db, workerURL, parallelSteps))
 	registerVersionRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

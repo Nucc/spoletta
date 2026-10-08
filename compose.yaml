@@ -16,11 +16,11 @@ services:
       timeout: 5s
       retries: 20
 
-  # Runs pi agent harnesses for agent processes. Only the webapp reaches it,
-  # so its port isn't published. It uses the models and model settings from
-  # your pi config (PI_CONFIG_DIR, ~/.pi/agent by default) and credentials
-  # from the environment `podman compose up` runs in; restart it after
-  # changing either.
+  # Runs pi agent harnesses for agent processes, and bash for script
+  # processes. Only the webapp reaches it, so its port isn't published. It
+  # uses the models and model settings from your pi config (PI_CONFIG_DIR,
+  # ~/.pi/agent by default) and credentials from the environment `podman
+  # compose up` runs in; restart it after changing either.
   worker:
     build: ./worker
     environment:
@@ -33,6 +33,13 @@ services:
       - ANTHROPIC_API_KEY
       - GEMINI_API_KEY
       - OPENROUTER_API_KEY
+      # For script processes calling APIs, e.g. curl -H "Authorization:
+      # Bearer $SENTRY_AUTH_TOKEN". Agents can read them too.
+      - SENTRY_AUTH_TOKEN
+      - SENTRY_URL
+      - JIRA_URL
+      - JIRA_EMAIL
+      - JIRA_API_TOKEN
     volumes:
       # Only these two files: the agent can read anything mounted, and the
       # rest of the directory holds sessions and OAuth tokens.

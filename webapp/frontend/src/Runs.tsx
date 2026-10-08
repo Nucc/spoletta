@@ -215,7 +215,7 @@ function Step({
         )}
         {s.prompt && (
           <details className="step-prompt">
-            <summary>Prompt sent to the agent</summary>
+            <summary>{s.kind === 'script' ? 'Script it ran' : 'Prompt sent to the agent'}</summary>
             <pre>{s.prompt}</pre>
           </details>
         )}

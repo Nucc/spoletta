@@ -21,6 +21,11 @@ type Fields = {
 
 const SAVE_DELAY_MS = 500
 
+const SCRIPT_PLACEHOLDER = `# e.g. the latest unresolved issues in Sentry:
+curl -sf -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \\
+  "https://sentry.io/api/0/organizations/my-org/issues/?query=is:unresolved&limit=10" |
+  jq '[.[] | {id: .shortId, title, permalink}]'`
+
 const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'agent', label: 'Agent' },
   { value: 'script', label: 'Script' },
@@ -215,10 +220,15 @@ export default function ProcessPanel({
             ref={bodyRef}
             readOnly={readOnly}
             value={script}
-            placeholder="Script to run for this process…"
+            placeholder={SCRIPT_PLACEHOLDER}
             spellCheck={false}
             onChange={(e) => setScript(e.target.value)}
           />
+          <small className="panel-note">
+            Runs with bash, curl and jq. Each object it takes is a file in <code>$INPUTS</code>, named after the object
+            with spaces as underscores. What it prints is its output; a list of items is a JSON array. A non-zero exit
+            fails it.
+          </small>
         </label>
       )}
       {review && <ReviewForm review={review} />}

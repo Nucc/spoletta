@@ -17,9 +17,20 @@ type run struct {
 	Status string `json:"status"`
 	// The version of the board the run ran on; null for runs from before
 	// versions were recorded.
-	Version    *int64     `json:"version"`
-	StartedAt  time.Time  `json:"startedAt"`
-	FinishedAt *time.Time `json:"finishedAt"`
+	Version *int64 `json:"version"`
+	// For the run of a recording flow process: the run it ran in, and the
+	// process, kept after it is deleted. Null for runs of the whole flow.
+	Parent      *int64     `json:"parent"`
+	Process     *int64     `json:"process"`
+	ProcessName string     `json:"processName"`
+	StartedAt   time.Time  `json:"startedAt"`
+	FinishedAt  *time.Time `json:"finishedAt"`
+}
+
+const runColumns = "id, status, version_id, parent_run_id, process_ref, process_name, started_at, finished_at"
+
+func scanRun(row interface{ Scan(...any) error }, rn *run) error {
+	return row.Scan(&rn.ID, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -44,10 +55,12 @@ type step struct {
 	Error         string         `json:"error"`
 	// For human steps: the name of the state the human set, and their
 	// instructions. Steps from before states hold approved or changes.
-	Outcome      string     `json:"outcome"`
-	Instructions string     `json:"instructions"`
-	StartedAt    time.Time  `json:"startedAt"`
-	FinishedAt   *time.Time `json:"finishedAt"`
+	Outcome      string `json:"outcome"`
+	Instructions string `json:"instructions"`
+	// For a recording flow process: the run its board ran as.
+	ChildRun   *int64     `json:"childRun"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
 }
 
 // The content and state an object got in a run from the step that generated
@@ -147,6 +160,10 @@ func migrateRuns(db *sql.DB) error {
 		// still has it.
 		{"run_steps", "process_ref", "BIGINT NULL AFTER process_id"},
 		{"run_objects", "object_ref", "BIGINT NULL AFTER object_id"},
+		{"runs", "parent_run_id", "BIGINT NULL AFTER version_id"},
+		{"runs", "process_ref", "BIGINT NULL AFTER parent_run_id"},
+		{"runs", "process_name", "VARCHAR(255) NOT NULL DEFAULT '' AFTER process_ref"},
+		{"run_steps", "child_run_id", "BIGINT NULL AFTER instructions"},
 	} {
 		if err := addColumn(db, c.table, c.name, c.def); err != nil {
 			return err
@@ -224,10 +241,10 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 	defer tx.Rollback()
 	// Locking the run orders this against a parallel step terminating it.
 	var runID int64
-	var runStatus string
+	var runStatus, kind string
 	err = tx.QueryRowContext(ctx,
-		"SELECT r.id, r.status FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
-		Scan(&runID, &runStatus)
+		"SELECT r.id, r.status, s.kind FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
+		Scan(&runID, &runStatus, &kind)
 	if err != nil {
 		return nil, err
 	}
@@ -258,8 +275,9 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 			return nil, err
 		}
 	}
-	// A step finishing after its run ended stores nothing.
-	if runStatus != runRunning {
+	// A step finishing after its run ended stores nothing, nor does a flow
+	// process's: the processes inside it stored what it generates.
+	if runStatus != runRunning || kind == kindFlow {
 		return nil, tx.Commit()
 	}
 
@@ -305,25 +323,22 @@ func decisionState(ctx context.Context, db *sql.DB, stepID, stateID int64) (stri
 	return name, err
 }
 
-// Records the state a human step set its object to. The object keeps the
-// content it last got in the run.
-func recordDecision(ctx context.Context, db *sql.DB, stepID, stateID int64) error {
+// Records the state a human step set its object to; the object keeps its content.
+func recordDecision(ctx context.Context, db *sql.DB, stepID, stateID int64, content string) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content)
-		SELECT s.run_id, s.id, o.id, o.id, o.name, st.name,
-			COALESCE((SELECT ro.content FROM run_objects ro WHERE ro.run_id = s.run_id AND ro.object_id = o.id ORDER BY ro.id DESC LIMIT 1), '')
+		SELECT s.run_id, s.id, o.id, o.id, o.name, st.name, ?
 		FROM run_steps s
 		JOIN object_states st ON st.id = ?
 		JOIN objects o ON o.id = st.object_id
 		WHERE s.id = ?`,
-		stateID, stepID)
+		content, stateID, stepID)
 	return err
 }
 
 func getRun(ctx context.Context, db *sql.DB, id int64) (run, error) {
 	var rn run
-	err := db.QueryRowContext(ctx, "SELECT id, status, version_id, started_at, finished_at FROM runs WHERE id = ?", id).
-		Scan(&rn.ID, &rn.Status, &rn.Version, &rn.StartedAt, &rn.FinishedAt)
+	err := scanRun(db.QueryRowContext(ctx, "SELECT "+runColumns+" FROM runs WHERE id = ?", id), &rn)
 	return rn, err
 }
 
@@ -356,7 +371,7 @@ func endRun(ctx context.Context, db *sql.DB, id int64, status string) (run, erro
 
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, status, version_id, started_at, finished_at FROM runs ORDER BY id DESC LIMIT 200")
+		rows, err := db.QueryContext(r.Context(), "SELECT "+runColumns+" FROM runs ORDER BY id DESC LIMIT 200")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -366,7 +381,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		rs := []run{}
 		for rows.Next() {
 			var rn run
-			if err := rows.Scan(&rn.ID, &rn.Status, &rn.Version, &rn.StartedAt, &rn.FinishedAt); err != nil {
+			if err := scanRun(rows, &rn); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -414,7 +429,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
-		eng.start(id, board)
+		eng.start(id, version, board)
 		rn, err := getRun(ctx, db, id)
 		if err != nil {
 			serverError(w, err)
@@ -448,7 +463,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
-				status, output, error, outcome, instructions, started_at, finished_at
+				status, output, error, outcome, instructions, child_run_id, started_at, finished_at
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
 			serverError(w, err)
@@ -460,7 +475,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			var inputs []byte
 			var cr []byte
 			if err := rows.Scan(&s.ID, &s.Process, &s.ProcessName, &s.Kind, &s.Model, &s.Thinking, &s.Prompt, &inputs, &cr,
-				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.StartedAt, &s.FinishedAt); err != nil {
+				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.ChildRun, &s.StartedAt, &s.FinishedAt); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -584,12 +599,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			http.Error(w, "no review waiting with that id in this run", http.StatusConflict)
 			return
 		}
-		if patch.State != nil {
-			if err := recordDecision(r.Context(), db, id, *patch.State); err != nil {
-				serverError(w, err)
-				return
-			}
-		}
+		// The run records the object in the state set, with the content it has there.
 		eng.decide(runID, id, decision{state: patch.State, instructions: patch.Instructions})
 		w.WriteHeader(http.StatusNoContent)
 	})

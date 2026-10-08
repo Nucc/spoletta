@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DragEvent, MouseEvent } from 'react'
+import type { CSSProperties, DragEvent, MouseEvent } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -20,6 +20,7 @@ import {
   type XYPosition,
 } from '@xyflow/react'
 import { BoardActionsContext, type BoardActions } from './actions'
+import { ColumnResizer, useColumnWidth } from './ColumnResizer'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import {
   CopyIcon,
@@ -115,6 +116,9 @@ type FlowEdge = Edge<LinkEdgeData>
 
 const nodeTypes = { process: ProcessNode, object: ObjectNode, start: StartNode, end: EndNode }
 const edgeTypes = { link: LinkEdge }
+
+// The column on the right of the board that holds the open panel.
+const PANEL_COLUMN = { storageKey: 'panel-width', min: 320, max: 1600, initial: 420, edge: 'left' } as const
 
 // Default sizes of new or never resized nodes; resizing changes only the
 // width. Used to place new nodes before they are measured.
@@ -1307,6 +1311,8 @@ export default function Board() {
     )
   }
 
+  const panelColumn = useColumnWidth(PANEL_COLUMN)
+
   return (
     <div className="board">
       <header className="toolbar">
@@ -1378,7 +1384,7 @@ export default function Board() {
           {error} (click to dismiss)
         </div>
       )}
-      <div className="workspace">
+      <div className="workspace" style={{ '--panel-width': `${panelColumn.width}px` } as CSSProperties}>
         <Sidebar>
           <SidebarGroup id="blocks" title="Building blocks">
             <BlockPalette blocks={BUILDING_BLOCKS} disabled={reviewing} onAdd={addAtViewportCenter} />
@@ -1461,6 +1467,9 @@ export default function Board() {
             <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
           )}
         </div>
+        {(panelNode || objectPanelNode || mcpOpen || versionsOpen || runDetail) && (
+          <ColumnResizer label="Resize panel" {...panelColumn} />
+        )}
         {panelNode && (
           <ProcessPanel
             key={panelNode.id}

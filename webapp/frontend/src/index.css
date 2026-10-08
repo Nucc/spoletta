@@ -221,8 +221,9 @@ body {
   background: #fff;
 }
 
-/* Drag the sidebar's right edge to change its width. */
-.sidebar-resizer {
+/* Drag the edge between the board and a column beside it, the sidebar or
+   the panel, to change the column's width. */
+.column-resizer {
   position: relative;
   z-index: 6;
   width: 1px;
@@ -232,21 +233,21 @@ body {
   touch-action: none;
 }
 
-.sidebar-resizer::before {
+.column-resizer::before {
   content: '';
   position: absolute;
   inset: 0 -3px;
 }
 
-.sidebar-resizer:hover,
-.sidebar-resizer:focus-visible,
-.resizing-sidebar .sidebar-resizer {
+.column-resizer:hover,
+.column-resizer:focus-visible,
+.resizing-column .column-resizer {
   background: #1f6feb;
   box-shadow: 0 0 0 1px #1f6feb;
   outline: none;
 }
 
-.resizing-sidebar {
+.resizing-column {
   cursor: ew-resize;
   user-select: none;
 }
@@ -661,15 +662,15 @@ body {
   color: #656d76;
 }
 
+/* Its left edge is the column resizer before it. */
 .panel {
-  width: 420px;
-  max-width: 50vw;
+  width: var(--panel-width, 420px);
+  max-width: 70vw;
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 16px;
   background: #fff;
-  border-left: 1px solid #d8dee4;
 }
 
 .panel-header {

@@ -11,6 +11,7 @@ import {
   type SentrySettings,
   type ThinkingLevel,
 } from './api'
+import { Data } from './Data'
 import { MCPServerPicker } from './MCPSettings'
 import type { RunStatus } from './ProcessNode'
 
@@ -292,7 +293,7 @@ export default function ProcessPanel({
       {run?.output && (
         <div className="panel-run">
           <span>{kind === 'human' ? 'Last decision' : 'Last run output'}</span>
-          <pre>{run.output}</pre>
+          <Data text={run.output} />
         </div>
       )}
     </aside>
@@ -393,7 +394,7 @@ function ReviewForm({ review }: { review: Review }) {
               {input.name}
               {input.state && ` (${input.state})`}
             </span>
-            <pre>{input.content}</pre>
+            <Data text={input.content} />
           </div>
         ))
       )}

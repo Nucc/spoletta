@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Data } from './Data'
 import {
   fileUrl,
   getStepMessages,
@@ -231,12 +232,12 @@ function Step({
           </p>
         )}
         {s.inputs.map((input, i) => (
-          <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} />
+          <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} data />
         ))}
         {s.changeRequest && (
           <>
             {s.changeRequest.reviewed.map((input, i) => (
-              <Block key={i} label={`Reviewed: ${input.name}`} text={input.content} />
+              <Block key={i} label={`Reviewed: ${input.name}`} text={input.content} data />
             ))}
             <Block
               label={
@@ -262,7 +263,7 @@ function Step({
         )}
         {s.error && <Block label={s.status === 'duplicate' ? 'Duplicate' : 'Error'} text={s.error} failed={s.status !== 'duplicate'} />}
         {s.kind !== 'human' && s.kind !== 'flow' && (s.status === 'done' || s.status === 'duplicate') && (
-          <Block label="Output" text={s.output || '(empty)'} />
+          <Block label="Output" text={s.output || '(empty)'} data />
         )}
         {s.kind !== 'human' && objects.length > 0 && (
           <p className="panel-note">
@@ -378,7 +379,7 @@ function Message({ message: m }: { message: AgentMessage }) {
       )
     case 'toolResult':
       return (
-        <Block label={`${m.toolName ?? 'Tool'} ${m.isError ? 'failed' : 'returned'}`} text={textOf(m) || '(nothing)'} failed={m.isError} />
+        <Block label={`${m.toolName ?? 'Tool'} ${m.isError ? 'failed' : 'returned'}`} text={textOf(m) || '(nothing)'} failed={m.isError} data={!m.isError} />
       )
     case 'assistant':
       return (
@@ -390,7 +391,7 @@ function Message({ message: m }: { message: AgentMessage }) {
                 <pre>{b.redacted && !b.thinking ? '(redacted)' : b.thinking}</pre>
               </details>
             ) : b.type === 'toolCall' ? (
-              <Block key={i} label={`Calls ${b.name}`} text={JSON.stringify(b.arguments, null, 2)} />
+              <Block key={i} label={`Calls ${b.name}`} text={JSON.stringify(b.arguments, null, 2)} data />
             ) : b.type === 'text' ? (
               <Block key={i} label="Says" text={b.text} />
             ) : null,
@@ -405,11 +406,12 @@ function Message({ message: m }: { message: AgentMessage }) {
   }
 }
 
-function Block({ label, text, failed }: { label: string; text: string; failed?: boolean }) {
+// A labelled text; data shows the fields of JSON content instead of the JSON.
+function Block({ label, text, failed, data }: { label: string; text: string; failed?: boolean; data?: boolean }) {
   return (
     <div className="panel-run">
       <span>{label}</span>
-      <pre className={failed ? 'failed' : undefined}>{text}</pre>
+      {data ? <Data text={text} /> : <pre className={failed ? 'failed' : undefined}>{text}</pre>}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ObjectAttribute } from './api'
+import { Data } from './Data'
 import { ExhibitionIcon, TrashIcon } from './icons'
 
 const SAVE_DELAY_MS = 500
@@ -148,7 +149,7 @@ export default function ObjectPanel({
       {content !== undefined && (
         <div className="panel-run">
           <span>Last run</span>
-          <pre>{content || '(empty)'}</pre>
+          <Data text={content || '(empty)'} />
         </div>
       )}
     </aside>

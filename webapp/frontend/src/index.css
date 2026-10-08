@@ -213,7 +213,6 @@ body {
 
 /* Run history on the left of the board. */
 .runs {
-  width: 220px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -221,7 +220,36 @@ body {
   padding: 16px 10px;
   overflow-y: auto;
   background: #fff;
-  border-right: 1px solid #d8dee4;
+}
+
+/* Drag the run list's right edge to change its width. */
+.runs-resizer {
+  position: relative;
+  z-index: 6;
+  width: 1px;
+  flex-shrink: 0;
+  background: #d8dee4;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.runs-resizer::before {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.runs-resizer:hover,
+.runs-resizer:focus-visible,
+.resizing-runs .runs-resizer {
+  background: #1f6feb;
+  box-shadow: 0 0 0 1px #1f6feb;
+  outline: none;
+}
+
+.resizing-runs {
+  cursor: ew-resize;
+  user-select: none;
 }
 
 .runs h2 {

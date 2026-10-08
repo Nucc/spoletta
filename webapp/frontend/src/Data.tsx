@@ -133,11 +133,18 @@ function Value({ value }: { value: Json }) {
       {entries.map(([k, e]) => (
         <div key={k}>
           <dt>{k}</dt>
-          <dd>
+          {/* Each value in a box of its own; nested fields keep their indent. */}
+          <dd className={isNested(e) ? undefined : 'data-value'}>
             <Value value={e} />
           </dd>
         </div>
       ))}
     </dl>
   )
+}
+
+// Whether the value holds fields of its own, as an object or a list of them.
+function isNested(v: Json): boolean {
+  if (v === null || typeof v !== 'object') return false
+  return !Array.isArray(v) || v.some((e) => e !== null && typeof e === 'object')
 }

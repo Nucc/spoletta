@@ -907,6 +907,18 @@ body {
   margin: 2px 0 0;
 }
 
+.data-fields dd.data-value {
+  padding: 6px 8px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.data-value > .data-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
 .data-fields dd > .data-fields,
 .data-items > li > .data-fields {
   padding-left: 10px;

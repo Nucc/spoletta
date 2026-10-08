@@ -1,4 +1,19 @@
-import { fileUrl, type FlowRun, type FlowRunDetail, type FlowRunStatus, type ProcessKind, type RunStep, type StepStatus } from './api'
+import { useEffect, useRef, useState } from 'react'
+import {
+  fileUrl,
+  getStepMessages,
+  type AgentMessage,
+  type FlowRun,
+  type FlowRunDetail,
+  type FlowRunStatus,
+  type ProcessKind,
+  type RunStep,
+  type StepMessage,
+  type StepStatus,
+} from './api'
+
+// How often an open conversation of a step still going is refreshed.
+const CONVERSATION_REFRESH_MS = 1500
 
 const RUN_LABELS: Record<FlowRunStatus, string> = {
   running: 'Running',
@@ -152,6 +167,7 @@ export function RunPanel({
           {run.steps.map((s) => (
             <li key={s.id}>
               <Step
+                run={run.id}
                 step={s}
                 objects={run.objects.filter((o) => o.step === s.id)}
                 onStop={stoppable(s) ? () => onStopStep(s.id) : undefined}
@@ -170,11 +186,13 @@ export const stoppable = (s: { kind: ProcessKind; status: StepStatus }) =>
   s.status === 'active' && (s.kind === 'agent' || s.kind === 'script' || s.kind === 'sentry')
 
 function Step({
+  run,
   step: s,
   objects,
   onStop,
   onOpenRun,
 }: {
+  run: number
   step: RunStep
   objects: FlowRunDetail['objects']
   onStop?: () => void
@@ -238,6 +256,7 @@ function Step({
             <pre>{s.prompt}</pre>
           </details>
         )}
+        {s.kind === 'agent' && s.prompt && <Conversation run={run} step={s} />}
         {s.kind === 'human' && s.outcome && (
           <Block label="Decision" text={decisionText(s.outcome, objects[0]?.name, s.instructions)} />
         )}
@@ -267,6 +286,123 @@ function Step({
       </div>
     </details>
   )
+}
+
+// What the agent did: its conversation with the model, loaded once opened,
+// and followed while the step goes. Once the step ended, it loads once more
+// for the messages that came in last.
+function Conversation({ run, step }: { run: number; step: RunStep }) {
+  const [open, setOpen] = useState(false)
+  const [messages, setMessages] = useState<StepMessage[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState('')
+  const last = useRef(0)
+  const going = step.status === 'active'
+
+  useEffect(() => {
+    if (!open) return
+    let stopped = false
+    let timer: number | undefined
+    const load = async () => {
+      try {
+        const more = await getStepMessages(run, step.id, last.current)
+        if (stopped) return
+        if (more.length > 0) {
+          last.current = more[more.length - 1].id
+          setMessages((ms) => [...ms, ...more])
+        }
+        setLoaded(true)
+        setError('')
+      } catch (err) {
+        if (stopped) return
+        setError(err instanceof Error ? err.message : String(err))
+      }
+      if (going) timer = window.setTimeout(load, CONVERSATION_REFRESH_MS)
+    }
+    load()
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+    }
+  }, [open, going, run, step.id])
+
+  return (
+    <details className="step-prompt conversation" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>What the agent did</summary>
+      {error && <Block label="The conversation couldn't load" text={error} failed />}
+      {loaded && messages.length === 0 && (
+        <p className="panel-note">{going ? 'Nothing yet.' : 'No conversation was recorded for this step.'}</p>
+      )}
+      <ol className="messages">
+        {messages.map((m, i) => (
+          <li key={m.id}>
+            {m.attempt > 1 && messages[i - 1]?.attempt !== m.attempt && (
+              <p className="panel-note">Try {m.attempt}: the agent didn't hand in its output, so it was asked again.</p>
+            )}
+            <Message message={m.message} />
+          </li>
+        ))}
+      </ol>
+      {going && loaded && <p className="panel-note">Still going…</p>}
+    </details>
+  )
+}
+
+const blocks = (m: AgentMessage) =>
+  typeof m.content === 'string' ? [{ type: 'text' as const, text: m.content }] : (m.content ?? [])
+
+const textOf = (m: AgentMessage) =>
+  blocks(m)
+    .map((b) => (b.type === 'text' ? b.text : b.type === 'image' ? `(${b.mimeType} image)` : ''))
+    .filter(Boolean)
+    .join('\n')
+
+function Message({ message: m }: { message: AgentMessage }) {
+  if (m.omitted !== undefined) {
+    return <p className="panel-note">A {m.role} message of {Math.round(m.omitted / 1024)} KB, too large to keep.</p>
+  }
+  switch (m.role) {
+    case 'system':
+      return (
+        <details className="message-fold">
+          <summary>System prompt</summary>
+          <pre>{m.sections ? Object.values(m.sections).filter(Boolean).join('\n\n') : textOf(m)}</pre>
+        </details>
+      )
+    case 'user':
+      return (
+        <details className="message-fold">
+          <summary>Prompt</summary>
+          <pre>{textOf(m)}</pre>
+        </details>
+      )
+    case 'toolResult':
+      return (
+        <Block label={`${m.toolName ?? 'Tool'} ${m.isError ? 'failed' : 'returned'}`} text={textOf(m) || '(nothing)'} failed={m.isError} />
+      )
+    case 'assistant':
+      return (
+        <>
+          {blocks(m).map((b, i) =>
+            b.type === 'thinking' ? (
+              <details key={i} className="message-fold">
+                <summary>Thinking</summary>
+                <pre>{b.redacted && !b.thinking ? '(redacted)' : b.thinking}</pre>
+              </details>
+            ) : b.type === 'toolCall' ? (
+              <Block key={i} label={`Calls ${b.name}`} text={JSON.stringify(b.arguments, null, 2)} />
+            ) : b.type === 'text' ? (
+              <Block key={i} label="Says" text={b.text} />
+            ) : null,
+          )}
+          {(m.stopReason === 'error' || m.stopReason === 'aborted') && (
+            <Block label={m.stopReason === 'error' ? 'The request failed' : 'The request was aborted'} text={m.errorMessage ?? ''} failed />
+          )}
+        </>
+      )
+    default:
+      return <Block label={m.role} text={textOf(m)} />
+  }
 }
 
 function Block({ label, text, failed }: { label: string; text: string; failed?: boolean }) {

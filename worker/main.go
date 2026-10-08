@@ -1,6 +1,7 @@
 // Runs pi agent harnesses and scripts on behalf of the webapp. Each POST /run
-// spawns one non-interactive pi process in a fresh scratch directory, each
-// POST /script one bash script, and replies once it exits.
+// spawns one non-interactive pi process in a fresh scratch directory and
+// streams its conversation back as it goes, ending with the outcome; each
+// POST /script runs one bash script and replies once it exits.
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -183,11 +185,27 @@ func main() {
 			}
 		}
 
+		// The reply is a JSON record per line: {"message": ...} for each message
+		// of the conversation as it ends, then {"result": ...} with the outcome.
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		rc := http.NewResponseController(w)
+		var mu sync.Mutex
+		send := func(record any) {
+			mu.Lock()
+			defer mu.Unlock()
+			if err := json.NewEncoder(w).Encode(record); err == nil {
+				rc.Flush()
+			}
+		}
+
 		started := time.Now()
-		res := runPi(r.Context(), run, timeout)
+		res := runPi(r.Context(), run, timeout, func(m json.RawMessage) {
+			send(map[string]json.RawMessage{"message": m})
+		})
 		logRun(run, res, time.Since(started))
 		if r.Context().Err() == nil {
-			reply(w, http.StatusOK, res)
+			send(map[string]runResult{"result": res})
 		}
 	})
 
@@ -329,8 +347,9 @@ func modelArgs(model string) []string {
 }
 
 // Returns the run outcome; a client that disconnects (ctx is cancelled) or a
-// run that exceeds the timeout kills pi.
-func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult {
+// run that exceeds the timeout kills pi. emit gets each message of the
+// conversation as it ends.
+func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func(json.RawMessage)) runResult {
 	cwd, err := os.MkdirTemp("", "run-")
 	if err != nil {
 		return runResult{Error: "create scratch directory: " + err.Error()}
@@ -338,7 +357,8 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult
 	defer os.RemoveAll(cwd)
 
 	// An empty model or thinking level leaves the choice to the pi settings.
-	args := append([]string{"-p", "--no-session", "--no-approve"}, modelArgs(run.Model)...)
+	// pi prints its events as JSON, so the conversation can be followed.
+	args := append([]string{"-p", "--mode", "json", "--no-session", "--no-approve"}, modelArgs(run.Model)...)
 	if run.Thinking != "" {
 		args = append(args, "--thinking", run.Thinking)
 	}
@@ -390,15 +410,16 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult
 	// parsed as a file reference or an option. pi may exit before reading it,
 	// e.g. on a bad model; that's reported by its exit status.
 	cmd.Stdin = strings.NewReader(run.Prompt)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	events := &eventStream{emit: emit}
+	var stderr bytes.Buffer
+	cmd.Stdout = events
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		return runResult{Error: "failed to start pi: " + err.Error()}
 	}
 	err = cmd.Wait()
-	output := strings.TrimSpace(stdout.String())
+	output, failure := events.outcome()
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
 		return runResult{Output: output, Error: "timed out"}
@@ -410,6 +431,9 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult
 			msg = "pi failed: " + err.Error()
 		}
 		return runResult{Output: output, Error: msg}
+	case failure != "":
+		// In JSON mode pi exits fine even when the model's request failed.
+		return runResult{Output: output, Error: failure}
 	}
 	if resultFile != "" {
 		// Missing if the agent never called submit_output, or the extension failed to load.
@@ -430,6 +454,85 @@ func writeOutputSpec(dir string, run runRequest) (string, error) {
 		return "", err
 	}
 	return spec.ResultFile, os.WriteFile(filepath.Join(dir, "spec.json"), b, 0o644)
+}
+
+// Reads pi's JSON event stream (docs/json.md in pi): a JSON record per line,
+// split on LF only. Of the events, only each message's end is kept, which
+// holds the whole message: the prompt, each reply of the model with its
+// thinking and tool calls, and each tool's result.
+type eventStream struct {
+	emit func(json.RawMessage)
+	buf  []byte
+	last piMessage
+}
+
+type piMessage struct {
+	Role    string `json:"role"`
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+	StopReason   string `json:"stopReason"`
+	ErrorMessage string `json:"errorMessage"`
+}
+
+func (s *eventStream) Write(p []byte) (int, error) {
+	s.buf = append(s.buf, p...)
+	for {
+		i := bytes.IndexByte(s.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		s.record(bytes.TrimSuffix(s.buf[:i], []byte("\r")))
+		s.buf = s.buf[i+1:]
+	}
+}
+
+func (s *eventStream) record(line []byte) {
+	var ev struct {
+		Type    string          `json:"type"`
+		Message json.RawMessage `json:"message"`
+	}
+	if json.Unmarshal(line, &ev) != nil || ev.Type != "message_end" {
+		return
+	}
+	// A user message's content can be a plain string, which doesn't fit
+	// piMessage; only the role matters then.
+	var m piMessage
+	if err := json.Unmarshal(ev.Message, &m); err != nil {
+		m = piMessage{}
+		var role struct {
+			Role string `json:"role"`
+		}
+		_ = json.Unmarshal(ev.Message, &role)
+		m.Role = role.Role
+	}
+	s.last = m
+	if s.emit != nil {
+		s.emit(ev.Message)
+	}
+}
+
+// What the run printed, as text mode would: the text of the last message if
+// the model wrote it. A failed or aborted request instead gives its error.
+func (s *eventStream) outcome() (output, failure string) {
+	m := s.last
+	if m.Role != "assistant" {
+		return "", ""
+	}
+	if m.StopReason == "error" || m.StopReason == "aborted" {
+		if m.ErrorMessage == "" {
+			return "", "Request " + m.StopReason
+		}
+		return "", m.ErrorMessage
+	}
+	var texts []string
+	for _, c := range m.Content {
+		if c.Type == "text" {
+			texts = append(texts, c.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(texts, "\n")), ""
 }
 
 // Characters kept in an input's file name; others become underscores.

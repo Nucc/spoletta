@@ -636,6 +636,31 @@ body {
   border-radius: 6px;
 }
 
+.conversation > .panel-note,
+.conversation > .panel-run {
+  margin-top: 8px;
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.messages > li {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.message-fold summary {
+  font-weight: 400;
+  color: #656d76;
+}
+
 .panel {
   width: 420px;
   max-width: 50vw;

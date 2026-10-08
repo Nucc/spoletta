@@ -81,6 +81,7 @@ func main() {
 	mcp := newMCPBroker(db, env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")))
 	registerMCPRoutes(mux, db, mcp)
 	registerRunRoutes(mux, db, newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, mcp, parallelSteps))
+	registerMessageRoutes(mux, db)
 	registerVersionRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
 	registerFileRoutes(mux)

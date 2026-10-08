@@ -441,6 +441,44 @@ export function getRun(id: number): Promise<FlowRunDetail> {
   return request(`/api/runs/${id}`)
 }
 
+// A content block of a message of an agent's conversation, as pi has it.
+// Images come without their data.
+export type MessageBlock =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string; redacted?: boolean }
+  | { type: 'toolCall'; id: string; name: string; arguments: unknown }
+  | { type: 'image'; mimeType: string }
+
+// A message of an agent's conversation, as pi has it. A message too large
+// to keep has only its role, and omitted holds its size.
+export type AgentMessage = {
+  role: 'system' | 'user' | 'assistant' | 'toolResult' | string
+  content?: string | MessageBlock[]
+  omitted?: number
+  // System messages: the prompt in named sections.
+  sections?: Record<string, string | null>
+  // Assistant messages.
+  model?: string
+  stopReason?: string
+  errorMessage?: string
+  // Tool results.
+  toolName?: string
+  isError?: boolean
+}
+
+export type StepMessage = {
+  id: number
+  // Which try of the step it belongs to, from 1.
+  attempt: number
+  message: AgentMessage
+  createdAt: string
+}
+
+// An agent step's conversation; after, a message id, gives only the messages since.
+export function getStepMessages(run: number, id: number, after = 0): Promise<StepMessage[]> {
+  return request(`/api/runs/${run}/steps/${id}/messages?after=${after}`)
+}
+
 // Ends a run where it is; steps still going are cancelled.
 export function stopRun(id: number): Promise<FlowRun> {
   return request(`/api/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'interrupted' }) })

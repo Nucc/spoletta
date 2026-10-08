@@ -152,7 +152,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		res.Error = msg
 	}
 	if res.Error == "" {
-		res = runAgent(ctx, workerURL, run)
+		res = runAgent(ctx, db, workerURL, run, stepID, 1)
 		if contract != nil && res.OK {
 			res = followContract(ctx, db, workerURL, run, contract, res, stepID)
 		}
@@ -166,15 +166,43 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	return res, err
 }
 
-func runAgent(ctx context.Context, workerURL string, run agentRun) runResult {
-	var res runResult
-	if err := callWorker(ctx, http.MethodPost, workerURL+"/run", run, &res); err != nil {
+// Runs the agent in the worker, recording each message of its conversation
+// as the step's as it comes in, so what the agent does can be followed while
+// it goes. attempt counts the tries of the step, from 1.
+func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, stepID int64, attempt int) runResult {
+	failed := func(err error) runResult {
 		if ctx.Err() != nil {
 			return runResult{Error: "it was stopped"}
 		}
 		return runResult{Error: "worker unavailable: " + err.Error()}
 	}
-	return res
+	resp, err := requestWorker(ctx, http.MethodPost, workerURL+"/run", run)
+	if err != nil {
+		return failed(err)
+	}
+	defer resp.Body.Close()
+	// A record per line: each message as it ends, then the result.
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var rec struct {
+			Message json.RawMessage `json:"message"`
+			Result  *runResult      `json:"result"`
+		}
+		if err := dec.Decode(&rec); err != nil {
+			if errors.Is(err, io.EOF) {
+				err = errors.New("it ended the run without a result")
+			}
+			return failed(err)
+		}
+		if rec.Result != nil {
+			return *rec.Result
+		}
+		if rec.Message != nil {
+			if err := recordMessage(ctx, db, stepID, attempt, rec.Message); err != nil && ctx.Err() == nil {
+				log.Printf("record message of step %d: %v", stepID, err)
+			}
+		}
+	}
 }
 
 // Checks what an agent handed in against the interface of the objects it
@@ -191,7 +219,7 @@ func followContract(ctx context.Context, db *sql.DB, workerURL string, run agent
 				log.Printf("record retry of step %d: %v", stepID, err)
 			}
 		}
-		if res = runAgent(ctx, workerURL, run); !res.OK {
+		if res = runAgent(ctx, db, workerURL, run, stepID, 2); !res.OK {
 			return res
 		}
 		if out, objects, err = c.handedIn(res); err != nil {
@@ -253,34 +281,44 @@ func withChangeRequest(prompt string, cr *changeRequest) string {
 	return b.String()
 }
 
-// No client timeout: agent runs can take minutes, and the worker enforces its own limit.
 func callWorker(ctx context.Context, method, url string, in, out any) error {
+	resp, err := requestWorker(ctx, method, url, in)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
+}
+
+// Sends a request to the worker; the reply is the caller's to read and close
+// if it succeeded. No client timeout: agent runs can take minutes, and the
+// worker enforces its own limit.
+func requestWorker(ctx context.Context, method, url string, in any) (*http.Response, error) {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		body = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("status %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
+		resp.Body.Close()
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	return nil
+	return resp, nil
 }

@@ -142,6 +142,15 @@ func migrateRuns(db *sql.DB) error {
 			FOREIGN KEY (step_id) REFERENCES run_steps(id) ON DELETE CASCADE,
 			FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE SET NULL
 		)`,
+		// The conversation of an agent step, a message per row; see messages.go.
+		`CREATE TABLE IF NOT EXISTS run_step_messages (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			step_id BIGINT NOT NULL,
+			attempt INT NOT NULL,
+			message JSON NOT NULL,
+			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+			FOREIGN KEY (step_id) REFERENCES run_steps(id) ON DELETE CASCADE
+		)`,
 		// Outcomes used to be approved or changes; now they name states.
 		"ALTER TABLE run_steps MODIFY outcome VARCHAR(255) NOT NULL DEFAULT ''",
 		// Runs execute in the server; whatever was in flight when it went down

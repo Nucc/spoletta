@@ -1,4 +1,3 @@
-import { useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { fileUrl, type FlowRun, type FlowRunDetail, type FlowRunStatus, type RunStep, type StepStatus } from './api'
 
 const RUN_LABELS: Record<FlowRunStatus, string> = {
@@ -48,7 +47,6 @@ export function RunList({
   selected: number | null
   onSelect: (id: number) => void
 }) {
-  const { width, setWidth, startResize } = useRunsWidth()
   const ids = new Set(runs.map((r) => r.id))
   const children = new Map<number, FlowRun[]>()
   for (const r of [...runs].reverse()) {
@@ -90,91 +88,11 @@ export function RunList({
     </li>
   )
 
-  return (
-    <>
-      <aside className="runs" aria-label="Runs" style={{ width }}>
-        <h2>Runs</h2>
-        {runs.length === 0 ? (
-          <p className="panel-note">No runs yet. Press play to run the flow.</p>
-        ) : (
-          <ol className="run-list">{top.map((r) => item(r, false))}</ol>
-        )}
-      </aside>
-      <div
-        className="runs-resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize runs"
-        aria-valuenow={width}
-        aria-valuemin={RUNS_MIN_WIDTH}
-        aria-valuemax={RUNS_MAX_WIDTH}
-        tabIndex={0}
-        onPointerDown={startResize}
-        onKeyDown={(e) => {
-          const step = e.key === 'ArrowLeft' ? -RUNS_KEY_STEP : e.key === 'ArrowRight' ? RUNS_KEY_STEP : 0
-          if (!step) return
-          e.preventDefault()
-          setWidth((w) => saveRunsWidth(w + step))
-        }}
-      />
-    </>
+  return runs.length === 0 ? (
+    <p className="panel-note">No runs yet. Press play to run the flow.</p>
+  ) : (
+    <ol className="run-list">{top.map((r) => item(r, false))}</ol>
   )
-}
-
-const RUNS_MIN_WIDTH = 160
-const RUNS_MAX_WIDTH = 640
-const RUNS_DEFAULT_WIDTH = 220
-const RUNS_KEY_STEP = 20
-const RUNS_WIDTH_KEY = 'runs-width'
-
-const clampRunsWidth = (w: number) => Math.round(Math.min(RUNS_MAX_WIDTH, Math.max(RUNS_MIN_WIDTH, w)))
-
-function loadRunsWidth(): number {
-  try {
-    const w = Number(localStorage.getItem(RUNS_WIDTH_KEY))
-    return w ? clampRunsWidth(w) : RUNS_DEFAULT_WIDTH
-  } catch {
-    return RUNS_DEFAULT_WIDTH
-  }
-}
-
-// Clamps a width and remembers it for the next visit.
-function saveRunsWidth(w: number): number {
-  const clamped = clampRunsWidth(w)
-  try {
-    localStorage.setItem(RUNS_WIDTH_KEY, String(clamped))
-  } catch {
-    // The width just won't be remembered.
-  }
-  return clamped
-}
-
-// The run list's width, which dragging its right edge changes.
-function useRunsWidth() {
-  const [width, setWidth] = useState(loadRunsWidth)
-
-  const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return
-    e.preventDefault()
-    const handle = e.currentTarget
-    handle.setPointerCapture(e.pointerId)
-    const startX = e.clientX
-    const startWidth = width
-    document.body.classList.add('resizing-runs')
-    const move = (ev: PointerEvent) => setWidth(clampRunsWidth(startWidth + ev.clientX - startX))
-    const end = (ev: PointerEvent) => {
-      handle.removeEventListener('pointermove', move)
-      handle.removeEventListener('pointerup', end)
-      handle.removeEventListener('pointercancel', end)
-      document.body.classList.remove('resizing-runs')
-      setWidth(saveRunsWidth(startWidth + ev.clientX - startX))
-    }
-    handle.addEventListener('pointermove', move)
-    handle.addEventListener('pointerup', end)
-    handle.addEventListener('pointercancel', end)
-  }
-
-  return { width, setWidth, startResize }
 }
 
 // What happened in a run: each process execution in the order it started.

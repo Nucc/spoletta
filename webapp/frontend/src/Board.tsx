@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { MouseEvent } from 'react'
+import type { DragEvent, MouseEvent } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -47,7 +47,9 @@ import ObjectPanel from './ObjectPanel'
 import ProcessPanel from './ProcessPanel'
 import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
+import { BLOCK_MIME, BlockPalette, BUILDING_BLOCKS, ConnectorPalette, findBlock, type Block } from './Palette'
 import { decisionText, RunList, RunPanel } from './Runs'
+import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
 import {
   createAttribute,
@@ -316,7 +318,9 @@ export default function Board() {
         const newId =
           node.type === 'object'
             ? objectNodeId((await createObject({ name, x, y, parent })).id)
-            : String((await createProcess({ name, kind: 'agent', prompt: '', script: '', model: '', thinking: '', x, y, parent })).id)
+            : String(
+                (await createProcess({ name, kind: node.data.kind, prompt: '', script: '', model: '', thinking: '', x, y, parent })).id,
+              )
         setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: newId } : n)))
       } catch (err) {
         report(err)
@@ -572,8 +576,9 @@ export default function Board() {
     )
   }, [shownRun, shownVersion, runVersion, shownSeq, getNode, setNodes])
 
+  // A process takes the block's kind, such as a connector's.
   const addDraft = useCallback(
-    (type: 'process' | 'object', screenX: number, screenY: number) => {
+    ({ type, kind = 'agent' }: Block, screenX: number, screenY: number) => {
       const center = screenToFlowPosition({ x: screenX, y: screenY })
       const { width, height } = NODE_SIZE[type]
       const base = {
@@ -585,22 +590,37 @@ export default function Board() {
       }
       const draft: FlowNode =
         type === 'process'
-          ? { ...base, type, data: { name: '', kind: 'agent', prompt: '', script: '', model: '', thinking: '', recording: false, settings: {}, editing: true } }
+          ? { ...base, type, data: { name: '', kind, prompt: '', script: '', model: '', thinking: '', recording: false, settings: {}, editing: true } }
           : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
     [screenToFlowPosition, setNodes],
   )
 
-  const addAtViewportCenter = (type: 'process' | 'object') => {
+  const addAtViewportCenter = (block: Block) => {
     const rect = wrapper.current?.getBoundingClientRect()
-    if (rect) addDraft(type, rect.left + rect.width / 2, rect.top + rect.height / 2)
+    if (rect && !reviewing) addDraft(block, rect.left + rect.width / 2, rect.top + rect.height / 2)
   }
 
   const onPaneDoubleClick = (e: MouseEvent<HTMLDivElement>) => {
     if (!reviewing && (e.target as HTMLElement).classList.contains('react-flow__pane')) {
-      addDraft(e.shiftKey ? 'object' : 'process', e.clientX, e.clientY)
+      addDraft(BUILDING_BLOCKS.find((b) => b.id === (e.shiftKey ? 'object' : 'process'))!, e.clientX, e.clientY)
     }
+  }
+
+  // A block dragged from the sidebar lands where it is dropped. Its id can
+  // only be read on the drop, so a drag is told apart by its type.
+  const onCanvasDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (reviewing || !e.dataTransfer.types.includes(BLOCK_MIME)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  const onCanvasDrop = (e: DragEvent<HTMLDivElement>) => {
+    const block = findBlock(e.dataTransfer.getData(BLOCK_MIME))
+    if (reviewing || !block) return
+    e.preventDefault()
+    addDraft(block, e.clientX, e.clientY)
   }
 
   // A flow process opens its board; other nodes their settings.
@@ -1242,12 +1262,6 @@ export default function Board() {
         <h1>
           <FlowBuilderIcon /> Flow Builder
         </h1>
-        <button onClick={() => addAtViewportCenter('process')} disabled={reviewing}>
-          <PlusIcon /> Process
-        </button>
-        <button onClick={() => addAtViewportCenter('object')} disabled={reviewing}>
-          <PlusIcon /> Object
-        </button>
         <button
           onClick={onWrap}
           disabled={reviewing || selectedProcesses.length === 0}
@@ -1260,7 +1274,7 @@ export default function Board() {
         </button>
         <span
           className="hint"
-          title="Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it."
+          title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it."
         >
           Processes connect through the objects they generate and take. Right-click a node for more.
         </span>
@@ -1305,15 +1319,30 @@ export default function Board() {
         </div>
       )}
       <div className="workspace">
-        <RunList
-          runs={runs}
-          selected={runId}
-          onSelect={(id) => {
-            const run = runs.find((r) => r.id === id)
-            if (run) showRun(run)
-          }}
-        />
-        <div className={`canvas${linkingTo ? ` linking-to-${linkingTo}` : ''}`} ref={wrapper}>
+        <Sidebar>
+          <SidebarGroup id="blocks" title="Building blocks">
+            <BlockPalette blocks={BUILDING_BLOCKS} disabled={reviewing} onAdd={addAtViewportCenter} />
+          </SidebarGroup>
+          <SidebarGroup id="connectors" title="Connectors">
+            <ConnectorPalette disabled={reviewing} onAdd={addAtViewportCenter} />
+          </SidebarGroup>
+          <SidebarGroup id="runs" title="Runs" fill>
+            <RunList
+              runs={runs}
+              selected={runId}
+              onSelect={(id) => {
+                const run = runs.find((r) => r.id === id)
+                if (run) showRun(run)
+              }}
+            />
+          </SidebarGroup>
+        </Sidebar>
+        <div
+          className={`canvas${linkingTo ? ` linking-to-${linkingTo}` : ''}`}
+          ref={wrapper}
+          onDragOver={onCanvasDragOver}
+          onDrop={onCanvasDrop}
+        >
           <BoardActionsContext.Provider value={actions}>
             <ReactFlow
               nodes={nodes}

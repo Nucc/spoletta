@@ -211,19 +211,18 @@ body {
   min-width: 0;
 }
 
-/* Run history on the left of the board. */
-.runs {
+/* On the left of the board: building blocks, connectors and run history,
+   each in a group that folds away. */
+.sidebar {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 16px 10px;
   overflow-y: auto;
   background: #fff;
 }
 
-/* Drag the run list's right edge to change its width. */
-.runs-resizer {
+/* Drag the sidebar's right edge to change its width. */
+.sidebar-resizer {
   position: relative;
   z-index: 6;
   width: 1px;
@@ -233,32 +232,175 @@ body {
   touch-action: none;
 }
 
-.runs-resizer::before {
+.sidebar-resizer::before {
   content: '';
   position: absolute;
   inset: 0 -3px;
 }
 
-.runs-resizer:hover,
-.runs-resizer:focus-visible,
-.resizing-runs .runs-resizer {
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible,
+.resizing-sidebar .sidebar-resizer {
   background: #1f6feb;
   box-shadow: 0 0 0 1px #1f6feb;
   outline: none;
 }
 
-.resizing-runs {
+.resizing-sidebar {
   cursor: ew-resize;
   user-select: none;
 }
 
-.runs h2 {
-  margin: 0 6px;
-  font-size: 15px;
+.sidebar-group {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid #d8dee4;
 }
 
-.runs .panel-note {
+/* The runs take the height the other groups leave, and scroll on their own. */
+.sidebar-group.fill.open {
+  flex: 1 0 160px;
+  min-height: 160px;
+}
+
+.sidebar-group.fill .sidebar-group-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sidebar-group h2 {
+  margin: 0;
+}
+
+.sidebar-group h2 button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  color: #656d76;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.sidebar-group h2 button:hover {
+  color: #1f2328;
+  background: #f6f8fa;
+}
+
+.sidebar-group h2 button:focus-visible {
+  outline: 2px solid #1f6feb;
+  outline-offset: -2px;
+}
+
+.sidebar-group h2 svg {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.sidebar-group.open h2 svg {
+  transform: rotate(90deg);
+}
+
+.sidebar-group-body {
+  padding: 0 10px 12px;
+}
+
+.sidebar-group-body .panel-note {
   margin: 0 6px;
+}
+
+/* Tiles dragged onto the board, as many to a row as fit. */
+.palette {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.palette-tile {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: #1f2328;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  cursor: grab;
+}
+
+.palette-tile:hover:not(:disabled) {
+  background: #fff;
+  border-color: #8c959f;
+  box-shadow: 0 1px 3px rgb(31 35 40 / 0.12);
+}
+
+.palette-tile:active:not(:disabled) {
+  cursor: grabbing;
+}
+
+.palette-tile:focus-visible {
+  outline: 2px solid #1f6feb;
+  outline-offset: 1px;
+}
+
+.palette-tile:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.palette-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The element as the board draws it: a process round-ended, an object square. */
+.palette-shape {
+  width: 44px;
+  height: 22px;
+  background: #fff;
+  border: 1.5px solid #8c959f;
+}
+
+.palette-shape.process {
+  border-radius: 11px;
+}
+
+.palette-shape.object {
+  border-radius: 2px;
+}
+
+/* A connector shows its service's logo. */
+.palette-logo {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #fff;
+  background: #1f2328;
+}
+
+.palette-logo.sentry {
+  background: #362d59;
 }
 
 .run-list {

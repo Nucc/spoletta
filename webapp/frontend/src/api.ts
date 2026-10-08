@@ -208,29 +208,6 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 
 export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
-export type RunResult = {
-  ok: boolean
-  // When the process generates objects with attributes, the reply as checked
-  // JSON; each such object holds its part, given in objects by object id.
-  output: string
-  error: string
-  objects?: Record<string, string>
-  // Set when what the step generated holds a unique value another run
-  // stored; the server terminated the run.
-  duplicate?: Duplicate
-}
-
-// A unique value a step generated that another run already stored.
-export type Duplicate = {
-  object: string
-  attribute: string
-  value: string
-  // The run that stored it.
-  run: number
-}
-
-export const duplicateText = (d: Duplicate) => `${d.object} with ${d.attribute} ${d.value} was already stored by run #${d.run}.`
-
 export type Models = {
   // pi's default model as provider/id, empty if pi picks one itself.
   default: string
@@ -258,21 +235,6 @@ export type ChangeRequest = {
   state?: string
   instructions: string
   reviewed: RunInput[]
-}
-
-// Runs an agent process; with a flow run id, the server records it as a step of that run.
-export function runProcess(
-  id: number,
-  inputs: RunInput[],
-  changeRequest?: ChangeRequest,
-  run?: number,
-  signal?: AbortSignal,
-): Promise<RunResult> {
-  return request(`/api/processes/${id}/run`, {
-    method: 'POST',
-    body: JSON.stringify({ run, inputs, changeRequest }),
-    signal,
-  })
 }
 
 // The server terminates a run whose step generated a duplicate.
@@ -342,25 +304,15 @@ export function getRun(id: number): Promise<FlowRunDetail> {
   return request(`/api/runs/${id}`)
 }
 
-// keepalive lets the request finish while the page unloads.
-export function endRun(id: number, status: Exclude<FlowRunStatus, 'running' | 'terminated'>, keepalive = false): Promise<FlowRun> {
-  return request(`/api/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ status }), keepalive })
+// Ends a run where it is; steps still going are cancelled.
+export function stopRun(id: number): Promise<FlowRun> {
+  return request(`/api/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'interrupted' }) })
 }
 
-// Records a script or human step; agent steps are recorded by runProcess.
-export function startStep(
-  run: number,
-  step: { process: number; status: 'active' | 'waiting'; inputs: RunInput[] },
-): Promise<{ id: number }> {
-  return request(`/api/runs/${run}/steps`, { method: 'POST', body: JSON.stringify(step) })
-}
-
-export function finishStep(
-  run: number,
-  id: number,
-  result: { status: 'done' | 'error'; output?: string; error?: string; state?: number; instructions?: string },
-): Promise<{ duplicate: Duplicate } | undefined> {
-  return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(result) })
+// Decides a human step waiting for its review, and lets the run go on: the
+// state the human set, if they had any to choose from, and their instructions.
+export function decideStep(run: number, id: number, decision: { state: number | null; instructions: string }): Promise<void> {
+  return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(decision) })
 }
 
 // A saved snapshot of the whole board. Saving always adds a version on top;

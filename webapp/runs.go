@@ -10,9 +10,8 @@ import (
 	"time"
 )
 
-// A run is one execution of the flow from the start node. The frontend walks
-// the flow and records each process it executes as a step; agent steps are
-// recorded by the run endpoint, which knows the exact prompt sent.
+// A run is one execution of the flow from the start node. The engine walks
+// the flow and records each process it executes as a step; see engine.go.
 type run struct {
 	ID     int64  `json:"id"`
 	Status string `json:"status"`
@@ -127,8 +126,8 @@ func migrateRuns(db *sql.DB) error {
 		)`,
 		// Outcomes used to be approved or changes; now they name states.
 		"ALTER TABLE run_steps MODIFY outcome VARCHAR(255) NOT NULL DEFAULT ''",
-		// Runs are driven by a browser; whatever was in flight when the server
-		// went down can't continue. Their open steps end first, while the runs
+		// Runs execute in the server; whatever was in flight when it went down
+		// can't continue. Their open steps end first, while the runs
 		// still read as running.
 		`UPDATE run_steps s JOIN runs r ON r.id = s.run_id
 		SET s.status = 'error', s.error = 'The run ended before this step finished.', s.finished_at = CURRENT_TIMESTAMP(3)
@@ -321,7 +320,41 @@ func recordDecision(ctx context.Context, db *sql.DB, stepID, stateID int64) erro
 	return err
 }
 
-func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
+func getRun(ctx context.Context, db *sql.DB, id int64) (run, error) {
+	var rn run
+	err := db.QueryRowContext(ctx, "SELECT id, status, version_id, started_at, finished_at FROM runs WHERE id = ?", id).
+		Scan(&rn.ID, &rn.Status, &rn.Version, &rn.StartedAt, &rn.FinishedAt)
+	return rn, err
+}
+
+// Ends a run. Only a running run can end, so a run that ended otherwise
+// already, such as terminated, keeps how it ended.
+func endRun(ctx context.Context, db *sql.DB, id int64, status string) (run, error) {
+	_, err := db.ExecContext(ctx,
+		"UPDATE runs SET status = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = ?",
+		status, id, runRunning)
+	if err != nil {
+		return run{}, err
+	}
+	// Steps left open, such as a review nobody decided, ended with the run.
+	_, err = db.ExecContext(ctx,
+		"UPDATE run_steps SET status = ?, error = 'The run ended before this step finished.', finished_at = CURRENT_TIMESTAMP(3) WHERE run_id = ? AND status IN (?, ?)",
+		stepError, id, stepActive, stepWaiting)
+	if err != nil {
+		return run{}, err
+	}
+	rn, err := getRun(ctx, db, id)
+	if err != nil {
+		return rn, err
+	}
+	// Only a run that ended done keeps the values it stored.
+	if rn.Status != runDone && rn.Status != runRunning {
+		err = releaseRun(ctx, db, id)
+	}
+	return rn, err
+}
+
+func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.QueryContext(r.Context(), "SELECT id, status, version_id, started_at, finished_at FROM runs ORDER BY id DESC LIMIT 200")
 		if err != nil {
@@ -346,15 +379,9 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeJSON(w, http.StatusOK, rs)
 	})
 
-	getRun := func(ctx context.Context, id int64) (run, error) {
-		var rn run
-		err := db.QueryRowContext(ctx, "SELECT id, status, version_id, started_at, finished_at FROM runs WHERE id = ?", id).
-			Scan(&rn.ID, &rn.Status, &rn.Version, &rn.StartedAt, &rn.FinishedAt)
-		return rn, err
-	}
-
 	// Starts a run on the board as it is: a board changed since its version
 	// is saved as a new one first, so the run's version shows what it ran.
+	// The run goes on in the server; this returns once it started.
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		tx, err := db.BeginTx(ctx, nil)
@@ -364,6 +391,11 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		version, err := saveVersion(ctx, tx, true)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		board, err := takeSnapshot(ctx, tx)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -382,7 +414,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		rn, err := getRun(r.Context(), id)
+		eng.start(id, board)
+		rn, err := getRun(ctx, db, id)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -397,7 +430,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		rn, err := getRun(r.Context(), id)
+		rn, err := getRun(r.Context(), db, id)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "run not found", http.StatusNotFound)
 			return
@@ -470,8 +503,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeJSON(w, http.StatusOK, detail)
 	})
 
-	// Ends a run. Only a running run can end, so a late update from a closed
-	// page can't overwrite how it ended.
+	// Stops a run: {"status": "interrupted"}. The run ends where it is, and
+	// steps still going are cancelled.
 	mux.HandleFunc("PATCH /api/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
@@ -485,27 +518,12 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if !validRunEnd(patch.Status) {
-			http.Error(w, "status must be done, failed or interrupted", http.StatusBadRequest)
+		if patch.Status != runInterrupted {
+			http.Error(w, "status must be interrupted", http.StatusBadRequest)
 			return
 		}
-
-		_, err = db.ExecContext(r.Context(),
-			"UPDATE runs SET status = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = ?",
-			patch.Status, id, runRunning)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		// Steps left open, such as a review nobody decided, ended with the run.
-		_, err = db.ExecContext(r.Context(),
-			"UPDATE run_steps SET status = ?, error = 'The run ended before this step finished.', finished_at = CURRENT_TIMESTAMP(3) WHERE run_id = ? AND status IN (?, ?)",
-			stepError, id, stepActive, stepWaiting)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		rn, err := getRun(r.Context(), id)
+		// Ended first, so what the cancelled steps still record finds the run over.
+		rn, err := endRun(r.Context(), db, id, runInterrupted)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "run not found", http.StatusNotFound)
 			return
@@ -514,58 +532,12 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		// It may have ended otherwise already, such as terminated; only a
-		// run that ended done keeps the values it stored.
-		if rn.Status != runDone && rn.Status != runRunning {
-			if err := releaseRun(r.Context(), db, id); err != nil {
-				serverError(w, err)
-				return
-			}
-		}
+		eng.stop(id)
 		writeJSON(w, http.StatusOK, rn)
 	})
 
-	// Records a script or human step; agent steps are recorded when they run.
-	mux.HandleFunc("POST /api/runs/{id}/steps", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		var body struct {
-			Process int64      `json:"process"`
-			Status  string     `json:"status"`
-			Inputs  []runInput `json:"inputs"`
-		}
-		err = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunRequestBytes)).Decode(&body)
-		if err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if body.Status != stepActive && body.Status != stepWaiting {
-			http.Error(w, "status must be active or waiting", http.StatusBadRequest)
-			return
-		}
-
-		stepID, err := startStep(r.Context(), db, id, body.Process, body.Status, "", body.Inputs, nil)
-		switch {
-		case errors.Is(err, errNotFound):
-			http.Error(w, "process not found", http.StatusBadRequest)
-			return
-		case mysqlErrorIs(err, mysqlErrForeignKey):
-			http.Error(w, "run not found", http.StatusBadRequest)
-			return
-		case err != nil:
-			serverError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusCreated, struct {
-			ID int64 `json:"id"`
-		}{stepID})
-	})
-
-	// Finishes a script or human step; a human step also records the state it
-	// decided on.
+	// Decides a human step waiting for its review: records the state the
+	// human set, if any, and their instructions, and lets the run go on.
 	mux.HandleFunc("PATCH /api/runs/{run}/steps/{id}", func(w http.ResponseWriter, r *http.Request) {
 		runID, err1 := strconv.ParseInt(r.PathValue("run"), 10, 64)
 		id, err2 := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -574,9 +546,6 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var patch struct {
-			Status       string `json:"status"`
-			Output       string `json:"output"`
-			Error        string `json:"error"`
 			State        *int64 `json:"state"`
 			Instructions string `json:"instructions"`
 		}
@@ -585,23 +554,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if patch.Status != stepDone && patch.Status != stepError {
-			http.Error(w, "status must be done or error", http.StatusBadRequest)
-			return
-		}
 
-		// Only open steps of this run; finishing one twice would generate its objects twice.
-		var open int
-		if err := db.QueryRowContext(r.Context(),
-			"SELECT COUNT(*) FROM run_steps WHERE id = ? AND run_id = ? AND status IN (?, ?)",
-			id, runID, stepActive, stepWaiting).Scan(&open); err != nil {
-			serverError(w, err)
-			return
-		}
-		if open == 0 {
-			http.Error(w, "no open step with that id in this run", http.StatusConflict)
-			return
-		}
 		var outcome string
 		if patch.State != nil {
 			if outcome, err = decisionState(r.Context(), db, id, *patch.State); err != nil {
@@ -613,15 +566,22 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		_, err = db.ExecContext(r.Context(), "UPDATE run_steps SET outcome = ?, instructions = ? WHERE id = ?",
-			outcome, patch.Instructions, id)
+		// Only a review of this run still waiting; deciding one twice would
+		// let the run go on twice.
+		res, err := db.ExecContext(r.Context(),
+			`UPDATE run_steps SET status = ?, outcome = ?, instructions = ?, finished_at = CURRENT_TIMESTAMP(3)
+			WHERE id = ? AND run_id = ? AND kind = ? AND status = ?`,
+			stepDone, outcome, patch.Instructions, id, runID, kindHuman, stepWaiting)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		dup, err := finishStep(r.Context(), db, id, patch.Status, patch.Output, patch.Error, nil)
-		if err != nil {
-			serverError(w, err)
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			http.Error(w, "no review waiting with that id in this run", http.StatusConflict)
 			return
 		}
 		if patch.State != nil {
@@ -630,12 +590,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		if dup != nil {
-			writeJSON(w, http.StatusOK, struct {
-				Duplicate *duplicate `json:"duplicate"`
-			}{dup})
-			return
-		}
+		eng.decide(runID, id, decision{state: patch.State, instructions: patch.Instructions})
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

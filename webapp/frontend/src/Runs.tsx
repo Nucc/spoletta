@@ -79,7 +79,7 @@ export function RunList({
 }
 
 // What happened in a run: each process execution in the order it started.
-export function RunPanel({ run, onClose }: { run: FlowRunDetail; onClose: () => void }) {
+export function RunPanel({ run, onStop, onClose }: { run: FlowRunDetail; onStop: () => void; onClose: () => void }) {
   return (
     <aside className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
@@ -94,6 +94,11 @@ export function RunPanel({ run, onClose }: { run: FlowRunDetail; onClose: () => 
         Started {formatTime(run.startedAt)}
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
       </p>
+      {run.status === 'running' && (
+        <button className="run-stop" onClick={onStop} title="End the run where it is; steps still going are cancelled">
+          Stop run
+        </button>
+      )}
       <p className="panel-note">
         {run.version === null
           ? 'Ran before versions were kept, so the board shows it as the board is now.'

@@ -66,9 +66,10 @@ func main() {
 	registerObjectRoutes(mux, db)
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
-	registerRunRoutes(mux, db)
+	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
+	registerRunRoutes(mux, db, newEngine(db, workerURL))
 	registerVersionRoutes(mux, db)
-	registerAgentRoutes(mux, db, env("WORKER_URL", "http://127.0.0.1:8090"))
+	registerAgentRoutes(mux, workerURL)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		var version string
 		if err := db.QueryRowContext(r.Context(), "SELECT VERSION()").Scan(&version); err != nil {

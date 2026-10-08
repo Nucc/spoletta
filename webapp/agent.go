@@ -11,7 +11,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 )
 
@@ -65,7 +64,7 @@ type runResult struct {
 	Objects map[int64]string `json:"objects,omitempty"`
 	// Set when what the step generated holds a unique value another run
 	// stored; its run is terminated.
-	Duplicate *duplicate `json:"duplicate,omitempty"`
+	Duplicate *duplicate `json:"-"`
 }
 
 func migrateAgent(db *sql.DB) error {
@@ -74,7 +73,7 @@ func migrateAgent(db *sql.DB) error {
 	return err
 }
 
-func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
+func registerAgentRoutes(mux *http.ServeMux, workerURL string) {
 	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, r *http.Request) {
 		var models agentModels
 		if err := callWorker(r.Context(), http.MethodGet, workerURL+"/models", nil, &models); err != nil {
@@ -83,101 +82,57 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		writeJSON(w, http.StatusOK, models)
 	})
+}
 
-	// Runs an agent process's prompt in the worker and waits for the result.
-	// The body may list the process's input objects and a human's change
-	// request, which are appended to the prompt. Closing the request cancels
-	// the run.
-	mux.HandleFunc("POST /api/processes/{id}/run", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
+// Runs an agent process's prompt in the worker as a step of a run and waits
+// for the result. Its input objects and a human's change request are
+// appended to the prompt. Problems with the process itself are step
+// failures, so they show up on the node like any other; the error is for
+// recording the step.
+func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, runID, id int64, inputs []runInput, cr *changeRequest) (runResult, error) {
+	var res runResult
+	run := agentRun{ProcessID: id}
+	err := db.QueryRowContext(ctx, "SELECT name, prompt, model, thinking FROM processes WHERE id = ?", id).
+		Scan(&run.ProcessName, &run.Prompt, &run.Model, &run.Thinking)
+	if errors.Is(err, sql.ErrNoRows) {
+		return res, errNotFound
+	}
+	if err != nil {
+		return res, err
+	}
+	contract, msg, err := contractFor(ctx, db, id)
+	if err != nil {
+		return res, err
+	}
+	switch {
+	case strings.TrimSpace(run.Prompt) == "":
+		res.Error = "the process has no prompt"
+	case msg != "":
+		res.Error = msg
+	default:
+		run.Prompt = withChangeRequest(withInputs(run.Prompt, inputs), cr)
+		if contract != nil {
+			run.Prompt = contract.withContract(run.Prompt)
 		}
+	}
 
-		var body struct {
-			// The flow run this is a step of, if any; the step is recorded in it.
-			Run           *int64         `json:"run"`
-			Inputs        []runInput     `json:"inputs"`
-			ChangeRequest *changeRequest `json:"changeRequest"`
+	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Prompt, inputs, cr)
+	if err != nil {
+		return res, err
+	}
+	if res.Error == "" {
+		res = runAgent(ctx, workerURL, run)
+		if contract != nil && res.OK {
+			res = followContract(ctx, db, workerURL, run, contract, res, stepID)
 		}
-		err = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunRequestBytes)).Decode(&body)
-		if err != nil && !errors.Is(err, io.EOF) {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		var kind string
-		run := agentRun{ProcessID: id}
-		err = db.QueryRowContext(r.Context(), "SELECT name, kind, prompt, model, thinking FROM processes WHERE id = ?", id).
-			Scan(&run.ProcessName, &kind, &run.Prompt, &run.Model, &run.Thinking)
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "process not found", http.StatusNotFound)
-			return
-		}
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		if kind != kindAgent {
-			http.Error(w, "only agent processes can be run", http.StatusBadRequest)
-			return
-		}
-		// Problems with the process itself are run failures, so they show up on the node like any other.
-		var res runResult
-		contract, msg, err := contractFor(r.Context(), db, id)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		switch {
-		case strings.TrimSpace(run.Prompt) == "":
-			res.Error = "the process has no prompt"
-		case msg != "":
-			res.Error = msg
-		default:
-			run.Prompt = withChangeRequest(withInputs(run.Prompt, body.Inputs), body.ChangeRequest)
-			if contract != nil {
-				run.Prompt = contract.withContract(run.Prompt)
-			}
-		}
-
-		var stepID int64
-		if body.Run != nil {
-			stepID, err = startStep(r.Context(), db, *body.Run, id, stepActive, run.Prompt, body.Inputs, body.ChangeRequest)
-			if mysqlErrorIs(err, mysqlErrForeignKey) {
-				http.Error(w, "run not found", http.StatusBadRequest)
-				return
-			}
-			if err != nil {
-				serverError(w, err)
-				return
-			}
-		}
-
-		if res.Error == "" {
-			res = runAgent(r.Context(), workerURL, run)
-			if contract != nil && res.OK {
-				res = followContract(r.Context(), db, workerURL, run, contract, res, stepID)
-			}
-		}
-		if stepID != 0 {
-			status := stepError
-			if res.OK {
-				status = stepDone
-			}
-			// The request may be gone, but the step still has to end.
-			dup, err := finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects)
-			if err != nil {
-				log.Printf("record step %d: %v", stepID, err)
-			}
-			res.Duplicate = dup
-		}
-		if r.Context().Err() != nil {
-			return
-		}
-		writeJSON(w, http.StatusOK, res)
-	})
+	}
+	status := stepError
+	if res.OK {
+		status = stepDone
+	}
+	// The run may have been stopped, but the step still has to end.
+	res.Duplicate, err = finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects)
+	return res, err
 }
 
 func runAgent(ctx context.Context, workerURL string, run agentRun) runResult {

@@ -47,10 +47,8 @@ import {
   deleteLink,
   deleteObject,
   deleteProcess,
+  decideStep,
   deleteState,
-  duplicateText,
-  endRun,
-  finishStep,
   getRun,
   getStart,
   getVersionBoard,
@@ -63,20 +61,17 @@ import {
   listVersions,
   renameState,
   restoreVersion,
-  runProcess,
   saveVersion,
   setLinkRoute,
   setLinkStates,
   startRun,
-  startStep,
+  stopRun,
   updateAttribute,
   updateObject,
   updateProcess,
   updateStart,
   type BoardContents,
-  type ChangeRequest,
   type Connection,
-  type Duplicate,
   type FlowObject,
   type FlowRun,
   type Versions,
@@ -87,7 +82,6 @@ import {
   type ObjectState,
   type Process,
   type ProcessKind,
-  type RunInput,
   type Start,
 } from './api'
 
@@ -122,17 +116,10 @@ const OBJECT_PREFIX = 'obj-'
 
 const markerEnd = { type: MarkerType.ArrowClosed }
 
-// Script processes don't execute yet; they just occupy their slot in the run.
-const SIMULATED_RUN_MS = 3000
-
-// How often an open run that is still going is refreshed.
+// How often an open run that is still going is refreshed, and the run list
+// while any run in it is.
 const RUN_REFRESH_MS = 1500
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
-// The decision a human process made during a run: the state it set, if it
-// had any to choose from.
-type Decision = { state: number | null; instructions: string }
+const RUN_LIST_REFRESH_MS = 5000
 
 // The state a handle of an object node belongs to, if any.
 const stateOfHandle = (handle: string | null | undefined): number | null => {
@@ -205,13 +192,16 @@ export default function Board() {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>([])
   const [error, setError] = useState<string | null>(null)
-  const [running, setRunning] = useState(false)
+  // Set while a run is being started.
+  const [starting, setStarting] = useState(false)
   const [panelId, setPanelId] = useState<string | null>(null)
   const [models, setModels] = useState<Models | null>(null)
   const [runs, setRuns] = useState<FlowRun[]>([])
   // The run open in the side panel, and its steps once loaded.
   const [runId, setRunId] = useState<number | null>(null)
   const [runDetail, setRunDetail] = useState<FlowRunDetail | null>(null)
+  // Bumped to load the open run again straight away, such as after a decision.
+  const [runReload, setRunReload] = useState(0)
   const [versions, setVersions] = useState<Versions>({ current: null, versions: [] })
   const [versionsOpen, setVersionsOpen] = useState(false)
   // Set while a save or a jump to another version is under way.
@@ -221,10 +211,8 @@ export default function Board() {
   const { getNode, getNodes, screenToFlowPosition, fitView } = useReactFlow<FlowNode>()
   const wrapper = useRef<HTMLDivElement>(null)
   const draftSeq = useRef(0)
-  // Resolves the decision of each human process waiting during a run.
-  const decisions = useRef(new Map<string, (d: Decision) => void>())
-  // The run in progress, so it can be marked interrupted if the page closes.
-  const liveRun = useRef<number | null>(null)
+  // The reviews whose process's panel was opened for them, so closing it keeps it closed.
+  const shownReviews = useRef(new Set<number>())
 
   const report = useCallback((err: unknown) => {
     console.error(err)
@@ -376,19 +364,13 @@ export default function Board() {
     }
   }
 
-  // A run can't continue without the page that drives it.
+  // Loads the open run, and keeps refreshing it while it goes on. Once it
+  // ended, the run list catches up.
   useEffect(() => {
-    const onHide = () => {
-      if (liveRun.current !== null) endRun(liveRun.current, 'interrupted', true).catch(() => {})
+    if (runId === null) {
+      setRunDetail(null)
+      return
     }
-    window.addEventListener('pagehide', onHide)
-    return () => window.removeEventListener('pagehide', onHide)
-  }, [])
-
-  // Loads the open run, and keeps refreshing it while it goes on.
-  useEffect(() => {
-    setRunDetail(null)
-    if (runId === null) return
     let stopped = false
     let timer: number | undefined
     const load = async () => {
@@ -397,6 +379,7 @@ export default function Board() {
         if (stopped) return
         setRunDetail(detail)
         if (detail.status === 'running') timer = window.setTimeout(load, RUN_REFRESH_MS)
+        else setRuns((rs) => rs.map((r) => (r.id === detail.id ? { ...r, status: detail.status, finishedAt: detail.finishedAt } : r)))
       } catch (err) {
         report(err)
       }
@@ -406,16 +389,22 @@ export default function Board() {
       stopped = true
       window.clearTimeout(timer)
     }
-  }, [runId, report])
+  }, [runId, runReload, report])
 
-  // A finished run shows on the board it ran on, its version, which can't be
+  // Runs go on in the server whether open or not, so the list keeps up with them.
+  const anyRunning = runs.some((r) => r.status === 'running')
+  useEffect(() => {
+    if (!anyRunning) return
+    const timer = window.setInterval(refreshRuns, RUN_LIST_REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [anyRunning, refreshRuns])
+
+  // A run shows on the board it runs or ran on, its version, which can't be
   // edited while the run is open. Runs from before versions were kept show
-  // on the board as it is. The run list can still have the run running after
-  // it ends; the run's own details can't, but they reload when another run opens.
-  const finishedRun = runDetail && runDetail.status !== 'running' ? runDetail : null
+  // on the board as it is.
+  const shownRun = runDetail?.id === runId ? runDetail : null
   const openRun = runs.find((r) => r.id === runId)
-  const runFinished = (openRun && openRun.status !== 'running') || finishedRun?.id === runId
-  const runVersion = !running && runFinished ? (openRun?.version ?? null) : null
+  const runVersion = openRun?.version ?? null
   // The version the board shows, null for the board itself.
   const [shownVersion, setShownVersion] = useState<number | null>(null)
   const reviewing = shownVersion !== null
@@ -436,23 +425,31 @@ export default function Board() {
     }
   }, [runVersion, shownVersion, showBoard, report])
 
-  // Shows a finished run on the board: each process as its last step in the
-  // run left it, each object with the content and state it last got.
+  // Shows the open run on the board: each process as its last step in the
+  // run left it, each object with the content and state it last got. A
+  // review waiting for a decision opens its process's panel, unless another
+  // panel is open.
   useEffect(() => {
-    if (!finishedRun || finishedRun.id !== runId || running || shownVersion !== runVersion) return
-    const steps = new Map(finishedRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
-    const objects = new Map(finishedRun.objects.flatMap((o) => (o.object === null ? [] : [[objectNodeId(o.object), o] as const])))
+    if (!shownRun || shownVersion !== runVersion) return
+    const steps = new Map(shownRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
+    const objects = new Map(shownRun.objects.flatMap((o) => (o.object === null ? [] : [[objectNodeId(o.object), o] as const])))
+    for (const [process, s] of steps) {
+      if (s.status !== 'waiting' || shownReviews.current.has(s.id)) continue
+      shownReviews.current.add(s.id)
+      setPanelId((open) => open ?? process)
+    }
     setNodes((ns) =>
       ns.map((n): FlowNode => {
         if (n.type === 'process') {
           const s = steps.get(n.id)
           const output =
             s?.kind === 'human' && s.outcome
-              ? decisionText(s.outcome, finishedRun.objects.find((o) => o.step === s.id)?.name, s.instructions)
+              ? decisionText(s.outcome, shownRun.objects.find((o) => o.step === s.id)?.name, s.instructions)
               : s?.output
+          const review = s?.kind === 'human' && s.status === 'waiting' ? s.inputs : undefined
           return {
             ...n,
-            data: { ...n.data, status: s?.status, output: output || undefined, runError: s?.error || undefined, review: undefined },
+            data: { ...n.data, status: s?.status, output: output || undefined, runError: s?.error || undefined, review },
           }
         }
         if (n.type === 'object') {
@@ -465,7 +462,7 @@ export default function Board() {
         return n
       }),
     )
-  }, [finishedRun, runId, running, shownVersion, runVersion, setNodes])
+  }, [shownRun, shownVersion, runVersion, setNodes])
 
   const addDraft = useCallback(
     (type: 'process' | 'object', screenX: number, screenY: number) => {
@@ -665,7 +662,7 @@ export default function Board() {
   // that takes it. The new node starts out being named.
   const append = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || running) return
+    if (!node || node.type === 'start' || reviewing) return
     try {
       if (node.type === 'process') {
         const o = await createObject({ name: NEW_OBJECT, ...below(node, 'object') })
@@ -692,7 +689,7 @@ export default function Board() {
     const edge = edges.find((e) => e.id === edgeId)
     const source = edge && getNode(edge.source)
     const target = edge && getNode(edge.target)
-    if (!edge || !source || !target || running) return
+    if (!edge || !source || !target || reviewing) return
     const state = edge.data?.link?.state ?? null
     const processFirst = source.type !== 'process'
     const [firstType, secondType] = processFirst ? (['process', 'object'] as const) : (['object', 'process'] as const)
@@ -739,7 +736,7 @@ export default function Board() {
   // Its links go with it on the server; runs keep their record of it.
   const remove = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || running) return
+    if (!node || node.type === 'start' || reviewing) return
     if (!window.confirm(`Delete “${node.data.name}” and its links?`)) return
     try {
       if (node.type === 'object') await deleteObject(objectIdOf(id))
@@ -810,7 +807,7 @@ export default function Board() {
   const removeState = async (objectId: string, stateId: number) => {
     const node = getNode(objectId)
     const state = node?.type === 'object' ? node.data.states.find((s) => s.id === stateId) : undefined
-    if (!state || running || !window.confirm(`Delete state “${state.name}” and its links?`)) return
+    if (!state || reviewing || !window.confirm(`Delete state “${state.name}” and its links?`)) return
     try {
       await deleteState(stateId)
     } catch (err) {
@@ -832,7 +829,7 @@ export default function Board() {
   const setDecisionStates = async (edgeId: string, states: number[]) => {
     const edge = edges.find((e) => e.id === edgeId)
     const l = edge?.data?.link
-    if (!l || running) return
+    if (!l || reviewing) return
     try {
       await setLinkStates(l.id, states)
     } catch (err) {
@@ -850,7 +847,7 @@ export default function Board() {
     )
 
   const addAttribute = async (objectId: string, name: string) => {
-    if (running) return false
+    if (reviewing) return false
     try {
       const attribute = await createAttribute(objectIdOf(objectId), { name, definition: '' })
       setAttributes(objectId, (as) => [...as, attribute])
@@ -862,7 +859,7 @@ export default function Board() {
   }
 
   const setPersistent = async (objectId: string, persistent: boolean) => {
-    if (running) return false
+    if (reviewing) return false
     try {
       await updateObject(objectIdOf(objectId), { persistent })
       updateObjectData(objectId, { persistent })
@@ -891,7 +888,7 @@ export default function Board() {
   const removeAttribute = async (objectId: string, id: number) => {
     const node = getNode(objectId)
     const attribute = node?.type === 'object' ? node.data.attributes.find((a) => a.id === id) : undefined
-    if (!attribute || running || !window.confirm(`Delete attribute “${attribute.name}”?`)) return false
+    if (!attribute || reviewing || !window.confirm(`Delete attribute “${attribute.name}”?`)) return false
     try {
       await deleteAttribute(id)
     } catch (err) {
@@ -922,13 +919,13 @@ export default function Board() {
           {
             label: 'Add state',
             icon: <PlusIcon size={16} />,
-            disabled: running,
+            disabled: reviewing,
             onSelect: () => updateObjectData(id, { addingState: true }),
           },
         ]
       : []),
     { label: 'Duplicate', icon: <CopyIcon />, onSelect: () => duplicate(id) },
-    { label: 'Delete', icon: <TrashIcon />, danger: true, disabled: running, onSelect: () => remove(id) },
+    { label: 'Delete', icon: <TrashIcon />, danger: true, disabled: reviewing, onSelect: () => remove(id) },
   ]
 
   // Nodes and edges reach the board through a context whose functions stay
@@ -950,263 +947,42 @@ export default function Board() {
       setDecisionStates: (edgeId, states) => latest.current.setDecisionStates(edgeId, states),
       setRoute: (edgeId, route, save) => latest.current.setRoute(edgeId, route, save),
       resize: (id, x, width) => latest.current.resize(id, x, width),
-      editable: !running && !reviewing,
+      editable: !reviewing,
     }),
-    [running, reviewing, updateObjectData],
+    [reviewing, updateObjectData],
   )
 
   const startTarget = edges.find((e) => e.id === START_EDGE_ID)?.target
-  // Set while going back from a run's version to the board, to run it then.
-  const [queuedRun, setQueuedRun] = useState(false)
-  const canRun = (reviewing || startTarget !== undefined) && !running && !queuedRun
+  const canRun = (reviewing || startTarget !== undefined) && !starting
 
-  // Agent processes run their prompt in the worker's pi harness; script
-  // processes are still simulated. Each execution is recorded as a step of
-  // the flow run; the server records agent steps itself. Returns what the
-  // process printed and, for output objects with attributes, what each holds;
-  // or null if it failed. A duplicate means the server terminated the run.
-  const execute = async (
-    run: number,
-    id: string,
-    inputs: RunInput[],
-    changeRequest?: ChangeRequest,
-  ): Promise<{ output: string; objects?: Record<string, string>; duplicate?: Duplicate } | null> => {
-    const node = getNode(id)
-    if (node?.type !== 'process' || node.data.kind !== 'agent') {
-      const step = await startStep(run, { process: Number(id), status: 'active', inputs }).catch(report)
-      await sleep(SIMULATED_RUN_MS)
-      const finished = step ? await finishStep(run, step.id, { status: 'done', output: '' }).catch(report) : undefined
-      const duplicate = finished?.duplicate
-      updateData(id, duplicate ? { status: 'duplicate', runError: duplicateText(duplicate) } : { status: 'done' })
-      return { output: '', duplicate }
-    }
+  // Starts a run of the board, which the server executes, and opens it. The
+  // board shows the run on its version, which is the board as it is.
+  const onPlay = async () => {
+    setStarting(true)
     try {
-      const res = await runProcess(Number(id), inputs, changeRequest, run)
-      if (res.duplicate) {
-        updateData(id, { status: 'duplicate', output: res.output, runError: duplicateText(res.duplicate) })
-        return { output: res.output, objects: res.objects, duplicate: res.duplicate }
-      }
-      updateData(id, { status: res.ok ? 'done' : 'error', output: res.output, runError: res.error })
-      return res.ok ? { output: res.output, objects: res.objects } : null
+      const run = await startRun()
+      // Starting the run may have saved the board as a new version.
+      refreshVersions()
+      setRuns((rs) => [run, ...rs])
+      setPanelId(null)
+      setVersionsOpen(false)
+      setRunId(run.id)
     } catch (err) {
-      updateData(id, { status: 'error', runError: err instanceof Error ? err.message : String(err) })
-      return null
-    }
-  }
-
-  // A process that succeeds generates its output objects, which hold what it
-  // printed, or for an object with attributes its part of the checked reply,
-  // each in the state its link names or in none. Then the processes
-  // taking those objects run, in parallel:
-  // - A link without a state takes the object whatever state it is in. Its
-  //   process runs once every object it takes that way exists; objects no
-  //   process generates are given, so they exist from the start.
-  // - A link naming a state is a condition: its process runs whenever the
-  //   object enters that state, with whichever objects it takes without a
-  //   state exist. Several such links are alternatives, not all required.
-  // A failure stops its branch, and every process runs at most once per pass,
-  // so cycles end. Processes still connected directly run right after their
-  // predecessor.
-  //
-  // A human process waits for a person to review its inputs and set an object
-  // to one of the states its output links name; the object keeps its content.
-  // Instructions they leave go as a change request to the processes taking
-  // the object in that state. Each decision starts a fresh pass, so review
-  // loops can repeat while cycles without a human still run once per pass.
-  //
-  // A step generating a unique value another run stored terminates the run:
-  // no further process starts, and reviews still waiting end undecided.
-  const onRun = async () => {
-    if (!startTarget) return
-    type End = { object: string; state: number | null }
-    const add = <T,>(m: Map<string, T[]>, k: string, v: T) => m.set(k, [...(m.get(k) ?? []), v])
-    // Process to the objects it generates, or the states a human decides on.
-    const outputs = new Map<string, End[]>()
-    // Process to the objects it takes, and object to the processes taking it.
-    const inputs = new Map<string, End[]>()
-    const takers = new Map<string, { process: string; state: number | null }[]>()
-    const successors = new Map<string, string[]>()
-    for (const e of edges) {
-      const l = e.data?.link
-      if (l) {
-        const process = String(l.process)
-        const object = objectNodeId(l.object)
-        if (l.direction === 'output') {
-          // A human's link stands for each state it can set.
-          if (l.states.length > 0) for (const state of l.states) add(outputs, process, { object, state })
-          else add(outputs, process, { object, state: l.state })
-        }
-        else {
-          add(inputs, process, { object, state: l.state })
-          add(takers, object, { process, state: l.state })
-        }
-      } else if (e.id.startsWith(CONNECTION_PREFIX)) add(successors, e.source, e.target)
-    }
-    const objects = new Map(nodes.flatMap((n) => (n.type === 'object' ? [[n.id, n.data] as const] : [])))
-    const stateNames = new Map([...objects.values()].flatMap((o) => o.states.map((s) => [s.id, s.name] as const)))
-    const stateObjects = new Map([...objects].flatMap(([id, o]) => o.states.map((s) => [s.id, id] as const)))
-    const humans = new Set(nodes.flatMap((n) => (n.type === 'process' && n.data.kind === 'human' ? [n.id] : [])))
-    const generated = new Set([...outputs].flatMap(([p, ends]) => (humans.has(p) ? [] : ends.map((e) => e.object))))
-
-    // Each object that exists: its content, state and the instructions of the
-    // human who set that state.
-    type Value = { content: string; state: number | null; review?: { reviewer: string; instructions: string } }
-    const values = new Map<string, Value>([...objects.keys()].filter((o) => !generated.has(o)).map((o) => [o, { content: '', state: null }]))
-    const asInput = (o: string): RunInput => {
-      const v = values.get(o)
-      const state = v?.state != null ? stateNames.get(v.state) : undefined
-      return { name: objects.get(o)?.name ?? '', ...(state && { state }), content: v?.content ?? '' }
-    }
-    const plainInputs = (p: string) => (inputs.get(p) ?? []).filter((i) => i.state === null)
-    const ready = (p: string) => plainInputs(p).length > 0 && plainInputs(p).every((i) => values.has(i.object))
-    const takersIn = (object: string, state: number) =>
-      (takers.get(object) ?? []).filter((t) => t.state === state).map((t) => t.process)
-    const showObject = (o: string, v: Value) =>
-      updateObjectData(o, {
-        status: 'done',
-        content: v.content,
-        activeState: v.state === null ? undefined : stateNames.get(v.state),
-      })
-
-    const decide = (id: string, review: RunInput[]) =>
-      new Promise<Decision>((resolve) => {
-        decisions.current.set(id, resolve)
-        updateData(id, { status: 'waiting', review })
-        setPanelId((open) => open ?? id)
-      })
-
-    let failed = false
-    let terminated = false
-    const terminate = () => {
-      terminated = true
-      for (const [id, resolve] of decisions.current) {
-        updateData(id, { status: undefined, review: undefined })
-        resolve({ state: null, instructions: '' })
-      }
-      decisions.current.clear()
-    }
-    // trigger: the object whose entering a state the process takes it in made it run.
-    const runProcess = async (run: number, id: string, visited: Set<string>, trigger?: string): Promise<void> => {
-      if (terminated || visited.has(id)) return
-      visited.add(id)
-      updateData(id, { status: 'active', output: undefined, runError: undefined })
-      const given = plainInputs(id)
-        .filter((i) => generated.has(i.object) && values.has(i.object))
-        .map((i) => asInput(i.object))
-      const node = getNode(id)
-      const human = node?.type === 'process' && node.data.kind === 'human'
-      const review = trigger ? values.get(trigger)?.review : undefined
-      let changeRequest: ChangeRequest | undefined
-      if (trigger && review && !human) {
-        const state = values.get(trigger)?.state
-        changeRequest = {
-          reviewer: review.reviewer,
-          state: state != null ? stateNames.get(state) : undefined,
-          instructions: review.instructions,
-          reviewed: [asInput(trigger)],
-        }
-      } else if (trigger) given.push(asInput(trigger))
-
-      if (human) {
-        const step = await startStep(run, { process: Number(id), status: 'waiting', inputs: given }).catch(report)
-        const { state, instructions } = await decide(id, given)
-        // Ending the run closes the step.
-        if (terminated) return
-        if (step) {
-          await finishStep(run, step.id, { status: 'done', state: state ?? undefined, instructions }).catch(report)
-        }
-        const object = state === null ? undefined : stateObjects.get(state)
-        if (state === null || !object) return
-        const value = {
-          content: values.get(object)?.content ?? '',
-          state,
-          review: instructions ? { reviewer: node.data.name, instructions } : undefined,
-        }
-        values.set(object, value)
-        showObject(object, value)
-        await Promise.all(takersIn(object, state).map((p) => runProcess(run, p, new Set(), object)))
-        return
-      }
-
-      const result = await execute(run, id, given, changeRequest)
-      if (result === null) {
-        failed = true
-        return
-      }
-      const produced = outputs.get(id) ?? []
-      for (const { object, state } of produced) {
-        const content = result.objects?.[objectIdOf(object)] ?? result.output
-        values.set(object, { content, state })
-        showObject(object, { content, state })
-      }
-      if (result.duplicate) terminate()
-      if (terminated) return
-      const next = produced.flatMap(({ object }) =>
-        (takers.get(object) ?? []).filter((t) => t.state === null && ready(t.process)).map((t) => t.process),
-      )
-      const triggered = produced.flatMap(({ object, state }) =>
-        state === null ? [] : takersIn(object, state).map((p) => [p, object] as const),
-      )
-      await Promise.all([
-        ...[...next, ...(successors.get(id) ?? [])].map((p) => runProcess(run, p, visited)),
-        ...triggered.map(([p, object]) => runProcess(run, p, visited, object)),
-      ])
-    }
-
-    let run: FlowRun
-    try {
-      run = await startRun()
-    } catch (err) {
-      report(err)
-      return
-    }
-    liveRun.current = run.id
-    // Starting the run may have saved the board as a new version.
-    refreshVersions()
-    setRuns((rs) => [run, ...rs])
-    setRunId(run.id)
-    setVersionsOpen(false)
-    setRunning(true)
-    decisions.current.clear()
-    setNodes((ns) =>
-      ns.map((n): FlowNode => {
-        if (n.type === 'process') {
-          return { ...n, data: { ...n.data, status: undefined, output: undefined, runError: undefined, review: undefined } }
-        }
-        if (n.type === 'object') {
-          return { ...n, data: { ...n.data, status: undefined, content: undefined, activeState: undefined } }
-        }
-        return n
-      }),
-    )
-    try {
-      await runProcess(run.id, startTarget, new Set())
-    } catch (err) {
-      failed = true
       report(err)
     } finally {
-      liveRun.current = null
-      await endRun(run.id, failed ? 'failed' : 'done').catch(report)
-      setRunning(false)
-      refreshRuns()
+      setStarting(false)
     }
   }
 
-  // The flow runs as the board has it, so a run's version shown on the board
-  // makes way for the board first.
-  const onPlay = () => {
-    if (!reviewing) {
-      onRun()
-      return
+  const onStop = async (id: number) => {
+    try {
+      const run = await stopRun(id)
+      setRuns((rs) => rs.map((r) => (r.id === id ? run : r)))
+      setRunReload((n) => n + 1)
+    } catch (err) {
+      report(err)
     }
-    setRunId(null)
-    setQueuedRun(true)
   }
-  useEffect(() => {
-    if (!queuedRun || reviewing) return
-    setQueuedRun(false)
-    onRun()
-  })
 
   // The states a human process can set: those its output links list.
   const decisionOptions = (id: string) =>
@@ -1220,17 +996,23 @@ export default function Board() {
         .map((s) => ({ state: s.id, object: object.data.name, name: s.name }))
     })
 
-  const onDecide = (id: string, state: number | null, instructions: string) => {
-    const resolve = decisions.current.get(id)
-    if (!resolve) return
-    decisions.current.delete(id)
+  // Sends the decision on the review the process waits for in the open run,
+  // which goes on in the server.
+  const onDecide = async (id: string, state: number | null, instructions: string) => {
+    const step = shownRun?.steps.filter((s) => String(s.process) === id && s.status === 'waiting').at(-1)
+    if (!shownRun || !step) return
     const option = decisionOptions(id).find((o) => o.state === state)
     updateData(id, {
       status: 'done',
       review: undefined,
       output: option ? decisionText(option.name, option.object, instructions) : instructions || 'Reviewed',
     })
-    resolve({ state, instructions })
+    try {
+      await decideStep(shownRun.id, step.id, { state, instructions })
+    } catch (err) {
+      report(err)
+    }
+    setRunReload((n) => n + 1)
   }
 
   // Becoming or ceasing to be human drops the process's outputs, and becoming
@@ -1269,7 +1051,7 @@ export default function Board() {
           Processes connect through the objects they generate and take. Right-click a node for more.
         </span>
         <div className="versioning">
-          <button onClick={onSave} disabled={running || versioning || reviewing} title="Save the board as a new version">
+          <button onClick={onSave} disabled={versioning || reviewing} title="Save the board as a new version">
             <SaveIcon /> Save
           </button>
           <button
@@ -1297,7 +1079,7 @@ export default function Board() {
           disabled={!canRun}
           aria-label="Run flow"
           title={
-            running ? 'Running…' : canRun ? 'Run flow' : 'Connect the start node to a process first'
+            starting ? 'Starting…' : canRun ? 'Run flow' : 'Connect the start node to a process first'
           }
         >
           <PlayIcon />
@@ -1334,7 +1116,7 @@ export default function Board() {
               isValidConnection={isValidConnection}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeContextMenu={onNodeContextMenu}
-              onEdgeDoubleClick={(_, edge) => !running && !reviewing && edge.data?.route && setRoute(edge.id, null, true)}
+              onEdgeDoubleClick={(_, edge) => !reviewing && edge.data?.route && setRoute(edge.id, null, true)}
               onPaneClick={() => setPanelId(null)}
               onNodeDragStop={onNodeDragStop}
               onDoubleClick={onPaneDoubleClick}
@@ -1349,7 +1131,9 @@ export default function Board() {
           </BoardActionsContext.Provider>
           {reviewing && openRun && (
             <div className="review-banner" role="status">
-              Run #{openRun.id} ran on version {shownVersion}; this is the board as it was then.
+              {openRun.status === 'running'
+                ? `Run #${openRun.id} is running on version ${shownVersion}.`
+                : `Run #${openRun.id} ran on version ${shownVersion}; this is the board as it was then.`}
               <button onClick={() => setRunId(null)}>Back to the board</button>
             </div>
           )}
@@ -1394,7 +1178,7 @@ export default function Board() {
             attributes={objectPanelNode.data.attributes}
             persistent={objectPanelNode.data.persistent}
             onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
-            editable={!running && !reviewing}
+            editable={!reviewing}
             content={objectPanelNode.data.content}
             onRename={(name) => commitName(objectPanelNode.id, name)}
             onAdd={(name) => addAttribute(objectPanelNode.id, name)}
@@ -1408,13 +1192,13 @@ export default function Board() {
           <VersionPanel
             versions={versions.versions}
             current={versions.current}
-            disabled={running || versioning}
+            disabled={versioning}
             onRestore={onRestore}
             onClose={() => setVersionsOpen(false)}
           />
         )}
         {!panelNode && !objectPanelNode && !versionsOpen && runDetail && (
-          <RunPanel run={runDetail} onClose={() => setRunId(null)} />
+          <RunPanel run={runDetail} onStop={() => onStop(runDetail.id)} onClose={() => setRunId(null)} />
         )}
       </div>
     </div>

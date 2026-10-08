@@ -352,6 +352,22 @@ body {
   overflow-y: auto;
 }
 
+.run-stop {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  color: #cf222e;
+  cursor: pointer;
+}
+
+.run-stop:hover {
+  background: #fff5f5;
+}
+
 .steps {
   margin: 0;
   padding: 0;

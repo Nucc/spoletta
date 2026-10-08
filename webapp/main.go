@@ -69,12 +69,12 @@ func main() {
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
 	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
-	// How many agent and script steps run in the worker at once.
+	// How many agent, script and Sentry steps run at once.
 	parallelSteps, err := strconv.Atoi(env("PARALLEL_STEPS", "3"))
 	if err != nil || parallelSteps < 1 {
 		log.Fatalf("PARALLEL_STEPS must be a positive number")
 	}
-	registerRunRoutes(mux, db, newEngine(db, workerURL, parallelSteps))
+	registerRunRoutes(mux, db, newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, parallelSteps))
 	registerVersionRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

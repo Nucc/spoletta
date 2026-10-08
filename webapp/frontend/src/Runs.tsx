@@ -65,9 +65,13 @@ export function RunList({
         <span className="run-item-title">
           <span className={`status-dot ${r.status}`} aria-hidden="true" />
           Run #{r.id}
-          {r.itemKey && <span className="run-item-key">{r.itemKey}</span>}
           <span className="run-item-status">{RUN_LABELS[r.status]}</span>
         </span>
+        {r.itemKey && (
+          <span className="run-item-key" title={r.itemKey}>
+            {r.itemKey}
+          </span>
+        )}
         {r.parent !== null && (
           <span className="run-item-process">
             {r.processName}
@@ -215,7 +219,9 @@ function Step({
         )}
         {s.prompt && (
           <details className="step-prompt">
-            <summary>{s.kind === 'script' ? 'Script it ran' : 'Prompt sent to the agent'}</summary>
+            <summary>
+              {s.kind === 'script' ? 'Script it ran' : s.kind === 'sentry' ? 'Request sent to Sentry' : 'Prompt sent to the agent'}
+            </summary>
             <pre>{s.prompt}</pre>
           </details>
         )}

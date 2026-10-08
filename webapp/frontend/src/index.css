@@ -269,6 +269,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
   font-size: 14px;
   font-weight: 600;
 }
@@ -416,6 +417,11 @@ body {
 .process-kind.human {
   color: #953800;
   background: #fff1e5;
+}
+
+.process-kind.sentry {
+  color: #6639ba;
+  background: #fbefff;
 }
 
 .step-meta {
@@ -1338,6 +1344,10 @@ body {
   background: #1b7c83;
 }
 
+.process-node.sentry .node-icon {
+  background: #6639ba;
+}
+
 .end-node .node-icon {
   background: #1f2328;
 }
@@ -1429,6 +1439,7 @@ body {
 
 .run-item-key {
   min-width: 0;
+  padding-left: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

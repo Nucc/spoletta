@@ -360,6 +360,7 @@ export default function Board() {
         model: p.model,
         thinking: p.thinking,
         recording: p.recording,
+        settings: p.settings,
         editing,
       },
     }),
@@ -582,7 +583,7 @@ export default function Board() {
       }
       const draft: FlowNode =
         type === 'process'
-          ? { ...base, type, data: { name: '', kind: 'agent', prompt: '', script: '', model: '', thinking: '', recording: false, editing: true } }
+          ? { ...base, type, data: { name: '', kind: 'agent', prompt: '', script: '', model: '', thinking: '', recording: false, settings: {}, editing: true } }
           : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
@@ -895,6 +896,7 @@ export default function Board() {
                 model: node.data.model,
                 thinking: node.data.thinking,
                 recording: node.data.recording,
+                settings: node.data.settings,
                 parent: boardId,
                 width,
                 ...position,
@@ -1376,6 +1378,7 @@ export default function Board() {
               model: panelNode.data.model,
               thinking: panelNode.data.thinking,
               recording: panelNode.data.recording,
+              settings: panelNode.data.settings,
             }}
             models={models}
             readOnly={reviewing}

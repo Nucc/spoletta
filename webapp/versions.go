@@ -274,12 +274,12 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 	}
 
 	for _, p := range parentsFirst(s.Processes) {
-		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
+		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, kind = saved.kind, prompt = saved.prompt, script = saved.script,
 				model = saved.model, thinking = saved.thinking, x = saved.x, y = saved.y, width = saved.width,
-				parent_id = saved.parent_id, recording = saved.recording`,
-			p.ID, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording)
+				parent_id = saved.parent_id, recording = saved.recording, settings = saved.settings`,
+			p.ID, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings)
 		if err != nil {
 			return err
 		}

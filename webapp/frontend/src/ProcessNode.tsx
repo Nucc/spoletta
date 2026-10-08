@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Handle, Position, useNodeConnections, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
-import type { ProcessKind, RunInput, ThinkingLevel } from './api'
-import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, TrashIcon, ZoomInIcon } from './icons'
+import type { ProcessKind, ProcessSettings, RunInput, ThinkingLevel } from './api'
+import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, SentryIcon, TrashIcon, ZoomInIcon } from './icons'
 import WidthResizer from './WidthResizer'
 
 export type ProcessNodeData = {
@@ -15,6 +15,7 @@ export type ProcessNodeData = {
   thinking: ThinkingLevel | ''
   // For flow processes: each time it runs is a run of its own.
   recording: boolean
+  settings: ProcessSettings
   editing: boolean
   // Set while a flow run is in progress or after it has passed this process.
   status?: RunStatus
@@ -34,9 +35,16 @@ export const KIND_ICONS: Record<ProcessKind, () => ReactNode> = {
   script: ScriptIcon,
   human: HumanIcon,
   flow: FlowIcon,
+  sentry: SentryIcon,
 }
 
-const KIND_LABELS: Record<ProcessKind, string> = { agent: 'Agent', script: 'Script', human: 'Human review', flow: 'Flow' }
+const KIND_LABELS: Record<ProcessKind, string> = {
+  agent: 'Agent',
+  script: 'Script',
+  human: 'Human review',
+  flow: 'Flow',
+  sentry: 'Sentry',
+}
 
 const STATUS_LABELS: Record<RunStatus, string> = {
   active: 'Running',
@@ -50,6 +58,10 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 function subtitle(data: ProcessNodeData): string {
   if (data.status) return STATUS_LABELS[data.status]
   if (data.kind === 'flow') return data.recording ? 'Flow · recorded' : 'Flow'
+  if (data.kind === 'sentry') {
+    const s = data.settings.sentry
+    return s?.organization ? `Sentry · ${s.project || s.organization}` : 'Sentry'
+  }
   if (data.kind !== 'agent') return KIND_LABELS[data.kind]
   return `Agent · ${data.model ? data.model.slice(data.model.indexOf('/') + 1) : 'default model'}`
 }

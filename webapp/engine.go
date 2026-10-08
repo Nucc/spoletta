@@ -59,8 +59,9 @@ type decision struct {
 type engine struct {
 	db        *sql.DB
 	workerURL string
-	// A slot per agent or script step that can run at once in the worker,
-	// across all runs; reviews waiting take none.
+	sentry    sentryConfig
+	// A slot per agent, script or Sentry step that can run at once, across
+	// all runs; reviews waiting take none.
 	slots chan struct{}
 	mu    sync.Mutex
 	runs  map[int64]*liveRun
@@ -73,8 +74,8 @@ type liveRun struct {
 	reviews map[int64]chan decision
 }
 
-func newEngine(db *sql.DB, workerURL string, parallelSteps int) *engine {
-	return &engine{db: db, workerURL: workerURL, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{}}
+func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, parallelSteps int) *engine {
+	return &engine{db: db, workerURL: workerURL, sentry: sentry, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{}}
 }
 
 // Executes a run of the whole flow, on the top board of version's board, in
@@ -510,7 +511,7 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 	all(next)
 }
 
-// Executes an agent or script process; returns what it generated, each
+// Executes an agent, script or Sentry process; returns what it generated, each
 // object in the state its link names. False if it failed or found a
 // duplicate, which terminates the run and so still returns what it generated.
 func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64]value, bool) {
@@ -878,8 +879,8 @@ func (w *walk) runHuman(id int64, given []runInput) {
 	all(next)
 }
 
-// Executes an agent or script process as a step of the run, once a slot in
-// the worker is free. False if it failed; a duplicate is a result, and
+// Executes an agent, script or Sentry process as a step of the run, once a
+// slot is free. False if it failed; a duplicate is a result, and
 // terminates the run.
 func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool) {
 	select {
@@ -889,9 +890,12 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 	}
 	var res runResult
 	var err error
-	if w.kinds[id] == kindAgent {
+	switch w.kinds[id] {
+	case kindAgent:
 		res, err = runAgentStep(w.ctx, w.e.db, w.e.workerURL, w.run, id, inputs, cr)
-	} else {
+	case kindSentry:
+		res, err = runSentryStep(w.ctx, w.e.db, w.e.sentry, w.run, id, inputs)
+	default:
 		res, err = runScriptStep(w.ctx, w.e.db, w.e.workerURL, w.run, id, inputs)
 	}
 	<-w.e.slots

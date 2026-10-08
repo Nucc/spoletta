@@ -32,6 +32,14 @@ export const ScriptIcon = () => (
   </Icon>
 )
 
+// Issues coming in from a source: an arrow into a tray.
+export const SentryIcon = () => (
+  <Icon>
+    <path d="M8 1.75v7M5 6l3 3 3-3" />
+    <path d="M1.75 9.5v3.25c0 .55.45 1 1 1h10.5c.55 0 1-.45 1-1V9.5" />
+  </Icon>
+)
+
 export const HumanIcon = () => (
   <Icon>
     <circle cx="8" cy="5" r="2.75" />

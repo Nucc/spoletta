@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  DEFAULT_SENTRY,
   THINKING_LEVELS,
   updateProcess,
   type Models,
   type ProcessKind,
+  type ProcessSettings,
   type RunInput,
+  type SentrySettings,
   type ThinkingLevel,
 } from './api'
 import type { RunStatus } from './ProcessNode'
@@ -17,6 +20,7 @@ type Fields = {
   model: string
   thinking: ThinkingLevel | ''
   recording: boolean
+  settings: ProcessSettings
 }
 
 const SAVE_DELAY_MS = 500
@@ -31,7 +35,20 @@ const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'script', label: 'Script' },
   { value: 'human', label: 'Human' },
   { value: 'flow', label: 'Flow' },
+  { value: 'sentry', label: 'Sentry' },
 ]
+
+// Sentry's orders for issues, before the limit applies.
+const SENTRY_SORTS = [
+  { value: 'date', label: 'Last seen' },
+  { value: 'new', label: 'First seen' },
+  { value: 'freq', label: 'Events' },
+  { value: 'user', label: 'Users' },
+  { value: 'trends', label: 'Trends' },
+]
+
+// As many as a flow process runs at once.
+const MAX_SENTRY_ISSUES = 50
 
 // A human process waiting for its decision during a run.
 export type Review = {
@@ -77,6 +94,7 @@ export default function ProcessPanel({
   const [model, setModel] = useState(initial.model)
   const [thinking, setThinking] = useState(initial.thinking)
   const [recording, setRecording] = useState(initial.recording)
+  const [settings, setSettings] = useState(initial.settings)
   const saved = useRef(initial)
   const pending = useRef<Partial<Fields> | null>(null)
   const timer = useRef<number>(undefined)
@@ -101,6 +119,7 @@ export default function ProcessPanel({
     if (model !== saved.current.model) patch.model = model
     if (thinking !== saved.current.thinking) patch.thinking = thinking
     if (recording !== saved.current.recording) patch.recording = recording
+    if (JSON.stringify(settings) !== JSON.stringify(saved.current.settings)) patch.settings = settings
     if (Object.keys(patch).length === 0) return
 
     saved.current = { ...saved.current, ...patch }
@@ -108,7 +127,7 @@ export default function ProcessPanel({
     onChange(saved.current)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(flush, SAVE_DELAY_MS)
-  }, [name, kind, prompt, script, model, thinking, recording])
+  }, [name, kind, prompt, script, model, thinking, recording, settings])
 
   useEffect(() => flush, [])
 
@@ -175,7 +194,14 @@ export default function ProcessPanel({
           </label>
         </div>
       )}
-      {kind === 'flow' ? (
+      {kind === 'sentry' ? (
+        <SentryFields
+          key="sentry"
+          settings={settings.sentry ?? DEFAULT_SENTRY}
+          readOnly={readOnly}
+          onChange={(sentry) => setSettings((s) => ({ ...s, sentry }))}
+        />
+      ) : kind === 'flow' ? (
         <div key="flow" className="panel-field">
           <p className="panel-note">
             Made of processes on a board of its own. The objects it takes show at the board's start, the ones it
@@ -252,6 +278,83 @@ export default function ProcessPanel({
         </div>
       )}
     </aside>
+  )
+}
+
+function SentryFields({
+  settings: s,
+  readOnly,
+  onChange,
+}: {
+  settings: SentrySettings
+  readOnly: boolean
+  onChange: (s: SentrySettings) => void
+}) {
+  const set = (patch: Partial<SentrySettings>) => onChange({ ...s, ...patch })
+  // Typing a limit may pass through an empty field; only whole numbers in range are kept.
+  const [limit, setLimit] = useState(String(s.limit))
+  const slug = (v: string) => v.trim().replace(/[^A-Za-z0-9_-]/g, '')
+
+  return (
+    <div className="panel-field">
+      <div className="panel-row">
+        <label className="panel-field">
+          <span>Organization</span>
+          <input value={s.organization} readOnly={readOnly} placeholder="my-org" onChange={(e) => set({ organization: slug(e.target.value) })} />
+          {s.organization === '' && <small className="panel-warning">The organization's slug is needed.</small>}
+        </label>
+        <label className="panel-field">
+          <span>Project</span>
+          <input value={s.project} readOnly={readOnly} placeholder="All projects" onChange={(e) => set({ project: slug(e.target.value) })} />
+        </label>
+      </div>
+      <label className="panel-field">
+        <span>Query</span>
+        <input
+          value={s.query}
+          readOnly={readOnly}
+          placeholder="is:unresolved"
+          spellCheck={false}
+          onChange={(e) => set({ query: e.target.value })}
+        />
+      </label>
+      <div className="panel-row">
+        <label className="panel-field">
+          <span>Environment</span>
+          <input value={s.environment} readOnly={readOnly} placeholder="Any" onChange={(e) => set({ environment: e.target.value.trim() })} />
+        </label>
+        <label className="panel-field">
+          <span>Sort by</span>
+          <select value={s.sort} disabled={readOnly} onChange={(e) => set({ sort: e.target.value })}>
+            {SENTRY_SORTS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="panel-field">
+          <span>Limit</span>
+          <input
+            type="number"
+            min={1}
+            max={MAX_SENTRY_ISSUES}
+            value={limit}
+            readOnly={readOnly}
+            onChange={(e) => {
+              setLimit(e.target.value)
+              const n = Number(e.target.value)
+              if (Number.isInteger(n) && n >= 1 && n <= MAX_SENTRY_ISSUES) set({ limit: n })
+            }}
+          />
+        </label>
+      </div>
+      <small className="panel-note">
+        Fetches the issues with the token in <code>SENTRY_AUTH_TOKEN</code>. Each attribute of the list it generates takes
+        the issue's field of the same name, such as <code>shortId</code>, <code>title</code>, <code>permalink</code>{' '}
+        or <code>metadata.value</code>; without attributes, the list holds the main fields.
+      </small>
+    </div>
   )
 }
 

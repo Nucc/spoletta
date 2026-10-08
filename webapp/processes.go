@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"log"
@@ -27,30 +28,73 @@ type process struct {
 	// The flow process whose board it is on; null on the top board.
 	Parent *int64 `json:"parent"`
 	// For flow processes: each time it runs is a run of its own.
-	Recording bool `json:"recording"`
+	Recording bool            `json:"recording"`
+	Settings  processSettings `json:"settings"`
+}
+
+// The settings of kinds that take more than a prompt or a script, by kind,
+// so switching kinds back and forth loses none.
+type processSettings struct {
+	Sentry *sentrySettings `json:"sentry,omitempty"`
+}
+
+func (s processSettings) sentry() sentrySettings {
+	if s.Sentry == nil {
+		return defaultSentrySettings()
+	}
+	return *s.Sentry
+}
+
+// Why the settings can't be saved, or "".
+func (s processSettings) problem() string {
+	if s.Sentry != nil {
+		return s.Sentry.problem()
+	}
+	return ""
+}
+
+// Stored as JSON; processes from before settings have none.
+func (s *processSettings) Scan(v any) error {
+	*s = processSettings{}
+	switch b := v.(type) {
+	case nil:
+		return nil
+	case []byte:
+		return json.Unmarshal(b, s)
+	case string:
+		return json.Unmarshal([]byte(b), s)
+	}
+	return errors.New("settings: unexpected type")
+}
+
+func (s processSettings) Value() (driver.Value, error) {
+	b, err := json.Marshal(s)
+	return string(b), err
 }
 
 // A process is either run by an agent from its prompt, executes its script,
 // or is handled by a human, who reviews its inputs following its prompt and
 // approves them or requests changes. A flow process is made of processes
-// itself, on a board of its own; see boards.go.
+// itself, on a board of its own; see boards.go. A Sentry process fetches
+// issues from Sentry; see sentry.go.
 const (
 	kindAgent  = "agent"
 	kindScript = "script"
 	kindHuman  = "human"
 	kindFlow   = "flow"
+	kindSentry = "sentry"
 )
 
-const invalidKindMessage = "kind must be agent, script, human or flow"
+const invalidKindMessage = "kind must be agent, script, human, flow or sentry"
 
 func validKind(k string) bool {
-	return k == kindAgent || k == kindScript || k == kindHuman || k == kindFlow
+	return k == kindAgent || k == kindScript || k == kindHuman || k == kindFlow || k == kindSentry
 }
 
-const processColumns = "id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording"
+const processColumns = "id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings"
 
 func scanProcess(row interface{ Scan(...any) error }, p *process) error {
-	return row.Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y, &p.Width, &p.Parent, &p.Recording)
+	return row.Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y, &p.Width, &p.Parent, &p.Recording, &p.Settings)
 }
 
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -107,6 +151,7 @@ func migrate(db *sql.DB) error {
 		{"model", "VARCHAR(255) NOT NULL DEFAULT '' AFTER script"},
 		{"thinking", "VARCHAR(16) NOT NULL DEFAULT '' AFTER model"},
 		{"width", "DOUBLE NULL AFTER y"},
+		{"settings", "JSON NULL"},
 	} {
 		if err := addColumn(db, "processes", c.name, c.def); err != nil {
 			return err
@@ -186,6 +231,10 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, invalidWidthMessage, http.StatusBadRequest)
 			return
 		}
+		if msg := p.Settings.problem(); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		if msg, err := checkParent(r.Context(), db, p.Parent); err != nil {
 			serverError(w, err)
 			return
@@ -199,8 +248,8 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO processes (name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO processes (name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -241,6 +290,8 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			Width    *float64 `json:"width"`
 			// Turning it off keeps the runs it recorded.
 			Recording *bool `json:"recording"`
+			// Replaces all of them.
+			Settings *processSettings `json:"settings"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -255,6 +306,12 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !validWidth(patch.Width) {
 			http.Error(w, invalidWidthMessage, http.StatusBadRequest)
 			return
+		}
+		if patch.Settings != nil {
+			if msg := patch.Settings.problem(); msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
 		}
 		if patch.Kind != nil && !validKind(*patch.Kind) {
 			http.Error(w, invalidKindMessage, http.StatusBadRequest)
@@ -276,8 +333,8 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 
 		// COALESCE keeps the stored value for fields absent from the patch.
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE processes SET name = COALESCE(?, name), kind = COALESCE(?, kind), prompt = COALESCE(?, prompt), script = COALESCE(?, script), model = COALESCE(?, model), thinking = COALESCE(?, thinking), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), recording = COALESCE(?, recording) WHERE id = ?",
-			patch.Name, patch.Kind, patch.Prompt, patch.Script, patch.Model, patch.Thinking, patch.X, patch.Y, patch.Width, patch.Recording, id)
+			"UPDATE processes SET name = COALESCE(?, name), kind = COALESCE(?, kind), prompt = COALESCE(?, prompt), script = COALESCE(?, script), model = COALESCE(?, model), thinking = COALESCE(?, thinking), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), recording = COALESCE(?, recording), settings = COALESCE(?, settings) WHERE id = ?",
+			patch.Name, patch.Kind, patch.Prompt, patch.Script, patch.Model, patch.Thinking, patch.X, patch.Y, patch.Width, patch.Recording, patch.Settings, id)
 		if err != nil {
 			serverError(w, err)
 			return

@@ -57,6 +57,10 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:-apppass}
       PORT: "8080"
       WORKER_URL: http://worker:8090
+      # For Sentry processes: a token with event:read, and the address of a
+      # self-hosted Sentry if not sentry.io.
+      SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
+      SENTRY_URL: ${SENTRY_URL:-}
     ports:
       - "8080:8080"
     depends_on:

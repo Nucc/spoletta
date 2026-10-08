@@ -1,7 +1,32 @@
 // A human process is a review step: a person checks its inputs and decides
 // by setting an object to one of the states the process's output links name.
-// A flow process is made of processes, on a board of its own.
-export type ProcessKind = 'agent' | 'script' | 'human' | 'flow'
+// A flow process is made of processes, on a board of its own. A Sentry
+// process fetches issues from Sentry.
+export type ProcessKind = 'agent' | 'script' | 'human' | 'flow' | 'sentry'
+
+// Which of Sentry's issues a Sentry process fetches.
+export type SentrySettings = {
+  organization: string
+  // Slug or id; empty fetches from every project the token can see.
+  project: string
+  environment: string
+  // Sentry's search syntax.
+  query: string
+  sort: string
+  limit: number
+}
+
+export const DEFAULT_SENTRY: SentrySettings = {
+  organization: '',
+  project: '',
+  environment: '',
+  query: 'is:unresolved',
+  sort: 'date',
+  limit: 10,
+}
+
+// Settings of the kinds that take more than a prompt or a script, by kind.
+export type ProcessSettings = { sentry?: SentrySettings }
 
 export type Process = {
   id: number
@@ -22,6 +47,7 @@ export type Process = {
   parent: number | null
   // For flow processes: each time it runs is a run of its own.
   recording: boolean
+  settings: ProcessSettings
 }
 
 export type Start = {
@@ -117,7 +143,11 @@ export function listProcesses(): Promise<Process[]> {
 }
 
 export function createProcess(
-  p: Omit<Process, 'id' | 'width' | 'recording'> & { width?: number | null; recording?: boolean },
+  p: Omit<Process, 'id' | 'width' | 'recording' | 'settings'> & {
+    width?: number | null
+    recording?: boolean
+    settings?: ProcessSettings
+  },
 ): Promise<Process> {
   return request('/api/processes', { method: 'POST', body: JSON.stringify(p) })
 }
@@ -408,9 +438,10 @@ export type BoardContents = {
   boards: InnerBoard[]
 }
 
-// Versions from before boards have no parents, recording or boards.
+// Versions from before boards have no parents, recording or boards, and
+// processes from before settings none.
 type Snapshot = {
-  processes: (Omit<Process, 'parent' | 'recording'> & Partial<Pick<Process, 'parent' | 'recording'>>)[]
+  processes: (Omit<Process, 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
   objects: (Omit<FlowObject, 'states' | 'attributes' | 'parent' | 'many'> & Partial<Pick<FlowObject, 'parent' | 'many'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
@@ -426,7 +457,12 @@ type Snapshot = {
 export async function getVersionBoard(id: number): Promise<BoardContents> {
   const s: Snapshot = await request(`/api/versions/${id}`)
   return {
-    processes: s.processes.map((p) => ({ ...p, parent: p.parent ?? null, recording: p.recording ?? false })),
+    processes: s.processes.map((p) => ({
+      ...p,
+      parent: p.parent ?? null,
+      recording: p.recording ?? false,
+      settings: p.settings ?? {},
+    })),
     objects: s.objects.map((o) => ({
       ...o,
       parent: o.parent ?? null,

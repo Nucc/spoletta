@@ -504,8 +504,11 @@ export default function Board({
     refreshMCPServers()
     refreshRuns()
     refreshVersions()
-    loadBoard().catch(report)
-  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers])
+    // The flow just loaded; show all of it once its nodes are measured.
+    loadBoard()
+      .then(() => window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS))
+      .catch(report)
+  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, fitView])
 
   // The settings take the side panel; a node opened afterwards takes it back.
   const openMCPSettings = (open: boolean) => {
@@ -604,8 +607,6 @@ export default function Board({
   const [shownVersion, setShownVersion] = useState<number | null>(null)
   const [shownBoard, setShownBoard] = useState<BoardId>(null)
   const reviewing = shownVersion !== null
-  // Set once the flow's first board has been fitted to the view.
-  const fitted = useRef(false)
   useEffect(() => {
     if (runVersion === shownVersion && boardId === shownBoard) return
     let stale = false
@@ -617,12 +618,8 @@ export default function Board({
         showBoard(c, boardId)
         setShownVersion(runVersion)
         setShownBoard(boardId)
-        // The flow just loaded, or another board is a different place; show
-        // all of it once its nodes are measured.
-        if (!fitted.current || boardId !== shownBoard) {
-          fitted.current = true
-          window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
-        }
+        // Another board is a different place; show all of it once its nodes are measured.
+        if (boardId !== shownBoard) window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
       })
       .catch(report)
     return () => {

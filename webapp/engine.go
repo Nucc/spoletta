@@ -43,7 +43,8 @@ import (
 // further process starts, and reviews still waiting end undecided.
 //
 // A flow process runs the board inside it, which starts from its start and
-// from the objects the flow process takes, given as they are outside. What
+// from the objects the flow process takes, given as they are outside; the
+// process its start points at takes them all, as do those linked to them. What
 // the processes inside generate of the objects the flow process generates
 // comes out of it. A recording flow process runs its board as a run of its
 // own; the step in the run it is in refers to it, and how it ended doesn't
@@ -422,6 +423,15 @@ func (w *walk) plainInputs(p int64) []linkEnd {
 	return plain
 }
 
+// The objects given from outside lead into a flow process's start, so the
+// process it points at takes them, linked to them or not.
+func (w *walk) startGiven(p int64) []int64 {
+	if w.board == nil || w.target == nil || *w.target != p {
+		return nil
+	}
+	return w.given
+}
+
 // Called with w.mu held.
 func (w *walk) ready(p int64) bool {
 	plain := w.plainInputs(p)
@@ -466,9 +476,16 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 
 	w.mu.Lock()
 	given := []runInput{}
+	taken := map[int64]bool{}
 	for _, i := range w.plainInputs(id) {
 		if _, ok := w.values[i.object]; ok && w.generated[i.object] {
 			given = append(given, w.asInput(i.object))
+			taken[i.object] = true
+		}
+	}
+	for _, o := range w.startGiven(id) {
+		if !taken[o] && o != trigger {
+			given = append(given, w.asInput(o))
 		}
 	}
 	var cr *changeRequest
@@ -572,6 +589,9 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 		if v, ok := w.values[i.object]; ok {
 			given[i.object] = v
 		}
+	}
+	for _, o := range w.startGiven(id) {
+		given[o] = w.values[o]
 	}
 	w.mu.Unlock()
 	var lists []int64

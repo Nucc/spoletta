@@ -1,0 +1,3 @@
+# Binaries go build leaves in the module directories.
+/webapp/webapp
+/worker/worker

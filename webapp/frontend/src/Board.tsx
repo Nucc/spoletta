@@ -29,6 +29,7 @@ import {
   LayoutIcon,
   PencilIcon,
   PlayIcon,
+  PlugIcon,
   PlusIcon,
   SaveIcon,
   TrashIcon,
@@ -51,6 +52,7 @@ import { BLOCK_MIME, BlockPalette, BUILDING_BLOCKS, ConnectorPalette, findBlock,
 import { decisionText, RunList, RunPanel } from './Runs'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
+import { MCPSettingsPanel } from './MCPSettings'
 import {
   createAttribute,
   createLink,
@@ -70,6 +72,7 @@ import {
   listConnections,
   listLinks,
   listModels,
+  listMCPServers,
   listBoards,
   listObjects,
   listProcesses,
@@ -95,6 +98,7 @@ import {
   type FlowObject,
   type FlowRun,
   type Versions,
+  type MCPServer,
   type FlowRunDetail,
   type Link,
   type Models,
@@ -244,6 +248,8 @@ export default function Board() {
   const [starting, setStarting] = useState(false)
   const [panelId, setPanelId] = useState<string | null>(null)
   const [models, setModels] = useState<Models | null>(null)
+  const [mcpServers, setMCPServers] = useState<MCPServer[] | null>(null)
+  const [mcpOpen, setMCPOpen] = useState(false)
   const [runs, setRuns] = useState<FlowRun[]>([])
   // The run open in the side panel, and its steps once loaded.
   const [runId, setRunId] = useState<number | null>(null)
@@ -434,12 +440,40 @@ export default function Board() {
 
   const loadBoard = useCallback(() => fetchBoard().then((c) => showBoard(c, boardRef.current)), [showBoard])
 
+  const refreshMCPServers = useCallback(() => listMCPServers().then(setMCPServers).catch(report), [report])
+
+  // A sign-in window says when it is done; coming back to this window after
+  // one that couldn't say so shows the outcome too.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin === window.location.origin && e.data?.type === 'mcp-sign-in') refreshMCPServers()
+    }
+    const onFocus = () => refreshMCPServers()
+    window.addEventListener('message', onMessage)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('message', onMessage)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [refreshMCPServers])
+
   useEffect(() => {
     listModels().then(setModels).catch(report)
+    refreshMCPServers()
     refreshRuns()
     refreshVersions()
     loadBoard().catch(report)
-  }, [loadBoard, report, refreshRuns, refreshVersions])
+  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers])
+
+  // The settings take the side panel; a node opened afterwards takes it back.
+  const openMCPSettings = (open: boolean) => {
+    if (open) {
+      setPanelId(null)
+      setVersionsOpen(false)
+      refreshMCPServers()
+    }
+    setMCPOpen(open)
+  }
 
   const onSave = async () => {
     setVersioning(true)
@@ -1288,6 +1322,7 @@ export default function Board() {
             onClick={() => {
               if (!versionsOpen) {
                 setPanelId(null)
+                setMCPOpen(false)
                 refreshVersions()
               }
               setVersionsOpen(!versionsOpen)
@@ -1299,6 +1334,14 @@ export default function Board() {
             {versions.versions.length > 0 && versions.current !== versions.versions[0].id && (
               <span className="version-latest">latest {versions.versions[0].id}</span>
             )}
+          </button>
+          <button
+            className={`mcp-toggle${mcpOpen ? ' open' : ''}`}
+            aria-expanded={mcpOpen}
+            onClick={() => openMCPSettings(!mcpOpen)}
+            title="The MCP servers agents can use"
+          >
+            <PlugIcon /> MCP servers
           </button>
         </div>
         <button
@@ -1416,6 +1459,7 @@ export default function Board() {
               settings: panelNode.data.settings,
             }}
             models={models}
+            mcpServers={mcpServers}
             readOnly={reviewing}
             run={{ status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
             review={
@@ -1430,6 +1474,7 @@ export default function Board() {
               updateData(panelNode.id, fields)
             }}
             onZoomIn={() => zoomIn(panelNode.id)}
+            onOpenMCPSettings={() => openMCPSettings(true)}
             onClose={() => setPanelId(null)}
             onError={report}
           />
@@ -1453,7 +1498,15 @@ export default function Board() {
           />
         )}
         {/* A node being edited or reviewed takes the panel; the versions or run show again once it closes. */}
-        {!panelNode && !objectPanelNode && versionsOpen && (
+        {!panelNode && !objectPanelNode && mcpOpen && (
+          <MCPSettingsPanel
+            servers={mcpServers ?? []}
+            onChanged={refreshMCPServers}
+            onClose={() => setMCPOpen(false)}
+            onError={report}
+          />
+        )}
+        {!panelNode && !objectPanelNode && !mcpOpen && versionsOpen && (
           <VersionPanel
             versions={versions.versions}
             current={versions.current}
@@ -1462,7 +1515,7 @@ export default function Board() {
             onClose={() => setVersionsOpen(false)}
           />
         )}
-        {!panelNode && !objectPanelNode && !versionsOpen && runDetail && (
+        {!panelNode && !objectPanelNode && !mcpOpen && !versionsOpen && runDetail && (
           <RunPanel
             run={runDetail}
             onStop={() => onStop(runDetail.id)}

@@ -3,6 +3,7 @@ import {
   DEFAULT_SENTRY,
   THINKING_LEVELS,
   updateProcess,
+  type MCPServer,
   type Models,
   type ProcessKind,
   type ProcessSettings,
@@ -10,6 +11,7 @@ import {
   type SentrySettings,
   type ThinkingLevel,
 } from './api'
+import { MCPServerPicker } from './MCPSettings'
 import type { RunStatus } from './ProcessNode'
 
 type Fields = {
@@ -64,11 +66,13 @@ export default function ProcessPanel({
   id,
   initial,
   models,
+  mcpServers,
   readOnly = false,
   run,
   review,
   onChange,
   onZoomIn,
+  onOpenMCPSettings,
   onClose,
   onError,
 }: {
@@ -76,6 +80,8 @@ export default function ProcessPanel({
   initial: Fields
   // Models pi offers, or null while they load.
   models: Models | null
+  // The MCP servers agents can use, or null while they load.
+  mcpServers: MCPServer[] | null
   // Shows the process without letting it change, such as as a past run's version has it.
   readOnly?: boolean
   // How this process did in the latest flow run, if it has run.
@@ -84,6 +90,7 @@ export default function ProcessPanel({
   onChange: (fields: Fields) => void
   // Shows a flow process's board.
   onZoomIn: () => void
+  onOpenMCPSettings: () => void
   onClose: () => void
   onError: (err: unknown) => void
 }) {
@@ -216,16 +223,27 @@ export default function ProcessPanel({
           </button>
         </div>
       ) : kind === 'agent' ? (
-        <label key="agent" className="panel-field panel-field-grow">
-          <span>Prompt</span>
-          <textarea
-            ref={bodyRef}
+        <>
+          <label key="agent" className="panel-field panel-field-grow">
+            <span>Prompt</span>
+            <textarea
+              ref={bodyRef}
+              readOnly={readOnly}
+              value={prompt}
+              placeholder="Describe what this process should do…"
+              onChange={(e) => setPrompt(e.target.value)}
+            />
+          </label>
+          <MCPServerPicker
+            servers={mcpServers}
+            selected={settings.mcpServers ?? []}
             readOnly={readOnly}
-            value={prompt}
-            placeholder="Describe what this process should do…"
-            onChange={(e) => setPrompt(e.target.value)}
+            onChange={(ids) =>
+              setSettings(({ mcpServers: _, ...rest }) => (ids.length > 0 ? { ...rest, mcpServers: ids } : rest))
+            }
+            onOpenSettings={onOpenMCPSettings}
           />
-        </label>
+        </>
       ) : kind === 'human' ? (
         // The prompt doubles as the reviewer's instructions; switching kinds keeps it.
         <label key="human" className={`panel-field${review ? '' : ' panel-field-grow'}`}>

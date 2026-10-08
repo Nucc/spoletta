@@ -184,3 +184,12 @@ export const ZoomInIcon = () => (
     <path d="M10.5 10.5l4 4M5 7h4M7 5v4" />
   </Icon>
 )
+
+// A plug: what connects agents to MCP servers.
+export const PlugIcon = () => (
+  <Icon>
+    <path d="M6 1.75v3M10 1.75v3" />
+    <path d="M4 4.75h8v2.5a4 4 0 0 1-8 0z" />
+    <path d="M8 11.25v3" />
+  </Icon>
+)

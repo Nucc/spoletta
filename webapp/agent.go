@@ -54,6 +54,10 @@ type agentRun struct {
 	Output *outputSpec `json:"output,omitempty"`
 	// Where the agent writes the files it generates.
 	FilesDir string `json:"filesDir,omitempty"`
+	// The MCP servers the process uses, reached through the webapp's proxy
+	// with the step's token; pi gets no MCP servers without them.
+	MCPServers []mcpRunServer `json:"mcpServers,omitempty"`
+	MCPToken   string         `json:"mcpToken,omitempty"`
 }
 
 // Inputs are capped so a runaway output can't grow every prompt downstream without bound.
@@ -97,11 +101,12 @@ func registerAgentRoutes(mux *http.ServeMux, workerURL string) {
 // appended to the prompt. Problems with the process itself are step
 // failures, so they show up on the node like any other; the error is for
 // recording the step.
-func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, runID, id int64, inputs []runInput, cr *changeRequest) (runResult, error) {
+func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, runID, id int64, inputs []runInput, cr *changeRequest) (runResult, error) {
 	var res runResult
 	run := agentRun{ProcessID: id}
-	err := db.QueryRowContext(ctx, "SELECT name, prompt, model, thinking FROM processes WHERE id = ?", id).
-		Scan(&run.ProcessName, &run.Prompt, &run.Model, &run.Thinking)
+	var settings processSettings
+	err := db.QueryRowContext(ctx, "SELECT name, prompt, model, thinking, settings FROM processes WHERE id = ?", id).
+		Scan(&run.ProcessName, &run.Prompt, &run.Model, &run.Thinking, &settings)
 	if errors.Is(err, sql.ErrNoRows) {
 		return res, errNotFound
 	}
@@ -134,6 +139,16 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, runID, id i
 		if _, err := db.ExecContext(ctx, "UPDATE run_steps SET prompt = ? WHERE id = ?", run.Prompt, stepID); err != nil {
 			return res, err
 		}
+	}
+	// The step's token reaches its MCP servers until the step ends, retry included.
+	if res.Error == "" {
+		var msg string
+		run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, settings.MCPServers)
+		if err != nil {
+			return res, err
+		}
+		defer mcp.revoke(run.MCPToken)
+		res.Error = msg
 	}
 	if res.Error == "" {
 		res = runAgent(ctx, workerURL, run)

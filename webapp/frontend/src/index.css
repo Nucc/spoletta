@@ -1638,3 +1638,148 @@ body {
   padding-left: 18px;
   font-size: 13px;
 }
+
+/* The MCP servers agents can use, in the settings, and picked per process. */
+.toolbar .mcp-toggle.open {
+  background: #ddf4ff;
+  border-color: #54aeff;
+}
+
+.mcp-panel {
+  overflow-y: auto;
+}
+
+.mcp-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+}
+
+.mcp-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mcp-item-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.mcp-item-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #656d76;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.mcp-item-description {
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.mcp-item-description:hover,
+.mcp-item-description:focus {
+  border-color: #d8dee4;
+}
+
+.mcp-item-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mcp-item-actions button {
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mcp-item-actions button:hover {
+  background: #f6f8fa;
+}
+
+.mcp-item-actions button.danger {
+  margin-left: auto;
+  color: #82071e;
+}
+
+.mcp-status {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #9a6700;
+  background: #fff8c5;
+  border-radius: 10px;
+}
+
+.mcp-status.connected {
+  color: #1a7f37;
+  background: #dafbe1;
+}
+
+.mcp-add {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #d8dee4;
+}
+
+.mcp-add h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.mcp-add .panel-button {
+  margin-top: 0;
+}
+
+.mcp-add .panel-button:disabled {
+  color: #8c959f;
+  cursor: not-allowed;
+}
+
+.mcp-picker {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.mcp-picker legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.mcp-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-picker .link-button {
+  font-size: 13px;
+  font-weight: 400;
+}

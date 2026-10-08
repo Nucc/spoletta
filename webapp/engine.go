@@ -60,6 +60,7 @@ type engine struct {
 	db        *sql.DB
 	workerURL string
 	sentry    sentryConfig
+	mcp       *mcpBroker
 	// A slot per agent, script or Sentry step that can run at once, across
 	// all runs; reviews waiting take none.
 	slots chan struct{}
@@ -74,8 +75,8 @@ type liveRun struct {
 	reviews map[int64]chan decision
 }
 
-func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, parallelSteps int) *engine {
-	return &engine{db: db, workerURL: workerURL, sentry: sentry, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{}}
+func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker, parallelSteps int) *engine {
+	return &engine{db: db, workerURL: workerURL, sentry: sentry, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{}}
 }
 
 // Executes a run of the whole flow, on the top board of version's board, in
@@ -892,7 +893,7 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 	var err error
 	switch w.kinds[id] {
 	case kindAgent:
-		res, err = runAgentStep(w.ctx, w.e.db, w.e.workerURL, w.run, id, inputs, cr)
+		res, err = runAgentStep(w.ctx, w.e.db, w.e.workerURL, w.e.mcp, w.run, id, inputs, cr)
 	case kindSentry:
 		res, err = runSentryStep(w.ctx, w.e.db, w.e.sentry, w.run, id, inputs)
 	default:

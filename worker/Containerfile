@@ -15,6 +15,7 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY submit-output.ts /opt/flow/submit-output.ts
+COPY mcp-servers.ts /opt/flow/mcp-servers.ts
 
 EXPOSE 8090
 CMD ["worker"]

@@ -59,6 +59,9 @@ func main() {
 	if err := migrate(db); err != nil {
 		log.Fatal(err)
 	}
+	if err := migrateMCP(db); err != nil {
+		log.Fatal(err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
@@ -74,7 +77,10 @@ func main() {
 	if err != nil || parallelSteps < 1 {
 		log.Fatalf("PARALLEL_STEPS must be a positive number")
 	}
-	registerRunRoutes(mux, db, newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, parallelSteps))
+	// Where the worker reaches this webapp's MCP proxy.
+	mcp := newMCPBroker(db, env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")))
+	registerMCPRoutes(mux, db, mcp)
+	registerRunRoutes(mux, db, newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, mcp, parallelSteps))
 	registerVersionRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
 	registerFileRoutes(mux)

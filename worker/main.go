@@ -55,6 +55,17 @@ type runRequest struct {
 	Output *outputSpec `json:"output"`
 	// Where the agent writes files; inside the files root.
 	FilesDir string `json:"filesDir"`
+	// The only MCP servers pi gets, which mcp-servers.ts registers; with
+	// none, pi runs without MCP. The URLs are the webapp's proxy, which
+	// takes the token.
+	MCPServers []mcpServer `json:"mcpServers"`
+	MCPToken   string      `json:"mcpToken"`
+}
+
+type mcpServer struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Description string `json:"description,omitempty"`
 }
 
 // The interface of what a process generates, as submit-output.ts reads it.
@@ -101,6 +112,9 @@ var filesRoot = envOr("FILES_DIR", "/data/files")
 
 // The submit_output extension, which the image puts here.
 var outputExtension = envOr("OUTPUT_EXTENSION", "/opt/flow/submit-output.ts")
+
+// The extension that registers a run's MCP servers, which the image puts here.
+var mcpExtension = envOr("MCP_EXTENSION", "/opt/flow/mcp-servers.ts")
 
 // Creates a run's files directory, which must be inside the files root.
 func makeFilesDir(dir string) error {
@@ -329,31 +343,40 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult
 		args = append(args, "--thinking", run.Thinking)
 	}
 
-	// The spec and the result live outside the agent's working directory.
+	// The specs and the result live outside the agent's working directory.
 	var resultFile string
-	var env []string
-	if run.Output != nil {
-		private, err := os.MkdirTemp("", "output-")
+	env := os.Environ()
+	if len(run.MCPServers) > 0 || run.Output != nil {
+		private, err := os.MkdirTemp("", "private-")
 		if err != nil {
-			return runResult{Error: "create output directory: " + err.Error()}
+			return runResult{Error: "create private directory: " + err.Error()}
 		}
 		defer os.RemoveAll(private)
-		spec := *run.Output
-		spec.FilesDir = run.FilesDir
-		spec.ResultFile = filepath.Join(private, "result.json")
-		b, err := json.Marshal(spec)
-		if err == nil {
-			err = os.WriteFile(filepath.Join(private, "spec.json"), b, 0o644)
+		if len(run.MCPServers) > 0 {
+			b, err := json.Marshal(map[string]any{"servers": run.MCPServers, "token": run.MCPToken})
+			if err == nil {
+				err = os.WriteFile(filepath.Join(private, "mcp.json"), b, 0o600)
+			}
+			if err != nil {
+				return runResult{Error: "write MCP servers: " + err.Error()}
+			}
+			args = append(args, "-e", mcpExtension)
+			env = append(env, "FLOW_MCP_SERVERS="+filepath.Join(private, "mcp.json"))
 		}
-		if err != nil {
-			return runResult{Error: "write output spec: " + err.Error()}
+		if run.Output != nil {
+			if resultFile, err = writeOutputSpec(private, run); err != nil {
+				return runResult{Error: "write output spec: " + err.Error()}
+			}
+			args = append(args, "-e", outputExtension)
+			env = append(env, "FLOW_OUTPUT_SPEC="+filepath.Join(private, "spec.json"))
 		}
-		resultFile = spec.ResultFile
-		args = append(args, "-e", outputExtension)
-		env = append(os.Environ(), "FLOW_OUTPUT_SPEC="+filepath.Join(private, "spec.json"))
+	}
+	if len(run.MCPServers) == 0 {
+		args = append(args, "--no-mcp")
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
+
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "pi", args...)
 	cmd.Dir = cwd
@@ -395,6 +418,18 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult
 		}
 	}
 	return runResult{OK: true, Output: output}
+}
+
+// Writes the output spec submit-output.ts reads, returning where its result goes.
+func writeOutputSpec(dir string, run runRequest) (string, error) {
+	spec := *run.Output
+	spec.FilesDir = run.FilesDir
+	spec.ResultFile = filepath.Join(dir, "result.json")
+	b, err := json.Marshal(spec)
+	if err != nil {
+		return "", err
+	}
+	return spec.ResultFile, os.WriteFile(filepath.Join(dir, "spec.json"), b, 0o644)
 }
 
 // Characters kept in an input's file name; others become underscores.

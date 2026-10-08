@@ -36,6 +36,8 @@ type process struct {
 // so switching kinds back and forth loses none.
 type processSettings struct {
 	Sentry *sentrySettings `json:"sentry,omitempty"`
+	// The MCP servers an agent process may use, by id; none by default. See mcp.go.
+	MCPServers []int64 `json:"mcpServers,omitempty"`
 }
 
 func (s processSettings) sentry() sentrySettings {

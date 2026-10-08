@@ -26,7 +26,11 @@ export const DEFAULT_SENTRY: SentrySettings = {
 }
 
 // Settings of the kinds that take more than a prompt or a script, by kind.
-export type ProcessSettings = { sentry?: SentrySettings }
+export type ProcessSettings = {
+  sentry?: SentrySettings
+  // The MCP servers an agent process may use, by id; none when absent.
+  mcpServers?: number[]
+}
 
 export type Process = {
   id: number
@@ -300,6 +304,43 @@ export type Models = {
 
 export function listModels(): Promise<Models> {
   return request('/api/models')
+}
+
+// An MCP server agents can use once it is connected, which signs in through
+// the browser; each agent process picks the ones it uses.
+export type MCPServer = {
+  id: number
+  name: string
+  url: string
+  description: string
+  connected: boolean
+}
+
+export function listMCPServers(): Promise<MCPServer[]> {
+  return request('/api/mcp-servers')
+}
+
+export function createMCPServer(s: Pick<MCPServer, 'name' | 'url' | 'description'>): Promise<MCPServer> {
+  return request('/api/mcp-servers', { method: 'POST', body: JSON.stringify(s) })
+}
+
+export function updateMCPServer(id: number, patch: Partial<Pick<MCPServer, 'name' | 'url' | 'description'>>): Promise<MCPServer> {
+  return request(`/api/mcp-servers/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function deleteMCPServer(id: number): Promise<void> {
+  return request(`/api/mcp-servers/${id}`, { method: 'DELETE' })
+}
+
+export function disconnectMCPServer(id: number): Promise<void> {
+  return request(`/api/mcp-servers/${id}/disconnect`, { method: 'POST' })
+}
+
+// Signs in to the server in a window of its own, which tells this one when
+// it is done with a "mcp-sign-in" message. Call it straight from a click, so
+// the window isn't blocked.
+export function connectMCPServer(id: number) {
+  window.open(`/api/mcp-servers/${id}/connect`, `mcp-sign-in-${id}`, 'popup,width=560,height=720')
 }
 
 // An object the process takes as input, with what the process that generated

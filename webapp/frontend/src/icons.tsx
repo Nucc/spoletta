@@ -119,6 +119,12 @@ export const TrashIcon = () => (
   </Icon>
 )
 
+export const StopIcon = () => (
+  <Icon>
+    <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
+  </Icon>
+)
+
 export const PlusIcon = ({ size = 12 }: { size?: number }) => (
   <Icon size={size}>
     <path d="M8 3v10M3 8h10" />

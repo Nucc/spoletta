@@ -1,4 +1,4 @@
-import { fileUrl, type FlowRun, type FlowRunDetail, type FlowRunStatus, type RunStep, type StepStatus } from './api'
+import { fileUrl, type FlowRun, type FlowRunDetail, type FlowRunStatus, type ProcessKind, type RunStep, type StepStatus } from './api'
 
 const RUN_LABELS: Record<FlowRunStatus, string> = {
   running: 'Running',
@@ -99,11 +99,13 @@ export function RunList({
 export function RunPanel({
   run,
   onStop,
+  onStopStep,
   onOpenRun,
   onClose,
 }: {
   run: FlowRunDetail
   onStop: () => void
+  onStopStep: (id: number) => void
   // Opens another run: the one a recording flow process ran as, or the one it ran in.
   onOpenRun: (id: number) => void
   onClose: () => void
@@ -149,7 +151,12 @@ export function RunPanel({
         <ol className="steps">
           {run.steps.map((s) => (
             <li key={s.id}>
-              <Step step={s} objects={run.objects.filter((o) => o.step === s.id)} onOpenRun={onOpenRun} />
+              <Step
+                step={s}
+                objects={run.objects.filter((o) => o.step === s.id)}
+                onStop={stoppable(s) ? () => onStopStep(s.id) : undefined}
+                onOpenRun={onOpenRun}
+              />
             </li>
           ))}
         </ol>
@@ -158,13 +165,19 @@ export function RunPanel({
   )
 }
 
+// Agent, script and Sentry steps can be stopped while they go.
+export const stoppable = (s: { kind: ProcessKind; status: StepStatus }) =>
+  s.status === 'active' && (s.kind === 'agent' || s.kind === 'script' || s.kind === 'sentry')
+
 function Step({
   step: s,
   objects,
+  onStop,
   onOpenRun,
 }: {
   step: RunStep
   objects: FlowRunDetail['objects']
+  onStop?: () => void
   onOpenRun: (id: number) => void
 }) {
   return (
@@ -180,6 +193,11 @@ function Step({
           {STEP_LABELS[s.status]} · started {formatTime(s.startedAt)}
           {s.process === null && ' · process since deleted'}
         </p>
+        {onStop && (
+          <button className="run-stop" onClick={onStop} title="Stop this step; its branch ends, the rest of the run goes on">
+            Stop step
+          </button>
+        )}
         {s.kind === 'agent' && (
           <p className="panel-note">
             Model: {s.model || 'default'} · thinking: {s.thinking || 'default'}

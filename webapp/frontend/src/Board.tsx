@@ -86,6 +86,7 @@ import {
   setLinkStates,
   startRun,
   stopRun,
+  stopStep,
   updateAttribute,
   updateEnd,
   updateObject,
@@ -1138,16 +1139,32 @@ export default function Board() {
     { label: 'Delete', icon: <TrashIcon />, danger: true, disabled: reviewing || isBoundary(id), onSelect: () => remove(id) },
   ]
 
+  const onStopStep = async (run: number, step: number) => {
+    try {
+      await stopStep(run, step)
+    } catch (err) {
+      report(err)
+    }
+    setRunReload((n) => n + 1)
+  }
+
+  // Stops the step the process has going in the open run.
+  const stopProcess = (id: string) => {
+    const step = shownRun?.steps.filter((s) => String(s.process) === id && s.status === 'active').at(-1)
+    if (shownRun && step) onStopStep(shownRun.id, step.id)
+  }
+
   // Nodes and edges reach the board through a context whose functions stay
   // the same, so they don't all re-render whenever the board does.
-  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRoute, resize, zoomIn })
-  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRoute, resize, zoomIn }
+  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRoute, resize, zoomIn, stopProcess })
+  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRoute, resize, zoomIn, stopProcess }
   const actions = useMemo<BoardActions>(
     () => ({
       commitName: (id, name) => latest.current.commitName(id, name),
       cancelName: (id) => latest.current.cancelName(id),
       openPanel: (id) => setPanelId(id),
       zoomIn: (id) => latest.current.zoomIn(id),
+      stopProcess: (id) => latest.current.stopProcess(id),
       remove: (id) => latest.current.remove(id),
       append: (id) => latest.current.append(id),
       insert: (edgeId) => latest.current.insert(edgeId),
@@ -1519,6 +1536,7 @@ export default function Board() {
           <RunPanel
             run={runDetail}
             onStop={() => onStop(runDetail.id)}
+            onStopStep={(step) => onStopStep(runDetail.id, step)}
             onOpenRun={openRunById}
             onClose={() => setRunId(null)}
           />

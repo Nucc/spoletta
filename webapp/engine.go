@@ -29,8 +29,9 @@ import (
 //     state exist. Several such links are alternatives, not all required.
 //
 // A failure stops its branch, and every process runs at most once per pass,
-// so cycles end. Processes still connected directly run right after their
-// predecessor.
+// so cycles end. An agent, script or Sentry step stopped while it goes
+// fails, so stops its branch the same way; the rest of the run goes on.
+// Processes still connected directly run right after their predecessor.
 //
 // A human process waits for a person to review its inputs and set an object
 // to one of the states its output links name; the object keeps its content.
@@ -73,6 +74,8 @@ type liveRun struct {
 	cancel context.CancelFunc
 	// The reviews waiting for a decision, by step id.
 	reviews map[int64]chan decision
+	// What stops each agent, script or Sentry step going, by step id.
+	steps map[int64]context.CancelFunc
 }
 
 func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker, parallelSteps int) *engine {
@@ -92,7 +95,7 @@ func (e *engine) start(id, version int64, board snapshot) {
 }
 
 func (e *engine) register(id int64, cancel context.CancelFunc) *liveRun {
-	lr := &liveRun{cancel: cancel, reviews: map[int64]chan decision{}}
+	lr := &liveRun{cancel: cancel, reviews: map[int64]chan decision{}, steps: map[int64]context.CancelFunc{}}
 	e.mu.Lock()
 	e.runs[id] = lr
 	e.mu.Unlock()
@@ -131,6 +134,22 @@ func (e *engine) stop(id int64) {
 	if lr, ok := e.runs[id]; ok {
 		lr.cancel()
 	}
+}
+
+// Cancels one step of a run, which fails it and ends its branch; the rest of
+// the run goes on. False if the step isn't going.
+func (e *engine) stopStep(runID, stepID int64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	lr, ok := e.runs[runID]
+	if !ok {
+		return false
+	}
+	cancel, ok := lr.steps[stepID]
+	if ok {
+		cancel()
+	}
+	return ok
 }
 
 // Lets a run waiting for a review go on with the human's decision.
@@ -881,27 +900,41 @@ func (w *walk) runHuman(id int64, given []runInput) {
 }
 
 // Executes an agent, script or Sentry process as a step of the run, once a
-// slot is free. False if it failed; a duplicate is a result, and
-// terminates the run.
+// slot is free; the step can be stopped on its own while it goes. False if
+// it failed or was stopped; a duplicate is a result, and terminates the run.
 func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool) {
 	select {
 	case w.e.slots <- struct{}{}:
 	case <-w.ctx.Done():
 		return runResult{}, false
 	}
+	ctx, cancel := context.WithCancel(w.ctx)
+	defer cancel()
+	var stepID int64
+	started := func(id int64) {
+		w.e.mu.Lock()
+		stepID = id
+		w.lr.steps[id] = cancel
+		w.e.mu.Unlock()
+	}
+	defer func() {
+		w.e.mu.Lock()
+		delete(w.lr.steps, stepID)
+		w.e.mu.Unlock()
+	}()
 	var res runResult
 	var err error
 	switch w.kinds[id] {
 	case kindAgent:
-		res, err = runAgentStep(w.ctx, w.e.db, w.e.workerURL, w.e.mcp, w.run, id, inputs, cr)
+		res, err = runAgentStep(ctx, w.e.db, w.e.workerURL, w.e.mcp, w.run, id, inputs, cr, started)
 	case kindSentry:
-		res, err = runSentryStep(w.ctx, w.e.db, w.e.sentry, w.run, id, inputs)
+		res, err = runSentryStep(ctx, w.e.db, w.e.sentry, w.run, id, inputs, started)
 	default:
-		res, err = runScriptStep(w.ctx, w.e.db, w.e.workerURL, w.run, id, inputs)
+		res, err = runScriptStep(ctx, w.e.db, w.e.workerURL, w.run, id, inputs, started)
 	}
 	<-w.e.slots
 	if err != nil {
-		if w.ctx.Err() == nil {
+		if ctx.Err() == nil {
 			log.Printf("run process %d in run %d: %v", id, w.run, err)
 		}
 		return res, false

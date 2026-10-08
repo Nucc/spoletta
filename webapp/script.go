@@ -33,8 +33,9 @@ type scriptInput struct {
 }
 
 // Executes a script process as a step of the run, which records its script
-// as the step's prompt. A change request has nothing to go to.
-func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, runID, id int64, inputs []runInput) (runResult, error) {
+// as the step's prompt. A change request has nothing to go to. started gets
+// the step's id once it is recorded.
+func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
 	var res runResult
 	run := scriptRun{ProcessID: id, Inputs: []scriptInput{}}
 	err := db.QueryRowContext(ctx, "SELECT name, script FROM processes WHERE id = ?", id).Scan(&run.ProcessName, &run.Script)
@@ -62,6 +63,7 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, runID, id 
 	if err != nil {
 		return res, err
 	}
+	started(stepID)
 	if contract != nil {
 		contract.filesDir = stepFilesDir(runID, stepID)
 		run.FilesDir = contract.filesDir
@@ -70,7 +72,7 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, runID, id 
 		if err := callWorker(ctx, http.MethodPost, workerURL+"/script", run, &res); err != nil {
 			res = runResult{Error: "worker unavailable: " + err.Error()}
 			if ctx.Err() != nil {
-				res.Error = "the run was cancelled"
+				res.Error = "it was stopped"
 			}
 		}
 		if contract != nil && res.OK {

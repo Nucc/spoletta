@@ -194,8 +194,8 @@ func sentryList(issues []map[string]json.RawMessage, fields []string, lenient bo
 }
 
 // Executes a Sentry process as a step of the run, which records the request
-// it sent as the step's prompt.
-func runSentryStep(ctx context.Context, db *sql.DB, cfg sentryConfig, runID, id int64, inputs []runInput) (runResult, error) {
+// it sent as the step's prompt. started gets the step's id once it is recorded.
+func runSentryStep(ctx context.Context, db *sql.DB, cfg sentryConfig, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
 	var res runResult
 	var settings processSettings
 	err := db.QueryRowContext(ctx, "SELECT settings FROM processes WHERE id = ?", id).Scan(&settings)
@@ -236,11 +236,12 @@ func runSentryStep(ctx context.Context, db *sql.DB, cfg sentryConfig, runID, id 
 	if err != nil {
 		return res, err
 	}
+	started(stepID)
 	if res.Error == "" {
 		issues, err := cfg.fetch(ctx, u)
 		switch {
 		case ctx.Err() != nil:
-			res.Error = "the run was cancelled"
+			res.Error = "it was stopped"
 		case err != nil:
 			res.Error = err.Error()
 		default:

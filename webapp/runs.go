@@ -560,6 +560,22 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		writeJSON(w, http.StatusOK, rn)
 	})
 
+	// Stops an agent, script or Sentry step still going. It fails, which ends
+	// its branch; the rest of the run goes on.
+	mux.HandleFunc("POST /api/runs/{run}/steps/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		runID, err1 := strconv.ParseInt(r.PathValue("run"), 10, 64)
+		id, err2 := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err1 != nil || err2 != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		if !eng.stopStep(runID, id) {
+			http.Error(w, "no step going with that id in this run", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	// Decides a human step waiting for its review: records the state the
 	// human set, if any, and their instructions, and lets the run go on.
 	mux.HandleFunc("PATCH /api/runs/{run}/steps/{id}", func(w http.ResponseWriter, r *http.Request) {

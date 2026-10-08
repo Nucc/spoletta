@@ -100,8 +100,8 @@ func registerAgentRoutes(mux *http.ServeMux, workerURL string) {
 // for the result. Its input objects and a human's change request are
 // appended to the prompt. Problems with the process itself are step
 // failures, so they show up on the node like any other; the error is for
-// recording the step.
-func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, runID, id int64, inputs []runInput, cr *changeRequest) (runResult, error) {
+// recording the step. started gets the step's id once it is recorded.
+func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, runID, id int64, inputs []runInput, cr *changeRequest, started func(int64)) (runResult, error) {
 	var res runResult
 	run := agentRun{ProcessID: id}
 	var settings processSettings
@@ -130,6 +130,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	if err != nil {
 		return res, err
 	}
+	started(stepID)
 	// The files directory is the step's, so the contract follows the step.
 	if res.Error == "" && contract != nil {
 		contract.filesDir = stepFilesDir(runID, stepID)
@@ -169,7 +170,7 @@ func runAgent(ctx context.Context, workerURL string, run agentRun) runResult {
 	var res runResult
 	if err := callWorker(ctx, http.MethodPost, workerURL+"/run", run, &res); err != nil {
 		if ctx.Err() != nil {
-			return runResult{Error: "the run was cancelled"}
+			return runResult{Error: "it was stopped"}
 		}
 		return runResult{Error: "worker unavailable: " + err.Error()}
 	}

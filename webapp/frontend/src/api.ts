@@ -446,6 +446,12 @@ export function stopRun(id: number): Promise<FlowRun> {
   return request(`/api/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'interrupted' }) })
 }
 
+// Stops an agent, script or Sentry step still going. It fails, which ends its
+// branch; the rest of the run goes on.
+export function stopStep(run: number, id: number): Promise<void> {
+  return request(`/api/runs/${run}/steps/${id}/stop`, { method: 'POST' })
+}
+
 // Decides a human step waiting for its review, and lets the run go on: the
 // state the human set, if they had any to choose from, and their instructions.
 export function decideStep(run: number, id: number, decision: { state: number | null; instructions: string }): Promise<void> {

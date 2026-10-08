@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Handle, Position, useNodeConnections, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { ProcessKind, ProcessSettings, RunInput, ThinkingLevel } from './api'
-import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, SentryIcon, TrashIcon, ZoomInIcon } from './icons'
+import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, SentryIcon, StopIcon, TrashIcon, ZoomInIcon } from './icons'
+import { stoppable } from './Runs'
 import WidthResizer from './WidthResizer'
 
 export type ProcessNodeData = {
@@ -100,6 +101,11 @@ export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNod
       </div>
       {!draft && (
         <span className="node-buttons nodrag">
+          {data.status && stoppable({ kind: data.kind, status: data.status }) && (
+            <button title="Stop" aria-label="Stop" onClick={() => actions.stopProcess(id)}>
+              <StopIcon />
+            </button>
+          )}
           {data.kind === 'flow' && (
             <button title="Zoom in" aria-label="Zoom in" onClick={() => actions.zoomIn(id)}>
               <ZoomInIcon />

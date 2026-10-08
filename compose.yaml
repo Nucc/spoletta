@@ -40,6 +40,11 @@ services:
       - JIRA_URL
       - JIRA_EMAIL
       - JIRA_API_TOKEN
+      # For flows with repositories: a token that can clone them over https,
+      # such as a GitHub token with contents:read. Agents can read it too.
+      # GIT_USERNAME defaults to x-access-token, which GitHub takes.
+      - GIT_TOKEN
+      - GIT_USERNAME
     volumes:
       # Only these two files: the agent can read anything mounted, and the
       # rest of the directory holds sessions and OAuth tokens.
@@ -47,6 +52,8 @@ services:
       - ${PI_CONFIG_DIR:-~/.pi/agent}/settings.json:/pi-host/settings.json:ro
       # Files runs generate, at the same path as in the webapp, which serves them.
       - files:/data/files
+      # The runs' git checkouts, kept between their steps.
+      - workspaces:/data/workspaces
     restart: unless-stopped
 
   webapp:
@@ -80,3 +87,4 @@ services:
 volumes:
   mysql-data:
   files:
+  workspaces:

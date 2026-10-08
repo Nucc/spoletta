@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
-import { getFlow, renameFlow, type Flow } from './api'
+import { getFlow, updateFlow, type Flow } from './api'
 import Board from './Board'
 import FlowList from './FlowList'
 
@@ -39,7 +39,10 @@ function FlowPage({ id }: { id: number }) {
     if (flow) document.title = `${flow.name} · Flows`
   }, [flow])
 
-  const onRename = useCallback(async (name: string) => setFlow(await renameFlow(id, name)), [id])
+  const onUpdate = useCallback(
+    async (patch: Partial<Pick<Flow, 'name' | 'settings'>>) => setFlow(await updateFlow(id, patch)),
+    [id],
+  )
 
   if (error) {
     return (
@@ -56,7 +59,7 @@ function FlowPage({ id }: { id: number }) {
   if (!flow) return null
   return (
     <ReactFlowProvider>
-      <Board flow={flow} onRename={onRename} />
+      <Board flow={flow} onUpdate={onUpdate} />
     </ReactFlowProvider>
   )
 }

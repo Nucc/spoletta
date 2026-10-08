@@ -1,7 +1,9 @@
 // Runs pi agent harnesses and scripts on behalf of the webapp. Each POST /run
-// spawns one non-interactive pi process in a fresh scratch directory and
-// streams its conversation back as it goes, ending with the outcome; each
-// POST /script runs one bash script and replies once it exits.
+// spawns one non-interactive pi process and streams its conversation back as
+// it goes, ending with the outcome; each POST /script runs one bash script
+// and replies once it exits. Either runs in its run's workspace, a directory
+// of git checkouts on the run's branch (see workspace.go), or without one in
+// a fresh scratch directory.
 package main
 
 import (
@@ -62,6 +64,8 @@ type runRequest struct {
 	// takes the token.
 	MCPServers []mcpServer `json:"mcpServers"`
 	MCPToken   string      `json:"mcpToken"`
+	// The workspace it works in, if the flow has repositories.
+	Workspace *workspaceSpec `json:"workspace"`
 }
 
 type mcpServer struct {
@@ -88,6 +92,8 @@ type scriptRequest struct {
 	Inputs      []scriptInput `json:"inputs"`
 	// Where the script writes files, which $OUTPUTS points to; inside the files root.
 	FilesDir string `json:"filesDir"`
+	// The workspace it works in, if the flow has repositories.
+	Workspace *workspaceSpec `json:"workspace"`
 }
 
 type scriptInput struct {
@@ -235,6 +241,22 @@ func main() {
 		}
 	})
 
+	// Deletes the workspaces of runs: {"runs": [ids]}.
+	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Runs []int64 `json:"runs"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
+			reply(w, http.StatusBadRequest, map[string]string{"error": "invalid request: " + err.Error()})
+			return
+		}
+		if err := deleteWorkspaces(body.Runs); err != nil {
+			reply(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+
 	log.Printf("worker: listening on %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
@@ -350,11 +372,11 @@ func modelArgs(model string) []string {
 // run that exceeds the timeout kills pi. emit gets each message of the
 // conversation as it ends.
 func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func(json.RawMessage)) runResult {
-	cwd, err := os.MkdirTemp("", "run-")
+	cwd, release, err := workDir(ctx, run.Workspace, "run-")
 	if err != nil {
-		return runResult{Error: "create scratch directory: " + err.Error()}
+		return runResult{Error: err.Error()}
 	}
-	defer os.RemoveAll(cwd)
+	defer release()
 
 	// An empty model or thinking level leaves the choice to the pi settings.
 	// pi prints its events as JSON, so the conversation can be followed.
@@ -535,24 +557,51 @@ func (s *eventStream) outcome() (output, failure string) {
 	return strings.TrimSpace(strings.Join(texts, "\n")), ""
 }
 
+// The directory a step works in, and what gives it back once the step is
+// done: its run's workspace, ready and taken, or a scratch directory deleted
+// afterwards. Getting the workspace ready doesn't count towards the step's
+// timeout.
+func workDir(ctx context.Context, ws *workspaceSpec, scratch string) (string, func(), error) {
+	if ws != nil {
+		dir, release, err := takeWorkspace(ctx, ws)
+		if err != nil {
+			return "", nil, errors.New("prepare workspace: " + err.Error())
+		}
+		return dir, release, nil
+	}
+	dir, err := os.MkdirTemp("", scratch)
+	if err != nil {
+		return "", nil, errors.New("create scratch directory: " + err.Error())
+	}
+	return dir, func() { os.RemoveAll(dir) }, nil
+}
+
 // Characters kept in an input's file name; others become underscores.
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
-// Runs a script with bash in a fresh scratch directory, which is its working
-// directory. Each object it takes is a file in the directory $INPUTS points
-// to, named after the object: spaces and other characters unsafe in a file
-// name become underscores, so Jira Ticket is $INPUTS/Jira_Ticket. Files it
-// generates go in the directory $OUTPUTS points to, which is kept. What the
-// script prints is its output; a non-zero exit fails it, with what it printed
-// to stderr as the error. Like pi, it runs in a process group of its own,
+// Runs a script with bash in its run's workspace, which $WORKSPACE points to
+// and whose checkouts are on the branch $BRANCH names, or else in a fresh
+// scratch directory. Each object it takes is a file in the directory $INPUTS
+// points to, named after the object: spaces and other characters unsafe in a
+// file name become underscores, so Jira Ticket is $INPUTS/Jira_Ticket. Files
+// it generates go in the directory $OUTPUTS points to, which is kept. What
+// the script prints is its output; a non-zero exit fails it, with what it
+// printed to stderr as the error. Like pi, it runs in a process group of its own,
 // which a cancelled request or the timeout kills.
 func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) runResult {
-	cwd, err := os.MkdirTemp("", "script-")
+	cwd, release, err := workDir(ctx, run.Workspace, "script-")
 	if err != nil {
-		return runResult{Error: "create scratch directory: " + err.Error()}
+		return runResult{Error: err.Error()}
 	}
-	defer os.RemoveAll(cwd)
-	inputs := filepath.Join(cwd, ".inputs")
+	defer release()
+	// The inputs and the script stay out of the working directory, which a
+	// workspace shares with other steps.
+	private, err := os.MkdirTemp("", "script-private-")
+	if err != nil {
+		return runResult{Error: "create private directory: " + err.Error()}
+	}
+	defer os.RemoveAll(private)
+	inputs := filepath.Join(private, "inputs")
 	if err := os.Mkdir(inputs, 0o755); err != nil {
 		return runResult{Error: "create inputs directory: " + err.Error()}
 	}
@@ -565,7 +614,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) ru
 			return runResult{Error: "write input " + in.Name + ": " + err.Error()}
 		}
 	}
-	script := filepath.Join(cwd, ".script")
+	script := filepath.Join(private, "script")
 	if err := os.WriteFile(script, []byte(run.Script), 0o644); err != nil {
 		return runResult{Error: "write script: " + err.Error()}
 	}
@@ -575,6 +624,9 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) ru
 	cmd := exec.CommandContext(runCtx, "bash", script)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "INPUTS="+inputs)
+	if run.Workspace != nil {
+		cmd.Env = append(cmd.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
+	}
 	if run.FilesDir != "" {
 		cmd.Env = append(cmd.Env, "OUTPUTS="+run.FilesDir)
 	}

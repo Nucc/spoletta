@@ -85,11 +85,14 @@ func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker
 
 // Executes a run of the whole flow, on the top board of version's board, in
 // the background, and ends it once nothing in it is left to run.
-func (e *engine) start(id, version int64, board snapshot) {
+// Its agents and scripts work in a workspace with the repositories, on a
+// branch of the run's own, whose name starts with prefix.
+func (e *engine) start(id, version int64, board snapshot, repos []repository, prefix string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	lr := e.register(id, cancel)
 	go func() {
-		w := newWalk(ctx, e, id, lr, newFlowRun(version, board), nil, nil)
+		fr := newFlowRun(version, board, repos, prefix)
+		w := newWalk(ctx, e, id, lr, fr, nil, nil, fr.workspace("run-"+strconv.FormatInt(id, 10)))
 		w.enter()
 		e.finish(ctx, id, w)
 	}()
@@ -233,14 +236,26 @@ type flowRun struct {
 	version int64
 	board   snapshot
 	objects map[int64]snapshotObject
+	// The flow's repositories as the run started, and its branches' prefix.
+	repos  []repository
+	prefix string
 }
 
-func newFlowRun(version int64, board snapshot) *flowRun {
-	fr := &flowRun{version: version, board: board, objects: map[int64]snapshotObject{}}
+func newFlowRun(version int64, board snapshot, repos []repository, prefix string) *flowRun {
+	fr := &flowRun{version: version, board: board, objects: map[int64]snapshotObject{}, repos: repos, prefix: prefix}
 	for _, o := range board.Objects {
 		fr.objects[o.ID] = o
 	}
 	return fr
+}
+
+// A workspace of its own, named id, on the branch <prefix>/id; nil when the
+// flow has no repositories.
+func (fr *flowRun) workspace(id string) *runWorkspace {
+	if len(fr.repos) == 0 {
+		return nil
+	}
+	return &runWorkspace{id: id, branch: fr.prefix + "/" + id, repos: fr.repos}
 }
 
 // A run walking a board: the top board, or a flow process's.
@@ -252,6 +267,8 @@ type walk struct {
 	fr  *flowRun
 	// The flow process whose board it is, nil for the top board.
 	board *int64
+	// Where its agents and scripts work; nil without repositories.
+	ws *runWorkspace
 	// Where it starts: the process its start points at, and the objects given
 	// from outside.
 	target *int64
@@ -284,10 +301,11 @@ type taker struct {
 	process, state int64
 }
 
-// A walk of board, nil for the top one, with the objects given from outside.
-func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun, board *int64, given map[int64]value) *walk {
+// A walk of board, nil for the top one, with the objects given from outside,
+// working in ws.
+func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun, board *int64, given map[int64]value, ws *runWorkspace) *walk {
 	w := &walk{
-		e: e, ctx: ctx, run: run, lr: lr, fr: fr, board: board,
+		e: e, ctx: ctx, run: run, lr: lr, fr: fr, board: board, ws: ws,
 		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{},
 		outputs: map[int64][]linkEnd{}, inputs: map[int64][]linkEnd{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{},
@@ -679,7 +697,17 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item) (map[int64]va
 		ctx, cancel = context.WithCancel(w.reviews)
 		lr = w.e.register(run, cancel)
 	}
-	inner := newWalk(ctx, w.e, run, lr, w.fr, &id, given)
+	// An item works on a branch of its own, so items running at once don't
+	// meet; otherwise the board goes on with this run's.
+	ws := w.ws
+	if it != nil {
+		name := fmt.Sprintf("run-%d-step-%d", w.run, stepID)
+		if recording {
+			name = "run-" + strconv.FormatInt(run, 10)
+		}
+		ws = w.fr.workspace(name)
+	}
+	inner := newWalk(ctx, w.e, run, lr, w.fr, &id, given, ws)
 	inner.enter()
 
 	var status string
@@ -947,11 +975,11 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 	var err error
 	switch w.kinds[id] {
 	case kindAgent:
-		res, err = runAgentStep(ctx, w.e.db, w.e.workerURL, w.e.mcp, w.run, id, inputs, cr, started)
+		res, err = runAgentStep(ctx, w.e.db, w.e.workerURL, w.e.mcp, w.ws, w.run, id, inputs, cr, started)
 	case kindSentry:
 		res, err = runSentryStep(ctx, w.e.db, w.e.sentry, w.run, id, inputs, started)
 	default:
-		res, err = runScriptStep(ctx, w.e.db, w.e.workerURL, w.run, id, inputs, started)
+		res, err = runScriptStep(ctx, w.e.db, w.e.workerURL, w.ws, w.run, id, inputs, started)
 	}
 	<-w.e.slots
 	if err != nil {

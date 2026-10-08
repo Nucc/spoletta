@@ -1817,16 +1817,19 @@ body {
 }
 
 /* The MCP servers agents can use, in the settings, and picked per process. */
-.toolbar .mcp-toggle.open {
+.toolbar .mcp-toggle.open,
+.toolbar .settings-toggle.open {
   background: #ddf4ff;
   border-color: #54aeff;
 }
 
-.mcp-panel {
+.mcp-panel,
+.flow-settings-panel {
   overflow-y: auto;
 }
 
-.mcp-list {
+.mcp-list,
+.repo-list {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1835,7 +1838,8 @@ body {
   gap: 8px;
 }
 
-.mcp-item {
+.mcp-item,
+.repo-item {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1844,19 +1848,22 @@ body {
   border-radius: 8px;
 }
 
-.mcp-item-head {
+.mcp-item-head,
+.repo-item-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.mcp-item-name {
+.mcp-item-name,
+.repo-item-name {
   font-weight: 600;
   font-size: 14px;
 }
 
-.mcp-item-url {
+.mcp-item-url,
+.repo-item-url {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2129,4 +2136,18 @@ body {
   gap: 6px;
   color: #656d76;
   font-size: 13px;
+}
+
+/* The flow's repositories, in its settings. */
+.panel-subheading {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2328;
+}
+
+.repo-item-base {
+  color: #656d76;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }

@@ -26,6 +26,7 @@ import {
   CopyIcon,
   FlowBuilderIcon,
   FlowIcon,
+  GearIcon,
   HistoryIcon,
   LayoutIcon,
   PencilIcon,
@@ -54,6 +55,7 @@ import { decisionText, RunList, RunPanel } from './Runs'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
 import { MCPSettingsPanel } from './MCPSettings'
+import { FlowSettingsPanel } from './FlowSettings'
 import {
   createAttribute,
   createLink,
@@ -98,6 +100,7 @@ import {
   type BoardId,
   type Connection,
   type FlowObject,
+  defaultBranchPrefix,
   type Flow,
   type FlowRun,
   type Versions,
@@ -255,7 +258,13 @@ const toEndNode = (e: { x: number; y: number }): EndNodeType => ({
 
 // A flow's board, its runs and its versions. Opening another flow mounts a
 // new board.
-export default function Board({ flow, onRename }: { flow: Flow; onRename: (name: string) => Promise<void> }) {
+export default function Board({
+  flow,
+  onUpdate,
+}: {
+  flow: Flow
+  onUpdate: (patch: Partial<Pick<Flow, 'name' | 'settings'>>) => Promise<void>
+}) {
   const flowId = flow.id
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>([])
@@ -266,6 +275,7 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
   const [models, setModels] = useState<Models | null>(null)
   const [mcpServers, setMCPServers] = useState<MCPServer[] | null>(null)
   const [mcpOpen, setMCPOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [runs, setRuns] = useState<FlowRun[]>([])
   // The run open in the side panel, and its steps once loaded.
   const [runId, setRunId] = useState<number | null>(null)
@@ -502,9 +512,19 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
     if (open) {
       setPanelId(null)
       setVersionsOpen(false)
+      setSettingsOpen(false)
       refreshMCPServers()
     }
     setMCPOpen(open)
+  }
+
+  const openFlowSettings = (open: boolean) => {
+    if (open) {
+      setPanelId(null)
+      setVersionsOpen(false)
+      setMCPOpen(false)
+    }
+    setSettingsOpen(open)
   }
 
   const onSave = async () => {
@@ -1351,7 +1371,7 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
           <span className="crumb-separator" aria-hidden>
             /
           </span>
-          <FlowName name={flow.name} onRename={onRename} onError={report} />
+          <FlowName name={flow.name} onRename={(name) => onUpdate({ name })} onError={report} />
         </h1>
         <button
           onClick={onWrap}
@@ -1380,6 +1400,7 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
               if (!versionsOpen) {
                 setPanelId(null)
                 setMCPOpen(false)
+                setSettingsOpen(false)
                 refreshVersions()
               }
               setVersionsOpen(!versionsOpen)
@@ -1399,6 +1420,14 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
             title="The MCP servers agents can use"
           >
             <PlugIcon /> MCP servers
+          </button>
+          <button
+            className={`settings-toggle${settingsOpen ? ' open' : ''}`}
+            aria-expanded={settingsOpen}
+            onClick={() => openFlowSettings(!settingsOpen)}
+            title="The repositories the flow works on, and its branches"
+          >
+            <GearIcon /> Settings
           </button>
         </div>
         <button
@@ -1501,7 +1530,7 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
             <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
           )}
         </div>
-        {(panelNode || objectPanelNode || mcpOpen || versionsOpen || runDetail) && (
+        {(panelNode || objectPanelNode || mcpOpen || settingsOpen || versionsOpen || runDetail) && (
           <ColumnResizer label="Resize panel" {...panelColumn} />
         )}
         {panelNode && (
@@ -1535,6 +1564,8 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
             }}
             onZoomIn={() => zoomIn(panelNode.id)}
             onOpenMCPSettings={() => openMCPSettings(true)}
+            repositories={flow.settings.repositories}
+            onOpenFlowSettings={() => openFlowSettings(true)}
             onClose={() => setPanelId(null)}
             onError={report}
           />
@@ -1566,7 +1597,17 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
             onError={report}
           />
         )}
-        {!panelNode && !objectPanelNode && !mcpOpen && versionsOpen && (
+        {!panelNode && !objectPanelNode && !mcpOpen && settingsOpen && (
+          <FlowSettingsPanel
+            settings={flow.settings}
+            defaultPrefix={defaultBranchPrefix(flow.name)}
+            readOnly={reviewing}
+            onSave={(settings) => onUpdate({ settings })}
+            onClose={() => setSettingsOpen(false)}
+            onError={report}
+          />
+        )}
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && versionsOpen && (
           <VersionPanel
             versions={versions.versions}
             current={versions.current}
@@ -1575,7 +1616,7 @@ export default function Board({ flow, onRename }: { flow: Flow; onRename: (name:
             onClose={() => setVersionsOpen(false)}
           />
         )}
-        {!panelNode && !objectPanelNode && !mcpOpen && !versionsOpen && runDetail && (
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !versionsOpen && runDetail && (
           <RunPanel
             run={runDetail}
             onStop={() => onStop(runDetail.id)}

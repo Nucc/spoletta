@@ -4,6 +4,7 @@ import {
   THINKING_LEVELS,
   updateProcess,
   type MCPServer,
+  type Repository,
   type Models,
   type ProcessKind,
   type ProcessSettings,
@@ -13,6 +14,7 @@ import {
 } from './api'
 import { Data } from './Data'
 import { MCPServerPicker } from './MCPSettings'
+import { RepositoryPicker } from './FlowSettings'
 import type { RunStatus } from './ProcessNode'
 
 type Fields = {
@@ -74,6 +76,8 @@ export default function ProcessPanel({
   onChange,
   onZoomIn,
   onOpenMCPSettings,
+  repositories,
+  onOpenFlowSettings,
   onClose,
   onError,
 }: {
@@ -92,6 +96,9 @@ export default function ProcessPanel({
   // Shows a flow process's board.
   onZoomIn: () => void
   onOpenMCPSettings: () => void
+  // The flow's repositories, which agents and scripts pick from.
+  repositories: Repository[]
+  onOpenFlowSettings: () => void
   onClose: () => void
   onError: (err: unknown) => void
 }) {
@@ -138,6 +145,19 @@ export default function ProcessPanel({
   }, [name, kind, prompt, script, model, thinking, recording, settings])
 
   useEffect(() => flush, [])
+
+  // Absent means every repository, so unpicking the last one keeps [].
+  const repositoryPicker = (
+    <RepositoryPicker
+      repositories={repositories}
+      selected={settings.repositories}
+      readOnly={readOnly}
+      onChange={(names) =>
+        setSettings(({ repositories: _, ...rest }) => (names === undefined ? rest : { ...rest, repositories: names }))
+      }
+      onOpenSettings={onOpenFlowSettings}
+    />
+  )
 
   // Both bodies are kept, so switching type back and forth loses nothing.
   useEffect(() => {
@@ -244,6 +264,7 @@ export default function ProcessPanel({
             }
             onOpenSettings={onOpenMCPSettings}
           />
+          {repositoryPicker}
         </>
       ) : kind === 'human' ? (
         // The prompt doubles as the reviewer's instructions; switching kinds keeps it.
@@ -272,10 +293,12 @@ export default function ProcessPanel({
           <small className="panel-note">
             Runs with bash, curl and jq. Each object it takes is a file in <code>$INPUTS</code>, named after the object
             with spaces as underscores. What it prints is its output; a list of items is a JSON array. A non-zero exit
-            fails it.
+            fails it. With repositories, it runs in their workspace, <code>$WORKSPACE</code>, on the branch{' '}
+            <code>$BRANCH</code>.
           </small>
         </label>
       )}
+      {kind === 'script' && repositoryPicker}
       {review && <ReviewForm review={review} />}
       {run?.status === 'active' && <p className="panel-note">Running…</p>}
       {run?.error &&

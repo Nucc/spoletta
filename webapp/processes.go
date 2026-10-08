@@ -41,6 +41,9 @@ type processSettings struct {
 	Sentry *sentrySettings `json:"sentry,omitempty"`
 	// The MCP servers an agent process may use, by id; none by default. See mcp.go.
 	MCPServers []int64 `json:"mcpServers,omitempty"`
+	// The flow's repositories an agent or script process works on, by name;
+	// all of them when absent, none when empty. See workspace.go.
+	Repositories *[]string `json:"repositories,omitempty"`
 }
 
 func (s processSettings) sentry() sentrySettings {

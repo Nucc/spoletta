@@ -15,9 +15,12 @@ import (
 // objects, the boards of its flow processes, its versions and its runs. Each
 // flow does one job, such as fixing exceptions or bumping dependencies.
 type flow struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// The repositories its agents and scripts work on, and how its runs'
+	// branches are named; see workspace.go.
+	Settings  flowSettings `json:"settings"`
+	CreatedAt time.Time    `json:"createdAt"`
 	// Its latest run of the whole flow, if any.
 	LastRun *run `json:"lastRun"`
 }
@@ -58,6 +61,12 @@ func migrateFlows(db *sql.DB) error {
 		if err := addColumn(db, t, "flow_id", "BIGINT NULL"); err != nil {
 			return err
 		}
+	}
+	if err := addColumn(db, "flows", "settings", "JSON NULL"); err != nil {
+		return err
+	}
+	if err := addColumn(db, "run_steps", "branch", "VARCHAR(255) NOT NULL DEFAULT ''"); err != nil {
+		return err
 	}
 
 	legacy, err := hasTable(db, "start_node")
@@ -199,7 +208,7 @@ func flowFor(ctx context.Context, db *sql.DB, given int64, parent *int64) (int64
 
 func getFlow(ctx context.Context, db *sql.DB, id int64) (flow, error) {
 	var f flow
-	err := db.QueryRowContext(ctx, "SELECT id, name, created_at FROM flows WHERE id = ?", id).Scan(&f.ID, &f.Name, &f.CreatedAt)
+	err := db.QueryRowContext(ctx, "SELECT id, name, settings, created_at FROM flows WHERE id = ?", id).Scan(&f.ID, &f.Name, &f.Settings, &f.CreatedAt)
 	if err != nil {
 		return f, err
 	}
@@ -213,8 +222,26 @@ func getFlow(ctx context.Context, db *sql.DB, id int64) (flow, error) {
 	return f, nil
 }
 
-// Deletes a flow with everything in it and every run of it.
-func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) error {
+// Deletes a flow with everything in it and every run of it, and returns
+// the runs, whose workspaces are to go too.
+func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
+	var runs []int64
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM runs WHERE flow_id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var r int64
+		if err := rows.Scan(&r); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		runs = append(runs, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	stmts := []string{
 		"UPDATE flows SET version_id = NULL WHERE id = ?",
 		"DELETE FROM runs WHERE flow_id = ?",
@@ -227,13 +254,13 @@ func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) error {
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s, id); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return runs, nil
 }
 
-func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
+func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	mux.HandleFunc("GET /api/flows", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.QueryContext(r.Context(), "SELECT id FROM flows ORDER BY name, id")
 		if err != nil {
@@ -337,6 +364,8 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		var patch struct {
 			Name *string `json:"name"`
+			// Replaces them all; runs going on keep the ones they started with.
+			Settings *flowSettings `json:"settings"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -348,7 +377,14 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		if _, err := db.ExecContext(r.Context(), "UPDATE flows SET name = COALESCE(?, name) WHERE id = ?", patch.Name, id); err != nil {
+		if patch.Settings != nil {
+			if msg := patch.Settings.check(); msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
+		}
+		if _, err := db.ExecContext(r.Context(), "UPDATE flows SET name = COALESCE(?, name), settings = COALESCE(?, settings) WHERE id = ?",
+			patch.Name, patch.Settings, id); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -386,7 +422,8 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "can't delete a flow while it is running", http.StatusConflict)
 			return
 		}
-		if err := deleteFlow(ctx, tx, id); err != nil {
+		runs, err := deleteFlow(ctx, tx, id)
+		if err != nil {
 			serverError(w, err)
 			return
 		}
@@ -394,6 +431,7 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		dropWorkspaces(workerURL, runs)
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

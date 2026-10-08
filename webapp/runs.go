@@ -63,7 +63,9 @@ type step struct {
 	Outcome      string `json:"outcome"`
 	Instructions string `json:"instructions"`
 	// For a recording flow process: the run its board ran as.
-	ChildRun   *int64     `json:"childRun"`
+	ChildRun *int64 `json:"childRun"`
+	// The branch it worked on in its run's workspace, if it worked in one.
+	Branch     string     `json:"branch"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
@@ -430,6 +432,17 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		defer tx.Rollback()
+		var name string
+		var settings flowSettings
+		err = tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ?", f).Scan(&name, &settings)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "flow not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		version, err := saveVersion(ctx, tx, f, true)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
@@ -458,7 +471,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
-		eng.start(id, version, board)
+		eng.start(id, version, board, settings.Repositories, settings.prefix(name))
 		rn, err := getRun(ctx, db, id)
 		if err != nil {
 			serverError(w, err)
@@ -492,7 +505,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
-				status, output, error, outcome, instructions, child_run_id, started_at, finished_at
+				status, output, error, outcome, instructions, child_run_id, branch, started_at, finished_at
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
 			serverError(w, err)
@@ -504,7 +517,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			var inputs []byte
 			var cr []byte
 			if err := rows.Scan(&s.ID, &s.Process, &s.ProcessName, &s.Kind, &s.Model, &s.Thinking, &s.Prompt, &inputs, &cr,
-				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.ChildRun, &s.StartedAt, &s.FinishedAt); err != nil {
+				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.ChildRun, &s.Branch, &s.StartedAt, &s.FinishedAt); err != nil {
 				serverError(w, err)
 				return
 			}

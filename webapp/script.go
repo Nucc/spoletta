@@ -25,6 +25,9 @@ type scriptRun struct {
 	Inputs      []scriptInput `json:"inputs"`
 	// Where the script writes the files it generates, which $OUTPUTS points to.
 	FilesDir string `json:"filesDir,omitempty"`
+	// The workspace it works in, its working directory, if it works on
+	// repositories; $WORKSPACE and $BRANCH say where and on which branch.
+	Workspace *workspaceSpec `json:"workspace,omitempty"`
 }
 
 type scriptInput struct {
@@ -35,10 +38,11 @@ type scriptInput struct {
 // Executes a script process as a step of the run, which records its script
 // as the step's prompt. A change request has nothing to go to. started gets
 // the step's id once it is recorded.
-func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
+func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWorkspace, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
 	var res runResult
 	run := scriptRun{ProcessID: id, Inputs: []scriptInput{}}
-	err := db.QueryRowContext(ctx, "SELECT name, script FROM processes WHERE id = ?", id).Scan(&run.ProcessName, &run.Script)
+	var settings processSettings
+	err := db.QueryRowContext(ctx, "SELECT name, script, settings FROM processes WHERE id = ?", id).Scan(&run.ProcessName, &run.Script, &settings)
 	if errors.Is(err, sql.ErrNoRows) {
 		return res, errNotFound
 	}
@@ -59,11 +63,15 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, runID, id 
 		res.Error = msg
 	}
 
+	run.Workspace = ws.forProcess(settings)
 	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Script, inputs, nil)
 	if err != nil {
 		return res, err
 	}
 	started(stepID)
+	if err := recordBranch(ctx, db, stepID, run.Workspace); err != nil {
+		return res, err
+	}
 	if contract != nil {
 		contract.filesDir = stepFilesDir(runID, stepID)
 		run.FilesDir = contract.filesDir

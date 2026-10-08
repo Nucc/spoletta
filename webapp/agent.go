@@ -58,6 +58,8 @@ type agentRun struct {
 	// with the step's token; pi gets no MCP servers without them.
 	MCPServers []mcpRunServer `json:"mcpServers,omitempty"`
 	MCPToken   string         `json:"mcpToken,omitempty"`
+	// The workspace it works in, if it works on repositories.
+	Workspace *workspaceSpec `json:"workspace,omitempty"`
 }
 
 // Inputs are capped so a runaway output can't grow every prompt downstream without bound.
@@ -101,7 +103,7 @@ func registerAgentRoutes(mux *http.ServeMux, workerURL string) {
 // appended to the prompt. Problems with the process itself are step
 // failures, so they show up on the node like any other; the error is for
 // recording the step. started gets the step's id once it is recorded.
-func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, runID, id int64, inputs []runInput, cr *changeRequest, started func(int64)) (runResult, error) {
+func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, ws *runWorkspace, runID, id int64, inputs []runInput, cr *changeRequest, started func(int64)) (runResult, error) {
 	var res runResult
 	run := agentRun{ProcessID: id}
 	var settings processSettings
@@ -123,7 +125,8 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	case msg != "":
 		res.Error = msg
 	default:
-		run.Prompt = withChangeRequest(withInputs(run.Prompt, inputs), cr)
+		run.Workspace = ws.forProcess(settings)
+		run.Prompt = withChangeRequest(withInputs(withWorkspace(run.Prompt, run.Workspace), inputs), cr)
 	}
 
 	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Prompt, inputs, cr)
@@ -131,6 +134,9 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		return res, err
 	}
 	started(stepID)
+	if err := recordBranch(ctx, db, stepID, run.Workspace); err != nil {
+		return res, err
+	}
 	// The files directory is the step's, so the contract follows the step.
 	if res.Error == "" && contract != nil {
 		contract.filesDir = stepFilesDir(runID, stepID)

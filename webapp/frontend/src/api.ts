@@ -30,6 +30,9 @@ export type ProcessSettings = {
   sentry?: SentrySettings
   // The MCP servers an agent process may use, by id; none when absent.
   mcpServers?: number[]
+  // The flow's repositories an agent or script process works on, by name;
+  // all of them when absent, none when empty.
+  repositories?: string[]
 }
 
 export type Process = {
@@ -157,10 +160,31 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export type Flow = {
   id: number
   name: string
+  settings: FlowSettings
   createdAt: string
   // Its latest run of the whole flow, if any.
   lastRun: FlowRun | null
 }
+
+// A repository the flow's agents and scripts work on, checked out in their
+// run's workspace in a directory named after it.
+export type Repository = {
+  name: string
+  // https only.
+  url: string
+  // The branch runs' branches start from; empty for the default branch.
+  base: string
+}
+
+export type FlowSettings = {
+  repositories: Repository[]
+  // Runs' branches are named <prefix>/run-<id>; empty uses flow/<the flow's name>.
+  branchPrefix: string
+}
+
+// The prefix runs' branches get when the flow sets none.
+export const defaultBranchPrefix = (flowName: string) =>
+  'flow/' + (flowName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'flow')
 
 export function listFlows(): Promise<Flow[]> {
   return request('/api/flows')
@@ -174,8 +198,8 @@ export function createFlow(name: string): Promise<Flow> {
   return request('/api/flows', { method: 'POST', body: JSON.stringify({ name }) })
 }
 
-export function renameFlow(id: number, name: string): Promise<Flow> {
-  return request(`/api/flows/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+export function updateFlow(id: number, patch: Partial<Pick<Flow, 'name' | 'settings'>>): Promise<Flow> {
+  return request(`/api/flows/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
 // Everything in it goes with it, its runs too.
@@ -446,6 +470,8 @@ export type RunStep = {
   instructions: string
   // For a recording flow process: the run its board ran as.
   childRun: number | null
+  // The branch it worked on in its run's workspace; empty if it worked in none.
+  branch: string
   startedAt: string
   finishedAt: string | null
 }

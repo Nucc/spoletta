@@ -222,6 +222,11 @@ function Step({
             Model: {s.model || 'default'} · thinking: {s.thinking || 'default'}
           </p>
         )}
+        {s.branch && (
+          <p className="panel-note">
+            Worked on the branch <code>{s.branch}</code>
+          </p>
+        )}
         {s.childRun !== null && (
           <p className="panel-note">
             Ran its board as{' '}

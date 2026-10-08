@@ -16,6 +16,12 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY submit-output.ts /opt/flow/submit-output.ts
 COPY mcp-servers.ts /opt/flow/mcp-servers.ts
+COPY --chmod=755 git-credential.sh /opt/flow/git-credential.sh
+# Agents commit to their run's branch as this, unless GIT_AUTHOR_NAME and
+# the like say otherwise.
+RUN git config --system credential.helper /opt/flow/git-credential.sh \
+ && git config --system user.name "Flow agent" \
+ && git config --system user.email "flow-agent@localhost"
 
 EXPOSE 8090
 CMD ["worker"]

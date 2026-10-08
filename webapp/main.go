@@ -65,14 +65,14 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
-	registerFlowListRoutes(mux, db)
+	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
+	registerFlowListRoutes(mux, db, workerURL)
 	registerProcessRoutes(mux, db)
 	registerFlowRoutes(mux, db)
 	registerBoardRoutes(mux, db)
 	registerObjectRoutes(mux, db)
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
-	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
 	// How many agent, script and Sentry steps run at once.
 	parallelSteps, err := strconv.Atoi(env("PARALLEL_STEPS", "3"))
 	if err != nil || parallelSteps < 1 {

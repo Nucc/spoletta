@@ -42,9 +42,11 @@ services:
       - JIRA_API_TOKEN
       # For flows with repositories: a token that can clone them over https,
       # such as a GitHub token with contents:read. Agents can read it too.
-      # GIT_USERNAME defaults to x-access-token, which GitHub takes.
-      - GIT_TOKEN
-      - GIT_USERNAME
+      # GIT_USERNAME defaults to x-access-token, which GitHub takes. Set
+      # here rather than passed through, so a .env file next to this one
+      # works too: podman-compose reads .env only for ${...}.
+      - GIT_TOKEN=${GIT_TOKEN:-}
+      - GIT_USERNAME=${GIT_USERNAME:-}
     volumes:
       # Only these two files: the agent can read anything mounted, and the
       # rest of the directory holds sessions and OAuth tokens.

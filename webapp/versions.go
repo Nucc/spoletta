@@ -33,6 +33,7 @@ type snapshotObject struct {
 	Y          float64  `json:"y"`
 	Width      *float64 `json:"width"`
 	Persistent bool     `json:"persistent"`
+	Many       bool     `json:"many"`
 	Parent     *int64   `json:"parent"`
 }
 
@@ -130,9 +131,9 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, parent_id FROM objects ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, parent_id FROM objects ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Parent)
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent)
 		s.Objects = append(s.Objects, o)
 		return err
 	})
@@ -284,11 +285,11 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 		}
 	}
 	for _, o := range s.Objects {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, name, x, y, width, persistent, parent_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?) AS saved
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, name, x, y, width, persistent, many, parent_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
-				parent_id = saved.parent_id`,
-			o.ID, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Parent)
+				many = saved.many, parent_id = saved.parent_id`,
+			o.ID, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Parent)
 		if err != nil {
 			return err
 		}

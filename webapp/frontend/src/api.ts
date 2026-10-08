@@ -50,6 +50,10 @@ export type FlowObject = {
   // Runs store what they generate it with, and its unique attributes tell
   // whether another run already stored a value.
   persistent: boolean
+  // A list of items: an agent generating it replies with a list, and a flow
+  // process taking it runs once per item. Inside that flow process, it is
+  // the item.
+  many: boolean
   // The flow process whose board it is on; null on the top board. It also
   // shows inside the flow processes linked to it.
   parent: number | null
@@ -176,7 +180,7 @@ export function listObjects(): Promise<FlowObject[]> {
 }
 
 export function createObject(
-  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'parent'> & {
+  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'parent'> & {
     width?: number | null
     parent?: number | null
   },
@@ -290,6 +294,8 @@ export type FlowRun = {
   parent: number | null
   process: number | null
   processName: string
+  // For the run of one item of a list: what tells the item apart.
+  itemKey: string
   startedAt: string
   finishedAt: string | null
 }
@@ -405,7 +411,7 @@ export type BoardContents = {
 // Versions from before boards have no parents, recording or boards.
 type Snapshot = {
   processes: (Omit<Process, 'parent' | 'recording'> & Partial<Pick<Process, 'parent' | 'recording'>>)[]
-  objects: (Omit<FlowObject, 'states' | 'attributes' | 'parent'> & Partial<Pick<FlowObject, 'parent'>>)[]
+  objects: (Omit<FlowObject, 'states' | 'attributes' | 'parent' | 'many'> & Partial<Pick<FlowObject, 'parent' | 'many'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none.
@@ -424,6 +430,7 @@ export async function getVersionBoard(id: number): Promise<BoardContents> {
     objects: s.objects.map((o) => ({
       ...o,
       parent: o.parent ?? null,
+      many: o.many ?? false,
       states: s.states.filter((st) => st.object === o.id),
       attributes: s.attributes.filter((a) => a.object === o.id),
     })),

@@ -35,7 +35,9 @@ export function decisionText(outcome: string, object: string | undefined, instru
   return instructions ? `${head}:\n${instructions}` : head
 }
 
-// Every run of the flow, newest first.
+// Every run of the flow, newest first, each with the runs of its recording
+// flow processes under it, such as one per item of a list, in the order they
+// started.
 export function RunList({
   runs,
   selected,
@@ -45,39 +47,50 @@ export function RunList({
   selected: number | null
   onSelect: (id: number) => void
 }) {
+  const ids = new Set(runs.map((r) => r.id))
+  const children = new Map<number, FlowRun[]>()
+  for (const r of [...runs].reverse()) {
+    if (r.parent !== null && ids.has(r.parent)) children.set(r.parent, [...(children.get(r.parent) ?? []), r])
+  }
+  // A run whose parent fell off the list shows on its own.
+  const top = runs.filter((r) => r.parent === null || !ids.has(r.parent))
+
+  const item = (r: FlowRun, nested: boolean) => (
+    <li key={r.id}>
+      <button
+        className={`run-item${selected === r.id ? ' selected' : ''}`}
+        aria-current={selected === r.id}
+        onClick={() => onSelect(r.id)}
+      >
+        <span className="run-item-title">
+          <span className={`status-dot ${r.status}`} aria-hidden="true" />
+          Run #{r.id}
+          {r.itemKey && <span className="run-item-key">{r.itemKey}</span>}
+          <span className="run-item-status">{RUN_LABELS[r.status]}</span>
+        </span>
+        {r.parent !== null && (
+          <span className="run-item-process">
+            {r.processName}
+            {!nested && ` · in run #${r.parent}`}
+          </span>
+        )}
+        <time dateTime={r.startedAt}>
+          {r.version !== null && `v${r.version} · `}
+          {formatTime(r.startedAt)}
+          {r.finishedAt && ` · ${formatDuration(r.startedAt, r.finishedAt)}`}
+        </time>
+      </button>
+      {(children.get(r.id)?.length ?? 0) > 0 && <ol className="run-list nested">{children.get(r.id)!.map((c) => item(c, true))}</ol>}
+    </li>
+  )
+
   return (
     <aside className="runs" aria-label="Runs">
       <h2>Runs</h2>
       {runs.length === 0 ? (
         <p className="panel-note">No runs yet. Press play to run the flow.</p>
       ) : (
-        <ol className="run-list">
-          {runs.map((r) => (
-            <li key={r.id}>
-              <button
-                className={`run-item${selected === r.id ? ' selected' : ''}`}
-                aria-current={selected === r.id}
-                onClick={() => onSelect(r.id)}
-              >
-                <span className="run-item-title">
-                  <span className={`status-dot ${r.status}`} aria-hidden="true" />
-                  Run #{r.id}
-                  <span className="run-item-status">{RUN_LABELS[r.status]}</span>
-                </span>
-                {r.parent !== null && (
-                  <span className="run-item-process">
-                    {r.processName} · in run #{r.parent}
-                  </span>
-                )}
-                <time dateTime={r.startedAt}>
-                  {r.version !== null && `v${r.version} · `}
-                  {formatTime(r.startedAt)}
-                  {r.finishedAt && ` · ${formatDuration(r.startedAt, r.finishedAt)}`}
-                </time>
-              </button>
-            </li>
-          ))}
-        </ol>
+        <ol className="run-list">{top.map((r) => item(r, false))}</ol>
       )}
     </aside>
   )

@@ -47,6 +47,9 @@ func migrateInstances(db *sql.DB) error {
 	if err := addColumn(db, "objects", "persistent", "BOOLEAN NOT NULL DEFAULT FALSE AFTER width"); err != nil {
 		return err
 	}
+	if err := addColumn(db, "objects", "many", "BOOLEAN NOT NULL DEFAULT FALSE AFTER persistent"); err != nil {
+		return err
+	}
 	if err := addColumn(db, "object_attributes", "is_unique", "BOOLEAN NOT NULL DEFAULT FALSE AFTER definition"); err != nil {
 		return err
 	}
@@ -125,50 +128,60 @@ func storeInstances(ctx context.Context, tx *sql.Tx, runID, stepID int64) (*dupl
 	// Objects and attributes go in id order, so concurrent runs take the
 	// keys' locks in the same order.
 	for _, g := range objects {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM object_instances WHERE object_id = ? AND run_id = ?", g.object, runID); err != nil {
-			return nil, err
+		if dup, err := storeInstance(ctx, tx, runID, stepID, g.object, g.name, g.content, g.state); dup != nil || err != nil {
+			return dup, err
 		}
-		res, err := tx.ExecContext(ctx,
-			"INSERT INTO object_instances (object_id, run_id, step_id, content, state) VALUES (?, ?, ?, ?, ?)",
-			g.object, runID, stepID, g.content, g.state)
-		if err != nil {
-			return nil, err
-		}
-		instance, err := res.LastInsertId()
-		if err != nil {
-			return nil, err
-		}
+	}
+	return nil, nil
+}
 
-		// Content that isn't a JSON object, such as an object without
-		// attributes, has no attribute values to keep unique.
-		fields, err := jsonObject(g.content)
-		if err != nil {
+// Stores what a run holds of a persistent object, replacing what it stored
+// of it before, and its unique values. Returns the first unique value
+// another run already holds; the caller rolls back what was stored then.
+func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64, name, content, state string) (*duplicate, error) {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM object_instances WHERE object_id = ? AND run_id = ?", object, runID); err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx,
+		"INSERT INTO object_instances (object_id, run_id, step_id, content, state) VALUES (?, ?, ?, ?, ?)",
+		object, runID, stepID, content, state)
+	if err != nil {
+		return nil, err
+	}
+	instance, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	// Content that isn't a JSON object, such as an object without
+	// attributes, has no attribute values to keep unique.
+	fields, err := jsonObject(content)
+	if err != nil {
+		return nil, nil
+	}
+	attrs, err := uniqueAttributes(ctx, tx, object)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range attrs {
+		hash, ok := keyOf(fields[a.Name])
+		if !ok {
 			continue
 		}
-		attrs, err := uniqueAttributes(ctx, tx, g.object)
+		value := compact(fields[a.Name])
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO instance_keys (object_id, attribute_id, value_hash, value, instance_id) VALUES (?, ?, ?, ?, ?)",
+			object, a.ID, hash, value, instance)
+		if mysqlErrorIs(err, mysqlErrDuplicate) {
+			d := &duplicate{Object: name, Attribute: a.Name, Value: value}
+			err := tx.QueryRowContext(ctx,
+				`SELECT i.run_id FROM instance_keys k JOIN object_instances i ON i.id = k.instance_id
+				WHERE k.object_id = ? AND k.attribute_id = ? AND k.value_hash = ?`,
+				object, a.ID, hash).Scan(&d.Run)
+			return d, err
+		}
 		if err != nil {
 			return nil, err
-		}
-		for _, a := range attrs {
-			hash, ok := keyOf(fields[a.Name])
-			if !ok {
-				continue
-			}
-			value := compact(fields[a.Name])
-			_, err := tx.ExecContext(ctx,
-				"INSERT INTO instance_keys (object_id, attribute_id, value_hash, value, instance_id) VALUES (?, ?, ?, ?, ?)",
-				g.object, a.ID, hash, value, instance)
-			if mysqlErrorIs(err, mysqlErrDuplicate) {
-				d := &duplicate{Object: g.name, Attribute: a.Name, Value: value}
-				err := tx.QueryRowContext(ctx,
-					`SELECT i.run_id FROM instance_keys k JOIN object_instances i ON i.id = k.instance_id
-					WHERE k.object_id = ? AND k.attribute_id = ? AND k.value_hash = ?`,
-					g.object, a.ID, hash).Scan(&d.Run)
-				return d, err
-			}
-			if err != nil {
-				return nil, err
-			}
 		}
 	}
 	return nil, nil

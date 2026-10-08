@@ -340,7 +340,7 @@ export default function Board() {
       width: o.width ?? NODE_SIZE.object.width,
       deletable: false,
       draggable: !boundary,
-      data: { name: o.name, states: o.states, attributes: o.attributes, persistent: o.persistent, editing, boundary },
+      data: { name: o.name, states: o.states, attributes: o.attributes, persistent: o.persistent, many: o.many, editing, boundary },
     }),
     [],
   )
@@ -583,7 +583,7 @@ export default function Board() {
       const draft: FlowNode =
         type === 'process'
           ? { ...base, type, data: { name: '', kind: 'agent', prompt: '', script: '', model: '', thinking: '', recording: false, editing: true } }
-          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, editing: true } }
+          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
     [screenToFlowPosition, setNodes],
@@ -985,6 +985,18 @@ export default function Board() {
     }
   }
 
+  const setMany = async (objectId: string, many: boolean) => {
+    if (reviewing) return false
+    try {
+      await updateObject(objectIdOf(objectId), { many })
+      updateObjectData(objectId, { many })
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
   const setPersistent = async (objectId: string, persistent: boolean) => {
     if (reviewing) return false
     try {
@@ -1280,7 +1292,7 @@ export default function Board() {
         </button>
       </header>
       {error && (
-        <div className="error" onClick={() => setError(null)}>
+        <div className="error-banner" onClick={() => setError(null)}>
           {error} (click to dismiss)
         </div>
       )}
@@ -1391,6 +1403,8 @@ export default function Board() {
             attributes={objectPanelNode.data.attributes}
             persistent={objectPanelNode.data.persistent}
             onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
+            many={objectPanelNode.data.many}
+            onManyChange={(many) => setMany(objectPanelNode.id, many)}
             editable={!reviewing}
             content={objectPanelNode.data.content}
             onRename={(name) => commitName(objectPanelNode.id, name)}

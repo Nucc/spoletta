@@ -13,6 +13,8 @@ export type ObjectNodeData = {
   attributes: ObjectAttribute[]
   // Runs store what they generate it with; see FlowObject.
   persistent: boolean
+  // A list of items on its own board; inside a flow process taking it, the item.
+  many: boolean
   // True while a new object is being named or an existing one renamed.
   editing: boolean
   // True while a new state is being named.
@@ -52,7 +54,7 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
 
   return (
     <div
-      className={`object-node${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}${data.boundary ? ' boundary' : ''}`}
+      className={`object-node${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}${data.boundary ? ' boundary' : ''}${data.many && !data.boundary ? ' many' : ''}`}
       title={data.content}
     >
       <WidthResizer id={id} minWidth={140} />
@@ -74,7 +76,15 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
             <>
               <span className="node-name">{data.name}</span>
               <span className="node-subtitle">
-                {data.activeState ? `In state ${data.activeState}` : data.status === 'done' ? 'Generated' : 'Object'}
+                {data.activeState
+                  ? `In state ${data.activeState}`
+                  : data.status === 'done'
+                    ? 'Generated'
+                    : !data.many
+                      ? 'Object'
+                      : data.boundary
+                        ? 'One item of the list'
+                        : 'List of items'}
               </span>
             </>
           )}

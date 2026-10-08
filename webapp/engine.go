@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -61,8 +63,11 @@ type decision struct {
 type engine struct {
 	db        *sql.DB
 	workerURL string
-	mu        sync.Mutex
-	runs      map[int64]*liveRun
+	// A slot per agent step that can run at once, across all runs; reviews
+	// waiting take none.
+	agents chan struct{}
+	mu     sync.Mutex
+	runs   map[int64]*liveRun
 }
 
 // A run in progress.
@@ -72,8 +77,8 @@ type liveRun struct {
 	reviews map[int64]chan decision
 }
 
-func newEngine(db *sql.DB, workerURL string) *engine {
-	return &engine{db: db, workerURL: workerURL, runs: map[int64]*liveRun{}}
+func newEngine(db *sql.DB, workerURL string, parallelAgents int) *engine {
+	return &engine{db: db, workerURL: workerURL, agents: make(chan struct{}, parallelAgents), runs: map[int64]*liveRun{}}
 }
 
 // Executes a run of the whole flow, on the top board of version's board, in
@@ -82,7 +87,7 @@ func (e *engine) start(id, version int64, board snapshot) {
 	ctx, cancel := context.WithCancel(context.Background())
 	lr := e.register(id, cancel)
 	go func() {
-		w := newWalk(ctx, e, id, lr, &flowRun{version: version, board: board}, nil, nil)
+		w := newWalk(ctx, e, id, lr, newFlowRun(version, board), nil, nil)
 		w.enter()
 		e.finish(ctx, id, w)
 	}()
@@ -209,6 +214,15 @@ func (p *pass) visit(id int64) bool {
 type flowRun struct {
 	version int64
 	board   snapshot
+	objects map[int64]snapshotObject
+}
+
+func newFlowRun(version int64, board snapshot) *flowRun {
+	fr := &flowRun{version: version, board: board, objects: map[int64]snapshotObject{}}
+	for _, o := range board.Objects {
+		fr.objects[o.ID] = o
+	}
+	return fr
 }
 
 // A run walking a board: the top board, or a flow process's.
@@ -532,7 +546,8 @@ func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64
 // and returns what the processes inside left of the objects it generates.
 // An object the flow process generates in a state comes out in that state,
 // unless it got one inside. False if the board didn't finish; only a
-// failure inside fails this run.
+// failure inside fails this run. A flow process taking a list runs once per
+// item; see runItems.
 func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 	w.mu.Lock()
 	given := map[int64]value{}
@@ -541,34 +556,87 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 			given[i.object] = v
 		}
 	}
+	w.mu.Unlock()
+	var lists []int64
+	for _, o := range slices.Sorted(maps.Keys(given)) {
+		if isList(w.fr.objects[o], w.board) {
+			lists = append(lists, o)
+		}
+	}
+	if len(lists) > 0 {
+		return w.runItems(id, given, lists)
+	}
+	out, status, _ := w.runBoard(id, given, nil)
+	return out, status == runDone
+}
+
+func (w *walk) fail() {
+	w.mu.Lock()
+	w.failed = true
+	w.mu.Unlock()
+}
+
+// One item of a list a flow process runs for.
+type item struct {
+	list int64
+	key  string
+	// Whether its run claims it, so no other run handles it; see claimItem.
+	claim bool
+}
+
+// Item runs that found their item claimed end as this, leaving no trace.
+const itemSkipped = "skipped"
+
+// Runs a flow process's board once, as a step of this run, and as a run of
+// its own if it records; for an item of a list, that run is the item's.
+// Returns what came out, how the board's run ended, and for an item another
+// run claimed, that run's claim.
+func (w *walk) runBoard(id int64, given map[int64]value, it *item) (map[int64]value, string, *duplicate) {
 	inputs := []runInput{}
 	for _, o := range slices.Sorted(maps.Keys(given)) {
-		inputs = append(inputs, w.asInput(o))
+		v := given[o]
+		inputs = append(inputs, runInput{Name: w.objects[o], State: w.stateNames[v.state], Content: v.content})
 	}
-	w.mu.Unlock()
-
 	db := w.e.db
 	stepID, err := startStep(w.ctx, db, w.run, id, stepActive, "", inputs, nil)
 	if err != nil {
 		if w.ctx.Err() == nil {
 			log.Printf("record process %d in run %d: %v", id, w.run, err)
 		}
-		w.mu.Lock()
-		w.failed = true
-		w.mu.Unlock()
-		return nil, false
+		w.fail()
+		return nil, runFailed, nil
 	}
 
 	run, lr, ctx := w.run, w.lr, w.reviews
 	recording := w.recording[id]
 	if recording {
-		if run, err = startChildRun(w.ctx, db, w.fr.version, w.run, id, w.names[id], stepID); err != nil {
+		key := ""
+		if it != nil {
+			key = it.key
+		}
+		if run, err = startChildRun(w.ctx, db, w.fr.version, w.run, id, w.names[id], key, stepID); err != nil {
 			log.Printf("start run of process %d in run %d: %v", id, w.run, err)
 			w.endStep(stepID, stepError, "Its run couldn't start.")
-			w.mu.Lock()
-			w.failed = true
-			w.mu.Unlock()
-			return nil, false
+			w.fail()
+			return nil, runFailed, nil
+		}
+		if it != nil && it.claim {
+			dup, err := claimItem(w.ctx, db, run, stepID, it.list, w.objects[it.list], given[it.list].content)
+			if err != nil || dup != nil {
+				// Another run handles the item; this one never started.
+				if _, err := db.ExecContext(context.Background(), "DELETE FROM runs WHERE id = ?", run); err != nil {
+					log.Printf("drop run %d: %v", run, err)
+				}
+				if _, err := db.ExecContext(context.Background(), "DELETE FROM run_steps WHERE id = ?", stepID); err != nil {
+					log.Printf("drop step %d: %v", stepID, err)
+				}
+				if err != nil {
+					log.Printf("claim item %s in run %d: %v", it.key, run, err)
+					w.fail()
+					return nil, runFailed, nil
+				}
+				return nil, itemSkipped, dup
+			}
 		}
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(w.reviews)
@@ -608,16 +676,14 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 			w.mu.Unlock()
 			w.terminate()
 		}
-		return nil, false
+		return nil, status, nil
 	case runInterrupted:
 		w.endStep(stepID, stepError, which+" was stopped.")
-		return nil, false
+		return nil, status, nil
 	default:
 		w.endStep(stepID, stepError, which+" failed.")
-		w.mu.Lock()
-		w.failed = true
-		w.mu.Unlock()
-		return nil, false
+		w.fail()
+		return nil, status, nil
 	}
 
 	out := map[int64]value{}
@@ -637,10 +703,8 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 	inner.mu.Unlock()
 	if _, err := finishStep(context.Background(), db, stepID, stepDone, "", "", contents); err != nil {
 		log.Printf("record step %d: %v", stepID, err)
-		w.mu.Lock()
-		w.failed = true
-		w.mu.Unlock()
-		return nil, false
+		w.fail()
+		return nil, runFailed, nil
 	}
 	// The run keeps the state each object came out in, and only the objects
 	// that came out.
@@ -653,6 +717,100 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 	if _, err := db.ExecContext(context.Background(), "DELETE FROM run_objects WHERE step_id = ?"+notIn(len(contents)),
 		append([]any{stepID}, int64Args(slices.Collect(maps.Keys(contents)))...)...); err != nil {
 		log.Printf("record step %d: %v", stepID, err)
+	}
+	return out, runDone, nil
+}
+
+// Runs a flow process once per item of the list it takes, all at once; each
+// item's run goes on whatever the others do. Items another run claimed are
+// skipped, and one step says which. What comes out are lists: each list the
+// flow process generates holds what each item's run left of it, in the
+// order of the items. Objects that aren't lists don't come out.
+func (w *walk) runItems(id int64, given map[int64]value, lists []int64) (map[int64]value, bool) {
+	note := func(status, msg string) {
+		inputs := []runInput{}
+		stepID, err := startStep(w.ctx, w.e.db, w.run, id, stepActive, "", inputs, nil)
+		if err != nil {
+			log.Printf("record process %d in run %d: %v", id, w.run, err)
+			return
+		}
+		w.endStep(stepID, status, msg)
+	}
+	if len(lists) > 1 {
+		names := make([]string, len(lists))
+		for i, o := range lists {
+			names[i] = strconv.Quote(w.objects[o])
+		}
+		note(stepError, "It takes the lists "+strings.Join(names, " and ")+"; it can run once per item of only one.")
+		w.fail()
+		return nil, false
+	}
+	list := lists[0]
+	items, err := listItems(given[list].content)
+	if err != nil {
+		note(stepError, strconv.Quote(w.objects[list])+" holds no list: "+err.Error()+".")
+		w.fail()
+		return nil, false
+	}
+	dropped := 0
+	if len(items) > maxItems {
+		dropped = len(items) - maxItems
+		items = items[:maxItems]
+	}
+	claim := w.recording[id] && w.fr.objects[list].Persistent
+
+	type result struct {
+		out    map[int64]value
+		status string
+		dup    *duplicate
+		key    string
+	}
+	results := make([]result, len(items))
+	runs := make([]func(), len(items))
+	for i, content := range items {
+		key, err := itemKey(w.ctx, w.e.db, list, content, i)
+		if err != nil {
+			log.Printf("key of item %d of object %d: %v", i+1, list, err)
+		}
+		results[i].key = key
+		g := maps.Clone(given)
+		g[list] = value{content: content}
+		runs[i] = func() {
+			results[i].out, results[i].status, results[i].dup = w.runBoard(id, g, &item{list: list, key: key, claim: claim})
+		}
+	}
+	all(runs)
+
+	var skipped []string
+	for _, r := range results {
+		if r.status == itemSkipped {
+			skipped = append(skipped, fmt.Sprintf("%s (run #%d)", r.key, r.dup.Run))
+		}
+	}
+	var msgs []string
+	if len(skipped) > 0 {
+		msgs = append(msgs, fmt.Sprintf("%d of %d items of %q were already taken by other runs: %s.",
+			len(skipped), len(items), w.objects[list], strings.Join(skipped, ", ")))
+	}
+	if dropped > 0 {
+		msgs = append(msgs, fmt.Sprintf("Only the first %d of %d items ran.", maxItems, maxItems+dropped))
+	}
+	if len(msgs) > 0 {
+		note(stepDuplicate, strings.Join(msgs, " "))
+	}
+
+	out := map[int64]value{}
+	for _, end := range w.outputs[id] {
+		if !isList(w.fr.objects[end.object], w.board) {
+			continue
+		}
+		var parts []string
+		for _, r := range results {
+			if v, ok := r.out[end.object]; ok {
+				parts = append(parts, asItem(v.content))
+			}
+		}
+		out[end.object] = value{content: indentJSON("[" + strings.Join(parts, ",") + "]"), state: end.state}
 	}
 	return out, true
 }
@@ -674,10 +832,10 @@ func (w *walk) endStep(stepID int64, status, msg string) {
 
 // Starts the run of a recording flow process, and refers its step in the
 // outer run to it.
-func startChildRun(ctx context.Context, db *sql.DB, version, parent, process int64, name string, stepID int64) (int64, error) {
+func startChildRun(ctx context.Context, db *sql.DB, version, parent, process int64, name, key string, stepID int64) (int64, error) {
 	res, err := db.ExecContext(ctx,
-		"INSERT INTO runs (status, version_id, parent_run_id, process_ref, process_name) VALUES (?, ?, ?, ?, ?)",
-		runRunning, version, parent, process, name)
+		"INSERT INTO runs (status, version_id, parent_run_id, process_ref, process_name, item_key) VALUES (?, ?, ?, ?, ?, ?)",
+		runRunning, version, parent, process, name, key)
 	if err != nil {
 		return 0, err
 	}
@@ -728,7 +886,13 @@ func (w *walk) runHuman(id int64, given []runInput) {
 // is a result, and terminates the run.
 func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool) {
 	if w.kinds[id] == kindAgent {
+		select {
+		case w.e.agents <- struct{}{}:
+		case <-w.ctx.Done():
+			return runResult{}, false
+		}
 		res, err := runAgentStep(w.ctx, w.e.db, w.e.workerURL, w.run, id, inputs, cr)
+		<-w.e.agents
 		if err != nil {
 			if w.ctx.Err() == nil {
 				log.Printf("run process %d in run %d: %v", id, w.run, err)

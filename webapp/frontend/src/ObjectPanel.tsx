@@ -12,9 +12,11 @@ export default function ObjectPanel({
   name,
   attributes,
   persistent,
+  many,
   editable,
   content,
   onPersistentChange,
+  onManyChange,
   onRename,
   onAdd,
   onUpdate,
@@ -24,6 +26,7 @@ export default function ObjectPanel({
   name: string
   attributes: ObjectAttribute[]
   persistent: boolean
+  many: boolean
   // False while a run is in progress.
   editable: boolean
   // What the object held at the end of the latest run, if it was generated.
@@ -31,6 +34,7 @@ export default function ObjectPanel({
   onRename: (name: string) => void
   // Each resolves to whether the server took the change.
   onPersistentChange: (persistent: boolean) => Promise<boolean>
+  onManyChange: (many: boolean) => Promise<boolean>
   onAdd: (name: string) => Promise<boolean>
   onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean }) => Promise<boolean>
   onRemove: (id: number) => Promise<boolean>
@@ -79,6 +83,14 @@ export default function ObjectPanel({
           onKeyDown={(e) => e.key === 'Enter' && commitObjectName()}
         />
       </label>
+      <label className="panel-check">
+        <input type="checkbox" checked={many} disabled={!editable} onChange={(e) => onManyChange(e.target.checked)} />
+        <span>List of items</span>
+      </label>
+      <p className="panel-note">
+        An agent generating it replies with a list, and a flow process taking it runs once per item, each item as this
+        object inside it. Stored, each item's run claims its item, so an item another run took is skipped.
+      </p>
       <label className="panel-check">
         <input
           type="checkbox"

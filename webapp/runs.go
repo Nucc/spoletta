@@ -20,17 +20,20 @@ type run struct {
 	Version *int64 `json:"version"`
 	// For the run of a recording flow process: the run it ran in, and the
 	// process, kept after it is deleted. Null for runs of the whole flow.
-	Parent      *int64     `json:"parent"`
-	Process     *int64     `json:"process"`
-	ProcessName string     `json:"processName"`
-	StartedAt   time.Time  `json:"startedAt"`
-	FinishedAt  *time.Time `json:"finishedAt"`
+	Parent      *int64 `json:"parent"`
+	Process     *int64 `json:"process"`
+	ProcessName string `json:"processName"`
+	// For a run of a flow process for one item of a list: what tells the
+	// item apart, its first unique attribute's value or its place in the list.
+	ItemKey    string     `json:"itemKey"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
 }
 
-const runColumns = "id, status, version_id, parent_run_id, process_ref, process_name, started_at, finished_at"
+const runColumns = "id, status, version_id, parent_run_id, process_ref, process_name, item_key, started_at, finished_at"
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -163,6 +166,7 @@ func migrateRuns(db *sql.DB) error {
 		{"runs", "parent_run_id", "BIGINT NULL AFTER version_id"},
 		{"runs", "process_ref", "BIGINT NULL AFTER parent_run_id"},
 		{"runs", "process_name", "VARCHAR(255) NOT NULL DEFAULT '' AFTER process_ref"},
+		{"runs", "item_key", "VARCHAR(255) NOT NULL DEFAULT '' AFTER process_name"},
 		{"run_steps", "child_run_id", "BIGINT NULL AFTER instructions"},
 	} {
 		if err := addColumn(db, c.table, c.name, c.def); err != nil {

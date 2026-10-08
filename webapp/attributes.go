@@ -158,9 +158,10 @@ func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]
 }
 
 // What an agent process must reply with: a JSON object with the attributes
-// of the object it generates. When it generates several objects with
-// attributes, the reply holds one such JSON object per generated object,
-// under the object's name. Objects without attributes take the whole reply.
+// of the object it generates, or for a list of items a JSON array of such
+// objects. When it generates several objects with attributes, the reply
+// holds one such JSON object or array per generated object, under the
+// object's name. Objects without attributes take the whole reply.
 type outputContract struct {
 	shaped []shapedObject
 }
@@ -168,6 +169,7 @@ type outputContract struct {
 type shapedObject struct {
 	id         int64
 	name       string
+	many       bool
 	attributes []attribute
 }
 
@@ -176,7 +178,8 @@ type shapedObject struct {
 // apart in a reply.
 func contractFor(ctx context.Context, db *sql.DB, process int64) (*outputContract, string, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT DISTINCT o.id, o.name FROM object_links l JOIN objects o ON o.id = l.object_id
+		`SELECT DISTINCT o.id, o.name, o.many AND o.parent_id <=> p.parent_id
+		FROM object_links l JOIN objects o ON o.id = l.object_id JOIN processes p ON p.id = l.process_id
 		WHERE l.process_id = ? AND l.direction = 'output' ORDER BY o.id`, process)
 	if err != nil {
 		return nil, "", err
@@ -185,7 +188,7 @@ func contractFor(ctx context.Context, db *sql.DB, process int64) (*outputContrac
 	var objects []shapedObject
 	for rows.Next() {
 		var o shapedObject
-		if err := rows.Scan(&o.id, &o.name); err != nil {
+		if err := rows.Scan(&o.id, &o.name, &o.many); err != nil {
 			return nil, "", err
 		}
 		objects = append(objects, o)
@@ -224,18 +227,29 @@ func (c *outputContract) withContract(prompt string) string {
 	b.WriteString("\n\n<output_format>\n")
 	if len(c.shaped) == 1 {
 		o := c.shaped[0]
-		fmt.Fprintf(&b, "You generate the object %q. Reply with only a JSON object, with no other text before or after it, holding exactly these keys:\n", o.name)
+		if o.many {
+			fmt.Fprintf(&b, "You generate the list %q. Reply with only a JSON array, with no other text before or after it, holding one JSON object per item, each with exactly these keys:\n", o.name)
+		} else {
+			fmt.Fprintf(&b, "You generate the object %q. Reply with only a JSON object, with no other text before or after it, holding exactly these keys:\n", o.name)
+		}
 		writeAttributes(&b, o.attributes, "")
-		fmt.Fprintf(&b, "\nFor example:\n%s\n", skeleton(o.attributes, ""))
+		fmt.Fprintf(&b, "\nFor example:\n%s\n", o.skeleton(""))
+		if o.many {
+			b.WriteString("An empty array if there are no items.\n")
+		}
 	} else {
-		b.WriteString("You generate several objects. Reply with only a JSON object, with no other text before or after it, holding one key per object below. Each holds a JSON object with exactly that object's keys.\n")
+		b.WriteString("You generate several objects. Reply with only a JSON object, with no other text before or after it, holding one key per object below. Each holds a JSON object with exactly that object's keys, or for a list a JSON array of such objects, one per item.\n")
 		for _, o := range c.shaped {
-			fmt.Fprintf(&b, "\n%q:\n", o.name)
+			if o.many {
+				fmt.Fprintf(&b, "\n%q, a list of items each with:\n", o.name)
+			} else {
+				fmt.Fprintf(&b, "\n%q:\n", o.name)
+			}
 			writeAttributes(&b, o.attributes, "  ")
 		}
 		b.WriteString("\nFor example:\n{\n")
 		for i, o := range c.shaped {
-			fmt.Fprintf(&b, "  %s: %s", quote(o.name), skeleton(o.attributes, "  "))
+			fmt.Fprintf(&b, "  %s: %s", quote(o.name), o.skeleton("  "))
 			if i < len(c.shaped)-1 {
 				b.WriteString(",")
 			}
@@ -271,6 +285,15 @@ func skeleton(attrs []attribute, indent string) string {
 	return b.String()
 }
 
+// What the object's part of a reply looks like: an object, or for a list an
+// array with one.
+func (o shapedObject) skeleton(indent string) string {
+	if !o.many {
+		return skeleton(o.attributes, indent)
+	}
+	return "[" + skeleton(o.attributes, indent) + "]"
+}
+
 func quote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
@@ -280,19 +303,19 @@ func quote(s string) string {
 // with the attributes in their order, and what each shaped object holds; or
 // says what is wrong with it.
 func (c *outputContract) parse(reply string) (string, map[int64]string, error) {
-	fields, err := jsonObject(stripFence(reply))
-	if err != nil {
-		return "", nil, err
-	}
 	contents := map[int64]string{}
 	if len(c.shaped) == 1 {
 		o := c.shaped[0]
-		out, err := shape(fields, o.attributes)
+		out, err := o.shape(stripFence(reply))
 		if err != nil {
 			return "", nil, err
 		}
 		contents[o.id] = out
 		return out, contents, nil
+	}
+	fields, err := jsonObject(stripFence(reply))
+	if err != nil {
+		return "", nil, err
 	}
 
 	keys := make([]string, len(c.shaped))
@@ -304,11 +327,7 @@ func (c *outputContract) parse(reply string) (string, map[int64]string, error) {
 	}
 	parts := make([]json.RawMessage, len(c.shaped))
 	for i, o := range c.shaped {
-		inner, err := jsonObject(string(fields[o.name]))
-		if err != nil {
-			return "", nil, fmt.Errorf("%q: %w", o.name, err)
-		}
-		out, err := shape(inner, o.attributes)
+		out, err := o.shape(string(fields[o.name]))
 		if err != nil {
 			return "", nil, fmt.Errorf("%q: %w", o.name, err)
 		}
@@ -316,6 +335,53 @@ func (c *outputContract) parse(reply string) (string, map[int64]string, error) {
 		parts[i] = json.RawMessage(out)
 	}
 	return ordered(keys, parts), contents, nil
+}
+
+// The object's part of a reply, checked and with its attributes in order:
+// a JSON object, or for a list a JSON array of them.
+func (o shapedObject) shape(s string) (string, error) {
+	if !o.many {
+		fields, err := jsonObject(s)
+		if err != nil {
+			return "", err
+		}
+		return shape(fields, o.attributes)
+	}
+	items, err := jsonArray(s)
+	if err != nil {
+		return "", err
+	}
+	parts := make([]string, len(items))
+	for i, item := range items {
+		fields, err := jsonObject(string(item))
+		if err != nil {
+			return "", fmt.Errorf("item %d: %w", i+1, err)
+		}
+		if parts[i], err = shape(fields, o.attributes); err != nil {
+			return "", fmt.Errorf("item %d: %w", i+1, err)
+		}
+	}
+	return indentJSON("[" + strings.Join(parts, ",") + "]"), nil
+}
+
+func jsonArray(s string) ([]json.RawMessage, error) {
+	var items []json.RawMessage
+	dec := json.NewDecoder(strings.NewReader(s))
+	if err := dec.Decode(&items); err != nil || items == nil {
+		return nil, errors.New("it is not a JSON array")
+	}
+	if dec.More() {
+		return nil, errors.New("it has text after the JSON array")
+	}
+	return items, nil
+}
+
+func indentJSON(s string) string {
+	var out bytes.Buffer
+	if err := json.Indent(&out, []byte(s), "", "  "); err != nil {
+		return s
+	}
+	return out.String()
 }
 
 // A reply may come wrapped in a Markdown code fence.

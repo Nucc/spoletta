@@ -21,6 +21,9 @@ type object struct {
 	Width *float64 `json:"width"`
 	// Runs store what they generate it with; see instances.go.
 	Persistent bool `json:"persistent"`
+	// A list of items: an agent generating it replies with a list, and a
+	// flow process taking it runs once per item; see items.go.
+	Many bool `json:"many"`
 	// The flow process whose board it is on; null on the top board. It also
 	// shows inside the flow processes linked to it; see boards.go.
 	Parent     *int64        `json:"parent"`
@@ -123,7 +126,7 @@ func migrateObjects(db *sql.DB) error {
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT id, name, x, y, width, persistent, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Parent)
+	err := db.QueryRowContext(ctx, "SELECT id, name, x, y, width, persistent, many, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent)
 	if err != nil {
 		return o, err
 	}
@@ -154,7 +157,7 @@ func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 
 func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/objects", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, name, x, y, width, persistent, parent_id FROM objects ORDER BY id")
+		rows, err := db.QueryContext(r.Context(), "SELECT id, name, x, y, width, persistent, many, parent_id FROM objects ORDER BY id")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -164,7 +167,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Parent); err != nil {
+			if err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -246,6 +249,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			Y     *float64 `json:"y"`
 			// Turning it off keeps what was stored.
 			Persistent *bool `json:"persistent"`
+			Many       *bool `json:"many"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -263,8 +267,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent) WHERE id = ?",
-			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, id)
+			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = COALESCE(?, many) WHERE id = ?",
+			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, patch.Many, id)
 		if err != nil {
 			serverError(w, err)
 			return

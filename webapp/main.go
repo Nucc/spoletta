@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -68,7 +69,11 @@ func main() {
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
 	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
-	registerRunRoutes(mux, db, newEngine(db, workerURL))
+	parallelAgents, err := strconv.Atoi(env("PARALLEL_AGENTS", "3"))
+	if err != nil || parallelAgents < 1 {
+		log.Fatalf("PARALLEL_AGENTS must be a positive number")
+	}
+	registerRunRoutes(mux, db, newEngine(db, workerURL, parallelAgents))
 	registerVersionRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

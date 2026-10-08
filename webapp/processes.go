@@ -13,7 +13,10 @@ import (
 )
 
 type process struct {
-	ID     int64  `json:"id"`
+	ID int64 `json:"id"`
+	// The flow it is in, on its top board or a flow process's. Versions
+	// leave it out: they belong to the flow.
+	Flow   int64  `json:"flow,omitempty"`
 	Name   string `json:"name"`
 	Kind   string `json:"kind"`
 	Prompt string `json:"prompt"`
@@ -93,10 +96,10 @@ func validKind(k string) bool {
 	return k == kindAgent || k == kindScript || k == kindHuman || k == kindFlow || k == kindSentry
 }
 
-const processColumns = "id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings"
+const processColumns = "id, flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings"
 
 func scanProcess(row interface{ Scan(...any) error }, p *process) error {
-	return row.Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y, &p.Width, &p.Parent, &p.Recording, &p.Settings)
+	return row.Scan(&p.ID, &p.Flow, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y, &p.Width, &p.Parent, &p.Recording, &p.Settings)
 }
 
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -183,7 +186,11 @@ func hasIndex(db *sql.DB, table, name string) (bool, error) {
 
 func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/processes", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT "+processColumns+" FROM processes ORDER BY id")
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), "SELECT "+processColumns+" FROM processes WHERE flow_id = ? ORDER BY id", f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -244,14 +251,23 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		var msg string
+		var err error
+		if p.Flow, msg, err = flowFor(r.Context(), db, p.Flow, p.Parent); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO processes (name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO processes (flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.Flow, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings)
 		if err != nil {
 			serverError(w, err)
 			return

@@ -16,7 +16,7 @@ import {
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
 
-const RUN_LABELS: Record<FlowRunStatus, string> = {
+export const RUN_LABELS: Record<FlowRunStatus, string> = {
   running: 'Running',
   done: 'Done',
   failed: 'Failed',
@@ -32,7 +32,7 @@ const STEP_LABELS: Record<StepStatus, string> = {
   duplicate: 'Already processed',
 }
 
-const formatTime = (s: string) =>
+export const formatTime = (s: string) =>
   new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
 
 function formatDuration(start: string, end: string | null): string {

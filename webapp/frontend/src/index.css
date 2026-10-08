@@ -41,8 +41,10 @@ body {
 
 .toolbar button {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
   padding: 6px 12px;
   font: inherit;
   font-size: 14px;
@@ -1957,4 +1959,174 @@ body {
 .mcp-picker .link-button {
   font-size: 13px;
   font-weight: 400;
+}
+
+/* The breadcrumb on a flow's board: back to every flow, then the flow's
+   name, which the pencil renames. */
+.toolbar h1 .home {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.toolbar h1 .home:hover {
+  color: #0969da;
+}
+
+.toolbar h1 .crumb-separator {
+  color: #8c959f;
+  font-weight: 400;
+}
+
+.toolbar h1 .flow-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: #656d76;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: #eaeef2;
+  color: #1f2328;
+}
+
+.toolbar h1 .flow-name .icon-button {
+  padding: 4px;
+  border: none;
+  font-weight: 400;
+}
+
+.flow-name-input {
+  width: 240px;
+  padding: 3px 6px;
+  font: inherit;
+  border: 1px solid #54aeff;
+  border-radius: 6px;
+}
+
+/* The main page: every flow, each opening its board. */
+.flows-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.flows {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+.flow-new {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.flow-new input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+}
+
+.flow-new input:focus {
+  outline: none;
+  border-color: #54aeff;
+  box-shadow: 0 0 0 3px rgba(84, 174, 255, 0.25);
+}
+
+.flow-new button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #1f883d;
+  border-radius: 8px;
+  background: #1f883d;
+  color: #fff;
+  cursor: pointer;
+}
+
+.flow-new button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.flows-note {
+  color: #656d76;
+  font-size: 14px;
+}
+
+.flow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flow-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 10px;
+}
+
+.flow-list li:hover {
+  border-color: #54aeff;
+}
+
+.flow-card {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.flow-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.flow-card-run {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #656d76;
+  font-size: 13px;
 }

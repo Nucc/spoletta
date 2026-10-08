@@ -13,7 +13,9 @@ import (
 // A run is one execution of the flow from the start node. The engine walks
 // the flow and records each process it executes as a step; see engine.go.
 type run struct {
-	ID     int64  `json:"id"`
+	ID int64 `json:"id"`
+	// The flow it is a run of.
+	Flow   int64  `json:"flow"`
 	Status string `json:"status"`
 	// The version of the board the run ran on; null for runs from before
 	// versions were recorded.
@@ -30,10 +32,10 @@ type run struct {
 	FinishedAt *time.Time `json:"finishedAt"`
 }
 
-const runColumns = "id, status, version_id, parent_run_id, process_ref, process_name, item_key, started_at, finished_at"
+const runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, started_at, finished_at"
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -386,7 +388,11 @@ func endRun(ctx context.Context, db *sql.DB, id int64, status string) (run, erro
 
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT "+runColumns+" FROM runs ORDER BY id DESC LIMIT 200")
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), "SELECT "+runColumns+" FROM runs WHERE flow_id = ? ORDER BY id DESC LIMIT 200", f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -413,6 +419,10 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	// is saved as a new one first, so the run's version shows what it ran.
 	// The run goes on in the server; this returns once it started.
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
 		ctx := r.Context()
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
@@ -420,17 +430,21 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		defer tx.Rollback()
-		version, err := saveVersion(ctx, tx, true)
+		version, err := saveVersion(ctx, tx, f, true)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "flow not found", http.StatusNotFound)
+			return
+		}
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		board, err := takeSnapshot(ctx, tx)
+		board, err := takeSnapshot(ctx, tx, f)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO runs (status, version_id) VALUES (?, ?)", runRunning, version)
+		res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id) VALUES (?, ?, ?)", f, runRunning, version)
 		if err != nil {
 			serverError(w, err)
 			return

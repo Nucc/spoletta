@@ -871,8 +871,9 @@ func (w *walk) endStep(stepID int64, status, msg string) {
 // outer run to it.
 func startChildRun(ctx context.Context, db *sql.DB, version, parent, process int64, name, key string, stepID int64) (int64, error) {
 	res, err := db.ExecContext(ctx,
-		"INSERT INTO runs (status, version_id, parent_run_id, process_ref, process_name, item_key) VALUES (?, ?, ?, ?, ?, ?)",
-		runRunning, version, parent, process, name, key)
+		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key)
+		SELECT flow_id, ?, ?, id, ?, ?, ? FROM runs WHERE id = ?`,
+		runRunning, version, process, name, key, parent)
 	if err != nil {
 		return 0, err
 	}

@@ -10,8 +10,8 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-// The start node is the board's single UML initial node. It lives in a
-// one-row table and points at no more than one process.
+// The start node is a board's single UML initial node. It points at no more
+// than one process; a flow's top board keeps it in flow_starts.
 type startNode struct {
 	X      float64 `json:"x"`
 	Y      float64 `json:"y"`
@@ -35,14 +35,6 @@ const (
 
 func migrateFlow(db *sql.DB) error {
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS start_node (
-			id TINYINT PRIMARY KEY,
-			x DOUBLE NOT NULL DEFAULT 0,
-			y DOUBLE NOT NULL DEFAULT 0,
-			target_id BIGINT NULL,
-			FOREIGN KEY (target_id) REFERENCES processes(id) ON DELETE SET NULL
-		)`,
-		"INSERT IGNORE INTO start_node (id, x, y) VALUES (1, 40, 40)",
 		`CREATE TABLE IF NOT EXISTS connections (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
 			source_id BIGINT NOT NULL,
@@ -56,9 +48,6 @@ func migrateFlow(db *sql.DB) error {
 		if _, err := db.Exec(s); err != nil {
 			return err
 		}
-	}
-	if err := addColumn(db, "start_node", "route", "JSON NULL"); err != nil {
-		return err
 	}
 	if err := migrateObjects(db); err != nil {
 		return err
@@ -81,12 +70,20 @@ func migrateFlow(db *sql.DB) error {
 	if err := migrateVersions(db); err != nil {
 		return err
 	}
+	if err := migrateFlows(db); err != nil {
+		return err
+	}
 	return migrateAgent(db)
 }
 
 func registerFlowRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/connections", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, source_id, target_id FROM connections ORDER BY id")
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
+		rows, err := db.QueryContext(r.Context(),
+			"SELECT c.id, c.source_id, c.target_id FROM connections c JOIN processes p ON p.id = c.source_id WHERE p.flow_id = ? ORDER BY c.id", f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -117,6 +114,16 @@ func registerFlowRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		if c.Source == c.Target {
 			http.Error(w, "a process can't connect to itself", http.StatusBadRequest)
+			return
+		}
+		var flows int
+		err := db.QueryRowContext(r.Context(), "SELECT COUNT(DISTINCT flow_id) FROM processes WHERE id IN (?, ?)", c.Source, c.Target).Scan(&flows)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if flows > 1 {
+			http.Error(w, "the processes are in different flows", http.StatusBadRequest)
 			return
 		}
 

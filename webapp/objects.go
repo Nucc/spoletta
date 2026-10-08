@@ -13,7 +13,9 @@ import (
 // An object is an OPM object: a named thing that processes generate and take
 // as input. Its attributes say what an agent generating it must reply with.
 type object struct {
-	ID   int64   `json:"id"`
+	ID int64 `json:"id"`
+	// The flow it is in, on its top board or a flow process's.
+	Flow int64   `json:"flow"`
 	Name string  `json:"name"`
 	X    float64 `json:"x"`
 	Y    float64 `json:"y"`
@@ -148,7 +150,7 @@ func migrateObjects(db *sql.DB) error {
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT id, name, x, y, width, persistent, many, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent)
+	err := db.QueryRowContext(ctx, "SELECT id, flow_id, name, x, y, width, persistent, many, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent)
 	if err != nil {
 		return o, err
 	}
@@ -179,7 +181,11 @@ func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 
 func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/objects", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, name, x, y, width, persistent, many, parent_id FROM objects ORDER BY id")
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), "SELECT id, flow_id, name, x, y, width, persistent, many, parent_id FROM objects WHERE flow_id = ? ORDER BY id", f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -189,7 +195,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent); err != nil {
+			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -243,7 +249,16 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (name, x, y, width, parent_id) VALUES (?, ?, ?, ?, ?)", o.Name, o.X, o.Y, o.Width, o.Parent)
+		var msg string
+		var err error
+		if o.Flow, msg, err = flowFor(r.Context(), db, o.Flow, o.Parent); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y, width, parent_id) VALUES (?, ?, ?, ?, ?, ?)", o.Flow, o.Name, o.X, o.Y, o.Width, o.Parent)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -323,7 +338,13 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	mux.HandleFunc("GET /api/links", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, process_id, object_id, direction, state_id, route, at_x, at_y FROM object_links ORDER BY id")
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
+		rows, err := db.QueryContext(r.Context(),
+			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y
+			FROM object_links l JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -352,7 +373,10 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 
-		srows, err := db.QueryContext(r.Context(), "SELECT link_id, state_id FROM link_states ORDER BY state_id")
+		srows, err := db.QueryContext(r.Context(),
+			`SELECT ls.link_id, ls.state_id FROM link_states ls
+			JOIN object_links l ON l.id = ls.link_id JOIN processes p ON p.id = l.process_id
+			WHERE p.flow_id = ? ORDER BY ls.state_id`, f)
 		if err != nil {
 			serverError(w, err)
 			return

@@ -34,6 +34,8 @@ export type ProcessSettings = {
 
 export type Process = {
   id: number
+  // The flow it is in.
+  flow: number
   name: string
   kind: ProcessKind
   // The agent's prompt when kind is 'agent', the reviewer's instructions when 'human'.
@@ -72,6 +74,8 @@ export type Connection = {
 // An OPM object: something a process generates and other processes take as input.
 export type FlowObject = {
   id: number
+  // The flow it is in.
+  flow: number
   name: string
   x: number
   y: number
@@ -148,10 +152,42 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export function listProcesses(): Promise<Process[]> {
-  return request('/api/processes')
+// A board of its own with everything on it, its versions and its runs; each
+// flow does one job, such as fixing exceptions or bumping dependencies.
+export type Flow = {
+  id: number
+  name: string
+  createdAt: string
+  // Its latest run of the whole flow, if any.
+  lastRun: FlowRun | null
 }
 
+export function listFlows(): Promise<Flow[]> {
+  return request('/api/flows')
+}
+
+export function getFlow(id: number): Promise<Flow> {
+  return request(`/api/flows/${id}`)
+}
+
+export function createFlow(name: string): Promise<Flow> {
+  return request('/api/flows', { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+export function renameFlow(id: number, name: string): Promise<Flow> {
+  return request(`/api/flows/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+}
+
+// Everything in it goes with it, its runs too.
+export function deleteFlow(id: number): Promise<void> {
+  return request(`/api/flows/${id}`, { method: 'DELETE' })
+}
+
+export function listProcesses(flow: number): Promise<Process[]> {
+  return request(`/api/processes?flow=${flow}`)
+}
+
+// On a flow process's board, it goes in that process's flow.
 export function createProcess(
   p: Omit<Process, 'id' | 'width' | 'recording' | 'settings'> & {
     width?: number | null
@@ -162,7 +198,7 @@ export function createProcess(
   return request('/api/processes', { method: 'POST', body: JSON.stringify(p) })
 }
 
-export function updateProcess(id: number, patch: Partial<Omit<Process, 'id'>>): Promise<Process> {
+export function updateProcess(id: number, patch: Partial<Omit<Process, 'id' | 'flow'>>): Promise<Process> {
   return request(`/api/processes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -173,14 +209,15 @@ export function deleteProcess(id: number): Promise<void> {
 // A board is the top board, null, or a flow process's, by its id.
 export type BoardId = number | null
 
-const boardQuery = (board: BoardId) => (board === null ? '' : `?board=${board}`)
+// A flow process's board, or the flow's top board.
+const boardQuery = (flow: number, board: BoardId) => (board === null ? `?flow=${flow}` : `?board=${board}`)
 
-export function getStart(): Promise<Start> {
-  return request('/api/start')
+export function getStart(flow: number): Promise<Start> {
+  return request(`/api/start${boardQuery(flow, null)}`)
 }
 
-export function updateStart(board: BoardId, patch: Partial<Start>): Promise<Start> {
-  return request(`/api/start${boardQuery(board)}`, { method: 'PATCH', body: JSON.stringify(patch) })
+export function updateStart(flow: number, board: BoardId, patch: Partial<Start>): Promise<Start> {
+  return request(`/api/start${boardQuery(flow, board)}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
 // Where a flow process's board ends; the objects it generates show there.
@@ -189,12 +226,12 @@ export type End = { x: number; y: number }
 // A flow process's board: where it starts and ends.
 export type InnerBoard = { process: number; start: Start; end: End }
 
-export function listBoards(): Promise<InnerBoard[]> {
-  return request('/api/boards')
+export function listBoards(flow: number): Promise<InnerBoard[]> {
+  return request(`/api/boards?flow=${flow}`)
 }
 
 export function updateEnd(board: number, patch: Partial<End>): Promise<End> {
-  return request(`/api/end${boardQuery(board)}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  return request(`/api/end?board=${board}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
 // Moves processes, and the selected objects only they link to, into a new
@@ -203,8 +240,8 @@ export function wrapProcesses(w: { name: string; processes: number[]; objects: n
   return request('/api/processes/wrap', { method: 'POST', body: JSON.stringify(w) })
 }
 
-export function listConnections(): Promise<Connection[]> {
-  return request('/api/connections')
+export function listConnections(flow: number): Promise<Connection[]> {
+  return request(`/api/connections?flow=${flow}`)
 }
 
 export function createConnection(c: Omit<Connection, 'id'>): Promise<Connection> {
@@ -215,10 +252,11 @@ export function deleteConnection(id: number): Promise<void> {
   return request(`/api/connections/${id}`, { method: 'DELETE' })
 }
 
-export function listObjects(): Promise<FlowObject[]> {
-  return request('/api/objects')
+export function listObjects(flow: number): Promise<FlowObject[]> {
+  return request(`/api/objects?flow=${flow}`)
 }
 
+// On a flow process's board, it goes in that process's flow.
 export function createObject(
   o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'parent'> & {
     width?: number | null
@@ -228,7 +266,7 @@ export function createObject(
   return request('/api/objects', { method: 'POST', body: JSON.stringify(o) })
 }
 
-export function updateObject(id: number, patch: Partial<Omit<FlowObject, 'id' | 'states' | 'attributes'>>): Promise<FlowObject> {
+export function updateObject(id: number, patch: Partial<Omit<FlowObject, 'id' | 'flow' | 'states' | 'attributes'>>): Promise<FlowObject> {
   return request(`/api/objects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -236,8 +274,8 @@ export function deleteObject(id: number): Promise<void> {
   return request(`/api/objects/${id}`, { method: 'DELETE' })
 }
 
-export function listLinks(): Promise<Link[]> {
-  return request('/api/links')
+export function listLinks(flow: number): Promise<Link[]> {
+  return request(`/api/links?flow=${flow}`)
 }
 
 // Without a state, the link names none; without states, it lists none.
@@ -367,6 +405,7 @@ export type FlowRunStatus = 'running' | 'done' | 'failed' | 'interrupted' | 'ter
 // One execution of the flow from the start node.
 export type FlowRun = {
   id: number
+  flow: number
   status: FlowRunStatus
   // The version of the board it ran on; starting a run saves a board changed
   // since its version as a new one. Null for runs from before versions were kept.
@@ -429,12 +468,12 @@ export const fileUrl = (path: string) => `/api/files?path=${encodeURIComponent(p
 
 export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[] }
 
-export function listRuns(): Promise<FlowRun[]> {
-  return request('/api/runs')
+export function listRuns(flow: number): Promise<FlowRun[]> {
+  return request(`/api/runs?flow=${flow}`)
 }
 
-export function startRun(): Promise<FlowRun> {
-  return request('/api/runs', { method: 'POST' })
+export function startRun(flow: number): Promise<FlowRun> {
+  return request(`/api/runs?flow=${flow}`, { method: 'POST' })
 }
 
 export function getRun(id: number): Promise<FlowRunDetail> {
@@ -513,12 +552,12 @@ export type Versions = {
   versions: Version[]
 }
 
-export function listVersions(): Promise<Versions> {
-  return request('/api/versions')
+export function listVersions(flow: number): Promise<Versions> {
+  return request(`/api/versions?flow=${flow}`)
 }
 
-export function saveVersion(): Promise<Version> {
-  return request('/api/versions', { method: 'POST' })
+export function saveVersion(flow: number): Promise<Version> {
+  return request(`/api/versions?flow=${flow}`, { method: 'POST' })
 }
 
 // Rewrites the board as the version has it.
@@ -541,8 +580,8 @@ export type BoardContents = {
 // Versions from before boards have no parents, recording or boards, and
 // processes from before settings none.
 type Snapshot = {
-  processes: (Omit<Process, 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
-  objects: (Omit<FlowObject, 'states' | 'attributes' | 'parent' | 'many'> & Partial<Pick<FlowObject, 'parent' | 'many'>>)[]
+  processes: (Omit<Process, 'flow' | 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many'> & Partial<Pick<FlowObject, 'parent' | 'many'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -554,18 +593,20 @@ type Snapshot = {
   boards?: InnerBoard[]
 }
 
-// The board as the version has it, without changing the board.
-export async function getVersionBoard(id: number): Promise<BoardContents> {
+// The flow's board as its version has it, without changing the board.
+export async function getVersionBoard(flow: number, id: number): Promise<BoardContents> {
   const s: Snapshot = await request(`/api/versions/${id}`)
   return {
     processes: s.processes.map((p) => ({
       ...p,
+      flow,
       parent: p.parent ?? null,
       recording: p.recording ?? false,
       settings: p.settings ?? {},
     })),
     objects: s.objects.map((o) => ({
       ...o,
+      flow,
       parent: o.parent ?? null,
       many: o.many ?? false,
       states: s.states.filter((st) => st.object === o.id),

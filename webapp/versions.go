@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// A version is a saved snapshot of the whole board: its processes, objects
+// A version is a saved snapshot of a flow's whole board: its processes, objects
 // with their states and attributes, links, connections and start node. Saving
 // always adds a version on top, and jumping to one rewrites the board as it
 // was, so no version is ever lost. The board keeps its rows' ids across
@@ -75,13 +75,6 @@ func migrateVersions(db *sql.DB) error {
 			snapshot JSON NOT NULL,
 			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 		)`,
-		// The version the board was last saved as or jumped to.
-		`CREATE TABLE IF NOT EXISTS flow_current (
-			id TINYINT PRIMARY KEY,
-			version_id BIGINT NULL,
-			FOREIGN KEY (version_id) REFERENCES flow_versions(id)
-		)`,
-		"INSERT IGNORE INTO flow_current (id) VALUES (1)",
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -92,8 +85,8 @@ func migrateVersions(db *sql.DB) error {
 }
 
 // Scans every row of query with scan, which reads the current row.
-func scanAll(ctx context.Context, tx *sql.Tx, query string, scan func(*sql.Rows) error) error {
-	rows, err := tx.QueryContext(ctx, query)
+func scanAll(ctx context.Context, tx *sql.Tx, query string, scan func(*sql.Rows) error, args ...any) error {
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -106,7 +99,7 @@ func scanAll(ctx context.Context, tx *sql.Tx, query string, scan func(*sql.Rows)
 	return rows.Err()
 }
 
-func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
+func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error) {
 	s := snapshot{
 		Processes:   []process{},
 		Objects:     []snapshotObject{},
@@ -118,49 +111,53 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
 		Boards:      []innerBoard{},
 	}
 	var startRoute []byte
-	err := tx.QueryRowContext(ctx, "SELECT x, y, target_id, route FROM start_node WHERE id = 1").Scan(&s.Start.X, &s.Start.Y, &s.Start.Target, &startRoute)
+	err := tx.QueryRowContext(ctx, "SELECT x, y, target_id, route FROM flow_starts WHERE flow_id = ?", flow).Scan(&s.Start.X, &s.Start.Y, &s.Start.Target, &startRoute)
 	if err != nil {
 		return s, err
 	}
 	s.Start.Route = routeJSON(startRoute)
 
-	err = scanAll(ctx, tx, "SELECT "+processColumns+" FROM processes ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT "+processColumns+" FROM processes WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var p process
 		err := scanProcess(rows, &p)
+		p.Flow = 0
 		s.Processes = append(s.Processes, p)
 		return err
-	})
+	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, parent_id FROM objects ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, parent_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
 		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent)
 		s.Objects = append(s.Objects, o)
 		return err
-	})
+	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, object_id, name FROM object_states ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, `SELECT st.id, st.object_id, st.name FROM object_states st
+		JOIN objects o ON o.id = st.object_id WHERE o.flow_id = ? ORDER BY st.id`, func(rows *sql.Rows) error {
 		var st objectState
 		err := rows.Scan(&st.ID, &st.Object, &st.Name)
 		s.States = append(s.States, st)
 		return err
-	})
+	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, object_id, name, definition, is_unique, is_file FROM object_attributes ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file FROM object_attributes a
+		JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ? ORDER BY a.id`, func(rows *sql.Rows) error {
 		var a attribute
 		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File)
 		s.Attributes = append(s.Attributes, a)
 		return err
-	})
+	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, process_id, object_id, direction, state_id, route, at_x, at_y FROM object_links ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, `SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y FROM object_links l
+		JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, func(rows *sql.Rows) error {
 		var l snapshotLink
 		var route []byte
 		var atX, atY sql.NullFloat64
@@ -169,36 +166,40 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
 		l.At = pointOf(atX, atY)
 		s.Links = append(s.Links, l)
 		return err
-	})
+	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT link_id, state_id FROM link_states ORDER BY link_id, state_id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, `SELECT ls.link_id, ls.state_id FROM link_states ls
+		JOIN object_links l ON l.id = ls.link_id JOIN processes p ON p.id = l.process_id
+		WHERE p.flow_id = ? ORDER BY ls.link_id, ls.state_id`, func(rows *sql.Rows) error {
 		var ls snapshotLinkState
 		err := rows.Scan(&ls.Link, &ls.State)
 		s.LinkStates = append(s.LinkStates, ls)
 		return err
-	})
+	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, source_id, target_id FROM connections ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, `SELECT c.id, c.source_id, c.target_id FROM connections c
+		JOIN processes p ON p.id = c.source_id WHERE p.flow_id = ? ORDER BY c.id`, func(rows *sql.Rows) error {
 		var c connection
 		err := rows.Scan(&c.ID, &c.Source, &c.Target)
 		s.Connections = append(s.Connections, c)
 		return err
-	})
+	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT process_id, x, y, target_id, route, end_x, end_y FROM inner_boards ORDER BY process_id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, `SELECT b.process_id, b.x, b.y, b.target_id, b.route, b.end_x, b.end_y FROM inner_boards b
+		JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ? ORDER BY b.process_id`, func(rows *sql.Rows) error {
 		var b innerBoard
 		var route []byte
 		err := rows.Scan(&b.Process, &b.Start.X, &b.Start.Y, &b.Start.Target, &route, &b.End.X, &b.End.Y)
 		b.Start.Route = routeJSON(route)
 		s.Boards = append(s.Boards, b)
 		return err
-	})
+	}, flow)
 	return s, err
 }
 
@@ -237,27 +238,34 @@ func storedRoute(r json.RawMessage) any {
 	return []byte(r)
 }
 
-// Deletes the rows of table whose id isn't among keep.
-func deleteOthers(ctx context.Context, tx *sql.Tx, table string, keep []int64) error {
-	if len(keep) == 0 {
-		_, err := tx.ExecContext(ctx, "DELETE FROM "+table)
-		return err
+// Deletes the flow's rows of table whose id isn't among keep.
+func deleteOthers(ctx context.Context, tx *sql.Tx, flow int64, table string, keep []int64) error {
+	args := []any{flow}
+	cond := ""
+	if len(keep) > 0 {
+		args = append(args, int64Args(keep)...)
+		cond = " AND id NOT IN (?" + strings.Repeat(", ?", len(keep)-1) + ")"
 	}
-	args := make([]any, len(keep))
-	for i, id := range keep {
-		args[i] = id
-	}
-	_, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE id NOT IN (?"+strings.Repeat(", ?", len(keep)-1)+")", args...)
+	_, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE flow_id = ?"+cond, args...)
 	return err
 }
 
-// Rewrites the board as s has it. Processes and objects are updated in place
-// rather than recreated, so the runs referring to them keep doing so. Rows
-// nothing outside the board refers to are recreated with their saved ids.
-func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
+// Rewrites the flow's board as s has it. Processes and objects are updated
+// in place rather than recreated, so the runs referring to them keep doing
+// so. Rows nothing outside the board refers to are recreated with their
+// saved ids. Other flows stay as they are.
+func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) error {
 	// Cleared first so their unique keys can't collide while being rewritten.
-	for _, t := range []string{"link_states", "object_links", "connections", "object_attributes", "object_states", "inner_boards"} {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+t); err != nil {
+	for _, del := range []string{
+		`DELETE ls FROM link_states ls JOIN object_links l ON l.id = ls.link_id
+			JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ?`,
+		"DELETE l FROM object_links l JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ?",
+		"DELETE c FROM connections c JOIN processes p ON p.id = c.source_id WHERE p.flow_id = ?",
+		"DELETE a FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ?",
+		"DELETE st FROM object_states st JOIN objects o ON o.id = st.object_id WHERE o.flow_id = ?",
+		"DELETE b FROM inner_boards b JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ?",
+	} {
+		if _, err := tx.ExecContext(ctx, del, flow); err != nil {
 			return err
 		}
 	}
@@ -266,34 +274,35 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 	for i, p := range s.Processes {
 		keep[i] = p.ID
 	}
-	if err := deleteOthers(ctx, tx, "processes", keep); err != nil {
+	if err := deleteOthers(ctx, tx, flow, "processes", keep); err != nil {
 		return err
 	}
 	keep = make([]int64, len(s.Objects))
 	for i, o := range s.Objects {
 		keep[i] = o.ID
 	}
-	if err := deleteOthers(ctx, tx, "objects", keep); err != nil {
+	if err := deleteOthers(ctx, tx, flow, "objects", keep); err != nil {
 		return err
 	}
 
+	// Ids are never shared between flows, so these only ever update the flow's own rows.
 	for _, p := range parentsFirst(s.Processes) {
-		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
+		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, kind = saved.kind, prompt = saved.prompt, script = saved.script,
 				model = saved.model, thinking = saved.thinking, x = saved.x, y = saved.y, width = saved.width,
 				parent_id = saved.parent_id, recording = saved.recording, settings = saved.settings`,
-			p.ID, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings)
+			p.ID, flow, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings)
 		if err != nil {
 			return err
 		}
 	}
 	for _, o := range s.Objects {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, name, x, y, width, persistent, many, parent_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?) AS saved
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, parent_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
 				many = saved.many, parent_id = saved.parent_id`,
-			o.ID, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Parent)
+			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Parent)
 		if err != nil {
 			return err
 		}
@@ -346,8 +355,8 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 			}
 		}
 	}
-	_, err := tx.ExecContext(ctx, "UPDATE start_node SET x = ?, y = ?, target_id = ?, route = ? WHERE id = 1",
-		s.Start.X, s.Start.Y, s.Start.Target, storedRoute(s.Start.Route))
+	_, err := tx.ExecContext(ctx, "UPDATE flow_starts SET x = ?, y = ?, target_id = ?, route = ? WHERE flow_id = ?",
+		s.Start.X, s.Start.Y, s.Start.Target, storedRoute(s.Start.Route), flow)
 	return err
 }
 
@@ -364,16 +373,16 @@ func sameSnapshot(a, b []byte) (bool, error) {
 	return reflect.DeepEqual(x, y), nil
 }
 
-// Saves the board as a new version on top of the one it is on, and makes it
-// current. With reuse, a board unchanged since its current version stays on
-// it instead; the version saved or kept is returned.
-func saveVersion(ctx context.Context, tx *sql.Tx, reuse bool) (int64, error) {
+// Saves the flow's board as a new version on top of the one it is on, and
+// makes it current. With reuse, a board unchanged since its current version
+// stays on it instead; the version saved or kept is returned.
+func saveVersion(ctx context.Context, tx *sql.Tx, flow int64, reuse bool) (int64, error) {
 	var current *int64
 	// Locked so that two saves can't both be based on the same version unnoticed.
-	if err := tx.QueryRowContext(ctx, "SELECT version_id FROM flow_current WHERE id = 1 FOR UPDATE").Scan(&current); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT version_id FROM flows WHERE id = ? FOR UPDATE", flow).Scan(&current); err != nil {
 		return 0, err
 	}
-	s, err := takeSnapshot(ctx, tx)
+	s, err := takeSnapshot(ctx, tx, flow)
 	if err != nil {
 		return 0, err
 	}
@@ -391,7 +400,7 @@ func saveVersion(ctx context.Context, tx *sql.Tx, reuse bool) (int64, error) {
 			return *current, err
 		}
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO flow_versions (based_on, snapshot) VALUES (?, ?)", current, body)
+	res, err := tx.ExecContext(ctx, "INSERT INTO flow_versions (flow_id, based_on, snapshot) VALUES (?, ?, ?)", flow, current, body)
 	if err != nil {
 		return 0, err
 	}
@@ -399,22 +408,31 @@ func saveVersion(ctx context.Context, tx *sql.Tx, reuse bool) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE flow_current SET version_id = ? WHERE id = 1", id)
+	_, err = tx.ExecContext(ctx, "UPDATE flows SET version_id = ? WHERE id = ?", id, flow)
 	return id, err
 }
 
 func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/versions", func(w http.ResponseWriter, r *http.Request) {
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
 		res := struct {
 			// The version the board was last saved as or jumped to; null before the first save.
 			Current  *int64    `json:"current"`
 			Versions []version `json:"versions"`
 		}{Versions: []version{}}
-		if err := db.QueryRowContext(r.Context(), "SELECT version_id FROM flow_current WHERE id = 1").Scan(&res.Current); err != nil {
+		err := db.QueryRowContext(r.Context(), "SELECT version_id FROM flows WHERE id = ?", f).Scan(&res.Current)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "flow not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
 			serverError(w, err)
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), "SELECT id, based_on, created_at FROM flow_versions ORDER BY id DESC")
+		rows, err := db.QueryContext(r.Context(), "SELECT id, based_on, created_at FROM flow_versions WHERE flow_id = ? ORDER BY id DESC", f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -436,6 +454,10 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	mux.HandleFunc("POST /api/versions", func(w http.ResponseWriter, r *http.Request) {
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
 		ctx := r.Context()
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
@@ -445,7 +467,10 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 		defer tx.Rollback()
 
 		var v version
-		if v.ID, err = saveVersion(ctx, tx, false); err != nil {
+		if v.ID, err = saveVersion(ctx, tx, f, false); errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "flow not found", http.StatusNotFound)
+			return
+		} else if err != nil {
 			serverError(w, err)
 			return
 		}
@@ -499,19 +524,9 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 
-		// A run follows the board as it goes; rewriting it underneath would derail the run.
-		var running int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE status = 'running'").Scan(&running); err != nil {
-			serverError(w, err)
-			return
-		}
-		if running > 0 {
-			http.Error(w, "can't switch versions while the flow is running", http.StatusConflict)
-			return
-		}
-
+		var f int64
 		var body []byte
-		err = tx.QueryRowContext(ctx, "SELECT snapshot FROM flow_versions WHERE id = ?", id).Scan(&body)
+		err = tx.QueryRowContext(ctx, "SELECT flow_id, snapshot FROM flow_versions WHERE id = ?", id).Scan(&f, &body)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "version not found", http.StatusNotFound)
 			return
@@ -520,16 +535,33 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		// Locks the flow, against a run starting on it meanwhile.
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM flows WHERE id = ? FOR UPDATE", f).Scan(&f); err != nil {
+			serverError(w, err)
+			return
+		}
+
+		// A run follows the board as it goes; rewriting it underneath would derail the run.
+		var running int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE flow_id = ? AND status = 'running'", f).Scan(&running); err != nil {
+			serverError(w, err)
+			return
+		}
+		if running > 0 {
+			http.Error(w, "can't switch versions while the flow is running", http.StatusConflict)
+			return
+		}
+
 		var s snapshot
 		if err := json.Unmarshal(body, &s); err != nil {
 			serverError(w, err)
 			return
 		}
-		if err := restoreSnapshot(ctx, tx, s); err != nil {
+		if err := restoreSnapshot(ctx, tx, f, s); err != nil {
 			serverError(w, err)
 			return
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE flow_current SET version_id = ? WHERE id = 1", id); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE flows SET version_id = ? WHERE id = ?", id, f); err != nil {
 			serverError(w, err)
 			return
 		}

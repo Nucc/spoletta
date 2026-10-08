@@ -21,9 +21,9 @@ import (
 // end. They are the same objects, so the processes inside link to them
 // directly; nothing is declared twice.
 //
-// Each board has a start; a flow process's board also has an end. The top
-// board's start lives in start_node, the others' in inner_boards, which has
-// the start's columns under the same names.
+// Each board has a start; a flow process's board also has an end. A flow's
+// top board's start lives in flow_starts, the others' in inner_boards, which
+// has the start's columns under the same names.
 
 // Where a flow process's board ends.
 type boardEnd struct {
@@ -107,33 +107,44 @@ func checkParent(ctx context.Context, db *sql.DB, parent *int64) (string, error)
 func onBoardOf(ctx context.Context, db *sql.DB, process, object int64) (bool, error) {
 	var n int
 	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM processes p JOIN objects o ON o.id = ?
+		`SELECT COUNT(*) FROM processes p JOIN objects o ON o.id = ? AND o.flow_id = p.flow_id
 		WHERE p.id = ? AND (o.parent_id <=> p.parent_id
 			OR EXISTS (SELECT 1 FROM object_links l WHERE l.process_id = p.parent_id AND l.object_id = o.id))`,
 		object, process).Scan(&n)
 	return n > 0, err
 }
 
-// The board a request is about, from ?board=<flow process id>; nil for the
-// top board. Writes the error and returns false if it is invalid.
-func boardParam(w http.ResponseWriter, r *http.Request) (*int64, bool) {
+// The board a request is about, from ?board=<flow process id>, and the flow
+// it is in; for a flow's top board, from ?flow=<id> with a nil board. Writes
+// the error and returns false if it is invalid.
+func boardParam(w http.ResponseWriter, r *http.Request, db *sql.DB) (int64, *int64, bool) {
 	v := r.URL.Query().Get("board")
 	if v == "" {
-		return nil, true
+		f, ok := flowParam(w, r)
+		return f, nil, ok
 	}
 	id, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		http.Error(w, "invalid board", http.StatusBadRequest)
-		return nil, false
+		return 0, nil, false
 	}
-	return &id, true
+	f, err := flowOf(r.Context(), db, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "board not found", http.StatusNotFound)
+		return 0, nil, false
+	}
+	if err != nil {
+		serverError(w, err)
+		return 0, nil, false
+	}
+	return f, &id, true
 }
 
 // The table and condition of the row holding a board's start, and its end
 // for a flow process's board.
-func startRow(board *int64) (string, string, []any) {
+func startRow(flow int64, board *int64) (string, string, []any) {
 	if board == nil {
-		return "start_node", "WHERE id = 1", nil
+		return "flow_starts", "WHERE flow_id = ?", []any{flow}
 	}
 	return "inner_boards", "WHERE process_id = ?", []any{*board}
 }
@@ -142,18 +153,18 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func getStart(ctx context.Context, db querier, board *int64) (startNode, error) {
+func getStart(ctx context.Context, db querier, flow int64, board *int64) (startNode, error) {
 	var s startNode
 	var route []byte
-	table, cond, args := startRow(board)
+	table, cond, args := startRow(flow, board)
 	err := db.QueryRowContext(ctx, "SELECT x, y, target_id, route FROM "+table+" "+cond, args...).Scan(&s.X, &s.Y, &s.Target, &route)
 	s.Route = routeJSON(route)
 	return s, err
 }
 
 func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
-	writeStart := func(w http.ResponseWriter, r *http.Request, board *int64) {
-		s, err := getStart(r.Context(), db, board)
+	writeStart := func(w http.ResponseWriter, r *http.Request, flow int64, board *int64) {
+		s, err := getStart(r.Context(), db, flow, board)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "board not found", http.StatusNotFound)
 			return
@@ -165,9 +176,15 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeJSON(w, http.StatusOK, s)
 	}
 
-	// Every flow process's board: where it starts and ends.
+	// Every board of a flow's flow processes: where it starts and ends.
 	mux.HandleFunc("GET /api/boards", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT process_id, x, y, target_id, route, end_x, end_y FROM inner_boards ORDER BY process_id")
+		f, ok := flowParam(w, r)
+		if !ok {
+			return
+		}
+		rows, err := db.QueryContext(r.Context(),
+			`SELECT b.process_id, b.x, b.y, b.target_id, b.route, b.end_x, b.end_y
+			FROM inner_boards b JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ? ORDER BY b.process_id`, f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -192,13 +209,13 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	mux.HandleFunc("GET /api/start", func(w http.ResponseWriter, r *http.Request) {
-		if board, ok := boardParam(w, r); ok {
-			writeStart(w, r, board)
+		if f, board, ok := boardParam(w, r, db); ok {
+			writeStart(w, r, f, board)
 		}
 	})
 
 	mux.HandleFunc("PATCH /api/start", func(w http.ResponseWriter, r *http.Request) {
-		board, ok := boardParam(w, r)
+		f, board, ok := boardParam(w, r, db)
 		if !ok {
 			return
 		}
@@ -213,7 +230,7 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		table, cond, args := startRow(board)
+		table, cond, args := startRow(f, board)
 
 		_, err := db.ExecContext(r.Context(), "UPDATE "+table+" SET x = COALESCE(?, x), y = COALESCE(?, y) "+cond,
 			append([]any{patch.X, patch.Y}, args...)...)
@@ -230,7 +247,7 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 			if target != nil {
 				var n int
-				err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM processes WHERE id = ? AND parent_id <=> ?", *target, board).Scan(&n)
+				err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM processes WHERE id = ? AND parent_id <=> ? AND flow_id = ?", *target, board, f).Scan(&n)
 				if err != nil {
 					serverError(w, err)
 					return
@@ -265,7 +282,7 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		writeStart(w, r, board)
+		writeStart(w, r, f, board)
 	})
 
 	getEnd := func(w http.ResponseWriter, r *http.Request, board int64) {
@@ -284,7 +301,7 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 
 	// Only a flow process's board has an end.
 	mux.HandleFunc("GET /api/end", func(w http.ResponseWriter, r *http.Request) {
-		board, ok := boardParam(w, r)
+		_, board, ok := boardParam(w, r, db)
 		if !ok {
 			return
 		}
@@ -296,7 +313,7 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	mux.HandleFunc("PATCH /api/end", func(w http.ResponseWriter, r *http.Request) {
-		board, ok := boardParam(w, r)
+		_, board, ok := boardParam(w, r, db)
 		if !ok {
 			return
 		}
@@ -401,7 +418,7 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 	// They must exist and share a board.
 	var boards, found int
 	var minX, minY, maxX, maxY = math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
-	rows, err := tx.QueryContext(ctx, "SELECT parent_id, x, y FROM processes WHERE id IN "+placeholders(len(processes)), int64Args(processes)...)
+	rows, err := tx.QueryContext(ctx, "SELECT flow_id, parent_id, x, y FROM processes WHERE id IN "+placeholders(len(processes)), int64Args(processes)...)
 	if err != nil {
 		return p, "", err
 	}
@@ -409,11 +426,11 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 	for rows.Next() {
 		var parent *int64
 		var x, y float64
-		if err := rows.Scan(&parent, &x, &y); err != nil {
+		if err := rows.Scan(&p.Flow, &parent, &x, &y); err != nil {
 			rows.Close()
 			return p, "", err
 		}
-		key := "top"
+		key := "flow " + strconv.FormatInt(p.Flow, 10)
 		if parent != nil {
 			key = strconv.FormatInt(*parent, 10)
 			p.Parent = parent
@@ -440,10 +457,10 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 	// only from the same board.
 	var moving []int64
 	if len(objects) > 0 {
-		args := append(int64Args(objects), p.Parent)
+		args := append(int64Args(objects), p.Parent, p.Flow)
 		args = append(args, int64Args(processes)...)
 		rows, err := tx.QueryContext(ctx,
-			`SELECT o.id FROM objects o WHERE o.id IN `+placeholders(len(objects))+` AND o.parent_id <=> ?
+			`SELECT o.id FROM objects o WHERE o.id IN `+placeholders(len(objects))+` AND o.parent_id <=> ? AND o.flow_id = ?
 			AND NOT EXISTS (SELECT 1 FROM object_links l WHERE l.object_id = o.id AND l.process_id NOT IN `+placeholders(len(processes))+`)`,
 			args...)
 		if err != nil {
@@ -465,8 +482,8 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 
 	p.Name, p.Kind = name, kindFlow
 	p.X, p.Y = (minX+maxX)/2, (minY+maxY)/2
-	res, err := tx.ExecContext(ctx, "INSERT INTO processes (name, kind, prompt, script, x, y, parent_id) VALUES (?, ?, '', '', ?, ?, ?)",
-		p.Name, p.Kind, p.X, p.Y, p.Parent)
+	res, err := tx.ExecContext(ctx, "INSERT INTO processes (flow_id, name, kind, prompt, script, x, y, parent_id) VALUES (?, ?, ?, '', '', ?, ?, ?)",
+		p.Flow, p.Name, p.Kind, p.X, p.Y, p.Parent)
 	if err != nil {
 		return p, "", err
 	}
@@ -509,12 +526,12 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 		return p, "", err
 	}
 
-	start, err := getStart(ctx, tx, p.Parent)
+	start, err := getStart(ctx, tx, p.Flow, p.Parent)
 	if err != nil {
 		return p, "", err
 	}
 	if start.Target != nil && inSet[*start.Target] {
-		table, cond, wargs := startRow(p.Parent)
+		table, cond, wargs := startRow(p.Flow, p.Parent)
 		if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET target_id = ?, route = NULL "+cond, append([]any{p.ID}, wargs...)...); err != nil {
 			return p, "", err
 		}

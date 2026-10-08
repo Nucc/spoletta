@@ -165,6 +165,32 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeJSON(w, http.StatusOK, s)
 	}
 
+	// Every flow process's board: where it starts and ends.
+	mux.HandleFunc("GET /api/boards", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.QueryContext(r.Context(), "SELECT process_id, x, y, target_id, route, end_x, end_y FROM inner_boards ORDER BY process_id")
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		defer rows.Close()
+		bs := []innerBoard{}
+		for rows.Next() {
+			var b innerBoard
+			var route []byte
+			if err := rows.Scan(&b.Process, &b.Start.X, &b.Start.Y, &b.Start.Target, &route, &b.End.X, &b.End.Y); err != nil {
+				serverError(w, err)
+				return
+			}
+			b.Start.Route = routeJSON(route)
+			bs = append(bs, b)
+		}
+		if err := rows.Err(); err != nil {
+			serverError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, bs)
+	})
+
 	mux.HandleFunc("GET /api/start", func(w http.ResponseWriter, r *http.Request) {
 		if board, ok := boardParam(w, r); ok {
 			writeStart(w, r, board)

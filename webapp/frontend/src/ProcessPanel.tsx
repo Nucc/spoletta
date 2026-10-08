@@ -16,6 +16,7 @@ type Fields = {
   script: string
   model: string
   thinking: ThinkingLevel | ''
+  recording: boolean
 }
 
 const SAVE_DELAY_MS = 500
@@ -24,6 +25,7 @@ const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'agent', label: 'Agent' },
   { value: 'script', label: 'Script' },
   { value: 'human', label: 'Human' },
+  { value: 'flow', label: 'Flow' },
 ]
 
 // A human process waiting for its decision during a run.
@@ -44,6 +46,7 @@ export default function ProcessPanel({
   run,
   review,
   onChange,
+  onZoomIn,
   onClose,
   onError,
 }: {
@@ -57,6 +60,8 @@ export default function ProcessPanel({
   run?: { status?: RunStatus; output?: string; error?: string }
   review?: Review
   onChange: (fields: Fields) => void
+  // Shows a flow process's board.
+  onZoomIn: () => void
   onClose: () => void
   onError: (err: unknown) => void
 }) {
@@ -66,6 +71,7 @@ export default function ProcessPanel({
   const [script, setScript] = useState(initial.script)
   const [model, setModel] = useState(initial.model)
   const [thinking, setThinking] = useState(initial.thinking)
+  const [recording, setRecording] = useState(initial.recording)
   const saved = useRef(initial)
   const pending = useRef<Partial<Fields> | null>(null)
   const timer = useRef<number>(undefined)
@@ -89,6 +95,7 @@ export default function ProcessPanel({
     if (script !== saved.current.script) patch.script = script
     if (model !== saved.current.model) patch.model = model
     if (thinking !== saved.current.thinking) patch.thinking = thinking
+    if (recording !== saved.current.recording) patch.recording = recording
     if (Object.keys(patch).length === 0) return
 
     saved.current = { ...saved.current, ...patch }
@@ -96,7 +103,7 @@ export default function ProcessPanel({
     onChange(saved.current)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(flush, SAVE_DELAY_MS)
-  }, [name, kind, prompt, script, model, thinking])
+  }, [name, kind, prompt, script, model, thinking, recording])
 
   useEffect(() => flush, [])
 
@@ -163,7 +170,21 @@ export default function ProcessPanel({
           </label>
         </div>
       )}
-      {kind === 'agent' ? (
+      {kind === 'flow' ? (
+        <div key="flow" className="panel-field">
+          <p className="panel-note">
+            Made of processes on a board of its own. The objects it takes show at the board's start, the ones it
+            generates at its end.
+          </p>
+          <label className="panel-check">
+            <input type="checkbox" checked={recording} disabled={readOnly} onChange={(e) => setRecording(e.target.checked)} />
+            <span>Record each time it runs as a run of its own</span>
+          </label>
+          <button className="panel-button" onClick={onZoomIn}>
+            Open its board
+          </button>
+        </div>
+      ) : kind === 'agent' ? (
         <label key="agent" className="panel-field panel-field-grow">
           <span>Prompt</span>
           <textarea

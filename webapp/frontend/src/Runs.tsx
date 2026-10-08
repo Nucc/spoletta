@@ -64,6 +64,11 @@ export function RunList({
                   Run #{r.id}
                   <span className="run-item-status">{RUN_LABELS[r.status]}</span>
                 </span>
+                {r.parent !== null && (
+                  <span className="run-item-process">
+                    {r.processName} · in run #{r.parent}
+                  </span>
+                )}
                 <time dateTime={r.startedAt}>
                   {r.version !== null && `v${r.version} · `}
                   {formatTime(r.startedAt)}
@@ -79,7 +84,18 @@ export function RunList({
 }
 
 // What happened in a run: each process execution in the order it started.
-export function RunPanel({ run, onStop, onClose }: { run: FlowRunDetail; onStop: () => void; onClose: () => void }) {
+export function RunPanel({
+  run,
+  onStop,
+  onOpenRun,
+  onClose,
+}: {
+  run: FlowRunDetail
+  onStop: () => void
+  // Opens another run: the one a recording flow process ran as, or the one it ran in.
+  onOpenRun: (id: number) => void
+  onClose: () => void
+}) {
   return (
     <aside className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
@@ -90,6 +106,15 @@ export function RunPanel({ run, onStop, onClose }: { run: FlowRunDetail; onStop:
           ×
         </button>
       </header>
+      {run.parent !== null && (
+        <p className="panel-note">
+          The run of {run.processName} in{' '}
+          <button className="link-button" onClick={() => onOpenRun(run.parent!)}>
+            run #{run.parent}
+          </button>
+          .
+        </p>
+      )}
       <p className="panel-note">
         Started {formatTime(run.startedAt)}
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
@@ -112,7 +137,7 @@ export function RunPanel({ run, onStop, onClose }: { run: FlowRunDetail; onStop:
         <ol className="steps">
           {run.steps.map((s) => (
             <li key={s.id}>
-              <Step step={s} objects={run.objects.filter((o) => o.step === s.id)} />
+              <Step step={s} objects={run.objects.filter((o) => o.step === s.id)} onOpenRun={onOpenRun} />
             </li>
           ))}
         </ol>
@@ -121,7 +146,15 @@ export function RunPanel({ run, onStop, onClose }: { run: FlowRunDetail; onStop:
   )
 }
 
-function Step({ step: s, objects }: { step: RunStep; objects: FlowRunDetail['objects'] }) {
+function Step({
+  step: s,
+  objects,
+  onOpenRun,
+}: {
+  step: RunStep
+  objects: FlowRunDetail['objects']
+  onOpenRun: (id: number) => void
+}) {
   return (
     <details className="step" open={s.status !== 'done'}>
       <summary>
@@ -138,6 +171,15 @@ function Step({ step: s, objects }: { step: RunStep; objects: FlowRunDetail['obj
         {s.kind === 'agent' && (
           <p className="panel-note">
             Model: {s.model || 'default'} · thinking: {s.thinking || 'default'}
+          </p>
+        )}
+        {s.childRun !== null && (
+          <p className="panel-note">
+            Ran its board as{' '}
+            <button className="link-button" onClick={() => onOpenRun(s.childRun!)}>
+              run #{s.childRun}
+            </button>
+            .
           </p>
         )}
         {s.inputs.map((input, i) => (
@@ -168,7 +210,9 @@ function Step({ step: s, objects }: { step: RunStep; objects: FlowRunDetail['obj
           <Block label="Decision" text={decisionText(s.outcome, objects[0]?.name, s.instructions)} />
         )}
         {s.error && <Block label={s.status === 'duplicate' ? 'Duplicate' : 'Error'} text={s.error} failed={s.status !== 'duplicate'} />}
-        {s.kind !== 'human' && (s.status === 'done' || s.status === 'duplicate') && <Block label="Output" text={s.output || '(empty)'} />}
+        {s.kind !== 'human' && s.kind !== 'flow' && (s.status === 'done' || s.status === 'duplicate') && (
+          <Block label="Output" text={s.output || '(empty)'} />
+        )}
         {s.kind !== 'human' && objects.length > 0 && (
           <p className="panel-note">
             Generated {objects.map((o) => (o.state ? `${o.name} (${o.state})` : o.name)).join(', ')}

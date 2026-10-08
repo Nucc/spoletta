@@ -23,6 +23,10 @@ export type ObjectNodeData = {
   content?: string
   // The name of the state the object was in at the end of the latest run.
   activeState?: string
+  // Set on a flow process's board for the objects the flow process takes
+  // ('in', shown at the start) or only generates ('out', at the end). They
+  // belong to the board outside, so they can't be moved or deleted here.
+  boundary?: 'in' | 'out'
 }
 
 export type ObjectNodeType = Node<ObjectNodeData, 'object'>
@@ -48,7 +52,7 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
 
   return (
     <div
-      className={`object-node${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}`}
+      className={`object-node${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}${data.boundary ? ' boundary' : ''}`}
       title={data.content}
     >
       <WidthResizer id={id} minWidth={140} />
@@ -80,7 +84,7 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
             <button title="Settings" aria-label="Settings" onClick={() => actions.openPanel(id)}>
               <GearIcon />
             </button>
-            <button title="Delete" aria-label="Delete" disabled={!actions.editable} onClick={() => actions.remove(id)}>
+            <button title="Delete" aria-label="Delete" disabled={!actions.editable || !!data.boundary} onClick={() => actions.remove(id)}>
               <TrashIcon />
             </button>
           </span>

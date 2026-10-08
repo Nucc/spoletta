@@ -130,3 +130,27 @@ export const HistoryIcon = () => (
     <path d="M2.25 2.5v2.75H5M8 5v3l2 1.5" />
   </Icon>
 )
+
+// Processes inside a process: OPM's in-zoomed process.
+export const FlowIcon = () => (
+  <Icon>
+    <rect x="1.5" y="2.5" width="13" height="11" rx="5.5" />
+    <circle cx="5.5" cy="8" r="1.5" />
+    <circle cx="10.5" cy="8" r="1.5" />
+  </Icon>
+)
+
+// UML activity final node: a ring around a dot.
+export const EndIcon = () => (
+  <Icon>
+    <circle cx="8" cy="8" r="6" />
+    <circle cx="8" cy="8" r="3" fill="currentColor" />
+  </Icon>
+)
+
+export const ZoomInIcon = () => (
+  <Icon>
+    <circle cx="7" cy="7" r="4.5" />
+    <path d="M10.5 10.5l4 4M5 7h4M7 5v4" />
+  </Icon>
+)

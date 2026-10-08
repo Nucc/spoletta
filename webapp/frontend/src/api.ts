@@ -1,6 +1,7 @@
 // A human process is a review step: a person checks its inputs and decides
 // by setting an object to one of the states the process's output links name.
-export type ProcessKind = 'agent' | 'script' | 'human'
+// A flow process is made of processes, on a board of its own.
+export type ProcessKind = 'agent' | 'script' | 'human' | 'flow'
 
 export type Process = {
   id: number
@@ -17,6 +18,10 @@ export type Process = {
   y: number
   // Set when resized; null draws the default width.
   width: number | null
+  // The flow process whose board it is on; null on the top board.
+  parent: number | null
+  // For flow processes: each time it runs is a run of its own.
+  recording: boolean
 }
 
 export type Start = {
@@ -45,6 +50,9 @@ export type FlowObject = {
   // Runs store what they generate it with, and its unique attributes tell
   // whether another run already stored a value.
   persistent: boolean
+  // The flow process whose board it is on; null on the top board. It also
+  // shows inside the flow processes linked to it.
+  parent: number | null
   states: ObjectState[]
   attributes: ObjectAttribute[]
 }
@@ -104,7 +112,9 @@ export function listProcesses(): Promise<Process[]> {
   return request('/api/processes')
 }
 
-export function createProcess(p: Omit<Process, 'id' | 'width'> & { width?: number | null }): Promise<Process> {
+export function createProcess(
+  p: Omit<Process, 'id' | 'width' | 'recording'> & { width?: number | null; recording?: boolean },
+): Promise<Process> {
   return request('/api/processes', { method: 'POST', body: JSON.stringify(p) })
 }
 
@@ -116,12 +126,37 @@ export function deleteProcess(id: number): Promise<void> {
   return request(`/api/processes/${id}`, { method: 'DELETE' })
 }
 
+// A board is the top board, null, or a flow process's, by its id.
+export type BoardId = number | null
+
+const boardQuery = (board: BoardId) => (board === null ? '' : `?board=${board}`)
+
 export function getStart(): Promise<Start> {
   return request('/api/start')
 }
 
-export function updateStart(patch: Partial<Start>): Promise<Start> {
-  return request('/api/start', { method: 'PATCH', body: JSON.stringify(patch) })
+export function updateStart(board: BoardId, patch: Partial<Start>): Promise<Start> {
+  return request(`/api/start${boardQuery(board)}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+// Where a flow process's board ends; the objects it generates show there.
+export type End = { x: number; y: number }
+
+// A flow process's board: where it starts and ends.
+export type InnerBoard = { process: number; start: Start; end: End }
+
+export function listBoards(): Promise<InnerBoard[]> {
+  return request('/api/boards')
+}
+
+export function updateEnd(board: number, patch: Partial<End>): Promise<End> {
+  return request(`/api/end${boardQuery(board)}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+// Moves processes, and the selected objects only they link to, into a new
+// flow process in their place.
+export function wrapProcesses(w: { name: string; processes: number[]; objects: number[] }): Promise<Process> {
+  return request('/api/processes/wrap', { method: 'POST', body: JSON.stringify(w) })
 }
 
 export function listConnections(): Promise<Connection[]> {
@@ -141,7 +176,10 @@ export function listObjects(): Promise<FlowObject[]> {
 }
 
 export function createObject(
-  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent'> & { width?: number | null },
+  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'parent'> & {
+    width?: number | null
+    parent?: number | null
+  },
 ): Promise<FlowObject> {
   return request('/api/objects', { method: 'POST', body: JSON.stringify(o) })
 }
@@ -247,6 +285,11 @@ export type FlowRun = {
   // The version of the board it ran on; starting a run saves a board changed
   // since its version as a new one. Null for runs from before versions were kept.
   version: number | null
+  // For the run of a recording flow process: the run it ran in, and the
+  // process. Null for runs of the whole flow.
+  parent: number | null
+  process: number | null
+  processName: string
   startedAt: string
   finishedAt: string | null
 }
@@ -274,6 +317,8 @@ export type RunStep = {
   // states hold approved or changes.
   outcome: string
   instructions: string
+  // For a recording flow process: the run its board ran as.
+  childRun: number | null
   startedAt: string
   finishedAt: string | null
 }
@@ -345,18 +390,22 @@ export function restoreVersion(id: number): Promise<void> {
   return request(`/api/versions/${id}/restore`, { method: 'POST' })
 }
 
-// The whole board, as the board's endpoints give it or a version saved it.
+// The whole flow, every board of it, as the board's endpoints give it or a
+// version saved it.
 export type BoardContents = {
   processes: Process[]
   objects: FlowObject[]
+  // The top board's start.
   start: Start
   connections: Connection[]
   links: Link[]
+  boards: InnerBoard[]
 }
 
+// Versions from before boards have no parents, recording or boards.
 type Snapshot = {
-  processes: Process[]
-  objects: Omit<FlowObject, 'states' | 'attributes'>[]
+  processes: (Omit<Process, 'parent' | 'recording'> & Partial<Pick<Process, 'parent' | 'recording'>>)[]
+  objects: (Omit<FlowObject, 'states' | 'attributes' | 'parent'> & Partial<Pick<FlowObject, 'parent'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none.
@@ -364,19 +413,22 @@ type Snapshot = {
   linkStates: { link: number; state: number }[]
   connections: Connection[]
   start: Start
+  boards?: InnerBoard[]
 }
 
 // The board as the version has it, without changing the board.
 export async function getVersionBoard(id: number): Promise<BoardContents> {
   const s: Snapshot = await request(`/api/versions/${id}`)
   return {
-    processes: s.processes,
+    processes: s.processes.map((p) => ({ ...p, parent: p.parent ?? null, recording: p.recording ?? false })),
     objects: s.objects.map((o) => ({
       ...o,
+      parent: o.parent ?? null,
       states: s.states.filter((st) => st.object === o.id),
       attributes: s.attributes.filter((a) => a.object === o.id),
     })),
     start: s.start,
+    boards: s.boards ?? [],
     connections: s.connections,
     links: s.links.map((l) => ({
       ...l,

@@ -1326,3 +1326,95 @@ body {
 .review-banner button {
   flex-shrink: 0;
 }
+
+/* A flow process is made of processes: its card is drawn double, as a
+   process with more inside. */
+.process-node.flow {
+  border: 3px double #1b7c83;
+}
+
+.process-node.flow .node-icon {
+  background: #1b7c83;
+}
+
+.end-node .node-icon {
+  background: #1f2328;
+}
+
+/* The objects outside a flow process, seen from its board: they belong to
+   the board outside, so they are drawn dashed and stay where they are put. */
+.object-node.boundary {
+  border-style: dashed;
+  background: #f6f8fa;
+}
+
+.react-flow__edge.boundary-edge .react-flow__edge-path {
+  stroke: #8c959f;
+  stroke-dasharray: 4 4;
+}
+
+/* Which board is shown, from the top one down. */
+.breadcrumb {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(50% - 24px);
+  padding: 4px 10px;
+  font-size: 13px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(31, 35, 40, 0.12);
+}
+
+.breadcrumb [aria-current] {
+  font-weight: 600;
+}
+
+.breadcrumb button,
+.link-button {
+  padding: 0;
+  font: inherit;
+  color: #0969da;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.breadcrumb button:hover,
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.breadcrumb-sep {
+  margin-left: 4px;
+  color: #8c959f;
+}
+
+.panel-button {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.panel-button:hover {
+  background: #f6f8fa;
+}
+
+.run-item-process {
+  padding-left: 14px;
+  font-size: 12px;
+  color: #1b7c83;
+}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Handle, Position, useNodeConnections, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { ProcessKind, RunInput, ThinkingLevel } from './api'
-import { AgentIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, TrashIcon } from './icons'
+import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, TrashIcon, ZoomInIcon } from './icons'
 import WidthResizer from './WidthResizer'
 
 export type ProcessNodeData = {
@@ -13,6 +13,8 @@ export type ProcessNodeData = {
   script: string
   model: string
   thinking: ThinkingLevel | ''
+  // For flow processes: each time it runs is a run of its own.
+  recording: boolean
   editing: boolean
   // Set while a flow run is in progress or after it has passed this process.
   status?: RunStatus
@@ -31,9 +33,10 @@ export const KIND_ICONS: Record<ProcessKind, () => ReactNode> = {
   agent: AgentIcon,
   script: ScriptIcon,
   human: HumanIcon,
+  flow: FlowIcon,
 }
 
-const KIND_LABELS: Record<ProcessKind, string> = { agent: 'Agent', script: 'Script', human: 'Human review' }
+const KIND_LABELS: Record<ProcessKind, string> = { agent: 'Agent', script: 'Script', human: 'Human review', flow: 'Flow' }
 
 const STATUS_LABELS: Record<RunStatus, string> = {
   active: 'Running',
@@ -46,6 +49,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 // What the card says under the name: the kind, and an agent's model.
 function subtitle(data: ProcessNodeData): string {
   if (data.status) return STATUS_LABELS[data.status]
+  if (data.kind === 'flow') return data.recording ? 'Flow · recorded' : 'Flow'
   if (data.kind !== 'agent') return KIND_LABELS[data.kind]
   return `Agent · ${data.model ? data.model.slice(data.model.indexOf('/') + 1) : 'default model'}`
 }
@@ -84,6 +88,11 @@ export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNod
       </div>
       {!draft && (
         <span className="node-buttons nodrag">
+          {data.kind === 'flow' && (
+            <button title="Zoom in" aria-label="Zoom in" onClick={() => actions.zoomIn(id)}>
+              <ZoomInIcon />
+            </button>
+          )}
           <button title="Settings" aria-label="Settings" onClick={() => actions.openPanel(id)}>
             <GearIcon />
           </button>

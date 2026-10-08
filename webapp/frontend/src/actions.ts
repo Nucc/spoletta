@@ -8,6 +8,8 @@ export type BoardActions = {
   // Drops a draft, or stops renaming an existing node.
   cancelName: (id: string) => void
   openPanel: (id: string) => void
+  // Shows a flow process's board.
+  zoomIn: (id: string) => void
   remove: (id: string) => void
   // Adds what comes next below a node nothing leads on from.
   append: (id: string) => void

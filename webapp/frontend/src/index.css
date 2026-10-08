@@ -2151,3 +2151,28 @@ body {
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* The commits a step made in each repository, in its run. */
+.step-commits {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.step-commits > li + li {
+  margin-top: 6px;
+}
+
+.step-commits-repo {
+  font-weight: 600;
+}
+
+.step-commits ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.step-commits code {
+  font-size: 12px;
+}

@@ -79,6 +79,9 @@ type runResult struct {
 	// Set when what the step generated holds a unique value another run
 	// stored; its run is terminated.
 	Duplicate *duplicate `json:"-"`
+	// For a step in a workspace: what it did to each repository it worked
+	// on, as the worker saw it.
+	Commits []repoCommits `json:"commits,omitempty"`
 }
 
 func migrateAgent(db *sql.DB) error {
@@ -162,6 +165,9 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		if contract != nil && res.OK {
 			res = followContract(ctx, db, workerURL, run, contract, res, stepID)
 		}
+		if err := recordCommits(context.Background(), db, stepID, res.Commits); err != nil {
+			log.Printf("record commits of step %d: %v", stepID, err)
+		}
 	}
 	status := stepError
 	if res.OK {
@@ -225,14 +231,17 @@ func followContract(ctx context.Context, db *sql.DB, workerURL string, run agent
 				log.Printf("record retry of step %d: %v", stepID, err)
 			}
 		}
-		if res = runAgent(ctx, db, workerURL, run, stepID, 2); !res.OK {
+		first := res.Commits
+		res = runAgent(ctx, db, workerURL, run, stepID, 2)
+		res.Commits = mergeCommits(first, res.Commits)
+		if !res.OK {
 			return res
 		}
 		if out, objects, err = c.handedIn(res); err != nil {
-			return runResult{Output: res.Output, Error: "The output didn't follow the interface of what the process generates twice. The last time " + err.Error() + "."}
+			return runResult{Output: res.Output, Error: "The output didn't follow the interface of what the process generates twice. The last time " + err.Error() + ".", Commits: res.Commits}
 		}
 	}
-	return runResult{OK: true, Output: out, Objects: objects}
+	return runResult{OK: true, Output: out, Objects: objects, Commits: res.Commits}
 }
 
 // What an agent handed in, checked against the contract.

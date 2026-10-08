@@ -68,6 +68,9 @@ func migrateFlows(db *sql.DB) error {
 	if err := addColumn(db, "run_steps", "branch", "VARCHAR(255) NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := addColumn(db, "run_steps", "commits", "JSON NULL"); err != nil {
+		return err
+	}
 
 	legacy, err := hasTable(db, "start_node")
 	if err != nil {

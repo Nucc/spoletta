@@ -8,6 +8,7 @@ import {
   type FlowRunDetail,
   type FlowRunStatus,
   type ProcessKind,
+  type RepoCommits,
   type RunStep,
   type StepMessage,
   type StepStatus,
@@ -227,6 +228,7 @@ function Step({
             Worked on the branch <code>{s.branch}</code>
           </p>
         )}
+        {s.commits.length > 0 && <StepCommits commits={s.commits} />}
         {s.childRun !== null && (
           <p className="panel-note">
             Ran its board as{' '}
@@ -297,6 +299,33 @@ function Step({
 // What the agent did: its conversation with the model, loaded once opened,
 // and followed while the step goes. Once the step ended, it loads once more
 // for the messages that came in last.
+// The commits a step made in each repository, from the one it started on.
+function StepCommits({ commits }: { commits: RepoCommits[] }) {
+  return (
+    <ul className="step-commits">
+      {commits.map((c) => (
+        <li key={c.name}>
+          <span className="step-commits-repo">{c.name}</span>{' '}
+          <span className="panel-note">
+            from <code>{c.before.slice(0, 7)}</code>
+            {c.after === c.before ? ', no commits' : <> to <code>{c.after.slice(0, 7)}</code></>}
+          </span>
+          {c.uncommitted && <span className="panel-warning"> · left changes uncommitted</span>}
+          {c.commits.length > 0 && (
+            <ul>
+              {c.commits.map((line) => (
+                <li key={line}>
+                  <code>{line.slice(0, line.indexOf(' '))}</code> {line.slice(line.indexOf(' ') + 1)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function Conversation({ run, step }: { run: number; step: RunStep }) {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<StepMessage[]>([])

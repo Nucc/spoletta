@@ -113,6 +113,8 @@ type runResult struct {
 	// through submit_output, which then is the output. If it didn't, the
 	// output is what it printed.
 	Submitted bool `json:"submitted"`
+	// For a step in a workspace: what it did to each repository it worked on.
+	Commits []repoCommits `json:"commits,omitempty"`
 }
 
 // Where files that runs generate are kept, a volume the webapp serves them from.
@@ -371,12 +373,12 @@ func modelArgs(model string) []string {
 // Returns the run outcome; a client that disconnects (ctx is cancelled) or a
 // run that exceeds the timeout kills pi. emit gets each message of the
 // conversation as it ends.
-func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func(json.RawMessage)) runResult {
-	cwd, release, err := workDir(ctx, run.Workspace, "run-")
+func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func(json.RawMessage)) (res runResult) {
+	cwd, ws, err := workDir(ctx, run.Workspace, "run-")
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
-	defer release()
+	defer ws.done(&res)
 
 	// An empty model or thinking level leaves the choice to the pi settings.
 	// pi prints its events as JSON, so the conversation can be followed.
@@ -561,19 +563,19 @@ func (s *eventStream) outcome() (output, failure string) {
 // done: its run's workspace, ready and taken, or a scratch directory deleted
 // afterwards. Getting the workspace ready doesn't count towards the step's
 // timeout.
-func workDir(ctx context.Context, ws *workspaceSpec, scratch string) (string, func(), error) {
+func workDir(ctx context.Context, ws *workspaceSpec, scratch string) (string, *takenWorkspace, error) {
 	if ws != nil {
-		dir, release, err := takeWorkspace(ctx, ws)
+		t, err := takeWorkspace(ctx, ws)
 		if err != nil {
 			return "", nil, errors.New("prepare workspace: " + err.Error())
 		}
-		return dir, release, nil
+		return t.dir, t, nil
 	}
 	dir, err := os.MkdirTemp("", scratch)
 	if err != nil {
 		return "", nil, errors.New("create scratch directory: " + err.Error())
 	}
-	return dir, func() { os.RemoveAll(dir) }, nil
+	return dir, &takenWorkspace{release: func() { os.RemoveAll(dir) }}, nil
 }
 
 // Characters kept in an input's file name; others become underscores.
@@ -588,12 +590,12 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // the script prints is its output; a non-zero exit fails it, with what it
 // printed to stderr as the error. Like pi, it runs in a process group of its own,
 // which a cancelled request or the timeout kills.
-func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) runResult {
-	cwd, release, err := workDir(ctx, run.Workspace, "script-")
+func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) (res runResult) {
+	cwd, ws, err := workDir(ctx, run.Workspace, "script-")
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
-	defer release()
+	defer ws.done(&res)
 	// The inputs and the script stay out of the working directory, which a
 	// workspace shares with other steps.
 	private, err := os.MkdirTemp("", "script-private-")

@@ -64,10 +64,12 @@ type step struct {
 	Instructions string `json:"instructions"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
-	// The branch it worked on in its run's workspace, if it worked in one.
-	Branch     string     `json:"branch"`
-	StartedAt  time.Time  `json:"startedAt"`
-	FinishedAt *time.Time `json:"finishedAt"`
+	// The branch it worked on in its run's workspace, if it worked in one,
+	// and what it did to each repository there.
+	Branch     string        `json:"branch"`
+	Commits    []repoCommits `json:"commits"`
+	StartedAt  time.Time     `json:"startedAt"`
+	FinishedAt *time.Time    `json:"finishedAt"`
 }
 
 // The content and state an object got in a run from the step that generated
@@ -505,7 +507,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
-				status, output, error, outcome, instructions, child_run_id, branch, started_at, finished_at
+				status, output, error, outcome, instructions, child_run_id, branch, commits, started_at, finished_at
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
 			serverError(w, err)
@@ -515,15 +517,22 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		for rows.Next() {
 			var s step
 			var inputs []byte
-			var cr []byte
+			var cr, commits []byte
 			if err := rows.Scan(&s.ID, &s.Process, &s.ProcessName, &s.Kind, &s.Model, &s.Thinking, &s.Prompt, &inputs, &cr,
-				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.ChildRun, &s.Branch, &s.StartedAt, &s.FinishedAt); err != nil {
+				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.ChildRun, &s.Branch, &commits, &s.StartedAt, &s.FinishedAt); err != nil {
 				serverError(w, err)
 				return
 			}
 			if err := json.Unmarshal(inputs, &s.Inputs); err != nil {
 				serverError(w, err)
 				return
+			}
+			s.Commits = []repoCommits{}
+			if commits != nil {
+				if err := json.Unmarshal(commits, &s.Commits); err != nil {
+					serverError(w, err)
+					return
+				}
 			}
 			if cr != nil {
 				if err := json.Unmarshal(cr, &s.ChangeRequest); err != nil {

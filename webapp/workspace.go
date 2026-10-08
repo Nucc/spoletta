@@ -184,11 +184,57 @@ func withWorkspace(prompt string, ws *workspaceSpec) string {
 		}
 		fmt.Fprintf(&b, "- %s/: %s, branched from %s\n", r.Name, r.URL, base)
 	}
+	b.WriteString("The checkouts hold only the latest commit of the branch they started from, with what this run committed on top: " +
+		"older history and tags aren't there, so don't look for them.\n")
 	// pi loads context files from the working directory up, which the checkouts are below.
 	b.WriteString("Before working in a repository, read its AGENTS.md or CLAUDE.md if it has one, else its README, for how to work in it. " +
 		"Other processes of this run work on the same branch, before and after you, so what they committed is there. " +
 		"Commit your changes to this branch as you go. Don't switch branches, and don't push.\n")
 	return b.String()
+}
+
+// What a step did to a repository it worked on.
+type repoCommits struct {
+	Name string `json:"name"`
+	// The commit it started from and the one it left; the same if it committed nothing.
+	Before string `json:"before"`
+	After  string `json:"after"`
+	// The commits it made, newest first, as "<short hash> <subject>"; only
+	// the latest ones of many.
+	Commits []string `json:"commits"`
+	// Whether it left changes it didn't commit.
+	Uncommitted bool `json:"uncommitted"`
+}
+
+// What two tries of a step did together: from where the first started to
+// where the second left off.
+func mergeCommits(first, second []repoCommits) []repoCommits {
+	byName := map[string]repoCommits{}
+	for _, c := range first {
+		byName[c.Name] = c
+	}
+	var merged []repoCommits
+	for _, c := range second {
+		if f, ok := byName[c.Name]; ok {
+			c.Before = f.Before
+			c.Commits = append(c.Commits, f.Commits...)
+		}
+		merged = append(merged, c)
+	}
+	return merged
+}
+
+// Records what a step did to its repositories, if it worked on any.
+func recordCommits(ctx context.Context, db execer, stepID int64, commits []repoCommits) error {
+	if len(commits) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(commits)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, "UPDATE run_steps SET commits = ? WHERE id = ?", b, stepID)
+	return err
 }
 
 // Records the branch a step works on.

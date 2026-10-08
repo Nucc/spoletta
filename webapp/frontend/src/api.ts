@@ -445,6 +445,17 @@ export type FlowRun = {
   finishedAt: string | null
 }
 
+// What a step did to a repository: the commit it started from, the one it
+// left, the commits it made in between, newest first, as "<short hash>
+// <subject>", and whether it left changes uncommitted.
+export type RepoCommits = {
+  name: string
+  before: string
+  after: string
+  commits: string[]
+  uncommitted: boolean
+}
+
 export type StepStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate'
 
 // One execution of a process in a run, with the process as it was then.
@@ -472,6 +483,8 @@ export type RunStep = {
   childRun: number | null
   // The branch it worked on in its run's workspace; empty if it worked in none.
   branch: string
+  // What it did to each repository it worked on.
+  commits: RepoCommits[]
   startedAt: string
   finishedAt: string | null
 }

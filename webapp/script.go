@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -82,6 +83,9 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 			if ctx.Err() != nil {
 				res.Error = "it was stopped"
 			}
+		}
+		if err := recordCommits(context.Background(), db, stepID, res.Commits); err != nil {
+			log.Printf("record commits of step %d: %v", stepID, err)
 		}
 		if contract != nil && res.OK {
 			// Unlike an agent, a script gives the same reply when asked again.

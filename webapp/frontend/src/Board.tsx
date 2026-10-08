@@ -1020,7 +1020,7 @@ export default function Board() {
   const changeAttribute = async (
     objectId: string,
     id: number,
-    patch: { name?: string; definition?: string; unique?: boolean },
+    patch: { name?: string; definition?: string; unique?: boolean; file?: boolean },
   ) => {
     try {
       const attribute = await updateAttribute(id, patch)

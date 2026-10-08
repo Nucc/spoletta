@@ -206,7 +206,7 @@ func runSentryStep(ctx context.Context, db *sql.DB, cfg sentryConfig, runID, id 
 		return res, err
 	}
 	s := settings.sentry()
-	contract, msg, err := contractFor(ctx, db, id)
+	contract, msg, err := contractFor(ctx, db, id, false)
 	if err != nil {
 		return res, err
 	}

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +26,9 @@ type attribute struct {
 	Definition string `json:"definition"`
 	// No two values a persistent object stores share this attribute's value.
 	Unique bool `json:"unique"`
+	// Holds the path of a file the process wrote in its step's files
+	// directory, which must exist.
+	File bool `json:"file"`
 }
 
 func migrateAttributes(db *sql.DB) error {
@@ -36,7 +41,10 @@ func migrateAttributes(db *sql.DB) error {
 		UNIQUE KEY object_name (object_id, name),
 		FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE CASCADE
 	)`)
-	return err
+	if err != nil {
+		return err
+	}
+	return addColumn(db, "object_attributes", "is_file", "BOOLEAN NOT NULL DEFAULT FALSE")
 }
 
 func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
@@ -87,6 +95,7 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			Name       *string `json:"name"`
 			Definition *string `json:"definition"`
 			Unique     *bool   `json:"unique"`
+			File       *bool   `json:"file"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -99,8 +108,8 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE object_attributes SET name = COALESCE(?, name), definition = COALESCE(?, definition), is_unique = COALESCE(?, is_unique) WHERE id = ?",
-			patch.Name, patch.Definition, patch.Unique, id)
+			"UPDATE object_attributes SET name = COALESCE(?, name), definition = COALESCE(?, definition), is_unique = COALESCE(?, is_unique), is_file = COALESCE(?, is_file) WHERE id = ?",
+			patch.Name, patch.Definition, patch.Unique, patch.File, id)
 		if mysqlErrorIs(err, mysqlErrDuplicate) {
 			http.Error(w, "the object already has an attribute named "+*patch.Name, http.StatusConflict)
 			return
@@ -111,8 +120,8 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var a attribute
-		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name, definition, is_unique FROM object_attributes WHERE id = ?", id).
-			Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique)
+		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name, definition, is_unique, is_file FROM object_attributes WHERE id = ?", id).
+			Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "attribute not found", http.StatusNotFound)
 			return
@@ -141,7 +150,7 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 // The attributes of every object, or of one if object isn't 0, by object id.
 func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]attribute, error) {
 	rows, err := db.QueryContext(ctx,
-		"SELECT id, object_id, name, definition, is_unique FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
+		"SELECT id, object_id, name, definition, is_unique, is_file FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +158,7 @@ func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]
 	attrs := map[int64][]attribute{}
 	for rows.Next() {
 		var a attribute
-		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique); err != nil {
+		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File); err != nil {
 			return nil, err
 		}
 		attrs[a.Object] = append(attrs[a.Object], a)
@@ -157,13 +166,16 @@ func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]
 	return attrs, rows.Err()
 }
 
-// What an agent process must reply with: a JSON object with the attributes
-// of the object it generates, or for a list of items a JSON array of such
-// objects. When it generates several objects with attributes, the reply
-// holds one such JSON object or array per generated object, under the
-// object's name. Objects without attributes take the whole reply.
+// The interface of what a process generates, which its output always
+// follows: a JSON object with the attributes of the object it generates, or
+// {"data": ...} when the object has none; for a list of items a JSON array
+// of such objects. When it generates several objects, the output holds one
+// such JSON object or array per generated object, under the object's name.
 type outputContract struct {
 	shaped []shapedObject
+	// The step's files directory, which file attributes must point inside;
+	// empty to leave them unchecked.
+	filesDir string
 }
 
 type shapedObject struct {
@@ -171,12 +183,17 @@ type shapedObject struct {
 	name       string
 	many       bool
 	attributes []attribute
+	// The object has no attributes, so it holds its value under data.
+	data bool
 }
 
-// The contract for what a process generates, or nil if none of its output
-// objects have attributes. Says what is wrong if the objects can't be told
-// apart in a reply.
-func contractFor(ctx context.Context, db *sql.DB, process int64) (*outputContract, string, error) {
+// The attribute an object without attributes holds its value in.
+const dataAttribute = "data"
+
+// The contract for what a process generates, or nil if it generates
+// nothing. With all false, only objects with attributes are in it, and nil
+// means none has any. Says what is wrong if the objects can't be told apart.
+func contractFor(ctx context.Context, db *sql.DB, process int64, all bool) (*outputContract, string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT DISTINCT o.id, o.name, o.many AND o.parent_id <=> p.parent_id
 		FROM object_links l JOIN objects o ON o.id = l.object_id JOIN processes p ON p.id = l.process_id
@@ -205,10 +222,14 @@ func contractFor(ctx context.Context, db *sql.DB, process int64) (*outputContrac
 	names := map[string]bool{}
 	for _, o := range objects {
 		if o.attributes = attrs[o.id]; len(o.attributes) == 0 {
-			continue
+			if !all {
+				continue
+			}
+			o.data = true
+			o.attributes = []attribute{{Name: dataAttribute, Definition: fmt.Sprintf("What %s holds, as any JSON value", quote(o.name))}}
 		}
 		if names[o.name] {
-			return nil, fmt.Sprintf("the process generates two objects named %q with attributes; rename one so its reply can tell them apart", o.name), nil
+			return nil, fmt.Sprintf("the process generates two objects named %q; rename one so its output can tell them apart", o.name), nil
 		}
 		names[o.name] = true
 		c.shaped = append(c.shaped, o)
@@ -219,43 +240,91 @@ func contractFor(ctx context.Context, db *sql.DB, process int64) (*outputContrac
 	return c, "", nil
 }
 
-// Appends what the reply must look like to the prompt. It goes last, so it
-// binds a revision asked for in a change request too.
+// Where a step keeps the files it generates, in the volume the worker
+// writes them to.
+func stepFilesDir(run, step int64) string {
+	return filepath.Join(filesRoot, "runs", strconv.FormatInt(run, 10), "steps", strconv.FormatInt(step, 10))
+}
+
+// The contract as the worker's submit_output tool takes it.
+type outputSpec struct {
+	Shape   string       `json:"shape"`
+	Objects []specObject `json:"objects"`
+}
+
+type specObject struct {
+	Name       string          `json:"name"`
+	Many       bool            `json:"many"`
+	Attributes []specAttribute `json:"attributes"`
+}
+
+type specAttribute struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	File        bool   `json:"file"`
+}
+
+// Tool arguments must be a JSON object, so a single list goes under items.
+func (c *outputContract) spec() *outputSpec {
+	s := &outputSpec{Shape: "objects"}
+	if len(c.shaped) == 1 {
+		s.Shape = "object"
+		if c.shaped[0].many {
+			s.Shape = "items"
+		}
+	}
+	for _, o := range c.shaped {
+		so := specObject{Name: o.name, Many: o.many}
+		for _, a := range o.attributes {
+			desc := strings.TrimSpace(a.Definition)
+			if a.File {
+				desc = strings.TrimSpace("The path of a file you wrote in " + c.filesDir + ". " + desc)
+			}
+			so.Attributes = append(so.Attributes, specAttribute{Name: a.Name, Description: desc, File: a.File})
+		}
+		s.Objects = append(s.Objects, so)
+	}
+	return s
+}
+
+func (c *outputContract) hasFiles() bool {
+	for _, o := range c.shaped {
+		for _, a := range o.attributes {
+			if a.File {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Appends what the agent hands in, through the submit_output tool, to the
+// prompt. It goes last, so it binds a revision asked for in a change request
+// too.
 func (c *outputContract) withContract(prompt string) string {
 	var b strings.Builder
 	b.WriteString(prompt)
 	b.WriteString("\n\n<output_format>\n")
-	if len(c.shaped) == 1 {
-		o := c.shaped[0]
-		if o.many {
-			fmt.Fprintf(&b, "You generate the list %q. Reply with only a JSON array, with no other text before or after it, holding one JSON object per item, each with exactly these keys:\n", o.name)
-		} else {
-			fmt.Fprintf(&b, "You generate the object %q. Reply with only a JSON object, with no other text before or after it, holding exactly these keys:\n", o.name)
+	b.WriteString("Hand in what you generate by calling the submit_output tool once, as your last action; a reply in text is not your result. ")
+	switch {
+	case len(c.shaped) > 1:
+		b.WriteString("Its arguments hold one key per object below, each a JSON object with exactly that object's keys, or for a list an array of such objects, one per item.\n")
+	case c.shaped[0].many:
+		b.WriteString("Its argument items is an array with one JSON object per item, each with exactly the keys below; an empty array if there are no items.\n")
+	default:
+		b.WriteString("Its arguments are exactly the keys below.\n")
+	}
+	for _, o := range c.shaped {
+		switch {
+		case o.many:
+			fmt.Fprintf(&b, "\n%q, a list of items each with:\n", o.name)
+		default:
+			fmt.Fprintf(&b, "\n%q:\n", o.name)
 		}
-		writeAttributes(&b, o.attributes, "")
-		fmt.Fprintf(&b, "\nFor example:\n%s\n", o.skeleton(""))
-		if o.many {
-			b.WriteString("An empty array if there are no items.\n")
-		}
-	} else {
-		b.WriteString("You generate several objects. Reply with only a JSON object, with no other text before or after it, holding one key per object below. Each holds a JSON object with exactly that object's keys, or for a list a JSON array of such objects, one per item.\n")
-		for _, o := range c.shaped {
-			if o.many {
-				fmt.Fprintf(&b, "\n%q, a list of items each with:\n", o.name)
-			} else {
-				fmt.Fprintf(&b, "\n%q:\n", o.name)
-			}
-			writeAttributes(&b, o.attributes, "  ")
-		}
-		b.WriteString("\nFor example:\n{\n")
-		for i, o := range c.shaped {
-			fmt.Fprintf(&b, "  %s: %s", quote(o.name), o.skeleton("  "))
-			if i < len(c.shaped)-1 {
-				b.WriteString(",")
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString("}\n")
+		writeAttributes(&b, o.attributes, "  ")
+	}
+	if c.hasFiles() {
+		fmt.Fprintf(&b, "\nWrite the files you generate in %s, and give their paths.\n", c.filesDir)
 	}
 	b.WriteString("Keys not listed are not allowed. Each value can be any JSON value that fits its definition.\n</output_format>\n")
 	return b.String()
@@ -264,34 +333,15 @@ func (c *outputContract) withContract(prompt string) string {
 func writeAttributes(b *strings.Builder, attrs []attribute, indent string) {
 	for _, a := range attrs {
 		def := strings.TrimSpace(a.Definition)
+		if a.File {
+			def = strings.TrimSpace("the path of a file you wrote. " + def)
+		}
 		if def == "" {
 			fmt.Fprintf(b, "%s- %s\n", indent, quote(a.Name))
 		} else {
 			fmt.Fprintf(b, "%s- %s: %s\n", indent, quote(a.Name), strings.ReplaceAll(def, "\n", "\n"+indent+"  "))
 		}
 	}
-}
-
-func skeleton(attrs []attribute, indent string) string {
-	var b strings.Builder
-	b.WriteString("{")
-	for i, a := range attrs {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		fmt.Fprintf(&b, "\n%s  %s: \"...\"", indent, quote(a.Name))
-	}
-	fmt.Fprintf(&b, "\n%s}", indent)
-	return b.String()
-}
-
-// What the object's part of a reply looks like: an object, or for a list an
-// array with one.
-func (o shapedObject) skeleton(indent string) string {
-	if !o.many {
-		return skeleton(o.attributes, indent)
-	}
-	return "[" + skeleton(o.attributes, indent) + "]"
 }
 
 func quote(s string) string {
@@ -306,7 +356,7 @@ func (c *outputContract) parse(reply string) (string, map[int64]string, error) {
 	contents := map[int64]string{}
 	if len(c.shaped) == 1 {
 		o := c.shaped[0]
-		out, err := o.shape(stripFence(reply))
+		out, err := c.shapeObject(o, stripFence(reply))
 		if err != nil {
 			return "", nil, err
 		}
@@ -327,7 +377,7 @@ func (c *outputContract) parse(reply string) (string, map[int64]string, error) {
 	}
 	parts := make([]json.RawMessage, len(c.shaped))
 	for i, o := range c.shaped {
-		out, err := o.shape(string(fields[o.name]))
+		out, err := c.shapeObject(o, string(fields[o.name]))
 		if err != nil {
 			return "", nil, fmt.Errorf("%q: %w", o.name, err)
 		}
@@ -339,13 +389,13 @@ func (c *outputContract) parse(reply string) (string, map[int64]string, error) {
 
 // The object's part of a reply, checked and with its attributes in order:
 // a JSON object, or for a list a JSON array of them.
-func (o shapedObject) shape(s string) (string, error) {
+func (c *outputContract) shapeObject(o shapedObject, s string) (string, error) {
 	if !o.many {
 		fields, err := jsonObject(s)
 		if err != nil {
 			return "", err
 		}
-		return shape(fields, o.attributes)
+		return c.shape(fields, o.attributes)
 	}
 	items, err := jsonArray(s)
 	if err != nil {
@@ -357,7 +407,7 @@ func (o shapedObject) shape(s string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("item %d: %w", i+1, err)
 		}
-		if parts[i], err = shape(fields, o.attributes); err != nil {
+		if parts[i], err = c.shape(fields, o.attributes); err != nil {
 			return "", fmt.Errorf("item %d: %w", i+1, err)
 		}
 	}
@@ -410,7 +460,7 @@ func jsonObject(s string) (map[string]json.RawMessage, error) {
 }
 
 // The object's attributes as indented JSON, in their order.
-func shape(fields map[string]json.RawMessage, attrs []attribute) (string, error) {
+func (c *outputContract) shape(fields map[string]json.RawMessage, attrs []attribute) (string, error) {
 	keys := make([]string, len(attrs))
 	for i, a := range attrs {
 		keys[i] = a.Name
@@ -418,11 +468,52 @@ func shape(fields map[string]json.RawMessage, attrs []attribute) (string, error)
 	if err := exactKeys(fields, keys); err != nil {
 		return "", err
 	}
+	// A file's path is kept whole, so it means the same to every process.
+	for _, a := range attrs {
+		if a.File {
+			path, err := c.checkFile(fields[a.Name])
+			if err != nil {
+				return "", fmt.Errorf("%s: %w", quote(a.Name), err)
+			}
+			fields[a.Name] = json.RawMessage(quote(path))
+		}
+	}
 	values := make([]json.RawMessage, len(keys))
 	for i, k := range keys {
 		values[i] = fields[k]
 	}
 	return ordered(keys, values), nil
+}
+
+// Checks that a file attribute's value is the path of a file in the step's
+// files directory, and returns the path, made absolute if it was relative to
+// that directory.
+func (c *outputContract) checkFile(value json.RawMessage) (string, error) {
+	var path string
+	if err := json.Unmarshal(value, &path); err != nil || path == "" {
+		return "", errors.New("it must be the path of a file, as a string")
+	}
+	if c.filesDir == "" {
+		return path, nil
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(c.filesDir, path)
+	}
+	root, err := filepath.EvalSymlinks(c.filesDir)
+	if err != nil {
+		return "", fmt.Errorf("%s doesn't exist", path)
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("%s doesn't exist", path)
+	}
+	if rel, err := filepath.Rel(root, real); err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("%s isn't in %s", path, c.filesDir)
+	}
+	if info, err := os.Stat(real); err != nil || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s isn't a file", path)
+	}
+	return filepath.Clean(path), nil
 }
 
 func exactKeys(fields map[string]json.RawMessage, keys []string) error {

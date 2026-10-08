@@ -49,6 +49,11 @@ type agentRun struct {
 	Prompt      string `json:"prompt"`
 	Model       string `json:"model"`
 	Thinking    string `json:"thinking"`
+	// What the process generates, which the agent hands in through the
+	// worker's submit_output tool, whose parameters it shapes.
+	Output *outputSpec `json:"output,omitempty"`
+	// Where the agent writes the files it generates.
+	FilesDir string `json:"filesDir,omitempty"`
 }
 
 // Inputs are capped so a runaway output can't grow every prompt downstream without bound.
@@ -62,6 +67,9 @@ type runResult struct {
 	// process generates objects with attributes; the others hold the output.
 	// The worker leaves it out.
 	Objects map[int64]string `json:"objects,omitempty"`
+	// Set by the worker when the agent handed in its output through
+	// submit_output, which checked it against the output's interface.
+	Submitted bool `json:"submitted,omitempty"`
 	// Set when what the step generated holds a unique value another run
 	// stored; its run is terminated.
 	Duplicate *duplicate `json:"-"`
@@ -100,7 +108,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, runID, id i
 	if err != nil {
 		return res, err
 	}
-	contract, msg, err := contractFor(ctx, db, id)
+	contract, msg, err := contractFor(ctx, db, id, true)
 	if err != nil {
 		return res, err
 	}
@@ -111,14 +119,21 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, runID, id i
 		res.Error = msg
 	default:
 		run.Prompt = withChangeRequest(withInputs(run.Prompt, inputs), cr)
-		if contract != nil {
-			run.Prompt = contract.withContract(run.Prompt)
-		}
 	}
 
 	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Prompt, inputs, cr)
 	if err != nil {
 		return res, err
+	}
+	// The files directory is the step's, so the contract follows the step.
+	if res.Error == "" && contract != nil {
+		contract.filesDir = stepFilesDir(runID, stepID)
+		run.Prompt = contract.withContract(run.Prompt)
+		run.Output = contract.spec()
+		run.FilesDir = contract.filesDir
+		if _, err := db.ExecContext(ctx, "UPDATE run_steps SET prompt = ? WHERE id = ?", run.Prompt, stepID); err != nil {
+			return res, err
+		}
 	}
 	if res.Error == "" {
 		res = runAgent(ctx, workerURL, run)
@@ -146,11 +161,13 @@ func runAgent(ctx context.Context, workerURL string, run agentRun) runResult {
 	return res
 }
 
-// Checks an agent's reply against the attributes of the objects it
-// generates. A reply that breaks the contract gets one more try, and the
-// step records the prompt of that try, which holds the rejected reply.
+// Checks what an agent handed in against the interface of the objects it
+// generates. The worker's submit_output tool has the agent fix what breaks
+// it, so this catches an agent that never handed anything in. That gets one
+// more try, and the step records the prompt of that try, which holds the
+// rejected reply.
 func followContract(ctx context.Context, db *sql.DB, workerURL string, run agentRun, c *outputContract, res runResult, stepID int64) runResult {
-	out, objects, err := c.parse(res.Output)
+	out, objects, err := c.handedIn(res)
 	if err != nil {
 		run.Prompt = withRetry(run.Prompt, res.Output, err)
 		if stepID != 0 {
@@ -161,11 +178,19 @@ func followContract(ctx context.Context, db *sql.DB, workerURL string, run agent
 		if res = runAgent(ctx, workerURL, run); !res.OK {
 			return res
 		}
-		if out, objects, err = c.parse(res.Output); err != nil {
-			return runResult{Output: res.Output, Error: "The reply didn't follow the output format twice. The last time " + err.Error() + "."}
+		if out, objects, err = c.handedIn(res); err != nil {
+			return runResult{Output: res.Output, Error: "The output didn't follow the interface of what the process generates twice. The last time " + err.Error() + "."}
 		}
 	}
 	return runResult{OK: true, Output: out, Objects: objects}
+}
+
+// What an agent handed in, checked against the contract.
+func (c *outputContract) handedIn(res runResult) (string, map[int64]string, error) {
+	if !res.Submitted {
+		return "", nil, errors.New("it wasn't handed in by calling submit_output")
+	}
+	return c.parse(res.Output)
 }
 
 // Appends each input object to the prompt, tagged with its name so the agent

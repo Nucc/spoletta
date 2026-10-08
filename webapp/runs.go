@@ -76,6 +76,8 @@ type runObject struct {
 	Name    string `json:"name"`
 	State   string `json:"state"`
 	Content string `json:"content"`
+	// The generated files its content names, which /api/files serves.
+	Files []string `json:"files"`
 }
 
 const (
@@ -512,6 +514,9 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			if err := orows.Scan(&o.ID, &o.Step, &o.Object, &o.Name, &o.State, &o.Content); err != nil {
 				serverError(w, err)
 				return
+			}
+			if o.Files = filesIn(o.Content); o.Files == nil {
+				o.Files = []string{}
 			}
 			detail.Objects = append(detail.Objects, o)
 		}

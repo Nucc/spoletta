@@ -36,7 +36,7 @@ export default function ObjectPanel({
   onPersistentChange: (persistent: boolean) => Promise<boolean>
   onManyChange: (many: boolean) => Promise<boolean>
   onAdd: (name: string) => Promise<boolean>
-  onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean }) => Promise<boolean>
+  onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean; file?: boolean }) => Promise<boolean>
   onRemove: (id: number) => Promise<boolean>
   onClose: () => void
 }) {
@@ -88,7 +88,7 @@ export default function ObjectPanel({
         <span>List of items</span>
       </label>
       <p className="panel-note">
-        An agent generating it replies with a list, and a flow process taking it runs once per item, each item as this
+        A process generating it hands in a JSON array, and a flow process taking it runs once per item, each item as this
         object inside it. Stored, each item's run claims its item, so an item another run took is skipped.
       </p>
       <label className="panel-check">
@@ -111,8 +111,10 @@ export default function ObjectPanel({
           <span>Attributes</span>
         </div>
         <p className="panel-note">
-          An agent that generates this object replies with a JSON object that has exactly these keys. The definitions tell
-          it what each one holds. A reply that doesn't fit is sent back once, then the step fails.
+          A process generating this object hands in a JSON object with exactly these keys, or with only data when it has
+          none; the definitions say what each one holds. An agent's output is checked as it hands it in, and it fixes what
+          doesn't fit; a script's that doesn't fit fails the step. A file attribute holds the path of a file the process
+          wrote.
         </p>
         {attributes.map((a) => (
           <AttributeRow
@@ -139,12 +141,10 @@ export default function ObjectPanel({
         </div>
         {duplicate && <small className="panel-warning">The object already has that attribute.</small>}
       </section>
-      {attributes.length > 0 && (
-        <div className="panel-run">
-          <span>Agents reply with</span>
-          <pre>{example(attributes)}</pre>
-        </div>
-      )}
+      <div className="panel-run">
+        <span>Processes hand in</span>
+        <pre>{example(attributes, many)}</pre>
+      </div>
       {content !== undefined && (
         <div className="panel-run">
           <span>Last run</span>
@@ -169,7 +169,7 @@ function AttributeRow({
   persistent: boolean
   // The names of the object's other attributes.
   taken: string[]
-  onUpdate: (patch: { name?: string; definition?: string; unique?: boolean }) => Promise<boolean>
+  onUpdate: (patch: { name?: string; definition?: string; unique?: boolean; file?: boolean }) => Promise<boolean>
   onRemove: () => Promise<boolean>
 }) {
   const [name, setName] = useState(attribute.name)
@@ -235,18 +235,29 @@ function AttributeRow({
         </button>
       </div>
       {clash && <small className="panel-warning">Another attribute has that name.</small>}
-      <label
-        className="panel-check"
-        title={persistent ? undefined : 'Store what runs generate to make an attribute unique'}
-      >
-        <input
-          type="checkbox"
-          checked={attribute.unique}
-          disabled={!editable || !persistent}
-          onChange={(e) => onUpdate({ unique: e.target.checked })}
-        />
-        <span>Unique</span>
-      </label>
+      <div className="attribute-flags">
+        <label
+          className="panel-check"
+          title={persistent ? undefined : 'Store what runs generate to make an attribute unique'}
+        >
+          <input
+            type="checkbox"
+            checked={attribute.unique}
+            disabled={!editable || !persistent}
+            onChange={(e) => onUpdate({ unique: e.target.checked })}
+          />
+          <span>Unique</span>
+        </label>
+        <label className="panel-check" title="Holds the path of a file the process wrote, which must exist">
+          <input
+            type="checkbox"
+            checked={attribute.file}
+            disabled={!editable}
+            onChange={(e) => onUpdate({ file: e.target.checked })}
+          />
+          <span>File</span>
+        </label>
+      </div>
       <textarea
         value={definition}
         rows={2}
@@ -260,7 +271,11 @@ function AttributeRow({
   )
 }
 
-// What a reply looks like, keys in order, as the agent is shown it.
-function example(attributes: ObjectAttribute[]): string {
-  return `{\n${attributes.map((a) => `  ${JSON.stringify(a.name)}: …`).join(',\n')}\n}`
+// What a process hands in, keys in order: {"data": …} without attributes,
+// an array of such objects for a list.
+function example(attributes: ObjectAttribute[], many: boolean): string {
+  const keys = attributes.length > 0 ? attributes.map((a) => a.name) : ['data']
+  const object = (indent: string) =>
+    `{\n${keys.map((k) => `${indent}  ${JSON.stringify(k)}: …`).join(',\n')}\n${indent}}`
+  return many ? `[\n  ${object('  ')}\n]` : object('')
 }

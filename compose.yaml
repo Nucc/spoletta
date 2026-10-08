@@ -45,6 +45,8 @@ services:
       # rest of the directory holds sessions and OAuth tokens.
       - ${PI_CONFIG_DIR:-~/.pi/agent}/models.json:/pi-host/models.json:ro
       - ${PI_CONFIG_DIR:-~/.pi/agent}/settings.json:/pi-host/settings.json:ro
+      # Files runs generate, at the same path as in the webapp, which serves them.
+      - files:/data/files
     restart: unless-stopped
 
   webapp:
@@ -61,6 +63,9 @@ services:
       # self-hosted Sentry if not sentry.io.
       SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
       SENTRY_URL: ${SENTRY_URL:-}
+    volumes:
+      # Read-only: the webapp checks and serves files; the worker writes them.
+      - files:/data/files:ro
     ports:
       - "8080:8080"
     depends_on:
@@ -72,3 +77,4 @@ services:
 
 volumes:
   mysql-data:
+  files:

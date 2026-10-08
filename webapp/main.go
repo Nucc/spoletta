@@ -77,6 +77,7 @@ func main() {
 	registerRunRoutes(mux, db, newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, parallelSteps))
 	registerVersionRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
+	registerFileRoutes(mux)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		var version string
 		if err := db.QueryRowContext(r.Context(), "SELECT VERSION()").Scan(&version); err != nil {

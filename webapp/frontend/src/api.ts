@@ -99,6 +99,9 @@ export type ObjectAttribute = {
   // generating one another run stored terminates its run. Only matters
   // while the object is persistent.
   unique: boolean
+  // Holds the path of a file the process wrote in its step's files
+  // directory, which must exist.
+  file: boolean
 }
 
 // A situation an object can be in, such as approved or changes requested.
@@ -276,7 +279,7 @@ export function createAttribute(object: number, a: { name: string; definition: s
   return request(`/api/objects/${object}/attributes`, { method: 'POST', body: JSON.stringify(a) })
 }
 
-export function updateAttribute(id: number, patch: Partial<Pick<ObjectAttribute, 'name' | 'definition' | 'unique'>>): Promise<ObjectAttribute> {
+export function updateAttribute(id: number, patch: Partial<Pick<ObjectAttribute, 'name' | 'definition' | 'unique' | 'file'>>): Promise<ObjectAttribute> {
   return request(`/api/attributes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -377,7 +380,11 @@ export type RunObject = {
   name: string
   state: string
   content: string
+  // The generated files its content names; fileUrl opens one.
+  files: string[]
 }
+
+export const fileUrl = (path: string) => `/api/files?path=${encodeURIComponent(path)}`
 
 export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[] }
 

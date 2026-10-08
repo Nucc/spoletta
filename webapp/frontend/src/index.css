@@ -513,6 +513,11 @@ body {
   font-size: 13px;
 }
 
+.attribute-flags {
+  display: flex;
+  gap: 16px;
+}
+
 .panel-check:has(input:disabled) {
   color: #8c959f;
 }
@@ -1456,4 +1461,10 @@ body {
     4px 4px 0 0 #8c959f,
     8px 8px 0 -1px #fff,
     8px 8px 0 0 #8c959f;
+}
+
+.step-files {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
 }

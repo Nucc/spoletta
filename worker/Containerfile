@@ -14,6 +14,7 @@ RUN apk add --no-cache bash curl git jq
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 
 COPY --from=build /out/worker /usr/local/bin/worker
+COPY submit-output.ts /opt/flow/submit-output.ts
 
 EXPOSE 8090
 CMD ["worker"]

@@ -151,9 +151,9 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, object_id, name, definition, is_unique FROM object_attributes ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, object_id, name, definition, is_unique, is_file FROM object_attributes ORDER BY id", func(rows *sql.Rows) error {
 		var a attribute
-		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique)
+		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File)
 		s.Attributes = append(s.Attributes, a)
 		return err
 	})
@@ -304,8 +304,8 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 		}
 	}
 	for _, a := range s.Attributes {
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (id, object_id, name, definition, is_unique) VALUES (?, ?, ?, ?, ?)",
-			a.ID, a.Object, a.Name, a.Definition, a.Unique)
+		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (id, object_id, name, definition, is_unique, is_file) VALUES (?, ?, ?, ?, ?, ?)",
+			a.ID, a.Object, a.Name, a.Definition, a.Unique, a.File)
 		if err != nil {
 			return err
 		}

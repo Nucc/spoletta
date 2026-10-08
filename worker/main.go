@@ -50,6 +50,20 @@ type runRequest struct {
 	Prompt      string `json:"prompt"`
 	Model       string `json:"model"`
 	Thinking    string `json:"thinking"`
+	// The objects the process generates, which the agent hands in through
+	// submit_output; see submit-output.ts. Absent when it generates none.
+	Output *outputSpec `json:"output"`
+	// Where the agent writes files; inside the files root.
+	FilesDir string `json:"filesDir"`
+}
+
+// The interface of what a process generates, as submit-output.ts reads it.
+type outputSpec struct {
+	Shape   string          `json:"shape"`
+	Objects json.RawMessage `json:"objects"`
+	// Set by the worker.
+	FilesDir   string `json:"filesDir"`
+	ResultFile string `json:"resultFile"`
 }
 
 // A script process's script, with the objects it takes.
@@ -59,6 +73,8 @@ type scriptRequest struct {
 	ProcessName string        `json:"processName"`
 	Script      string        `json:"script"`
 	Inputs      []scriptInput `json:"inputs"`
+	// Where the script writes files, which $OUTPUTS points to; inside the files root.
+	FilesDir string `json:"filesDir"`
 }
 
 type scriptInput struct {
@@ -74,6 +90,25 @@ type runResult struct {
 	OK     bool   `json:"ok"`
 	Output string `json:"output"`
 	Error  string `json:"error"`
+	// For a run with an output spec: whether the agent handed in its output
+	// through submit_output, which then is the output. If it didn't, the
+	// output is what it printed.
+	Submitted bool `json:"submitted"`
+}
+
+// Where files that runs generate are kept, a volume the webapp serves them from.
+var filesRoot = envOr("FILES_DIR", "/data/files")
+
+// The submit_output extension, which the image puts here.
+var outputExtension = envOr("OUTPUT_EXTENSION", "/opt/flow/submit-output.ts")
+
+// Creates a run's files directory, which must be inside the files root.
+func makeFilesDir(dir string) error {
+	rel, err := filepath.Rel(filesRoot, filepath.Clean(dir))
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return fmt.Errorf("files directory %q isn't inside %s", dir, filesRoot)
+	}
+	return os.MkdirAll(dir, 0o777)
 }
 
 func main() {
@@ -127,6 +162,13 @@ func main() {
 			}
 		}
 
+		if run.FilesDir != "" {
+			if err := makeFilesDir(run.FilesDir); err != nil {
+				reply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+
 		started := time.Now()
 		res := runPi(r.Context(), run, timeout)
 		logRun(run, res, time.Since(started))
@@ -144,6 +186,13 @@ func main() {
 		if strings.TrimSpace(run.Script) == "" {
 			reply(w, http.StatusBadRequest, map[string]string{"error": "script is required"})
 			return
+		}
+
+		if run.FilesDir != "" {
+			if err := makeFilesDir(run.FilesDir); err != nil {
+				reply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
 		}
 
 		started := time.Now()
@@ -280,10 +329,35 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult
 		args = append(args, "--thinking", run.Thinking)
 	}
 
+	// The spec and the result live outside the agent's working directory.
+	var resultFile string
+	var env []string
+	if run.Output != nil {
+		private, err := os.MkdirTemp("", "output-")
+		if err != nil {
+			return runResult{Error: "create output directory: " + err.Error()}
+		}
+		defer os.RemoveAll(private)
+		spec := *run.Output
+		spec.FilesDir = run.FilesDir
+		spec.ResultFile = filepath.Join(private, "result.json")
+		b, err := json.Marshal(spec)
+		if err == nil {
+			err = os.WriteFile(filepath.Join(private, "spec.json"), b, 0o644)
+		}
+		if err != nil {
+			return runResult{Error: "write output spec: " + err.Error()}
+		}
+		resultFile = spec.ResultFile
+		args = append(args, "-e", outputExtension)
+		env = append(os.Environ(), "FLOW_OUTPUT_SPEC="+filepath.Join(private, "spec.json"))
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "pi", args...)
 	cmd.Dir = cwd
+	cmd.Env = env
 	// pi gets its own process group so stopping it also stops the tools it started.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
@@ -314,6 +388,12 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration) runResult
 		}
 		return runResult{Output: output, Error: msg}
 	}
+	if resultFile != "" {
+		// Missing if the agent never called submit_output, or the extension failed to load.
+		if b, err := os.ReadFile(resultFile); err == nil {
+			return runResult{OK: true, Output: string(b), Submitted: true}
+		}
+	}
 	return runResult{OK: true, Output: output}
 }
 
@@ -323,7 +403,8 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // Runs a script with bash in a fresh scratch directory, which is its working
 // directory. Each object it takes is a file in the directory $INPUTS points
 // to, named after the object: spaces and other characters unsafe in a file
-// name become underscores, so Jira Ticket is $INPUTS/Jira_Ticket. What the
+// name become underscores, so Jira Ticket is $INPUTS/Jira_Ticket. Files it
+// generates go in the directory $OUTPUTS points to, which is kept. What the
 // script prints is its output; a non-zero exit fails it, with what it printed
 // to stderr as the error. Like pi, it runs in a process group of its own,
 // which a cancelled request or the timeout kills.
@@ -356,6 +437,9 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) ru
 	cmd := exec.CommandContext(runCtx, "bash", script)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "INPUTS="+inputs)
+	if run.FilesDir != "" {
+		cmd.Env = append(cmd.Env, "OUTPUTS="+run.FilesDir)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 10 * time.Second

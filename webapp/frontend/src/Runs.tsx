@@ -1,4 +1,4 @@
-import type { FlowRun, FlowRunDetail, FlowRunStatus, RunStep, StepStatus } from './api'
+import { fileUrl, type FlowRun, type FlowRunDetail, type FlowRunStatus, type RunStep, type StepStatus } from './api'
 
 const RUN_LABELS: Record<FlowRunStatus, string> = {
   running: 'Running',
@@ -236,6 +236,20 @@ function Step({
           <p className="panel-note">
             Generated {objects.map((o) => (o.state ? `${o.name} (${o.state})` : o.name)).join(', ')}
           </p>
+        )}
+        {s.kind !== 'human' && objects.some((o) => o.files.length > 0) && (
+          <div className="panel-run">
+            <span>Files</span>
+            <ul className="step-files">
+              {[...new Set(objects.flatMap((o) => o.files))].map((f) => (
+                <li key={f}>
+                  <a href={fileUrl(f)} target="_blank" rel="noreferrer">
+                    {f.split('/').pop()}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </div>
     </details>

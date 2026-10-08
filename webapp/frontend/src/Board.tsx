@@ -76,6 +76,7 @@ import {
   renameState,
   restoreVersion,
   saveVersion,
+  setLinkAt,
   setLinkRoute,
   setLinkStates,
   startRun,
@@ -339,7 +340,6 @@ export default function Board() {
       position: position ?? { x: o.x, y: o.y },
       width: o.width ?? NODE_SIZE.object.width,
       deletable: false,
-      draggable: !boundary,
       data: { name: o.name, states: o.states, attributes: o.attributes, persistent: o.persistent, many: o.many, editing, boundary },
     }),
     [],
@@ -373,9 +373,9 @@ export default function Board() {
 
   // Shows one board of the flow: its processes, its objects and their links.
   // A flow process's board also shows the objects the flow process is linked
-  // to, the ones it takes below its start and the ones it only generates
-  // above its end. A board that is gone, such as after jumping to a version
-  // without its flow process, gives way to the top board.
+  // to, the ones it takes above its start, leading into it, and the ones it
+  // only generates above its end. A board that is gone, such as after jumping
+  // to a version without its flow process, gives way to the top board.
   const showBoard = useCallback(
     (c: BoardContents, wanted: BoardId) => {
       const inner = wanted === null ? undefined : c.boards.find((b) => b.process === wanted)
@@ -394,11 +394,13 @@ export default function Board() {
       const ins = board === null ? [] : outside('input', new Set(own.map((o) => o.id)))
       const outs = board === null ? [] : outside('output', new Set([...own.map((o) => o.id), ...ins]))
       const byId = new Map(c.objects.map((o) => [o.id, o]))
+      // In a row, unless moved by hand.
+      const placed = (id: number) => c.links.find((l) => l.process === board && l.object === id && l.at)?.at ?? undefined
       const row = (objects: number[], at: XYPosition, side: 'in' | 'out') =>
         objects.flatMap((id, i) => {
           const o = byId.get(id)
           const x = at.x + i * (NODE_SIZE.object.width + BOUNDARY_GAP.x)
-          return o ? [toObjectNode(o, false, side, { x, y: at.y })] : []
+          return o ? [toObjectNode(o, false, side, placed(id) ?? { x, y: at.y })] : []
         })
 
       setNodes([
@@ -406,14 +408,14 @@ export default function Board() {
         ...(inner ? [toEndNode(inner.end)] : []),
         ...ps.map((p) => toNode(p)),
         ...own.map((o) => toObjectNode(o)),
-        ...row(ins, { x: start.x, y: start.y + BOUNDARY_GAP.y }, 'in'),
+        ...row(ins, { x: start.x, y: start.y - BOUNDARY_GAP.y }, 'in'),
         ...(inner ? row(outs, { x: inner.end.x, y: inner.end.y - BOUNDARY_GAP.y }, 'out') : []),
       ])
       setEdges([
         ...(start.target !== null && ids.has(start.target) ? [startEdge(start.target, start.route)] : []),
         ...c.connections.filter((cn) => ids.has(cn.source)).map(connectionEdge),
         ...c.links.filter((l) => ids.has(l.process)).map((l) => linkEdge(l, humans.has(l.process))),
-        ...ins.map((o) => boundaryEdge(START_ID, objectNodeId(o))),
+        ...ins.map((o) => boundaryEdge(objectNodeId(o), START_ID)),
         ...(inner
           ? [...new Set(c.links.filter((l) => l.process === board && l.direction === 'output').map((l) => l.object))].map((o) =>
               boundaryEdge(objectNodeId(o), END_ID),
@@ -627,8 +629,12 @@ export default function Board() {
       else if (id === END_ID) {
         if (boardId !== null) updateEnd(boardId, { x, y }).catch(report)
       }
-      // The objects outside keep their place there.
-      else if (isDraft(id) || isBoundary(id)) continue
+      else if (isDraft(id)) continue
+      // An object outside keeps its place here on its links to the board's process.
+      else if (isBoundary(id)) {
+        for (const l of contents?.links ?? [])
+          if (l.process === boardId && l.object === objectIdOf(id)) setLinkAt(l.id, { x, y }).catch(report)
+      }
       else if (isObject(id)) updateObject(objectIdOf(id), { x, y }).catch(report)
       else updateProcess(Number(id), { x, y }).catch(report)
     }

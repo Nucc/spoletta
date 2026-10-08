@@ -45,6 +45,22 @@ type link struct {
 	States    []int64 `json:"states"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
+	// Where the object shows on the process's own board, if moved there by
+	// hand; only a flow process has one.
+	At *point `json:"at"`
+}
+
+type point struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// A point stored in nullable columns, nil when there is none.
+func pointOf(x, y sql.NullFloat64) *point {
+	if !x.Valid || !y.Valid {
+		return nil
+	}
+	return &point{x.Float64, y.Float64}
 }
 
 const (
@@ -110,6 +126,12 @@ func migrateObjects(db *sql.DB) error {
 	}
 
 	if err := addColumn(db, "object_links", "route", "JSON NULL"); err != nil {
+		return err
+	}
+	if err := addColumn(db, "object_links", "at_x", "DOUBLE NULL"); err != nil {
+		return err
+	}
+	if err := addColumn(db, "object_links", "at_y", "DOUBLE NULL"); err != nil {
 		return err
 	}
 
@@ -301,7 +323,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	mux.HandleFunc("GET /api/links", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, process_id, object_id, direction, state_id, route FROM object_links ORDER BY id")
+		rows, err := db.QueryContext(r.Context(), "SELECT id, process_id, object_id, direction, state_id, route, at_x, at_y FROM object_links ORDER BY id")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -313,7 +335,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			l := link{States: []int64{}}
 			var state int64
 			var route []byte
-			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route); err != nil {
+			var atX, atY sql.NullFloat64
+			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -321,6 +344,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 				l.State = &state
 			}
 			l.Route = routeJSON(route)
+			l.At = pointOf(atX, atY)
 			ls = append(ls, l)
 		}
 		if err := rows.Err(); err != nil {
@@ -404,6 +428,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			l.States = []int64{}
 		}
 		l.Route = routeJSON(nil)
+		l.At = nil
 		if msg, err := setDecisionStates(r.Context(), tx, l.ID, l.Object, l.States); err != nil {
 			serverError(w, err)
 			return
@@ -430,6 +455,30 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if _, err := db.ExecContext(r.Context(), "UPDATE object_links SET route = ? WHERE id = ?", route, id); err != nil {
+			serverError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Places the object on the process's own board, or with null goes back to
+	// the default place.
+	mux.HandleFunc("PUT /api/links/{id}/at", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var at *point
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&at); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var x, y sql.NullFloat64
+		if at != nil {
+			x, y = sql.NullFloat64{Float64: at.X, Valid: true}, sql.NullFloat64{Float64: at.Y, Valid: true}
+		}
+		if _, err := db.ExecContext(r.Context(), "UPDATE object_links SET at_x = ?, at_y = ? WHERE id = ?", x, y, id); err != nil {
 			serverError(w, err)
 			return
 		}

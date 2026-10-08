@@ -45,6 +45,8 @@ type snapshotLink struct {
 	// 0 when the link names no state, as stored.
 	State int64           `json:"state"`
 	Route json.RawMessage `json:"route"`
+	// Versions from before boundary places have none.
+	At *point `json:"at,omitempty"`
 }
 
 type snapshotLinkState struct {
@@ -158,11 +160,13 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, process_id, object_id, direction, state_id, route FROM object_links ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, process_id, object_id, direction, state_id, route, at_x, at_y FROM object_links ORDER BY id", func(rows *sql.Rows) error {
 		var l snapshotLink
 		var route []byte
-		err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &l.State, &route)
+		var atX, atY sql.NullFloat64
+		err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &l.State, &route, &atX, &atY)
 		l.Route = routeJSON(route)
+		l.At = pointOf(atX, atY)
 		s.Links = append(s.Links, l)
 		return err
 	})
@@ -307,8 +311,12 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 		}
 	}
 	for _, l := range s.Links {
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route) VALUES (?, ?, ?, ?, ?, ?)",
-			l.ID, l.Process, l.Object, l.Direction, l.State, storedRoute(l.Route))
+		var atX, atY sql.NullFloat64
+		if l.At != nil {
+			atX, atY = sql.NullFloat64{Float64: l.At.X, Valid: true}, sql.NullFloat64{Float64: l.At.Y, Valid: true}
+		}
+		_, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			l.ID, l.Process, l.Object, l.Direction, l.State, storedRoute(l.Route), atX, atY)
 		if err != nil {
 			return err
 		}

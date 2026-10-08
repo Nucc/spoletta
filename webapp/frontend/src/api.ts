@@ -124,6 +124,9 @@ export type Link = {
   states: number[]
   // Where the link's segments run, if moved by hand; see route.ts.
   route: number[] | null
+  // Where the object shows on the process's own board, if moved there by
+  // hand; only a flow process has one.
+  at: { x: number; y: number } | null
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -232,7 +235,7 @@ export function listLinks(): Promise<Link[]> {
 
 // Without a state, the link names none; without states, it lists none.
 export function createLink(
-  l: Omit<Link, 'id' | 'state' | 'states' | 'route'> & { state?: number | null; states?: number[] },
+  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at'> & { state?: number | null; states?: number[] },
 ): Promise<Link> {
   return request('/api/links', { method: 'POST', body: JSON.stringify(l) })
 }
@@ -240,6 +243,11 @@ export function createLink(
 // Sets where a link's segments run; null goes back to the default route.
 export function setLinkRoute(id: number, route: number[] | null): Promise<void> {
   return request(`/api/links/${id}`, { method: 'PATCH', body: JSON.stringify({ route }) })
+}
+
+// Places the object on the link's process's own board; null goes back to the default place.
+export function setLinkAt(id: number, at: { x: number; y: number } | null): Promise<void> {
+  return request(`/api/links/${id}/at`, { method: 'PUT', body: JSON.stringify(at) })
 }
 
 // Replaces the states a human's output link decides between.
@@ -445,8 +453,9 @@ type Snapshot = {
   objects: (Omit<FlowObject, 'states' | 'attributes' | 'parent' | 'many'> & Partial<Pick<FlowObject, 'parent' | 'many'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
-  // state is 0 when the link names none.
-  links: (Omit<Link, 'state' | 'states'> & { state: number })[]
+  // state is 0 when the link names none; versions from before boundary
+  // places have no at.
+  links: (Omit<Link, 'state' | 'states' | 'at'> & { state: number; at?: Link['at'] })[]
   linkStates: { link: number; state: number }[]
   connections: Connection[]
   start: Start
@@ -476,6 +485,7 @@ export async function getVersionBoard(id: number): Promise<BoardContents> {
     links: s.links.map((l) => ({
       ...l,
       state: l.state || null,
+      at: l.at ?? null,
       states: s.linkStates.filter((ls) => ls.link === l.id).map((ls) => ls.state),
     })),
   }

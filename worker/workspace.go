@@ -312,8 +312,50 @@ func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// The pi sessions of a workspace's steps are kept beside it, out of the
+// agents' way, as long as it is: pi finds a session again only from the
+// directory it was started in.
+func sessionsDir(workspaceID string) string {
+	return filepath.Join(workspacesRoot, ".sessions", workspaceID)
+}
+
+// What pi takes as a session id.
+var safeSessionID = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
+
+// The pi options that keep the run's conversation in its session, or keep
+// none. Carrying on a session that isn't there fails, rather than starting
+// one that knows nothing, which pi would.
+func sessionArgs(run runRequest) ([]string, error) {
+	if run.SessionID == "" {
+		if run.Resume {
+			return nil, errors.New("there is no session to carry on")
+		}
+		return []string{"--no-session"}, nil
+	}
+	if run.Workspace == nil || !safeID.MatchString(run.Workspace.ID) {
+		return nil, errors.New("a session needs a workspace")
+	}
+	if !safeSessionID.MatchString(run.SessionID) {
+		return nil, fmt.Errorf("invalid session %q", run.SessionID)
+	}
+	dir := sessionsDir(run.Workspace.ID)
+	if run.Resume {
+		// pi names a session's file <time>_<id>.jsonl.
+		matches, err := filepath.Glob(filepath.Join(dir, "*_"+run.SessionID+".jsonl"))
+		if err != nil {
+			return nil, err
+		}
+		if len(matches) == 0 {
+			return nil, errors.New("the agent's session is gone, so it can't be carried on")
+		}
+	} else if err := os.MkdirAll(dir, 0o777); err != nil {
+		return nil, err
+	}
+	return []string{"--session-dir", dir, "--session-id", run.SessionID}, nil
+}
+
 // Deletes the workspaces of runs, run-<id> and the ones of its items,
-// run-<id>-*, with their branches.
+// run-<id>-*, with their branches and sessions.
 func deleteWorkspaces(runs []int64) error {
 	for _, id := range runs {
 		name := fmt.Sprintf("run-%d", id)
@@ -324,6 +366,9 @@ func deleteWorkspaces(runs []int64) error {
 		for _, dir := range append(matches, filepath.Join(workspacesRoot, name)) {
 			unlock := lockPath(dir)
 			err := deleteWorkspace(dir)
+			if err == nil {
+				err = os.RemoveAll(sessionsDir(filepath.Base(dir)))
+			}
 			unlock()
 			if err != nil {
 				return err

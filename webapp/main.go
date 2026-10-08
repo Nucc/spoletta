@@ -83,6 +83,7 @@ func main() {
 	registerMCPRoutes(mux, db, mcp)
 	registerRunRoutes(mux, db, newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, mcp, parallelSteps))
 	registerMessageRoutes(mux, db)
+	registerFollowUpRoutes(mux, db, workerURL, mcp)
 	registerVersionRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
 	registerFileRoutes(mux)

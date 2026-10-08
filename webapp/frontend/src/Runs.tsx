@@ -3,7 +3,10 @@ import { Data } from './Data'
 import {
   fileUrl,
   getStepMessages,
+  sendFollowUp,
+  stopFollowUp,
   type AgentMessage,
+  type FollowUp,
   type FlowRun,
   type FlowRunDetail,
   type FlowRunStatus,
@@ -118,6 +121,7 @@ export function RunPanel({
   onStop,
   onStopStep,
   onOpenRun,
+  onChanged,
   onClose,
 }: {
   run: FlowRunDetail
@@ -125,8 +129,12 @@ export function RunPanel({
   onStopStep: (id: number) => void
   // Opens another run: the one a recording flow process ran as, or the one it ran in.
   onOpenRun: (id: number) => void
+  // A follow-up started or was stopped, so the run is loaded again.
+  onChanged: () => void
   onClose: () => void
 }) {
+  // Follow-ups work on the run's branch, so only one goes at a time, once its steps are over.
+  const busy = run.steps.some((s) => s.status === 'active' || s.followUps.some((f) => f.status === 'active'))
   return (
     <aside className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
@@ -174,6 +182,8 @@ export function RunPanel({
                 objects={run.objects.filter((o) => o.step === s.id)}
                 onStop={stoppable(s) ? () => onStopStep(s.id) : undefined}
                 onOpenRun={onOpenRun}
+                busy={busy}
+                onChanged={onChanged}
               />
             </li>
           ))}
@@ -193,15 +203,19 @@ function Step({
   objects,
   onStop,
   onOpenRun,
+  busy,
+  onChanged,
 }: {
   run: number
   step: RunStep
   objects: FlowRunDetail['objects']
   onStop?: () => void
   onOpenRun: (id: number) => void
+  busy: boolean
+  onChanged: () => void
 }) {
   return (
-    <details className="step" open={s.status !== 'done'}>
+    <details className="step" open={s.status !== 'done' || s.followUps.length > 0}>
       <summary>
         <span className={`status-dot ${s.status}`} aria-hidden="true" />
         <span className="step-name">{s.processName}</span>
@@ -221,6 +235,11 @@ function Step({
         {s.kind === 'agent' && (
           <p className="panel-note">
             Model: {s.model || 'default'} · thinking: {s.thinking || 'default'}
+          </p>
+        )}
+        {s.session && (
+          <p className="panel-note">
+            pi session <code className="step-session">{s.session}</code>
           </p>
         )}
         {s.branch && (
@@ -291,8 +310,93 @@ function Step({
             </ul>
           </div>
         )}
+        {s.followUps.map((f) => (
+          <FollowUpItem key={f.id} run={run} step={s.id} followUp={f} onChanged={onChanged} />
+        ))}
+        {s.canFollowUp && s.status !== 'active' && <FollowUpForm run={run} step={s.id} busy={busy} onSent={onChanged} />}
       </div>
     </details>
+  )
+}
+
+// A message sent to the agent once its step was over, and what came of it.
+function FollowUpItem({ run, step, followUp: f, onChanged }: { run: number; step: number; followUp: FollowUp; onChanged: () => void }) {
+  const stop = async () => {
+    try {
+      await stopFollowUp(run, step, f.id)
+    } catch {
+      // It ended meanwhile; the reload shows how.
+    }
+    onChanged()
+  }
+  return (
+    <div className="follow-up">
+      <Block label={`You asked · ${formatTime(f.startedAt)}`} text={f.message} />
+      {f.status === 'active' ? (
+        <>
+          <p className="panel-note">The agent is working on it…</p>
+          <button className="run-stop" onClick={stop}>
+            Stop
+          </button>
+        </>
+      ) : (
+        <>
+          {f.commits.length > 0 && <StepCommits commits={f.commits} />}
+          {f.error ? <Block label="Error" text={f.error} failed /> : <Block label="The agent replied" text={f.output || '(nothing)'} />}
+        </>
+      )}
+    </div>
+  )
+}
+
+// Sends the agent a message in its session: it acts on it with what it did in
+// mind, in the run's workspace, such as to push its branch or change its work.
+function FollowUpForm({ run, step, busy, onSent }: { run: number; step: number; busy: boolean; onSent: () => void }) {
+  const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState('')
+  const disabled = busy || sending || message.trim() === ''
+
+  const send = async () => {
+    if (disabled) return
+    setSending(true)
+    setError('')
+    try {
+      await sendFollowUp(run, step, message.trim())
+      setMessage('')
+      onSent()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="follow-up-form">
+      <label className="panel-field">
+        <span>Message the agent</span>
+        <textarea
+          rows={3}
+          value={message}
+          placeholder="Carries on its conversation, in the same workspace and branch. E.g. push the branch, or change something."
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault()
+              send()
+            }
+          }}
+        />
+      </label>
+      {busy && <p className="panel-note">Wait until what is going in this run is over.</p>}
+      {error && <p className="panel-warning">{error}</p>}
+      <div className="review-actions">
+        <button onClick={send} disabled={disabled} title="Send (⌘/Ctrl+Enter)">
+          {sending ? 'Sending…' : 'Send'}
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -332,7 +436,8 @@ function Conversation({ run, step }: { run: number; step: RunStep }) {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const last = useRef(0)
-  const going = step.status === 'active'
+  const going = step.status === 'active' || step.followUps.some((f) => f.status === 'active')
+  const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
 
   useEffect(() => {
     if (!open) return
@@ -372,7 +477,11 @@ function Conversation({ run, step }: { run: number; step: RunStep }) {
         {messages.map((m, i) => (
           <li key={m.id}>
             {m.attempt > 1 && messages[i - 1]?.attempt !== m.attempt && (
-              <p className="panel-note">Try {m.attempt}: the agent didn't hand in its output, so it was asked again.</p>
+              <p className="panel-note">
+                {followUpOf.has(m.attempt)
+                  ? `Follow-up, ${formatTime(followUpOf.get(m.attempt)!.startedAt)}: you messaged the agent.`
+                  : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again.`}
+              </p>
             )}
             <Message message={m.message} />
           </li>

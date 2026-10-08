@@ -2176,3 +2176,31 @@ body {
 .step-commits code {
   font-size: 12px;
 }
+
+/* Selectable as a whole, to look the session up in the worker. */
+.step-session {
+  user-select: all;
+  word-break: break-all;
+}
+
+/* Messages sent to an agent once its step was over, carrying on its session. */
+.follow-up,
+.follow-up-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #d8dee4;
+}
+
+.follow-up-form textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.follow-up-form .review-actions button:disabled {
+  color: #8c959f;
+  background: #fff;
+  border-color: #d0d7de;
+  cursor: default;
+}

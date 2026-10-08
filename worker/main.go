@@ -66,6 +66,11 @@ type runRequest struct {
 	MCPToken   string      `json:"mcpToken"`
 	// The workspace it works in, if the flow has repositories.
 	Workspace *workspaceSpec `json:"workspace"`
+	// In a workspace: the pi session the conversation is kept in, so a person
+	// can carry it on later. Resume says the session must exist already,
+	// which a step's first run creates.
+	SessionID string `json:"sessionId"`
+	Resume    bool   `json:"resume"`
 }
 
 type mcpServer struct {
@@ -374,6 +379,10 @@ func modelArgs(model string) []string {
 // run that exceeds the timeout kills pi. emit gets each message of the
 // conversation as it ends.
 func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func(json.RawMessage)) (res runResult) {
+	session, err := sessionArgs(run)
+	if err != nil {
+		return runResult{Error: err.Error()}
+	}
 	cwd, ws, err := workDir(ctx, run.Workspace, "run-")
 	if err != nil {
 		return runResult{Error: err.Error()}
@@ -382,7 +391,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 
 	// An empty model or thinking level leaves the choice to the pi settings.
 	// pi prints its events as JSON, so the conversation can be followed.
-	args := append([]string{"-p", "--mode", "json", "--no-session", "--no-approve"}, modelArgs(run.Model)...)
+	args := append(append([]string{"-p", "--mode", "json", "--no-approve"}, session...), modelArgs(run.Model)...)
 	if run.Thinking != "" {
 		args = append(args, "--thinking", run.Thinking)
 	}

@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +62,25 @@ type agentRun struct {
 	MCPToken   string         `json:"mcpToken,omitempty"`
 	// The workspace it works in, if it works on repositories.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// In a workspace, the pi session the worker keeps its conversation in, so
+	// a person can carry it on once the step is over; see followups.go.
+	// Resume carries on one that exists.
+	SessionID string `json:"sessionId,omitempty"`
+	Resume    bool   `json:"resume,omitempty"`
+}
+
+// The pi session of a step that worked in a workspace, which follow-ups carry on.
+type stepSession struct {
+	ID        string         `json:"id"`
+	Workspace *workspaceSpec `json:"workspace"`
+}
+
+func newSessionID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // Inputs are capped so a runaway output can't grow every prompt downstream without bound.
@@ -160,6 +181,18 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		defer mcp.revoke(run.MCPToken)
 		res.Error = msg
 	}
+	if res.Error == "" && run.Workspace != nil {
+		if run.SessionID, err = newSessionID(); err != nil {
+			return res, err
+		}
+		b, err := json.Marshal(stepSession{ID: run.SessionID, Workspace: run.Workspace})
+		if err != nil {
+			return res, err
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE run_steps SET session = ? WHERE id = ?", b, stepID); err != nil {
+			return res, err
+		}
+	}
 	if res.Error == "" {
 		res = runAgent(ctx, db, workerURL, run, stepID, 1)
 		if contract != nil && res.OK {
@@ -221,15 +254,22 @@ func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, s
 // generates. The worker's submit_output tool has the agent fix what breaks
 // it, so this catches an agent that never handed anything in. That gets one
 // more try, and the step records the prompt of that try, which holds the
-// rejected reply.
+// rejected reply. An agent with a session carries it on, which holds the
+// prompt and the reply already, so it is only told what went wrong.
 func followContract(ctx context.Context, db *sql.DB, workerURL string, run agentRun, c *outputContract, res runResult, stepID int64) runResult {
 	out, objects, err := c.handedIn(res)
 	if err != nil {
-		run.Prompt = withRetry(run.Prompt, res.Output, err)
-		if stepID != 0 {
+		switch {
+		case run.SessionID != "":
+			run.Resume = true
+			run.Prompt = fmt.Sprintf("Your reply wasn't handed in: %s. Hand in what you generate by calling submit_output now.", err)
+		case stepID != 0:
+			run.Prompt = withRetry(run.Prompt, res.Output, err)
 			if _, err := db.ExecContext(ctx, "UPDATE run_steps SET prompt = ? WHERE id = ?", run.Prompt, stepID); err != nil {
 				log.Printf("record retry of step %d: %v", stepID, err)
 			}
+		default:
+			run.Prompt = withRetry(run.Prompt, res.Output, err)
 		}
 		first := res.Commits
 		res = runAgent(ctx, db, workerURL, run, stepID, 2)

@@ -66,10 +66,16 @@ type step struct {
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,
 	// and what it did to each repository there.
-	Branch     string        `json:"branch"`
-	Commits    []repoCommits `json:"commits"`
-	StartedAt  time.Time     `json:"startedAt"`
-	FinishedAt *time.Time    `json:"finishedAt"`
+	Branch  string        `json:"branch"`
+	Commits []repoCommits `json:"commits"`
+	// For an agent step that kept its session: the pi session's id, which a
+	// person can carry the conversation on in, and the follow-ups they sent;
+	// see followups.go.
+	Session     string     `json:"session"`
+	CanFollowUp bool       `json:"canFollowUp"`
+	FollowUps   []followUp `json:"followUps"`
+	StartedAt   time.Time  `json:"startedAt"`
+	FinishedAt  *time.Time `json:"finishedAt"`
 }
 
 // The content and state an object got in a run from the step that generated
@@ -507,21 +513,30 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
-				status, output, error, outcome, instructions, child_run_id, branch, commits, started_at, finished_at
+				status, output, error, outcome, instructions, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''), started_at, finished_at
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer rows.Close()
+		followUps, err := runFollowUps(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		for rows.Next() {
 			var s step
 			var inputs []byte
 			var cr, commits []byte
 			if err := rows.Scan(&s.ID, &s.Process, &s.ProcessName, &s.Kind, &s.Model, &s.Thinking, &s.Prompt, &inputs, &cr,
-				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.ChildRun, &s.Branch, &commits, &s.StartedAt, &s.FinishedAt); err != nil {
+				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.ChildRun, &s.Branch, &commits, &s.Session, &s.StartedAt, &s.FinishedAt); err != nil {
 				serverError(w, err)
 				return
+			}
+			s.CanFollowUp = s.Session != ""
+			if s.FollowUps = followUps[s.ID]; s.FollowUps == nil {
+				s.FollowUps = []followUp{}
 			}
 			if err := json.Unmarshal(inputs, &s.Inputs); err != nil {
 				serverError(w, err)

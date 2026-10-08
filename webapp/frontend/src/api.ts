@@ -485,6 +485,25 @@ export type RunStep = {
   branch: string
   // What it did to each repository it worked on.
   commits: RepoCommits[]
+  // For an agent step that kept its session: the pi session's id, empty if
+  // none; a person can carry its conversation on, and the follow-ups they sent.
+  session: string
+  canFollowUp: boolean
+  followUps: FollowUp[]
+  startedAt: string
+  finishedAt: string | null
+}
+
+// A message a person sent an agent step once it was over, which the agent
+// acted on in its session; another try of the step's conversation.
+export type FollowUp = {
+  id: number
+  attempt: number
+  message: string
+  status: 'active' | 'done' | 'error'
+  output: string
+  error: string
+  commits: RepoCommits[]
   startedAt: string
   finishedAt: string | null
 }
@@ -566,6 +585,16 @@ export function stopRun(id: number): Promise<FlowRun> {
 // branch; the rest of the run goes on.
 export function stopStep(run: number, id: number): Promise<void> {
   return request(`/api/runs/${run}/steps/${id}/stop`, { method: 'POST' })
+}
+
+// Carries on the conversation of an agent step that is over with a message,
+// which the agent acts on in its session, in the run's workspace.
+export function sendFollowUp(run: number, step: number, message: string): Promise<FollowUp> {
+  return request(`/api/runs/${run}/steps/${step}/followups`, { method: 'POST', body: JSON.stringify({ message }) })
+}
+
+export function stopFollowUp(run: number, step: number, id: number): Promise<void> {
+  return request(`/api/runs/${run}/steps/${step}/followups/${id}/stop`, { method: 'POST' })
 }
 
 // Decides a human step waiting for its review, and lets the run go on: the

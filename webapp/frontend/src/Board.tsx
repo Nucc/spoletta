@@ -570,8 +570,10 @@ export default function Board({
         const detail = await getRun(runId)
         if (stopped) return
         setRunDetail(detail)
-        if (detail.status === 'running') timer = window.setTimeout(load, RUN_REFRESH_MS)
-        else setRuns((rs) => rs.map((r) => (r.id === detail.id ? { ...r, status: detail.status, finishedAt: detail.finishedAt } : r)))
+        // Follow-ups go on once the run is over.
+        const following = detail.steps.some((s) => s.followUps.some((f) => f.status === 'active'))
+        if (detail.status === 'running' || following) timer = window.setTimeout(load, RUN_REFRESH_MS)
+        if (detail.status !== 'running') setRuns((rs) => rs.map((r) => (r.id === detail.id ? { ...r, status: detail.status, finishedAt: detail.finishedAt } : r)))
       } catch (err) {
         report(err)
       }
@@ -1622,6 +1624,7 @@ export default function Board({
             onStop={() => onStop(runDetail.id)}
             onStopStep={(step) => onStopStep(runDetail.id, step)}
             onOpenRun={openRunById}
+            onChanged={() => setRunReload((n) => n + 1)}
             onClose={() => setRunId(null)}
           />
         )}

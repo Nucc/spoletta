@@ -604,6 +604,8 @@ export default function Board({
   const [shownVersion, setShownVersion] = useState<number | null>(null)
   const [shownBoard, setShownBoard] = useState<BoardId>(null)
   const reviewing = shownVersion !== null
+  // Set once the flow's first board has been fitted to the view.
+  const fitted = useRef(false)
   useEffect(() => {
     if (runVersion === shownVersion && boardId === shownBoard) return
     let stale = false
@@ -615,8 +617,12 @@ export default function Board({
         showBoard(c, boardId)
         setShownVersion(runVersion)
         setShownBoard(boardId)
-        // Another board is a different place; show all of it once its nodes are measured.
-        if (boardId !== shownBoard) window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
+        // The flow just loaded, or another board is a different place; show
+        // all of it once its nodes are measured.
+        if (!fitted.current || boardId !== shownBoard) {
+          fitted.current = true
+          window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
+        }
       })
       .catch(report)
     return () => {
@@ -730,6 +736,16 @@ export default function Board({
 
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
   const objectPanelNode = nodes.find((n): n is ObjectNodeType => n.type === 'object' && n.id === panelId)
+  const panelOpen = Boolean(panelNode || objectPanelNode || mcpOpen || settingsOpen || versionsOpen || runDetail)
+
+  // The panel opening or closing changes the canvas's width; the board moves
+  // to the middle of it once the canvas has taken its new width.
+  const panelWasOpen = useRef(panelOpen)
+  useEffect(() => {
+    if (panelOpen === panelWasOpen.current) return
+    panelWasOpen.current = panelOpen
+    window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
+  }, [panelOpen, fitView])
 
   const savePositions = (positions: Map<string, XYPosition>) => {
     for (const [id, { x, y }] of positions) {
@@ -1532,7 +1548,7 @@ export default function Board({
             <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
           )}
         </div>
-        {(panelNode || objectPanelNode || mcpOpen || settingsOpen || versionsOpen || runDetail) && (
+        {panelOpen && (
           <ColumnResizer label="Resize panel" {...panelColumn} />
         )}
         {panelNode && (

@@ -24,21 +24,33 @@ type process struct {
 	Y        float64 `json:"y"`
 	// Set when resized; null draws the default width.
 	Width *float64 `json:"width"`
+	// The flow process whose board it is on; null on the top board.
+	Parent *int64 `json:"parent"`
+	// For flow processes: each time it runs is a run of its own.
+	Recording bool `json:"recording"`
 }
 
 // A process is either run by an agent from its prompt, executes its script,
 // or is handled by a human, who reviews its inputs following its prompt and
-// approves them or requests changes.
+// approves them or requests changes. A flow process is made of processes
+// itself, on a board of its own; see boards.go.
 const (
 	kindAgent  = "agent"
 	kindScript = "script"
 	kindHuman  = "human"
+	kindFlow   = "flow"
 )
 
-const invalidKindMessage = "kind must be agent, script or human"
+const invalidKindMessage = "kind must be agent, script, human or flow"
 
 func validKind(k string) bool {
-	return k == kindAgent || k == kindScript || k == kindHuman
+	return k == kindAgent || k == kindScript || k == kindHuman || k == kindFlow
+}
+
+const processColumns = "id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording"
+
+func scanProcess(row interface{ Scan(...any) error }, p *process) error {
+	return row.Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y, &p.Width, &p.Parent, &p.Recording)
 }
 
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -124,7 +136,7 @@ func hasIndex(db *sql.DB, table, name string) (bool, error) {
 
 func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/processes", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, name, kind, prompt, script, model, thinking, x, y, width FROM processes ORDER BY id")
+		rows, err := db.QueryContext(r.Context(), "SELECT "+processColumns+" FROM processes ORDER BY id")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -134,7 +146,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		ps := []process{}
 		for rows.Next() {
 			var p process
-			if err := rows.Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y, &p.Width); err != nil {
+			if err := scanProcess(rows, &p); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -174,13 +186,36 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, invalidWidthMessage, http.StatusBadRequest)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO processes (name, kind, prompt, script, model, thinking, x, y, width) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width)
+		if msg, err := checkParent(r.Context(), db, p.Parent); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO processes (name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		if p.ID, err = res.LastInsertId(); err != nil {
+			serverError(w, err)
+			return
+		}
+		if p.Kind == kindFlow {
+			if err := ensureBoard(r.Context(), tx, p.ID); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -204,6 +239,8 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			X        *float64 `json:"x"`
 			Y        *float64 `json:"y"`
 			Width    *float64 `json:"width"`
+			// Turning it off keeps the runs it recorded.
+			Recording *bool `json:"recording"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -239,11 +276,19 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 
 		// COALESCE keeps the stored value for fields absent from the patch.
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE processes SET name = COALESCE(?, name), kind = COALESCE(?, kind), prompt = COALESCE(?, prompt), script = COALESCE(?, script), model = COALESCE(?, model), thinking = COALESCE(?, thinking), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width) WHERE id = ?",
-			patch.Name, patch.Kind, patch.Prompt, patch.Script, patch.Model, patch.Thinking, patch.X, patch.Y, patch.Width, id)
+			"UPDATE processes SET name = COALESCE(?, name), kind = COALESCE(?, kind), prompt = COALESCE(?, prompt), script = COALESCE(?, script), model = COALESCE(?, model), thinking = COALESCE(?, thinking), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), recording = COALESCE(?, recording) WHERE id = ?",
+			patch.Name, patch.Kind, patch.Prompt, patch.Script, patch.Model, patch.Thinking, patch.X, patch.Y, patch.Width, patch.Recording, id)
 		if err != nil {
 			serverError(w, err)
 			return
+		}
+		// Becoming a flow gives it a board; ceasing to be one keeps the board,
+		// so switching back loses nothing.
+		if patch.Kind != nil && *patch.Kind == kindFlow && oldKind != "" {
+			if err := ensureBoard(r.Context(), db, id); err != nil {
+				serverError(w, err)
+				return
+			}
 		}
 		if patch.Kind != nil && *patch.Kind != oldKind && (oldKind == kindHuman || *patch.Kind == kindHuman) {
 			if err := dropMismatchedEdges(r.Context(), db, id, *patch.Kind); err != nil {
@@ -253,8 +298,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var p process
-		err = db.QueryRowContext(r.Context(), "SELECT id, name, kind, prompt, script, model, thinking, x, y, width FROM processes WHERE id = ?", id).
-			Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y, &p.Width)
+		err = scanProcess(db.QueryRowContext(r.Context(), "SELECT "+processColumns+" FROM processes WHERE id = ?", id), &p)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "process not found", http.StatusNotFound)
 			return
@@ -266,7 +310,8 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeJSON(w, http.StatusOK, p)
 	})
 
-	// Its links and connections go with it; runs keep their steps.
+	// Its links and connections go with it, and a flow process's board with
+	// all on it; runs keep their steps.
 	mux.HandleFunc("DELETE /api/processes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {

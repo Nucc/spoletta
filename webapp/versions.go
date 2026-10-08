@@ -33,6 +33,7 @@ type snapshotObject struct {
 	Y          float64  `json:"y"`
 	Width      *float64 `json:"width"`
 	Persistent bool     `json:"persistent"`
+	Parent     *int64   `json:"parent"`
 }
 
 type snapshotLink struct {
@@ -59,6 +60,8 @@ type snapshot struct {
 	LinkStates  []snapshotLinkState `json:"linkStates"`
 	Connections []connection        `json:"connections"`
 	Start       startNode           `json:"start"`
+	// Flow processes' boards; versions from before them have none.
+	Boards []innerBoard `json:"boards"`
 }
 
 func migrateVersions(db *sql.DB) error {
@@ -109,6 +112,7 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
 		Links:       []snapshotLink{},
 		LinkStates:  []snapshotLinkState{},
 		Connections: []connection{},
+		Boards:      []innerBoard{},
 	}
 	var startRoute []byte
 	err := tx.QueryRowContext(ctx, "SELECT x, y, target_id, route FROM start_node WHERE id = 1").Scan(&s.Start.X, &s.Start.Y, &s.Start.Target, &startRoute)
@@ -117,18 +121,18 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
 	}
 	s.Start.Route = routeJSON(startRoute)
 
-	err = scanAll(ctx, tx, "SELECT id, name, kind, prompt, script, model, thinking, x, y, width FROM processes ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT "+processColumns+" FROM processes ORDER BY id", func(rows *sql.Rows) error {
 		var p process
-		err := rows.Scan(&p.ID, &p.Name, &p.Kind, &p.Prompt, &p.Script, &p.Model, &p.Thinking, &p.X, &p.Y, &p.Width)
+		err := scanProcess(rows, &p)
 		s.Processes = append(s.Processes, p)
 		return err
 	})
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent FROM objects ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, parent_id FROM objects ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent)
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Parent)
 		s.Objects = append(s.Objects, o)
 		return err
 	})
@@ -179,7 +183,45 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx) (snapshot, error) {
 		s.Connections = append(s.Connections, c)
 		return err
 	})
+	if err != nil {
+		return s, err
+	}
+	err = scanAll(ctx, tx, "SELECT process_id, x, y, target_id, route, end_x, end_y FROM inner_boards ORDER BY process_id", func(rows *sql.Rows) error {
+		var b innerBoard
+		var route []byte
+		err := rows.Scan(&b.Process, &b.Start.X, &b.Start.Y, &b.Start.Target, &route, &b.End.X, &b.End.Y)
+		b.Start.Route = routeJSON(route)
+		s.Boards = append(s.Boards, b)
+		return err
+	})
 	return s, err
+}
+
+// The processes with the ones on the top board first, then the ones inside
+// them, and so on, so each is saved after the flow process it is in.
+func parentsFirst(ps []process) []process {
+	placed := map[int64]bool{}
+	var ordered []process
+	for len(ordered) < len(ps) {
+		before := len(ordered)
+		for _, p := range ps {
+			if !placed[p.ID] && (p.Parent == nil || placed[*p.Parent]) {
+				placed[p.ID] = true
+				ordered = append(ordered, p)
+			}
+		}
+		// Processes whose parent isn't saved can't be placed; they go last,
+		// and the foreign key turns them down.
+		if len(ordered) == before {
+			for _, p := range ps {
+				if !placed[p.ID] {
+					placed[p.ID] = true
+					ordered = append(ordered, p)
+				}
+			}
+		}
+	}
+	return ordered
 }
 
 // A route as stored: NULL for the default route.
@@ -209,7 +251,7 @@ func deleteOthers(ctx context.Context, tx *sql.Tx, table string, keep []int64) e
 // nothing outside the board refers to are recreated with their saved ids.
 func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 	// Cleared first so their unique keys can't collide while being rewritten.
-	for _, t := range []string{"link_states", "object_links", "connections", "object_attributes", "object_states"} {
+	for _, t := range []string{"link_states", "object_links", "connections", "object_attributes", "object_states", "inner_boards"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+t); err != nil {
 			return err
 		}
@@ -230,21 +272,23 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 		return err
 	}
 
-	for _, p := range s.Processes {
-		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, name, kind, prompt, script, model, thinking, x, y, width)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
+	for _, p := range parentsFirst(s.Processes) {
+		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, kind = saved.kind, prompt = saved.prompt, script = saved.script,
-				model = saved.model, thinking = saved.thinking, x = saved.x, y = saved.y, width = saved.width`,
-			p.ID, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width)
+				model = saved.model, thinking = saved.thinking, x = saved.x, y = saved.y, width = saved.width,
+				parent_id = saved.parent_id, recording = saved.recording`,
+			p.ID, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording)
 		if err != nil {
 			return err
 		}
 	}
 	for _, o := range s.Objects {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, name, x, y, width, persistent)
-			VALUES (?, ?, ?, ?, ?, ?) AS saved
-			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent`,
-			o.ID, o.Name, o.X, o.Y, o.Width, o.Persistent)
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, name, x, y, width, persistent, parent_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?) AS saved
+			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
+				parent_id = saved.parent_id`,
+			o.ID, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Parent)
 		if err != nil {
 			return err
 		}
@@ -276,6 +320,21 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, s snapshot) error {
 	for _, c := range s.Connections {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO connections (id, source_id, target_id) VALUES (?, ?, ?)", c.ID, c.Source, c.Target); err != nil {
 			return err
+		}
+	}
+	for _, b := range s.Boards {
+		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, target_id, route, end_x, end_y) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			b.Process, b.Start.X, b.Start.Y, b.Start.Target, storedRoute(b.Start.Route), b.End.X, b.End.Y)
+		if err != nil {
+			return err
+		}
+	}
+	// A flow process saved before boards were kept still needs one.
+	for _, p := range s.Processes {
+		if p.Kind == kindFlow {
+			if err := ensureBoard(ctx, tx, p.ID); err != nil {
+				return err
+			}
 		}
 	}
 	_, err := tx.ExecContext(ctx, "UPDATE start_node SET x = ?, y = ?, target_id = ?, route = ? WHERE id = 1",

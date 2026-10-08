@@ -20,7 +20,10 @@ type object struct {
 	// Set when resized; null draws the default width.
 	Width *float64 `json:"width"`
 	// Runs store what they generate it with; see instances.go.
-	Persistent bool          `json:"persistent"`
+	Persistent bool `json:"persistent"`
+	// The flow process whose board it is on; null on the top board. It also
+	// shows inside the flow processes linked to it; see boards.go.
+	Parent     *int64        `json:"parent"`
 	States     []objectState `json:"states"`
 	Attributes []attribute   `json:"attributes"`
 }
@@ -120,7 +123,7 @@ func migrateObjects(db *sql.DB) error {
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT id, name, x, y, width, persistent FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent)
+	err := db.QueryRowContext(ctx, "SELECT id, name, x, y, width, persistent, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Parent)
 	if err != nil {
 		return o, err
 	}
@@ -151,7 +154,7 @@ func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 
 func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/objects", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id, name, x, y, width, persistent FROM objects ORDER BY id")
+		rows, err := db.QueryContext(r.Context(), "SELECT id, name, x, y, width, persistent, parent_id FROM objects ORDER BY id")
 		if err != nil {
 			serverError(w, err)
 			return
@@ -161,7 +164,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent); err != nil {
+			if err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Parent); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -208,7 +211,14 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, invalidWidthMessage, http.StatusBadRequest)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (name, x, y, width) VALUES (?, ?, ?, ?)", o.Name, o.X, o.Y, o.Width)
+		if msg, err := checkParent(r.Context(), db, o.Parent); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (name, x, y, width, parent_id) VALUES (?, ?, ?, ?, ?)", o.Name, o.X, o.Y, o.Width, o.Parent)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -512,6 +522,9 @@ func setDecisionStates(ctx context.Context, tx *sql.Tx, linkID, object int64, st
 // the states its output link lists, and only it lists states; any other
 // process generates an object once, so it has at most one output link to it.
 func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
+	if ok, err := onBoardOf(ctx, db, l.Process, l.Object); err != nil || !ok {
+		return "the object isn't on the process's board", err
+	}
 	if l.State != nil {
 		var object int64
 		err := db.QueryRowContext(ctx, "SELECT object_id FROM object_states WHERE id = ?", *l.State).Scan(&object)

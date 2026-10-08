@@ -63,6 +63,7 @@ func main() {
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
 	registerProcessRoutes(mux, db)
 	registerFlowRoutes(mux, db)
+	registerBoardRoutes(mux, db)
 	registerObjectRoutes(mux, db)
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)

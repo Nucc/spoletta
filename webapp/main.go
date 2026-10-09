@@ -72,6 +72,7 @@ func main() {
 	registerFlowRoutes(mux, db)
 	registerBoardRoutes(mux, db)
 	registerPasteRoutes(mux, db)
+	registerStructRoutes(mux, db)
 	registerObjectRoutes(mux, db)
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)

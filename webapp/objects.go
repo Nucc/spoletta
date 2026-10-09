@@ -299,6 +299,10 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		// A struct holds its object alone, and the objects making it up.
+		if o.Owner == nil && refuseInStruct(w, r, db, o.Flow) {
+			return
+		}
 		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y, width, human, parent_id, owner_id, relation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			o.Flow, o.Name, o.X, o.Y, o.Width, o.Human, o.Parent, o.Owner, o.Relation)
 		if err != nil {
@@ -377,6 +381,15 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		// Where a copy goes, and what this flow does with it, are its own.
 		if (patch.Name != nil || patch.Many != nil || patch.Min != nil || len(patch.Max) > 0 || patch.Relation != nil || len(patch.General) > 0) && !ownObject(w, r, db, id) {
+			return
+		}
+		root, err := isStructRoot(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if root && (isTrue(patch.Human) || isTrue(patch.Persistent) || isTrue(patch.End)) {
+			http.Error(w, "a struct's object is what flows use; whether it is a person, stored or leads into an end is up to each copy of it", http.StatusBadRequest)
 			return
 		}
 		if owned && (isTrue(patch.Human) || isTrue(patch.Persistent) || isTrue(patch.End)) {
@@ -478,6 +491,13 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		// A struct is named after its object.
+		if root && patch.Name != nil {
+			if _, err := db.ExecContext(r.Context(), "UPDATE flows SET name = ? WHERE id = ?", *patch.Name, flow); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
 		// Only what copies have changes them; a new outcome comes out of the
 		// subflow processes running the flow.
 		if patch.Name != nil || patch.Many != nil || patch.Min != nil || len(patch.Max) > 0 || patch.Relation != nil || setGeneral || isTrue(patch.End) {
@@ -519,6 +539,13 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if owner != nil && !ownObject(w, r, db, *owner) {
+			return
+		}
+		if root, err := isStructRoot(r.Context(), db, id); err != nil {
+			serverError(w, err)
+			return
+		} else if root {
+			http.Error(w, "a struct is its object; delete the struct instead", http.StatusBadRequest)
 			return
 		}
 		if _, err := db.ExecContext(r.Context(), "DELETE FROM objects WHERE id = ?", id); err != nil {

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { createFlow, deleteFlow, listFlows, type Flow } from './api'
-import { FlowBuilderIcon, PlusIcon, SubflowIcon, TrashIcon } from './icons'
+import { FlowBuilderIcon, ObjectIcon, PlusIcon, SubflowIcon, TrashIcon } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
 
 // The main page: the flows that run, each a job of its own, such as fixing
-// exceptions or bumping dependencies, and apart from them the modules, the
-// flows made to be reused inside others. Opening one shows its board.
+// exceptions or bumping dependencies, and apart from them the procedures,
+// the flows made to be reused inside others, and the structs, the objects
+// they use. Opening one shows its board.
 export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const [flows, setFlows] = useState<Flow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -18,14 +19,20 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
     refresh()
   }, [refresh])
 
-  const onCreate = async (name: string, module: boolean) => {
-    const f = await createFlow(name, module)
+  const onCreate = async (name: string, kind: FlowKind) => {
+    const f = await createFlow(name, kind)
     onOpen(f.id)
   }
 
   const onDelete = async (f: Flow) => {
-    const used = f.usedBy > 0 ? ` ${usedByLabel(f.usedBy)}; they will fail to run it.` : ''
-    if (!window.confirm(`Delete ${f.name}, with everything on its board, its versions and its runs?${used}`)) return
+    const used =
+      f.usedBy === 0
+        ? ''
+        : f.struct
+          ? ` ${usedByLabel(f.usedBy)}; its copies there become objects of their own.`
+          : ` ${usedByLabel(f.usedBy)}; they will fail to run it.`
+    const what = f.struct ? 'what makes up its object and its versions' : 'everything on its board, its versions and its runs'
+    if (!window.confirm(`Delete ${f.name}, with ${what}?${used}`)) return
     try {
       await deleteFlow(f.id)
       await refresh()
@@ -53,20 +60,32 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           empty="No flows yet. Each flow does one job; name one above to start its board."
           placeholder="Name a new flow, such as Fix exceptions"
           button="New flow"
-          flows={flows?.filter((f) => !f.module) ?? null}
-          onCreate={(name) => onCreate(name, false)}
+          flows={flows?.filter((f) => kindOf(f) === 'flow') ?? null}
+          onCreate={(name) => onCreate(name, 'flow')}
           onDelete={onDelete}
           onError={report}
         />
         <FlowSection
-          module
+          kind="module"
           title="Procedures"
           note="Parts reused inside flows, dragged in from a board's sidebar. Changing one changes it everywhere it runs, and the objects it leaves follow it."
           empty="No procedures yet. A procedure is a group of processes other flows run, such as creating a Jira ticket."
           placeholder="Name a new procedure, such as Create a Jira ticket"
           button="New procedure"
-          flows={flows?.filter((f) => f.module) ?? null}
-          onCreate={(name) => onCreate(name, true)}
+          flows={flows?.filter((f) => kindOf(f) === 'module') ?? null}
+          onCreate={(name) => onCreate(name, 'module')}
+          onDelete={onDelete}
+          onError={report}
+        />
+        <FlowSection
+          kind="struct"
+          title="Structs"
+          note="Objects defined once, with their states, attributes and parts, and dragged in from a board's sidebar. Changing one changes every copy of it."
+          empty="No structs yet. A struct is a single object flows use, such as a Jira ticket."
+          placeholder="Name a new struct, such as Jira ticket"
+          button="New struct"
+          flows={flows?.filter((f) => kindOf(f) === 'struct') ?? null}
+          onCreate={(name) => onCreate(name, 'struct')}
           onDelete={onDelete}
           onError={report}
         />
@@ -77,8 +96,36 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
 
 const usedByLabel = (n: number) => `Used in ${n} ${n === 1 ? 'flow' : 'flows'}`
 
+type FlowKind = 'flow' | 'module' | 'struct'
+
+const kindOf = (f: Flow): FlowKind => (f.struct ? 'struct' : f.module ? 'module' : 'flow')
+
+const DELETE_TITLES: Record<FlowKind, string> = { flow: 'Delete flow', module: 'Delete procedure', struct: 'Delete struct' }
+
+// What a card says under its name: how many flows use it, and its latest
+// run; a struct never runs.
+function cardStatus(f: Flow, kind: FlowKind) {
+  const used = f.usedBy > 0 ? usedByLabel(f.usedBy) : 'Not used yet'
+  if (kind === 'struct') return used
+  return (
+    <>
+      {kind === 'module' && <span>{used} · </span>}
+      {f.lastRun ? (
+        <>
+          <span className={`status-dot ${f.lastRun.status}`} aria-hidden />
+          {RUN_LABELS[f.lastRun.status]} · {formatTime(f.lastRun.startedAt)}
+        </>
+      ) : kind === 'module' ? (
+        'Never run on its own'
+      ) : (
+        'Never run'
+      )}
+    </>
+  )
+}
+
 function FlowSection({
-  module = false,
+  kind = 'flow',
   title,
   note,
   empty,
@@ -89,7 +136,7 @@ function FlowSection({
   onDelete,
   onError,
 }: {
-  module?: boolean
+  kind?: FlowKind
   title: string
   note: string
   empty: string
@@ -116,9 +163,10 @@ function FlowSection({
   }
 
   return (
-    <section className={`flow-section${module ? ' modules' : ''}`} aria-label={title}>
+    <section className={`flow-section${kind === 'flow' ? '' : ` ${kind}s`}`} aria-label={title}>
       <h2>
-        {module && <SubflowIcon />}
+        {kind === 'module' && <SubflowIcon />}
+        {kind === 'struct' && <ObjectIcon />}
         {title}
       </h2>
       <p className="flows-note">{note}</p>
@@ -138,25 +186,13 @@ function FlowSection({
             <li key={f.id}>
               <a className="flow-card" href={`#/flows/${f.id}`}>
                 <span className="flow-card-name">{f.name}</span>
-                <span className="flow-card-run">
-                  {module && <span>{f.usedBy > 0 ? usedByLabel(f.usedBy) : 'Not used yet'} · </span>}
-                  {f.lastRun ? (
-                    <>
-                      <span className={`status-dot ${f.lastRun.status}`} aria-hidden />
-                      {RUN_LABELS[f.lastRun.status]} · {formatTime(f.lastRun.startedAt)}
-                    </>
-                  ) : module ? (
-                    'Never run on its own'
-                  ) : (
-                    'Never run'
-                  )}
-                </span>
+                <span className="flow-card-run">{cardStatus(f, kind)}</span>
               </a>
               <button
                 className="icon-button flow-delete"
                 onClick={() => onDelete(f)}
                 aria-label={`Delete ${f.name}`}
-                title={module ? 'Delete procedure' : 'Delete flow'}
+                title={DELETE_TITLES[kind]}
               >
                 <TrashIcon />
               </button>

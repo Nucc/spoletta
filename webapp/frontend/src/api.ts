@@ -119,7 +119,7 @@ export type FlowObject = {
   relation: Relation | ''
   // The object it specializes: it has that object's fields too.
   general: number | null
-  // The module's object it is a copy of, and that module: the copy follows
+  // The module's or struct's object it is a copy of, and that flow: the copy follows
   // it, so what it has changes only there. Null for an object of its own.
   source: number | null
   sourceFlow: number | null
@@ -195,7 +195,10 @@ export type Flow = {
   // Made to be reused: other flows run it, and only modules are offered to
   // them. Every flow another runs is one.
   module: boolean
-  // How many other flows run it.
+  // Holds a single object and nothing else, which flows use: each copy of
+  // it follows it, as one of a module's does.
+  struct: boolean
+  // How many other flows run it, or for a struct, use its object.
   usedBy: number
   settings: FlowSettings
   createdAt: string
@@ -231,8 +234,20 @@ export function getFlow(id: number): Promise<Flow> {
   return request(`/api/flows/${id}`)
 }
 
-export function createFlow(name: string, module = false): Promise<Flow> {
-  return request('/api/flows', { method: 'POST', body: JSON.stringify({ name, module }) })
+// A struct is made with its object, named after it.
+export function createFlow(name: string, kind: 'flow' | 'module' | 'struct' = 'flow'): Promise<Flow> {
+  return request('/api/flows', {
+    method: 'POST',
+    body: JSON.stringify({ name, module: kind === 'module', struct: kind === 'struct' }),
+  })
+}
+
+// Puts a copy of a struct's object on a board of a flow, which follows it.
+export function copyStruct(
+  struct: number,
+  at: { flow: number; parent: number | null; x: number; y: number },
+): Promise<FlowObject> {
+  return request(`/api/structs/${struct}/copies`, { method: 'POST', body: JSON.stringify(at) })
 }
 
 // A module other flows run stays one.

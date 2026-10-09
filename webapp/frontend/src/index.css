@@ -415,6 +415,10 @@ body {
   background: #1b7c83;
 }
 
+.palette-logo.struct {
+  background: #1a7f37;
+}
+
 .run-list {
   margin: 0;
   padding: 0;

@@ -62,6 +62,9 @@ func registerPasteRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		if refuseInStruct(w, r, db, req.Flow) {
+			return
+		}
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			serverError(w, err)

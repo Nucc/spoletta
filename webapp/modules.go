@@ -239,18 +239,24 @@ func usersOf(ctx context.Context, db querier, flow int64) (int, error) {
 }
 
 // Why an object can't be changed but where it comes from: it is a copy of a
-// module's, whose name the reason gives. Empty for an object of its own.
+// module's or a struct's, whose name the reason gives. Empty for an object of
+// its own.
 func copyReason(ctx context.Context, db querier, object int64) (string, error) {
 	var name, module string
-	err := db.QueryRowContext(ctx, `SELECT src.name, f.name FROM objects o
-		JOIN objects src ON src.id = o.source_id JOIN flows f ON f.id = src.flow_id WHERE o.id = ?`, object).Scan(&name, &module)
+	var isStruct bool
+	err := db.QueryRowContext(ctx, `SELECT src.name, f.name, f.is_struct FROM objects o
+		JOIN objects src ON src.id = o.source_id JOIN flows f ON f.id = src.flow_id WHERE o.id = ?`, object).Scan(&name, &module, &isStruct)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return quote(name) + " comes from the procedure " + quote(module) + "; change it there, and it changes here too", nil
+	from := "procedure"
+	if isStruct {
+		from = "struct"
+	}
+	return quote(name) + " comes from the " + from + " " + quote(module) + "; change it there, and it changes here too", nil
 }
 
 // The flow an object is in, 0 if it is gone.

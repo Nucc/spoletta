@@ -432,7 +432,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	// The run goes on in the server; this returns once it started.
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
-		if !ok {
+		if !ok || refuseInStruct(w, r, db, f) {
 			return
 		}
 		ctx := r.Context()

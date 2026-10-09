@@ -1,6 +1,6 @@
 import type { DragEvent, ReactNode } from 'react'
 import type { Flow, ProcessKind, ProcessSettings } from './api'
-import { SentryLogo, SubflowIcon } from './icons'
+import { ObjectIcon, SentryLogo, SubflowIcon } from './icons'
 
 // Something the sidebar adds to the board: a node of an OPM element, or a
 // process of a kind that talks to a service.
@@ -17,6 +17,8 @@ export type Block = {
   // subflow process runs.
   name?: string
   settings?: ProcessSettings
+  // The struct a new object is a copy of, named after it.
+  struct?: number
 }
 
 // Each new OPM element is one more entry.
@@ -46,6 +48,15 @@ export const flowBlock = (f: Flow): Block => ({
   kind: 'subflow',
   name: f.name,
   settings: { flow: f.id },
+})
+
+// A struct, added as a copy of its object.
+export const structBlock = (f: Flow): Block => ({
+  id: `struct-${f.id}`,
+  label: f.name,
+  title: `A copy of the struct ${f.name}, which changes only there`,
+  type: 'object',
+  struct: f.id,
 })
 
 // What a block dragged onto the board carries: its id.
@@ -114,6 +125,32 @@ export function FlowPalette({
           <PaletteTile block={b} disabled={disabled} onAdd={onAdd}>
             <span className="palette-logo subflow">
               <SubflowIcon />
+            </span>
+          </PaletteTile>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+// The structs, whose objects to use in this flow.
+export function StructPalette({
+  blocks,
+  disabled,
+  onAdd,
+}: {
+  blocks: Block[]
+  disabled: boolean
+  onAdd: (block: Block) => void
+}) {
+  if (blocks.length === 0) return <p className="panel-note">No structs yet. Make one on the main page.</p>
+  return (
+    <ul className="palette structs">
+      {blocks.map((b) => (
+        <li key={b.id}>
+          <PaletteTile block={b} disabled={disabled} onAdd={onAdd}>
+            <span className="palette-logo struct">
+              <ObjectIcon />
             </span>
           </PaletteTile>
         </li>

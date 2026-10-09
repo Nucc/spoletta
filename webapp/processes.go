@@ -267,6 +267,9 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		if refuseInStruct(w, r, db, p.Flow) {
+			return
+		}
 		if msg, err := checkCall(r.Context(), db, p.Flow, p.Kind, p.Settings); err != nil {
 			serverError(w, err)
 			return

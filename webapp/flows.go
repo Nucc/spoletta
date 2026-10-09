@@ -15,13 +15,16 @@ import (
 // A flow is a board of its own with everything on it: its processes and
 // objects, the boards of its flow processes, its versions and its runs. Each
 // flow does one job, such as fixing exceptions or bumping dependencies, or
-// is a module, a part of such jobs that other flows reuse; see modules.go.
+// is a module, a part of such jobs that other flows reuse; see modules.go,
+// or a struct, a single object they use; see structs.go.
 type flow struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 	// Offered to other flows to run; every flow another runs is one.
 	Module bool `json:"module"`
-	// How many other flows run it.
+	// Holds a single object, which other flows use; see structs.go.
+	Struct bool `json:"struct"`
+	// How many other flows run it, or for a struct, use its object.
 	UsedBy int `json:"usedBy"`
 	// The repositories its agents and scripts work on, and how its runs'
 	// branches are named; see workspace.go.
@@ -227,11 +230,16 @@ func flowFor(ctx context.Context, db *sql.DB, given int64, parent *int64) (int64
 
 func getFlow(ctx context.Context, db *sql.DB, id int64) (flow, error) {
 	var f flow
-	err := db.QueryRowContext(ctx, "SELECT id, name, module, settings, created_at FROM flows WHERE id = ?", id).Scan(&f.ID, &f.Name, &f.Module, &f.Settings, &f.CreatedAt)
+	err := db.QueryRowContext(ctx, "SELECT id, name, module, is_struct, settings, created_at FROM flows WHERE id = ?", id).Scan(&f.ID, &f.Name, &f.Module, &f.Struct, &f.Settings, &f.CreatedAt)
 	if err != nil {
 		return f, err
 	}
-	if f.UsedBy, err = usersOf(ctx, db, id); err != nil {
+	if f.Struct {
+		f.UsedBy, err = structUsers(ctx, db, id)
+	} else {
+		f.UsedBy, err = usersOf(ctx, db, id)
+	}
+	if err != nil {
 		return f, err
 	}
 	var rn run
@@ -338,6 +346,8 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		var body struct {
 			Name   string `json:"name"`
 			Module bool   `json:"module"`
+			// Made with its object, named after it.
+			Struct bool `json:"struct"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -347,13 +357,17 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
+		if body.Module && body.Struct {
+			http.Error(w, "a struct holds an object, not processes to run, so it can't be a procedure", http.StatusBadRequest)
+			return
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module) VALUES (?, ?)", body.Name, body.Module)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module, is_struct) VALUES (?, ?, ?)", body.Name, body.Module, body.Struct)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -366,6 +380,12 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		if _, err := tx.ExecContext(r.Context(), "INSERT INTO flow_starts (flow_id, x, y) VALUES (?, 40, 40)", id); err != nil {
 			serverError(w, err)
 			return
+		}
+		if body.Struct {
+			if _, err := tx.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y) VALUES (?, ?, 40, 40)", id, body.Name); err != nil {
+				serverError(w, err)
+				return
+			}
 		}
 		if err := tx.Commit(); err != nil {
 			serverError(w, err)
@@ -405,6 +425,21 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		if patch.Settings != nil {
 			if msg := patch.Settings.check(); msg != "" {
 				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
+		}
+		s, err := isStruct(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if s && isTrue(patch.Module) {
+			http.Error(w, "a struct holds an object, not processes to run, so it can't be a procedure", http.StatusBadRequest)
+			return
+		}
+		if s && patch.Name != nil {
+			if err := renameStruct(r.Context(), db, id, *patch.Name); err != nil {
+				serverError(w, err)
 				return
 			}
 		}

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
-import { useBoardActions } from './actions'
+import { StructFlowsContext, useBoardActions } from './actions'
 import type { ObjectAttribute, ObjectState, Relation } from './api'
 import { AggregationIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
 import { AppendButton, NameInput } from './ProcessNode'
@@ -18,9 +18,10 @@ export type ObjectNodeData = {
   general?: string
   // It makes up another object, on whose board it is.
   owned?: boolean
-  // A copy of a module's object, which follows it: what it has changes
-  // only in the module.
+  // A copy of a module's or a struct's object, which follows it: what it has
+  // changes only there. The flow it comes from.
   copied?: boolean
+  sourceFlow?: number | null
   // On an unfolded object's board, an object that isn't on it: the one
   // unfolded, the one it specializes or one specializing it. It stays where
   // it is shown, and is deleted where it is.
@@ -67,6 +68,7 @@ export const stateSourceHandle = (state: number) => `state-out-${state}`
 // border, as OPM marks a refined thing.
 export default function ObjectNode({ id, data, selected, width }: NodeProps<ObjectNodeType>) {
   const actions = useBoardActions()
+  const structs = useContext(StructFlowsContext)
   const draft = id.startsWith('draft-')
   const leaf = useNodeConnections({ handleType: 'source' }).length === 0
   const updateNodeInternals = useUpdateNodeInternals()
@@ -104,7 +106,7 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
                     : data.human
                       ? 'Person'
                       : data.copied && !data.owned
-                        ? `${data.many && !data.boundary ? 'List · ' : ''}From a procedure`
+                        ? `${data.many && !data.boundary ? 'List · ' : ''}From a ${structs.has(data.sourceFlow ?? 0) ? 'struct' : 'procedure'}`
                         : data.general
                         ? `${data.many && !data.boundary ? 'List of ' : ''}${data.general}`
                         : !data.many

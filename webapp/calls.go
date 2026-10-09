@@ -29,11 +29,15 @@ func checkCall(ctx context.Context, db *sql.DB, flow int64, kind string, s proce
 		return "", nil
 	}
 	var n int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM flows WHERE id = ?", *s.Flow).Scan(&n); err != nil {
+	var st bool
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(MAX(is_struct), FALSE) FROM flows WHERE id = ?", *s.Flow).Scan(&n, &st); err != nil {
 		return "", err
 	}
 	if n == 0 {
 		return "flow not found", nil
+	}
+	if st {
+		return "a struct is an object, not a flow to run; drag it onto the board as an object", nil
 	}
 	seen := map[int64]bool{}
 	next := []int64{*s.Flow}

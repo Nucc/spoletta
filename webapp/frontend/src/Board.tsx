@@ -19,7 +19,7 @@ import {
   type OnNodeDrag,
   type XYPosition,
 } from '@xyflow/react'
-import { BoardActionsContext, type BoardActions } from './actions'
+import { BoardActionsContext, StructFlowsContext, type BoardActions } from './actions'
 import { ColumnResizer, useColumnWidth } from './ColumnResizer'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import {
@@ -53,7 +53,18 @@ import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
 import StructureEdge, { type StructureKind } from './StructureEdge'
 import { fieldsOf, onBoard, ownedBy, ownersOf, possibleGenerals, shapeOf, specializationsOf } from './structure'
-import { BLOCK_MIME, BlockPalette, BUILDING_BLOCKS, ConnectorPalette, findBlock, flowBlock, FlowPalette, type Block } from './Palette'
+import {
+  BLOCK_MIME,
+  BlockPalette,
+  BUILDING_BLOCKS,
+  ConnectorPalette,
+  findBlock,
+  flowBlock,
+  FlowPalette,
+  structBlock,
+  StructPalette,
+  type Block,
+} from './Palette'
 import { decisionText, RunList, RunPanel } from './Runs'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
@@ -64,6 +75,7 @@ import { FlowSettingsPanel } from './FlowSettings'
 import {
   createAttribute,
   createLink,
+  copyStruct,
   createObject,
   createProcess,
   createState,
@@ -318,6 +330,9 @@ export default function Board({
   onUpdate: (patch: Partial<Pick<Flow, 'name' | 'module' | 'settings'>>) => Promise<void>
 }) {
   const flowId = flow.id
+  // A struct's board holds its one object alone: no start, no end, no
+  // processes and no runs; see structs.go.
+  const structBoard = flow.struct
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>([])
   const [error, setError] = useState<string | null>(null)
@@ -370,6 +385,8 @@ export default function Board({
   const draftSeq = useRef(0)
   // Loads the board again, for callbacks made before loadBoard is.
   const reload = useRef<() => Promise<void>>(async () => {})
+  // Whether a node is a struct's object, for callbacks made before it is known.
+  const isStructRootRef = useRef<(id: string) => boolean>(() => false)
   // The reviews whose process's panel was opened for them, so closing it keeps it closed.
   const shownReviews = useRef(new Set<number>())
 
@@ -418,7 +435,11 @@ export default function Board({
       setNodes((ns) => ns.map((n) => (n.id === id ? ({ ...n, data: { ...n.data, name, editing: false } } as FlowNode) : n)))
       try {
         if (!isDraft(id)) {
-          if (node.type === 'object') await updateObject(objectIdOf(id), { name })
+          // A struct is named after its object.
+          if (isStructRootRef.current(id)) {
+            await onUpdate({ name })
+            await reload.current()
+          } else if (node.type === 'object') await updateObject(objectIdOf(id), { name })
           else await updateProcess(Number(id), { name })
           return
         }
@@ -453,7 +474,7 @@ export default function Board({
         report(err)
       }
     },
-    [getNode, setNodes, report, flowId, placement],
+    [getNode, setNodes, report, flowId, placement, onUpdate],
   )
 
   const cancelName = useCallback(
@@ -492,6 +513,7 @@ export default function Board({
         human: o.human,
         owned: o.owner !== null,
         copied: o.source !== null,
+        sourceFlow: o.sourceFlow,
         editing,
         boundary,
       },
@@ -610,8 +632,7 @@ export default function Board({
         })
 
       setNodes([
-        toStartNode(start),
-        toEndNode(end, !inner),
+        ...(structBoard ? [] : [toStartNode(start), toEndNode(end, !inner)]),
         ...ps.map((p) => toNode(p)),
         ...own.map((o) => toObjectNode(o, false, undefined, undefined, c.objects)),
         ...row(ins, { x: start.x, y: start.y - BOUNDARY_GAP.y }, 'in'),
@@ -626,7 +647,7 @@ export default function Board({
         ...(inner ? [] : own.filter((o) => o.end).map((o) => endEdge(o.id))),
       ])
     },
-    [setNodes, setEdges, toNode, toObjectNode, showObject],
+    [setNodes, setEdges, toNode, toObjectNode, showObject, structBoard],
   )
 
   const loadBoard = useCallback(
@@ -848,12 +869,29 @@ export default function Board({
     [screenToFlowPosition, setNodes],
   )
 
+  // A struct's object lands as a copy, already named after it.
+  const addStruct = async (struct: number, screenX: number, screenY: number) => {
+    if (unfoldedRef.current !== null) return
+    const center = screenToFlowPosition({ x: screenX, y: screenY })
+    const { width, height } = NODE_SIZE.object
+    try {
+      await copyStruct(struct, { flow: flowId, parent: boardRef.current, x: center.x - width / 2, y: center.y - height / 2 })
+      await reload.current()
+    } catch (err) {
+      report(err)
+    }
+  }
+
+  const addBlock = (block: Block, screenX: number, screenY: number) =>
+    block.struct === undefined ? addDraft(block, screenX, screenY) : addStruct(block.struct, screenX, screenY)
+
   const addAtViewportCenter = (block: Block) => {
     const rect = wrapper.current?.getBoundingClientRect()
-    if (rect && !reviewing) addDraft(block, rect.left + rect.width / 2, rect.top + rect.height / 2)
+    if (rect && !reviewing) addBlock(block, rect.left + rect.width / 2, rect.top + rect.height / 2)
   }
 
   const onPaneDoubleClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (structBoard && !objectBoard) return
     if (!reviewing && (e.target as HTMLElement).classList.contains('react-flow__pane')) {
       addDraft(BUILDING_BLOCKS.find((b) => b.id === (e.shiftKey || objectBoard ? 'object' : 'process'))!, e.clientX, e.clientY)
     }
@@ -867,22 +905,33 @@ export default function Board({
     e.dataTransfer.dropEffect = 'copy'
   }
 
-  // The module an object is a copy of an object of, if it is one.
+  // The module or struct an object is a copy of an object of, if it is one.
   const moduleOf = (object: number) => {
     const o = contents?.objects.find((x) => x.id === object)
     if (!o || o.source === null || o.sourceFlow === null) return undefined
-    return { id: o.sourceFlow, name: otherFlows?.find((f) => f.id === o.sourceFlow)?.name ?? `Procedure #${o.sourceFlow}` }
+    const from = otherFlows?.find((f) => f.id === o.sourceFlow)
+    return { id: o.sourceFlow, name: from?.name ?? `Procedure #${o.sourceFlow}`, struct: Boolean(from?.struct) }
   }
 
-  // Only modules are reused; the flows that run stay on the main page.
+  // The object a struct is, which goes only with the struct.
+  const isStructRoot = (id: string) => {
+    if (!structBoard || !isObject(id)) return false
+    const o = contents?.objects.find((x) => x.id === objectIdOf(id))
+    return o !== undefined && o.owner === null && o.parent === null
+  }
+  isStructRootRef.current = isStructRoot
+
+  // Only modules and structs are reused; the flows that run stay on the main page.
   const flowBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.module).map(flowBlock), [otherFlows])
+  const structBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.struct).map(structBlock), [otherFlows])
+  const structFlows = useMemo(() => new Set((otherFlows ?? []).filter((f) => f.struct).map((f) => f.id)), [otherFlows])
 
   const onCanvasDrop = (e: DragEvent<HTMLDivElement>) => {
     const id = e.dataTransfer.getData(BLOCK_MIME)
-    const block = findBlock(id) ?? flowBlocks.find((b) => b.id === id)
-    if (reviewing || !block) return
+    const block = findBlock(id) ?? [...flowBlocks, ...structBlocks].find((b) => b.id === id)
+    if (reviewing || !block || (structBoard && !objectBoard)) return
     e.preventDefault()
-    addDraft(block, e.clientX, e.clientY)
+    addBlock(block, e.clientX, e.clientY)
   }
 
   // A flow process opens its board, a subflow process the flow it runs;
@@ -1231,7 +1280,8 @@ export default function Board({
   // belong to the board outside.
   const remove = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || node.type === 'end' || reviewing || isBoundary(id) || isFixed(id)) return
+    if (!node || node.type === 'start' || node.type === 'end' || reviewing || isBoundary(id) || isFixed(id) || isStructRoot(id))
+      return
     const inside =
       node.type === 'process' && node.data.kind === 'flow'
         ? ', its links and everything on its board'
@@ -1494,9 +1544,15 @@ export default function Board({
         ]
       : []),
     // Two objects making up one can't share a name.
-    { label: 'Duplicate', icon: <CopyIcon />, disabled: reviewing || objectBoard, onSelect: () => duplicate(id) },
+    { label: 'Duplicate', icon: <CopyIcon />, disabled: reviewing || objectBoard || structBoard, onSelect: () => duplicate(id) },
     { label: 'Copy', icon: <CopyIcon />, disabled: reviewing || objectBoard || isBoundary(id), onSelect: () => copySelection(id) },
-    { label: 'Delete', icon: <TrashIcon />, danger: true, disabled: reviewing || isBoundary(id) || isFixed(id), onSelect: () => remove(id) },
+    {
+      label: 'Delete',
+      icon: <TrashIcon />,
+      danger: true,
+      disabled: reviewing || isBoundary(id) || isFixed(id) || isStructRoot(id),
+      onSelect: () => remove(id),
+    },
   ]
 
   const onStopStep = async (run: number, step: number) => {
@@ -1655,7 +1711,7 @@ export default function Board({
     const c = readCopied()
     const rect = wrapper.current?.getBoundingClientRect()
     const point = screen ?? pointer.current ?? (rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
-    if (!c || !point || reviewing || objectBoard) return
+    if (!c || !point || reviewing || objectBoard || structBoard) return
     const at = screenToFlowPosition(point)
     try {
       const res = await pasteCopied(c, flowId, boardId, at.x - c.at.x, at.y - c.at.y)
@@ -1809,24 +1865,40 @@ export default function Board({
           <span className="crumb-separator" aria-hidden>
             /
           </span>
-          <FlowName name={flow.name} onRename={(name) => onUpdate({ name })} onError={report} />
+          <FlowName
+            name={flow.name}
+            // A struct's object is renamed with it.
+            onRename={(name) => onUpdate({ name }).then(() => (structBoard ? reload.current() : undefined))}
+            onError={report}
+          />
         </h1>
-        <button
-          onClick={onWrap}
-          disabled={reviewing || objectBoard || selectedProcesses.length === 0}
-          title="Move the selected processes into a new flow process; shift-click or drag to select several"
-        >
-          <FlowIcon /> Group into flow
-        </button>
-        <button onClick={onTidy} disabled={reviewing || objectBoard} title="Lay the board out from the top">
-          <LayoutIcon /> Tidy up
-        </button>
-        <span
-          className="hint"
-          title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
-        >
-          Processes connect through the objects they generate and take. Right-click a node for more.
-        </span>
+        {!structBoard && (
+          <>
+            <button
+              onClick={onWrap}
+              disabled={reviewing || objectBoard || selectedProcesses.length === 0}
+              title="Move the selected processes into a new flow process; shift-click or drag to select several"
+            >
+              <FlowIcon /> Group into flow
+            </button>
+            <button onClick={onTidy} disabled={reviewing || objectBoard} title="Lay the board out from the top">
+              <LayoutIcon /> Tidy up
+            </button>
+          </>
+        )}
+        {structBoard ? (
+          <span className="hint">
+            A struct is one object that flows use. Double-click it for its attributes, right-click it to add states, and
+            unfold it to build its parts.
+          </span>
+        ) : (
+          <span
+            className="hint"
+            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
+          >
+            Processes connect through the objects they generate and take. Right-click a node for more.
+          </span>
+        )}
         <div className="versioning">
           <button onClick={onSave} disabled={versioning || reviewing} title="Save the board as a new version">
             <SaveIcon /> Save
@@ -1851,34 +1923,40 @@ export default function Board({
               <span className="version-latest">latest {versions.versions[0].id}</span>
             )}
           </button>
-          <button
-            className={`mcp-toggle${mcpOpen ? ' open' : ''}`}
-            aria-expanded={mcpOpen}
-            onClick={() => openMCPSettings(!mcpOpen)}
-            title="The MCP servers agents can use"
-          >
-            <PlugIcon /> MCP servers
-          </button>
-          <button
-            className={`settings-toggle${settingsOpen ? ' open' : ''}`}
-            aria-expanded={settingsOpen}
-            onClick={() => openFlowSettings(!settingsOpen)}
-            title="The repositories the flow works on, and its branches"
-          >
-            <GearIcon /> Settings
-          </button>
+          {!structBoard && (
+            <>
+              <button
+                className={`mcp-toggle${mcpOpen ? ' open' : ''}`}
+                aria-expanded={mcpOpen}
+                onClick={() => openMCPSettings(!mcpOpen)}
+                title="The MCP servers agents can use"
+              >
+                <PlugIcon /> MCP servers
+              </button>
+              <button
+                className={`settings-toggle${settingsOpen ? ' open' : ''}`}
+                aria-expanded={settingsOpen}
+                onClick={() => openFlowSettings(!settingsOpen)}
+                title="The repositories the flow works on, and its branches"
+              >
+                <GearIcon /> Settings
+              </button>
+            </>
+          )}
         </div>
-        <button
-          className="play"
-          onClick={onPlay}
-          disabled={!canRun}
-          aria-label="Run flow"
-          title={
-            starting ? 'Starting…' : canRun ? 'Run flow' : 'Connect the start node to a process first'
-          }
-        >
-          <PlayIcon />
-        </button>
+        {!structBoard && (
+          <button
+            className="play"
+            onClick={onPlay}
+            disabled={!canRun}
+            aria-label="Run flow"
+            title={
+              starting ? 'Starting…' : canRun ? 'Run flow' : 'Connect the start node to a process first'
+            }
+          >
+            <PlayIcon />
+          </button>
+        )}
       </header>
       {error && (
         <div className="error-banner" onClick={() => setError(null)}>
@@ -1888,13 +1966,17 @@ export default function Board({
       <div className="workspace" style={{ '--panel-width': `${panelColumn.width}px` } as CSSProperties}>
         <Sidebar>
           <SidebarGroup id="blocks" title="Building blocks">
-            <BlockPalette
-              blocks={objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS}
-              disabled={reviewing}
-              onAdd={addAtViewportCenter}
-            />
+            {structBoard && !objectBoard ? (
+              <p className="panel-note">A struct holds its one object alone. Unfold it to add the objects making it up.</p>
+            ) : (
+              <BlockPalette
+                blocks={objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS}
+                disabled={reviewing}
+                onAdd={addAtViewportCenter}
+              />
+            )}
           </SidebarGroup>
-          {!objectBoard && (
+          {!objectBoard && !structBoard && (
             <>
               <SidebarGroup id="connectors" title="Connectors">
                 <ConnectorPalette disabled={reviewing} onAdd={addAtViewportCenter} />
@@ -1902,18 +1984,23 @@ export default function Board({
               <SidebarGroup id="flows" title="Procedures">
                 <FlowPalette blocks={flowBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
               </SidebarGroup>
+              <SidebarGroup id="structs" title="Structs">
+                <StructPalette blocks={structBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
+              </SidebarGroup>
             </>
           )}
-          <SidebarGroup id="runs" title="Runs" fill>
-            <RunList
-              runs={runs}
-              selected={runId}
-              onSelect={(id) => {
-                const run = runs.find((r) => r.id === id)
-                if (run) showRun(run)
-              }}
-            />
-          </SidebarGroup>
+          {!structBoard && (
+            <SidebarGroup id="runs" title="Runs" fill>
+              <RunList
+                runs={runs}
+                selected={runId}
+                onSelect={(id) => {
+                  const run = runs.find((r) => r.id === id)
+                  if (run) showRun(run)
+                }}
+              />
+            </SidebarGroup>
+          )}
         </Sidebar>
         <div
           className={`canvas${linkingTo ? ` linking-to-${linkingTo}` : ''}`}
@@ -1924,36 +2011,38 @@ export default function Board({
           onDrop={onCanvasDrop}
         >
           <BoardActionsContext.Provider value={actions}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onConnectStart={onConnectStart}
-              onConnectEnd={onConnectEnd}
-              onEdgesDelete={onEdgesDelete}
-              isValidConnection={isValidConnection}
-              onNodeDoubleClick={onNodeDoubleClick}
-              onNodeContextMenu={onNodeContextMenu}
-              onPaneContextMenu={(e) => {
-                e.preventDefault()
-                if (!reviewing && !objectBoard) setPaneMenu({ x: e.clientX, y: e.clientY })
-              }}
-              onEdgeDoubleClick={(_, edge) => !reviewing && edge.data?.route && setRoute(edge.id, null, true)}
-              onPaneClick={() => setPanelId(null)}
-              onNodeDragStop={onNodeDragStop}
-              onDoubleClick={onPaneDoubleClick}
-              zoomOnDoubleClick={false}
-              nodesDraggable={!reviewing}
-              nodesConnectable={!reviewing && !objectBoard}
-              deleteKeyCode={reviewing ? null : undefined}
-            >
-              <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
-              <Controls />
-            </ReactFlow>
+            <StructFlowsContext.Provider value={structFlows}>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onConnectStart={onConnectStart}
+                onConnectEnd={onConnectEnd}
+                onEdgesDelete={onEdgesDelete}
+                isValidConnection={isValidConnection}
+                onNodeDoubleClick={onNodeDoubleClick}
+                onNodeContextMenu={onNodeContextMenu}
+                onPaneContextMenu={(e) => {
+                  e.preventDefault()
+                  if (!reviewing && !objectBoard && !structBoard) setPaneMenu({ x: e.clientX, y: e.clientY })
+                }}
+                onEdgeDoubleClick={(_, edge) => !reviewing && edge.data?.route && setRoute(edge.id, null, true)}
+                onPaneClick={() => setPanelId(null)}
+                onNodeDragStop={onNodeDragStop}
+                onDoubleClick={onPaneDoubleClick}
+                zoomOnDoubleClick={false}
+                nodesDraggable={!reviewing}
+                nodesConnectable={!reviewing && !objectBoard}
+                deleteKeyCode={reviewing ? null : undefined}
+              >
+                <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
+                <Controls />
+              </ReactFlow>
+            </StructFlowsContext.Provider>
           </BoardActionsContext.Provider>
           {trail.length > 1 && (
             <nav className="breadcrumb" aria-label="Boards">
@@ -2063,6 +2152,7 @@ export default function Board({
             onHumanChange={(human) => setHuman(objectPanelNode.id, human)}
             editable={!reviewing}
             module={moduleOf(objectIdOf(objectPanelNode.id))}
+            structRoot={isStructRoot(objectPanelNode.id)}
             content={objectPanelNode.data.content}
             onRename={(name) => commitName(objectPanelNode.id, name)}
             onAdd={(name) => addAttribute(objectPanelNode.id, name)}

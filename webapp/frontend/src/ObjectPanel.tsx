@@ -23,6 +23,7 @@ export default function ObjectPanel({
   human,
   editable,
   module,
+  structRoot = false,
   content,
   generals,
   onPersistentChange,
@@ -50,7 +51,9 @@ export default function ObjectPanel({
   editable: boolean
   // For a copy of a module's object, the module: what the object has
   // changes only there, and here with it.
-  module?: { id: number; name: string }
+  module?: { id: number; name: string; struct: boolean }
+  // The object a struct is: whether it is a person or stored is up to each copy.
+  structRoot?: boolean
   // What the object held at the end of the latest run, if it was generated.
   content?: string
   // The objects it can specialize.
@@ -124,7 +127,8 @@ export default function ObjectPanel({
       </header>
       {module && (
         <p className="panel-note module-note">
-          A copy of an object of the procedure <a href={`#/flows/${module.id}`}>{module.name}</a>, which it follows: its
+          A copy of {module.struct ? 'the struct' : 'an object of the procedure'}{' '}
+          <a href={`#/flows/${module.id}`}>{module.name}</a>, which it follows: its
           name, how many it is, its states, attributes and what it is made of change only there, and here with it.
         </p>
       )}
@@ -175,7 +179,7 @@ export default function ObjectPanel({
             while it has none. Only how the board draws it tells an attribute from a part.
           </p>
         </>
-      ) : (
+      ) : structRoot ? null : (
         <>
           <label className="panel-check">
             <input type="checkbox" checked={human} disabled={!own} onChange={(e) => onHumanChange(e.target.checked)} />
@@ -201,7 +205,7 @@ export default function ObjectPanel({
         taking it runs once per item, each item as this object inside it; a list it collects from its items' runs has as
         many as ran. Stored, each item's run claims its item, so an item another run took is skipped.`}
       </p>
-      {!owner && !human && (
+      {!owner && !human && !structRoot && (
         <>
           <label className="panel-check">
             <input

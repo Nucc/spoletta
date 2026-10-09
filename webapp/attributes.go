@@ -82,9 +82,20 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		if a.Unique {
+			var owned bool
+			if err := db.QueryRowContext(r.Context(), "SELECT owner_id IS NOT NULL FROM objects WHERE id = ?", id).Scan(&owned); err != nil {
+				serverError(w, err)
+				return
+			}
+			if owned {
+				http.Error(w, "only an object on a board is stored, so only its own attributes can be unique", http.StatusBadRequest)
+				return
+			}
+		}
 
-		res, err := db.ExecContext(r.Context(), "INSERT INTO object_attributes (object_id, name, definition) VALUES (?, ?, ?)",
-			a.Object, a.Name, a.Definition)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file) VALUES (?, ?, ?, ?, ?)",
+			a.Object, a.Name, a.Definition, a.Unique, a.File)
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "the object already has an attribute named "+a.Name, http.StatusConflict)

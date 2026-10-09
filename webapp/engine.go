@@ -25,8 +25,9 @@ import (
 //     process runs once every object it takes that way exists; objects no
 //     process generates are given, so they exist from the start.
 //   - A link naming a state is a condition: its process runs whenever the
-//     object enters that state, with whichever objects it takes without a
-//     state exist. Several such links are alternatives, not all required.
+//     object enters that state, and only then, with whichever objects it
+//     takes without a state exist. Several such links are alternatives, not
+//     all required.
 //
 // A failure stops its branch, and every process runs at most once per pass,
 // so cycles end. An agent, script or Sentry step stopped while it goes
@@ -468,9 +469,14 @@ func (w *walk) startGiven(p int64) []int64 {
 	return w.given
 }
 
-// Called with w.mu held.
+// Whether a process runs now that objects it takes without a state exist:
+// it takes some that way and all of them exist. A process with a condition
+// waits for its object to enter that state instead. Called with w.mu held.
 func (w *walk) ready(p int64) bool {
 	plain := w.plainInputs(p)
+	if len(plain) < len(w.inputs[p]) {
+		return false
+	}
 	for _, i := range plain {
 		if _, ok := w.values[i.object]; !ok {
 			return false
@@ -569,7 +575,6 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 			for _, t := range w.takersIn(o, st) {
 				next = append(next, func() { w.runProcess(t, p, o) })
 			}
-			continue
 		}
 		for _, t := range w.takers[o] {
 			if t.state == 0 && w.ready(t.process) {

@@ -1,0 +1,631 @@
+package tests
+
+// End-to-end tests run the webapp as built, a process of its own per test,
+// and drive it through its HTTP API, as the frontend does, on a real MySQL.
+// Only the worker is faked: agents and scripts reply with what each test
+// tells them to, by process name, and every request the worker gets is kept
+// for the test to check.
+//
+// They need the compose MySQL; its root account creates a database of their
+// own, dropped once they are done. TEST_DB_ADDR, TEST_DB_USER and
+// TEST_DB_PASSWORD say where and as whom, by default 127.0.0.1:3306 as root
+// with compose's default password. Without a MySQL listening there they are
+// skipped; with one refusing them they fail. Run with -race, the webapp is
+// built with the race detector too, and a race it reports fails the test.
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/go-sql-driver/mysql"
+)
+
+const testDBPrefix = "genie_test_"
+
+// Set by race_test.go when the tests run with -race.
+var raceEnabled bool
+
+var testDB struct {
+	// Where the webapp finds its database, and the webapp built.
+	host, port, name, user, password string
+	binary                           string
+	// Why the tests can't run: a reason to skip them, or to fail.
+	skip, fail string
+}
+
+func TestMain(m *testing.M) {
+	cleanup := setUp()
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
+}
+
+func env(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// Builds the webapp and creates the test database, migrated by starting
+// the webapp once. Returns what undoes it.
+func setUp() func() {
+	addr, given := os.LookupEnv("TEST_DB_ADDR")
+	if !given {
+		addr = "127.0.0.1:3306"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		testDB.fail = fmt.Sprintf("TEST_DB_ADDR %q: %v", addr, err)
+		return func() {}
+	}
+	cfg := mysql.NewConfig()
+	cfg.Net = "tcp"
+	cfg.Addr = addr
+	cfg.User = env("TEST_DB_USER", "root")
+	cfg.Passwd = env("TEST_DB_PASSWORD", "rootpass")
+	cfg.Timeout = 3 * time.Second
+
+	root, err := sql.Open("mysql", cfg.FormatDSN())
+	if err == nil {
+		err = root.Ping()
+	}
+	if err != nil {
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && !given {
+			testDB.skip = fmt.Sprintf("no MySQL at %s (start it with `podman compose up -d mysql`): %v", addr, err)
+		} else {
+			testDB.fail = fmt.Sprintf("MySQL at %s: %v; if another MySQL holds that address, set TEST_DB_ADDR, such as [::1]:3306", addr, err)
+		}
+		return func() {}
+	}
+
+	dir, err := os.MkdirTemp("", "webapp-tests-")
+	if err != nil {
+		testDB.fail = err.Error()
+		return func() { root.Close() }
+	}
+	removeDir := func() { os.RemoveAll(dir) }
+	testDB.binary = filepath.Join(dir, "webapp")
+	args := []string{"build", "-o", testDB.binary}
+	if raceEnabled {
+		args = append(args, "-race")
+	}
+	build := exec.Command("go", append(args, ".")...)
+	build.Dir = ".."
+	if out, err := build.CombinedOutput(); err != nil {
+		testDB.fail = fmt.Sprintf("build the webapp: %v\n%s", err, out)
+		return func() { root.Close(); removeDir() }
+	}
+
+	sweepTestDBs(root)
+	testDB.host, testDB.port, testDB.user, testDB.password = host, port, cfg.User, cfg.Passwd
+	testDB.name = fmt.Sprintf("%s%d", testDBPrefix, time.Now().UnixNano())
+	if _, err := root.Exec("CREATE DATABASE " + testDB.name); err != nil {
+		testDB.fail = "create test database: " + err.Error()
+		return func() { root.Close(); removeDir() }
+	}
+	undo := func() {
+		if _, err := root.Exec("DROP DATABASE IF EXISTS " + testDB.name); err != nil {
+			log.Printf("drop test database: %v", err)
+		}
+		root.Close()
+		removeDir()
+	}
+	// The first start migrates the database, which takes a while; the tests'
+	// own starts then find it done.
+	srv, err := startWebapp("http://127.0.0.1:1", time.Minute)
+	if err != nil {
+		testDB.fail = "migrate: " + err.Error()
+		return undo
+	}
+	srv.stop()
+	return undo
+}
+
+// Drops the databases of test runs that went down before dropping theirs,
+// leaving recent ones to test runs still going.
+func sweepTestDBs(root *sql.DB) {
+	rows, err := root.Query("SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE ?", testDBPrefix+"%")
+	if err != nil {
+		return
+	}
+	var names []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			names = append(names, n)
+		}
+	}
+	rows.Close()
+	cutoff := time.Now().Add(-time.Hour).UnixNano()
+	for _, n := range names {
+		var started int64
+		if _, err := fmt.Sscanf(strings.TrimPrefix(n, testDBPrefix), "%d", &started); err == nil && started < cutoff {
+			root.Exec("DROP DATABASE IF EXISTS " + n)
+		}
+	}
+}
+
+// A webapp process, and what it logged.
+type webapp struct {
+	url    string
+	cmd    *exec.Cmd
+	log    *syncBuffer
+	exited chan struct{}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Starts the webapp on the test database with its worker at workerURL, and
+// waits for it to answer.
+func startWebapp(workerURL string, wait time.Duration) (*webapp, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	port := fmt.Sprint(l.Addr().(*net.TCPAddr).Port)
+	l.Close()
+	static, err := os.MkdirTemp("", "webapp-static-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(static)
+
+	w := &webapp{url: "http://127.0.0.1:" + port, log: &syncBuffer{}}
+	w.cmd = exec.Command(testDB.binary)
+	w.cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"DB_HOST=" + testDB.host,
+		"DB_PORT=" + testDB.port,
+		"DB_NAME=" + testDB.name,
+		"DB_USER=" + testDB.user,
+		"DB_PASSWORD=" + testDB.password,
+		"PORT=" + port,
+		"WORKER_URL=" + workerURL,
+		"MCP_PROXY_URL=" + w.url,
+		"PARALLEL_STEPS=3",
+		"STATIC_DIR=" + static,
+	}
+	w.cmd.Stdout, w.cmd.Stderr = w.log, w.log
+	if err := w.cmd.Start(); err != nil {
+		return nil, err
+	}
+	exited := make(chan struct{})
+	go func() {
+		w.cmd.Wait()
+		close(exited)
+	}()
+	deadline := time.Now().Add(wait)
+	for {
+		resp, err := http.Get(w.url + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				w.exited = exited
+				return w, nil
+			}
+		}
+		select {
+		case <-exited:
+			return nil, fmt.Errorf("the webapp exited:\n%s", w.log)
+		default:
+		}
+		if time.Now().After(deadline) {
+			w.cmd.Process.Kill()
+			<-exited
+			return nil, fmt.Errorf("the webapp didn't answer in %s:\n%s", wait, w.log)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Ends the webapp, and with it every run it was walking, and returns what
+// it logged.
+func (w *webapp) stop() string {
+	w.cmd.Process.Kill()
+	<-w.exited
+	return w.log.String()
+}
+
+// The webapp of a test, with a fake worker of its own. Tests share the
+// database, so each works in flows of its own.
+type app struct {
+	t      *testing.T
+	url    string
+	worker *fakeWorker
+}
+
+func newApp(t *testing.T) *app {
+	t.Helper()
+	fw := newFakeWorker(t)
+	a := startApp(t, fw.url)
+	a.worker = fw
+	return a
+}
+
+// The webapp of a test, with its worker at workerURL. It ends with the test,
+// before the worker, so steps going end first.
+func startApp(t *testing.T, workerURL string) *app {
+	t.Helper()
+	switch {
+	case testDB.fail != "":
+		t.Fatal(testDB.fail)
+	case testDB.skip != "":
+		t.Skip(testDB.skip)
+	}
+	w, err := startWebapp(workerURL, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		out := w.stop()
+		switch {
+		case strings.Contains(out, "WARNING: DATA RACE"):
+			t.Errorf("the webapp reported a data race:\n%s", out)
+		case t.Failed():
+			t.Logf("the webapp logged:\n%s", out)
+		}
+	})
+	return &app{t: t, url: w.url}
+}
+
+// Sends a request with body as JSON, if any, and returns the status and reply.
+func (a *app) do(method, path string, body any) (int, []byte) {
+	a.t.Helper()
+	var r io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			a.t.Fatal(err)
+		}
+		r = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, a.url+path, r)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		a.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	reply, err := io.ReadAll(resp.Body)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	return resp.StatusCode, reply
+}
+
+// Sends a request that must get status want, and decodes the reply into out, if given.
+func (a *app) call(method, path string, body any, want int, out any) {
+	a.t.Helper()
+	status, reply := a.do(method, path, body)
+	if status != want {
+		a.t.Fatalf("%s %s = %d %s, want %d", method, path, status, bytes.TrimSpace(reply), want)
+	}
+	if out != nil {
+		if err := json.Unmarshal(reply, out); err != nil {
+			a.t.Fatalf("%s %s: decode %s: %v", method, path, reply, err)
+		}
+	}
+}
+
+// Sends a request that must be refused with status want, with a message
+// holding msg.
+func (a *app) refused(method, path string, body any, want int, msg string) {
+	a.t.Helper()
+	status, reply := a.do(method, path, body)
+	if status != want || !strings.Contains(string(reply), msg) {
+		a.t.Errorf("%s %s = %d %q, want %d with %q", method, path, status, bytes.TrimSpace(reply), want, msg)
+	}
+}
+
+func (a *app) newFlow(name string) flow {
+	a.t.Helper()
+	var f flow
+	a.call("POST", "/api/flows", map[string]any{"name": name}, http.StatusCreated, &f)
+	return f
+}
+
+// Adds a process to the flow's top board; p's flow is filled in.
+func (a *app) newProcess(f int64, p map[string]any) process {
+	a.t.Helper()
+	p["flow"] = f
+	var out process
+	a.call("POST", "/api/processes", p, http.StatusCreated, &out)
+	return out
+}
+
+func (a *app) agent(f int64, name, prompt string) process {
+	a.t.Helper()
+	return a.newProcess(f, map[string]any{"name": name, "kind": kindAgent, "prompt": prompt})
+}
+
+func (a *app) newObject(f int64, name string) object {
+	a.t.Helper()
+	var o object
+	a.call("POST", "/api/objects", map[string]any{"flow": f, "name": name}, http.StatusCreated, &o)
+	return o
+}
+
+func (a *app) newState(object int64, name string) objectState {
+	a.t.Helper()
+	var s objectState
+	a.call("POST", fmt.Sprintf("/api/objects/%d/states", object), map[string]any{"name": name}, http.StatusCreated, &s)
+	return s
+}
+
+func (a *app) output(p, o int64) link {
+	a.t.Helper()
+	return a.link(map[string]any{"process": p, "object": o, "direction": directionOutput})
+}
+
+func (a *app) input(p, o int64) link {
+	a.t.Helper()
+	return a.link(map[string]any{"process": p, "object": o, "direction": directionInput})
+}
+
+func (a *app) link(l map[string]any) link {
+	a.t.Helper()
+	var out link
+	a.call("POST", "/api/links", l, http.StatusCreated, &out)
+	return out
+}
+
+func (a *app) startAt(f, p int64) {
+	a.t.Helper()
+	a.call("PATCH", fmt.Sprintf("/api/start?flow=%d", f), map[string]any{"target": p}, http.StatusOK, nil)
+}
+
+func (a *app) startRun(f int64) run {
+	a.t.Helper()
+	var rn run
+	a.call("POST", fmt.Sprintf("/api/runs?flow=%d", f), nil, http.StatusCreated, &rn)
+	return rn
+}
+
+type runDetail struct {
+	run
+	Steps   []step      `json:"steps"`
+	Objects []runObject `json:"objects"`
+}
+
+func (a *app) getRun(id int64) runDetail {
+	a.t.Helper()
+	var d runDetail
+	a.call("GET", fmt.Sprintf("/api/runs/%d", id), nil, http.StatusOK, &d)
+	return d
+}
+
+// Polls until cond holds of the run, and returns it as it is then.
+func (a *app) waitRun(id int64, what string, cond func(runDetail) bool) runDetail {
+	a.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		d := a.getRun(id)
+		if cond(d) {
+			return d
+		}
+		if time.Now().After(deadline) {
+			a.t.Fatalf("run %d: timed out waiting for %s; it is %s with steps %s", id, what, d.Status, describeSteps(d))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Waits for the run to end.
+func (a *app) finish(id int64) runDetail {
+	a.t.Helper()
+	return a.waitRun(id, "it to end", func(d runDetail) bool { return d.Status != runRunning })
+}
+
+// Waits for a step of the named process in the given status that isn't one
+// of those already seen, and returns it.
+func (a *app) waitStep(id int64, process, status string, seen ...int64) step {
+	a.t.Helper()
+	var found step
+	a.waitRun(id, fmt.Sprintf("a step of %q %s", process, status), func(d runDetail) bool {
+		for _, s := range d.Steps {
+			if s.ProcessName == process && s.Status == status && !slices.Contains(seen, s.ID) {
+				found = s
+				return true
+			}
+		}
+		return false
+	})
+	return found
+}
+
+func describeSteps(d runDetail) string {
+	var parts []string
+	for _, s := range d.Steps {
+		p := s.ProcessName + ":" + s.Status
+		if s.Error != "" {
+			p += " (" + s.Error + ")"
+		}
+		parts = append(parts, p)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// The steps of the named process, in the order they started.
+func stepsOf(d runDetail, process string) []step {
+	var ss []step
+	for _, s := range d.Steps {
+		if s.ProcessName == process {
+			ss = append(ss, s)
+		}
+	}
+	return ss
+}
+
+// The one step of the named process; fails unless there is exactly one.
+func onlyStep(t *testing.T, d runDetail, process string) step {
+	t.Helper()
+	ss := stepsOf(d, process)
+	if len(ss) != 1 {
+		t.Fatalf("%d steps of %q, want 1; steps %s", len(ss), process, describeSteps(d))
+	}
+	return ss[0]
+}
+
+// What the run's objects of that name held, in the order they were generated.
+func contentsOf(d runDetail, object string) []string {
+	var cs []string
+	for _, o := range d.Objects {
+		if o.Name == object {
+			cs = append(cs, o.Content)
+		}
+	}
+	return cs
+}
+
+// A worker whose agents and scripts reply as the test says, by process name.
+type fakeWorker struct {
+	t   *testing.T
+	url string
+
+	mu      sync.Mutex
+	agents  map[string]func(context.Context, agentRun) runResult
+	scripts map[string]func(context.Context, scriptRun) runResult
+	// Every run asked for, in the order asked.
+	agentRuns  []agentRun
+	scriptRuns []scriptRun
+}
+
+func newFakeWorker(t *testing.T) *fakeWorker {
+	fw := &fakeWorker{t: t, agents: map[string]func(context.Context, agentRun) runResult{}, scripts: map[string]func(context.Context, scriptRun) runResult{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, agentModels{Default: "fake/model", Models: []string{"fake/model"}})
+	})
+	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{})
+	})
+	// As the real one: a record per line, each message of the conversation,
+	// then the result.
+	mux.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
+		var run agentRun
+		if err := json.NewDecoder(r.Body).Decode(&run); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		fw.mu.Lock()
+		fw.agentRuns = append(fw.agentRuns, run)
+		reply := fw.agents[run.ProcessName]
+		fw.mu.Unlock()
+		res := runResult{Error: "the fake worker has no agent for " + run.ProcessName}
+		if reply != nil {
+			res = reply(r.Context(), run)
+		} else {
+			t.Errorf("fake worker: no agent for %q", run.ProcessName)
+		}
+		enc := json.NewEncoder(w)
+		enc.Encode(map[string]any{"message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "working on " + run.ProcessName}}}})
+		enc.Encode(map[string]any{"result": res})
+	})
+	mux.HandleFunc("POST /script", func(w http.ResponseWriter, r *http.Request) {
+		var run scriptRun
+		if err := json.NewDecoder(r.Body).Decode(&run); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		fw.mu.Lock()
+		fw.scriptRuns = append(fw.scriptRuns, run)
+		reply := fw.scripts[run.ProcessName]
+		fw.mu.Unlock()
+		res := runResult{Error: "the fake worker has no script for " + run.ProcessName}
+		if reply != nil {
+			res = reply(r.Context(), run)
+		} else {
+			t.Errorf("fake worker: no script for %q", run.ProcessName)
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	fw.url = srv.URL
+	return fw
+}
+
+func (fw *fakeWorker) onAgent(process string, reply func(context.Context, agentRun) runResult) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	fw.agents[process] = reply
+}
+
+func (fw *fakeWorker) onScript(process string, reply func(context.Context, scriptRun) runResult) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	fw.scripts[process] = reply
+}
+
+// The runs of the named agent asked for so far.
+func (fw *fakeWorker) runsOf(process string) []agentRun {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	var rs []agentRun
+	for _, r := range fw.agentRuns {
+		if r.ProcessName == process {
+			rs = append(rs, r)
+		}
+	}
+	return rs
+}
+
+// An agent that hands in v through submit_output, every time.
+func handsIn(v any) func(context.Context, agentRun) runResult {
+	return func(context.Context, agentRun) runResult { return submitted(v) }
+}
+
+func submitted(v any) runResult {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return runResult{OK: true, Output: string(b), Submitted: true}
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+// What a process generating one object without attributes hands in.
+func data(v any) map[string]any { return map[string]any{dataAttribute: v} }

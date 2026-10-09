@@ -249,7 +249,8 @@ export function updateStart(flow: number, board: BoardId, patch: Partial<Start>)
   return request(`/api/start${boardQuery(flow, board)}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
-// Where a flow process's board ends; the objects it generates show there.
+// Where a board ends. On a flow process's board, the objects it generates
+// show there; on a flow's top board, the objects it leaves lead into it.
 export type End = { x: number; y: number }
 
 // A flow process's board: where it starts and ends.
@@ -259,8 +260,13 @@ export function listBoards(flow: number): Promise<InnerBoard[]> {
   return request(`/api/boards?flow=${flow}`)
 }
 
-export function updateEnd(board: number, patch: Partial<End>): Promise<End> {
-  return request(`/api/end?board=${board}`, { method: 'PATCH', body: JSON.stringify(patch) })
+// The top board's end; null until it is moved.
+export function getEnd(flow: number): Promise<End | null> {
+  return request(`/api/end${boardQuery(flow, null)}`)
+}
+
+export function updateEnd(flow: number, board: BoardId, patch: Partial<End>): Promise<End> {
+  return request(`/api/end${boardQuery(flow, board)}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
 // Moves processes, and the selected objects only they link to, into a new
@@ -653,8 +659,9 @@ export function restoreVersion(id: number): Promise<void> {
 export type BoardContents = {
   processes: Process[]
   objects: FlowObject[]
-  // The top board's start.
+  // The top board's start, and its end, null until it is moved.
   start: Start
+  end: End | null
   connections: Connection[]
   links: Link[]
   boards: InnerBoard[]
@@ -674,6 +681,7 @@ type Snapshot = {
   linkStates: { link: number; state: number }[]
   connections: Connection[]
   start: Start
+  end?: End
   boards?: InnerBoard[]
 }
 
@@ -698,6 +706,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       attributes: s.attributes.filter((a) => a.object === o.id),
     })),
     start: s.start,
+    end: s.end ?? null,
     boards: s.boards ?? [],
     connections: s.connections,
     links: s.links.map((l) => ({

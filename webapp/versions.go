@@ -65,6 +65,9 @@ type snapshot struct {
 	LinkStates  []snapshotLinkState `json:"linkStates"`
 	Connections []connection        `json:"connections"`
 	Start       startNode           `json:"start"`
+	// The top board's end; none while it has no place, and in versions from
+	// before it had one.
+	End *boardEnd `json:"end,omitempty"`
 	// Flow processes' boards; versions from before them have none.
 	Boards []innerBoard `json:"boards"`
 }
@@ -113,11 +116,16 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 		Boards:      []innerBoard{},
 	}
 	var startRoute []byte
-	err := tx.QueryRowContext(ctx, "SELECT x, y, target_id, route FROM flow_starts WHERE flow_id = ?", flow).Scan(&s.Start.X, &s.Start.Y, &s.Start.Target, &startRoute)
+	var endX, endY *float64
+	err := tx.QueryRowContext(ctx, "SELECT x, y, target_id, route, end_x, end_y FROM flow_starts WHERE flow_id = ?", flow).
+		Scan(&s.Start.X, &s.Start.Y, &s.Start.Target, &startRoute, &endX, &endY)
 	if err != nil {
 		return s, err
 	}
 	s.Start.Route = routeJSON(startRoute)
+	if endX != nil && endY != nil {
+		s.End = &boardEnd{X: *endX, Y: *endY}
+	}
 
 	err = scanAll(ctx, tx, "SELECT "+processColumns+" FROM processes WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var p process
@@ -357,8 +365,12 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			}
 		}
 	}
-	_, err := tx.ExecContext(ctx, "UPDATE flow_starts SET x = ?, y = ?, target_id = ?, route = ? WHERE flow_id = ?",
-		s.Start.X, s.Start.Y, s.Start.Target, storedRoute(s.Start.Route), flow)
+	var endX, endY *float64
+	if s.End != nil {
+		endX, endY = &s.End.X, &s.End.Y
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE flow_starts SET x = ?, y = ?, target_id = ?, route = ?, end_x = ?, end_y = ? WHERE flow_id = ?",
+		s.Start.X, s.Start.Y, s.Start.Target, storedRoute(s.Start.Route), endX, endY, flow)
 	return err
 }
 

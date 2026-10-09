@@ -65,6 +65,13 @@ func migrateFlows(db *sql.DB) error {
 	if err := addColumn(db, "flows", "settings", "JSON NULL"); err != nil {
 		return err
 	}
+	// The end of a flow's top board, with the columns of inner_boards' end.
+	// Null until moved: the board places it below what is on it.
+	for _, c := range []string{"end_x", "end_y"} {
+		if err := addColumn(db, "flow_starts", c, "DOUBLE NULL"); err != nil {
+			return err
+		}
+	}
 	if err := addColumn(db, "run_steps", "branch", "VARCHAR(255) NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}

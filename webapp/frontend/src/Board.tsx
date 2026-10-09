@@ -70,6 +70,7 @@ import {
   decideStep,
   deleteState,
   getRun,
+  getEnd,
   getStart,
   getVersionBoard,
   listConnections,
@@ -141,10 +142,12 @@ const DUPLICATE_OFFSET = 40
 const DRAFT_PREFIX = 'draft-'
 const START_ID = 'start'
 const START_EDGE_ID = 'start-edge'
-// A flow process's board ends here.
+// A board ends here.
 const END_ID = 'end'
+// How far below the lowest node a top board's end sits until it is moved.
+const END_GAP = 200
 // The dashed lines from the start to the objects the flow process takes, and
-// from the ones it generates to the end.
+// from the ones it generates, or the top board leaves, to the end.
 const BOUNDARY_PREFIX = 'boundary-'
 // Where the objects outside sit, relative to the start and end.
 const BOUNDARY_GAP = { x: 24, y: 90 }
@@ -224,12 +227,19 @@ const fetchBoard = (flow: number): Promise<BoardContents> =>
     listProcesses(flow),
     listObjects(flow),
     getStart(flow),
+    getEnd(flow),
     listConnections(flow),
     listLinks(flow),
     listBoards(flow),
-  ]).then(
-    ([processes, objects, start, connections, links, boards]) => ({ processes, objects, start, connections, links, boards }),
-  )
+  ]).then(([processes, objects, start, end, connections, links, boards]) => ({
+    processes,
+    objects,
+    start,
+    end,
+    connections,
+    links,
+    boards,
+  }))
 
 const boundaryEdge = (source: string, target: string): FlowEdge => ({
   id: `${BOUNDARY_PREFIX}${source}-${target}`,
@@ -433,8 +443,10 @@ export default function Board({
   // Shows one board of the flow: its processes, its objects and their links.
   // A flow process's board also shows the objects the flow process is linked
   // to, the ones it takes above its start, leading into it, and the ones it
-  // only generates above its end. A board that is gone, such as after jumping
-  // to a version without its flow process, gives way to the top board.
+  // only generates above its end. On the top board, the objects that its
+  // processes generate and none of them takes lead into its end. A board
+  // that is gone, such as after jumping to a version without its flow
+  // process, gives way to the top board.
   const showBoard = useCallback(
     (c: BoardContents, wanted: BoardId) => {
       const inner = wanted === null ? undefined : c.boards.find((b) => b.process === wanted)
@@ -445,6 +457,13 @@ export default function Board({
       const humans = new Set(ps.filter((p) => p.kind === 'human').map((p) => p.id))
       const start = inner?.start ?? c.start
       const own = c.objects.filter((o) => o.parent === board)
+      // A top board's end without a place of its own sits below what is on it.
+      const lowest = Math.max(
+        start.y,
+        ...ps.map((p) => p.y + NODE_SIZE.process.height),
+        ...own.map((o) => o.y + NODE_SIZE.object.height),
+      )
+      const end = inner?.end ?? c.end ?? { x: start.x, y: lowest + END_GAP }
 
       // The objects outside, each once: taken ones at the start, even if generated too.
       const outside = (direction: 'input' | 'output', except: Set<number>) => [
@@ -452,6 +471,13 @@ export default function Board({
       ]
       const ins = board === null ? [] : outside('input', new Set(own.map((o) => o.id)))
       const outs = board === null ? [] : outside('output', new Set([...own.map((o) => o.id), ...ins]))
+      // What leads into the end.
+      const linked = (direction: 'input' | 'output') =>
+        new Set(c.links.filter((l) => ids.has(l.process) && l.direction === direction).map((l) => l.object))
+      const taken = linked('input')
+      const ends = inner
+        ? [...new Set(c.links.filter((l) => l.process === board && l.direction === 'output').map((l) => l.object))]
+        : [...linked('output')].filter((o) => !taken.has(o))
       const byId = new Map(c.objects.map((o) => [o.id, o]))
       // In a row, unless moved by hand.
       const placed = (id: number) => c.links.find((l) => l.process === board && l.object === id && l.at)?.at ?? undefined
@@ -464,7 +490,7 @@ export default function Board({
 
       setNodes([
         toStartNode(start),
-        ...(inner ? [toEndNode(inner.end)] : []),
+        toEndNode(end),
         ...ps.map((p) => toNode(p)),
         ...own.map((o) => toObjectNode(o)),
         ...row(ins, { x: start.x, y: start.y - BOUNDARY_GAP.y }, 'in'),
@@ -475,11 +501,7 @@ export default function Board({
         ...c.connections.filter((cn) => ids.has(cn.source)).map(connectionEdge),
         ...c.links.filter((l) => ids.has(l.process)).map((l) => linkEdge(l, humans.has(l.process))),
         ...ins.map((o) => boundaryEdge(objectNodeId(o), START_ID)),
-        ...(inner
-          ? [...new Set(c.links.filter((l) => l.process === board && l.direction === 'output').map((l) => l.object))].map((o) =>
-              boundaryEdge(objectNodeId(o), END_ID),
-            )
-          : []),
+        ...ends.map((o) => boundaryEdge(objectNodeId(o), END_ID)),
       ])
       setContents(c)
       setShownSeq((n) => n + 1)
@@ -757,9 +779,7 @@ export default function Board({
   const savePositions = (positions: Map<string, XYPosition>) => {
     for (const [id, { x, y }] of positions) {
       if (id === START_ID) updateStart(flowId, boardId, { x, y }).catch(report)
-      else if (id === END_ID) {
-        if (boardId !== null) updateEnd(boardId, { x, y }).catch(report)
-      }
+      else if (id === END_ID) updateEnd(flowId, boardId, { x, y }).catch(report)
       else if (isDraft(id)) continue
       // An object outside keeps its place here on its links to the board's process.
       else if (isBoundary(id)) {
@@ -803,8 +823,16 @@ export default function Board({
 
   // Lays the whole board out from the top, and keeps that layout. Routes
   // drawn by hand were for the old layout, so links go back to the default.
+  // The end goes last even when nothing leads into it, as if what leads
+  // nowhere led into it.
   const onTidy = () => {
-    moveNodes(tidy(getNodes(), edges))
+    const nodes = getNodes()
+    const leads = edges.some((e) => e.target === END_ID)
+      ? []
+      : nodes
+          .filter((n) => n.id !== START_ID && n.id !== END_ID && !edges.some((e) => e.source === n.id))
+          .map((n) => ({ id: `${BOUNDARY_PREFIX}${n.id}-${END_ID}`, source: n.id, target: END_ID }))
+    moveNodes(tidy(nodes, [...edges, ...leads]))
     for (const e of edges) if (e.data?.route) setRoute(e.id, null, true)
     window.requestAnimationFrame(() => fitView({ duration: 300 }))
   }

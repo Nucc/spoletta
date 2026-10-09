@@ -21,11 +21,12 @@ import (
 // end. They are the same objects, so the processes inside link to them
 // directly; nothing is declared twice.
 //
-// Each board has a start; a flow process's board also has an end. A flow's
-// top board's start lives in flow_starts, the others' in inner_boards, which
-// has the start's columns under the same names.
+// Each board has a start and an end. A flow's top board's start and end live
+// in flow_starts, the others' in inner_boards, which has their columns under
+// the same names. A top board's end has no place until it is moved: the
+// board places it below what is on it.
 
-// Where a flow process's board ends.
+// Where a board ends.
 type boardEnd struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
@@ -140,8 +141,7 @@ func boardParam(w http.ResponseWriter, r *http.Request, db *sql.DB) (int64, *int
 	return f, &id, true
 }
 
-// The table and condition of the row holding a board's start, and its end
-// for a flow process's board.
+// The table and condition of the row holding a board's start and end.
 func startRow(flow int64, board *int64) (string, string, []any) {
 	if board == nil {
 		return "flow_starts", "WHERE flow_id = ?", []any{flow}
@@ -285,9 +285,11 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeStart(w, r, f, board)
 	})
 
-	getEnd := func(w http.ResponseWriter, r *http.Request, board int64) {
-		var e boardEnd
-		err := db.QueryRowContext(r.Context(), "SELECT end_x, end_y FROM inner_boards WHERE process_id = ?", board).Scan(&e.X, &e.Y)
+	// A top board's end is null until it is moved.
+	writeEnd := func(w http.ResponseWriter, r *http.Request, flow int64, board *int64) {
+		var x, y *float64
+		table, cond, args := startRow(flow, board)
+		err := db.QueryRowContext(r.Context(), "SELECT end_x, end_y FROM "+table+" "+cond, args...).Scan(&x, &y)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "board not found", http.StatusNotFound)
 			return
@@ -296,29 +298,22 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, e)
+		if x == nil || y == nil {
+			writeJSON(w, http.StatusOK, nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, boardEnd{X: *x, Y: *y})
 	}
 
-	// Only a flow process's board has an end.
 	mux.HandleFunc("GET /api/end", func(w http.ResponseWriter, r *http.Request) {
-		_, board, ok := boardParam(w, r, db)
-		if !ok {
-			return
+		if f, board, ok := boardParam(w, r, db); ok {
+			writeEnd(w, r, f, board)
 		}
-		if board == nil {
-			http.Error(w, "the top board has no end", http.StatusNotFound)
-			return
-		}
-		getEnd(w, r, *board)
 	})
 
 	mux.HandleFunc("PATCH /api/end", func(w http.ResponseWriter, r *http.Request) {
-		_, board, ok := boardParam(w, r, db)
+		f, board, ok := boardParam(w, r, db)
 		if !ok {
-			return
-		}
-		if board == nil {
-			http.Error(w, "the top board has no end", http.StatusNotFound)
 			return
 		}
 		var patch struct {
@@ -329,13 +324,14 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		_, err := db.ExecContext(r.Context(), "UPDATE inner_boards SET end_x = COALESCE(?, end_x), end_y = COALESCE(?, end_y) WHERE process_id = ?",
-			patch.X, patch.Y, *board)
+		table, cond, args := startRow(f, board)
+		_, err := db.ExecContext(r.Context(), "UPDATE "+table+" SET end_x = COALESCE(?, end_x), end_y = COALESCE(?, end_y) "+cond,
+			append([]any{patch.X, patch.Y}, args...)...)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		getEnd(w, r, *board)
+		writeEnd(w, r, f, board)
 	})
 
 	// Moves processes, and the objects only they link to, into a new flow

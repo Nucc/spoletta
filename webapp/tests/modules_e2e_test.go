@@ -136,7 +136,7 @@ func TestModules(t *testing.T) {
 	}
 
 	path := fmt.Sprintf("/api/flows/%d", other.ID)
-	a.refused("PATCH", path, map[string]any{"module": false}, http.StatusConflict, "1 other flows run this module")
+	a.refused("PATCH", path, map[string]any{"module": false}, http.StatusConflict, "1 other flows run this procedure")
 	a.call("DELETE", fmt.Sprintf("/api/processes/%d", call.ID), nil, http.StatusNoContent, nil)
 	verPatch(a, path, map[string]any{"module": false})
 	if f := modFlowOf(a, other.ID); f.Module {
@@ -178,18 +178,18 @@ func TestModuleCopiesFollow(t *testing.T) {
 
 	// The copy is changed only in the module.
 	p := fmt.Sprintf("/api/objects/%d", cp.ID)
-	a.refused("POST", p+"/states", map[string]any{"name": "mine"}, http.StatusBadRequest, "comes from the module")
-	a.refused("POST", p+"/attributes", map[string]any{"name": "mine"}, http.StatusBadRequest, "comes from the module")
-	a.refused("PATCH", p, map[string]any{"name": "Mine"}, http.StatusBadRequest, "comes from the module")
-	a.refused("PATCH", p, map[string]any{"many": true}, http.StatusBadRequest, "comes from the module")
-	a.refused("PATCH", fmt.Sprintf("/api/states/%d", openHere), map[string]any{"name": "mine"}, http.StatusBadRequest, "comes from the module")
-	a.refused("DELETE", fmt.Sprintf("/api/attributes/%d", cp.Attributes[0].ID), nil, http.StatusBadRequest, "comes from the module")
-	a.refused("POST", "/api/objects", map[string]any{"name": "mine", "owner": cp.ID}, http.StatusBadRequest, "comes from the module")
+	a.refused("POST", p+"/states", map[string]any{"name": "mine"}, http.StatusBadRequest, "comes from the procedure")
+	a.refused("POST", p+"/attributes", map[string]any{"name": "mine"}, http.StatusBadRequest, "comes from the procedure")
+	a.refused("PATCH", p, map[string]any{"name": "Mine"}, http.StatusBadRequest, "comes from the procedure")
+	a.refused("PATCH", p, map[string]any{"many": true}, http.StatusBadRequest, "comes from the procedure")
+	a.refused("PATCH", fmt.Sprintf("/api/states/%d", openHere), map[string]any{"name": "mine"}, http.StatusBadRequest, "comes from the procedure")
+	a.refused("DELETE", fmt.Sprintf("/api/attributes/%d", cp.Attributes[0].ID), nil, http.StatusBadRequest, "comes from the procedure")
+	a.refused("POST", "/api/objects", map[string]any{"name": "mine", "owner": cp.ID}, http.StatusBadRequest, "comes from the procedure")
 	part := modPartsOf(objs, cp.ID)
 	if len(part) != 1 || part[0].Source == nil || *part[0].Source != meta.ID {
 		t.Fatalf("the copy's parts = %+v", part)
 	}
-	a.refused("DELETE", fmt.Sprintf("/api/objects/%d", part[0].ID), nil, http.StatusBadRequest, "comes from the module")
+	a.refused("DELETE", fmt.Sprintf("/api/objects/%d", part[0].ID), nil, http.StatusBadRequest, "comes from the procedure")
 	// Where it goes and whether it is stored are this flow's.
 	verPatch(a, p, map[string]any{"x": 500, "persistent": true})
 

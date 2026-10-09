@@ -60,11 +60,11 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         />
         <FlowSection
           module
-          title="Modules"
+          title="Procedures"
           note="Parts reused inside flows, dragged in from a board's sidebar. Changing one changes it everywhere it runs, and the objects it leaves follow it."
-          empty="No modules yet. A module is a flow other flows run, such as creating a Jira ticket."
-          placeholder="Name a new module, such as Create a Jira ticket"
-          button="New module"
+          empty="No procedures yet. A procedure is a group of processes other flows run, such as creating a Jira ticket."
+          placeholder="Name a new procedure, such as Create a Jira ticket"
+          button="New procedure"
           flows={flows?.filter((f) => f.module) ?? null}
           onCreate={(name) => onCreate(name, true)}
           onDelete={onDelete}
@@ -156,7 +156,7 @@ function FlowSection({
                 className="icon-button flow-delete"
                 onClick={() => onDelete(f)}
                 aria-label={`Delete ${f.name}`}
-                title={module ? 'Delete module' : 'Delete flow'}
+                title={module ? 'Delete procedure' : 'Delete flow'}
               >
                 <TrashIcon />
               </button>

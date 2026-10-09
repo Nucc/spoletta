@@ -113,14 +113,14 @@ export function FlowSettingsPanel({
           disabled={readOnly || saving || (module && usedBy > 0)}
           onChange={(e) => setModule(e.target.checked)}
         />
-        <span>Module: reused inside other flows</span>
+        <span>Procedure: a group of processes reused inside other flows</span>
       </label>
       <p className="panel-note">
         {module
           ? usedBy > 0
             ? `It is offered in other flows' sidebars, and ${usedBy} ${usedBy === 1 ? 'flow runs' : 'flows run'} it; take it out of them to make it a flow of its own again.`
-            : "It is offered in other flows' sidebars, and listed with the modules on the main page."
-          : 'A flow of its own, listed with the flows that run. Make it a module to reuse it inside others.'}
+            : "It is offered in other flows' sidebars, and listed with the procedures on the main page."
+          : 'A flow of its own, listed with the flows that run. Make it a procedure to reuse it inside others.'}
       </p>
       <h3 className="panel-subheading">Repositories</h3>
       <p className="panel-note">

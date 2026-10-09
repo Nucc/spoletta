@@ -104,7 +104,7 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
                     : data.human
                       ? 'Person'
                       : data.copied && !data.owned
-                        ? `${data.many && !data.boundary ? 'List · ' : ''}From a module`
+                        ? `${data.many && !data.boundary ? 'List · ' : ''}From a procedure`
                         : data.general
                         ? `${data.many && !data.boundary ? 'List of ' : ''}${data.general}`
                         : !data.many

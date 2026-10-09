@@ -250,7 +250,7 @@ func copyReason(ctx context.Context, db querier, object int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return quote(name) + " comes from the module " + quote(module) + "; change it there, and it changes here too", nil
+	return quote(name) + " comes from the procedure " + quote(module) + "; change it there, and it changes here too", nil
 }
 
 // The flow an object is in, 0 if it is gone.

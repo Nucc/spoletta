@@ -415,7 +415,7 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 				return
 			}
 			if n > 0 {
-				http.Error(w, fmt.Sprintf("%d other flows run this module; take it out of them first", n), http.StatusConflict)
+				http.Error(w, fmt.Sprintf("%d other flows run this procedure; take it out of them first", n), http.StatusConflict)
 				return
 			}
 		}

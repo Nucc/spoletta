@@ -871,7 +871,7 @@ export default function Board({
   const moduleOf = (object: number) => {
     const o = contents?.objects.find((x) => x.id === object)
     if (!o || o.source === null || o.sourceFlow === null) return undefined
-    return { id: o.sourceFlow, name: otherFlows?.find((f) => f.id === o.sourceFlow)?.name ?? `Module #${o.sourceFlow}` }
+    return { id: o.sourceFlow, name: otherFlows?.find((f) => f.id === o.sourceFlow)?.name ?? `Procedure #${o.sourceFlow}` }
   }
 
   // Only modules are reused; the flows that run stay on the main page.
@@ -1899,7 +1899,7 @@ export default function Board({
               <SidebarGroup id="connectors" title="Connectors">
                 <ConnectorPalette disabled={reviewing} onAdd={addAtViewportCenter} />
               </SidebarGroup>
-              <SidebarGroup id="flows" title="Modules">
+              <SidebarGroup id="flows" title="Procedures">
                 <FlowPalette blocks={flowBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
               </SidebarGroup>
             </>

@@ -45,7 +45,7 @@ const KIND_LABELS: Record<ProcessKind, string> = {
   script: 'Script',
   human: 'Human',
   flow: 'Flow',
-  subflow: 'Another flow',
+  subflow: 'Procedure',
   sentry: 'Sentry',
 }
 

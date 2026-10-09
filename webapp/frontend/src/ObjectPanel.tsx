@@ -124,7 +124,7 @@ export default function ObjectPanel({
       </header>
       {module && (
         <p className="panel-note module-note">
-          A copy of an object of the module <a href={`#/flows/${module.id}`}>{module.name}</a>, which it follows: its
+          A copy of an object of the procedure <a href={`#/flows/${module.id}`}>{module.name}</a>, which it follows: its
           name, how many it is, its states, attributes and what it is made of change only there, and here with it.
         </p>
       )}

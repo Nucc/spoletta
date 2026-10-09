@@ -46,7 +46,7 @@ const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'script', label: 'Script' },
   { value: 'human', label: 'Human' },
   { value: 'flow', label: 'Flow' },
-  { value: 'subflow', label: 'Another flow' },
+  { value: 'subflow', label: 'Procedure' },
   { value: 'sentry', label: 'Sentry' },
 ]
 
@@ -726,13 +726,13 @@ function SubflowFields({
   return (
     <>
       <label className="panel-field">
-        <span>Module it runs</span>
+        <span>Procedure it runs</span>
         <select
           value={flow ?? ''}
           disabled={readOnly}
           onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
         >
-          <option value="">Pick a module…</option>
+          <option value="">Pick a procedure…</option>
           {flow !== undefined && (flows === null || gone) && (
             <option value={flow}>{gone ? `Flow #${flow} (deleted)` : `Flow #${flow}`}</option>
           )}

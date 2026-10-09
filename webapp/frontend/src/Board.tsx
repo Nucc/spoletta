@@ -1075,6 +1075,10 @@ export default function Board({
   // The end goes last even when nothing leads into it, as if what leads
   // nowhere led into it.
   const onTidy = () => {
+    if (objectBoard) {
+      tidyObject()
+      return
+    }
     const nodes = getNodes()
     const leads = edges.some((e) => e.target === END_ID)
       ? []
@@ -1083,6 +1087,22 @@ export default function Board({
           .map((n) => ({ id: `${BOUNDARY_PREFIX}${n.id}-${END_ID}`, source: n.id, target: END_ID }))
     moveNodes(tidy(nodes, [...edges, ...leads]))
     for (const e of edges) if (e.data?.route) setRoute(e.id, null, true)
+    window.requestAnimationFrame(() => fitView({ duration: 300 }))
+  }
+
+  // An unfolded object stays where it is, and what makes it up is laid out
+  // below it; the objects shown beside it, such as its general, stay too.
+  const tidyObject = () => {
+    const nodes = getNodes().filter((n) => n.type === 'object' && (n.data.root || !isFixed(n.id)))
+    const root = nodes.find((n) => n.type === 'object' && n.data.root)
+    if (!root) return
+    const ids = new Set(nodes.map((n) => n.id))
+    const laid = tidy(nodes, edges.filter((e) => ids.has(e.source) && ids.has(e.target)))
+    const at = laid.get(root.id)!
+    const dx = root.position.x - at.x
+    const dy = root.position.y - at.y
+    const moved = [...laid].filter(([id]) => id !== root.id)
+    moveNodes(new Map(moved.map(([id, p]) => [id, { x: p.x + dx, y: p.y + dy }])))
     window.requestAnimationFrame(() => fitView({ duration: 300 }))
   }
 
@@ -1885,19 +1905,17 @@ export default function Board({
           />
         </h1>
         {!structBoard && (
-          <>
-            <button
-              onClick={onWrap}
-              disabled={reviewing || objectBoard || selectedProcesses.length === 0}
-              title="Move the selected processes into a new flow process; shift-click or drag to select several"
-            >
-              <FlowIcon /> Group into flow
-            </button>
-            <button onClick={onTidy} disabled={reviewing || objectBoard} title="Lay the board out from the top">
-              <LayoutIcon /> Tidy up
-            </button>
-          </>
+          <button
+            onClick={onWrap}
+            disabled={reviewing || objectBoard || selectedProcesses.length === 0}
+            title="Move the selected processes into a new flow process; shift-click or drag to select several"
+          >
+            <FlowIcon /> Group into flow
+          </button>
         )}
+        <button onClick={onTidy} disabled={reviewing} title="Lay the board out from the top">
+          <LayoutIcon /> Tidy up
+        </button>
         {structBoard ? (
           <span className="hint">
             A struct is one object that flows use. Add objects to give it nested fields, and make one a list in its

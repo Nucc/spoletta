@@ -119,6 +119,10 @@ export type FlowObject = {
   relation: Relation | ''
   // The object it specializes: it has that object's fields too.
   general: number | null
+  // The module's object it is a copy of, and that module: the copy follows
+  // it, so what it has changes only there. Null for an object of its own.
+  source: number | null
+  sourceFlow: number | null
   states: ObjectState[]
   attributes: ObjectAttribute[]
 }
@@ -188,6 +192,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export type Flow = {
   id: number
   name: string
+  // Made to be reused: other flows run it, and only modules are offered to
+  // them. Every flow another runs is one.
+  module: boolean
+  // How many other flows run it.
+  usedBy: number
   settings: FlowSettings
   createdAt: string
   // Its latest run of the whole flow, if any.
@@ -222,11 +231,12 @@ export function getFlow(id: number): Promise<Flow> {
   return request(`/api/flows/${id}`)
 }
 
-export function createFlow(name: string): Promise<Flow> {
-  return request('/api/flows', { method: 'POST', body: JSON.stringify({ name }) })
+export function createFlow(name: string, module = false): Promise<Flow> {
+  return request('/api/flows', { method: 'POST', body: JSON.stringify({ name, module }) })
 }
 
-export function updateFlow(id: number, patch: Partial<Pick<Flow, 'name' | 'settings'>>): Promise<Flow> {
+// A module other flows run stays one.
+export function updateFlow(id: number, patch: Partial<Pick<Flow, 'name' | 'module' | 'settings'>>): Promise<Flow> {
   return request(`/api/flows/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -324,6 +334,8 @@ export function createObject(
     | 'attributes'
     | 'width'
     | 'persistent'
+    | 'source'
+    | 'sourceFlow'
     | 'many'
     | 'min'
     | 'max'

@@ -37,11 +37,11 @@ export const CONNECTORS: (Block & { logo: () => ReactNode })[] = [
   { id: 'sentry', label: 'Sentry', title: 'Fetches issues from Sentry as a list', type: 'process', kind: 'sentry', logo: () => <SentryLogo /> },
 ]
 
-// Another flow, added as a process that runs it.
+// A module, added as a process that runs it.
 export const flowBlock = (f: Flow): Block => ({
   id: `flow-${f.id}`,
   label: f.name,
-  title: `Runs the flow ${f.name}, with the objects of the same names`,
+  title: `Runs the module ${f.name}, with the objects of the same names`,
   type: 'process',
   kind: 'subflow',
   name: f.name,
@@ -96,7 +96,7 @@ export function ConnectorPalette({
   )
 }
 
-// The other flows, to reuse in this one.
+// The modules, to reuse in this flow.
 export function FlowPalette({
   blocks,
   disabled,
@@ -106,7 +106,7 @@ export function FlowPalette({
   disabled: boolean
   onAdd: (block: Block) => void
 }) {
-  if (blocks.length === 0) return <p className="panel-note">No other flows yet.</p>
+  if (blocks.length === 0) return <p className="panel-note">No modules yet. Make one on the main page, or mark a flow as one in its settings.</p>
   return (
     <ul className="palette flows">
       {blocks.map((b) => (

@@ -43,7 +43,7 @@ function FlowPage({ id, run }: { id: number; run: number | null }) {
   }, [flow])
 
   const onUpdate = useCallback(
-    async (patch: Partial<Pick<Flow, 'name' | 'settings'>>) => setFlow(await updateFlow(id, patch)),
+    async (patch: Partial<Pick<Flow, 'name' | 'module' | 'settings'>>) => setFlow(await updateFlow(id, patch)),
     [id],
   )
 

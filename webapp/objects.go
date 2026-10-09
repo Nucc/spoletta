@@ -47,7 +47,11 @@ type object struct {
 	Owner    *int64 `json:"owner"`
 	Relation string `json:"relation"`
 	// The object it specializes, whose fields it has too.
-	General    *int64        `json:"general"`
+	General *int64 `json:"general"`
+	// The module's object it is a copy of, and the module, which the copy
+	// follows; see modules.go.
+	Source     *int64        `json:"source"`
+	SourceFlow *int64        `json:"sourceFlow"`
 	States     []objectState `json:"states"`
 	Attributes []attribute   `json:"attributes"`
 }
@@ -173,7 +177,8 @@ func migrateObjects(db *sql.DB) error {
 	return err
 }
 
-const objectColumns = "id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id"
+const objectColumns = "id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id, " +
+	"(SELECT src.flow_id FROM objects src WHERE src.id = objects.source_id)"
 
 // Whether an object is on a board of processes, rather than owned by
 // another object.
@@ -181,18 +186,18 @@ const onProcessBoard = "owner_id IS NULL"
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General)
+	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow)
 	if err != nil {
 		return o, err
 	}
-	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name FROM object_states WHERE object_id = ? ORDER BY id", id)
+	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name, source_id FROM object_states WHERE object_id = ? ORDER BY id", id)
 	if err != nil {
 		return o, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var s objectState
-		if err := rows.Scan(&s.ID, &s.Object, &s.Name); err != nil {
+		if err := rows.Scan(&s.ID, &s.Object, &s.Name, &s.Source); err != nil {
 			return o, err
 		}
 		o.States = append(o.States, s)
@@ -226,7 +231,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General); err != nil {
+			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -276,6 +281,9 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		var msg string
 		var err error
 		if o.Owner != nil {
+			if !ownObject(w, r, db, *o.Owner) {
+				return
+			}
 			msg, err = checkOwned(r.Context(), db, &o)
 		} else {
 			o.Relation = ""
@@ -299,8 +307,12 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		o.States = []objectState{}
 		o.Attributes = []attribute{}
+		o.Source, o.SourceFlow = nil, nil
 		if o.ID, err = res.LastInsertId(); err != nil {
 			serverError(w, err)
+			return
+		}
+		if o.Owner != nil && !propagateFrom(w, r, db, o.ID, false) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, o)
@@ -361,6 +373,10 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		if err != nil {
 			serverError(w, err)
+			return
+		}
+		// Where a copy goes, and what this flow does with it, are its own.
+		if (patch.Name != nil || patch.Many != nil || patch.Min != nil || len(patch.Max) > 0 || patch.Relation != nil || len(patch.General) > 0) && !ownObject(w, r, db, id) {
 			return
 		}
 		if owned && (isTrue(patch.Human) || isTrue(patch.Persistent) || isTrue(patch.End)) {
@@ -462,6 +478,14 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		// Only what copies have changes them; a new outcome comes out of the
+		// subflow processes running the flow.
+		if patch.Name != nil || patch.Many != nil || patch.Min != nil || len(patch.Max) > 0 || patch.Relation != nil || setGeneral || isTrue(patch.End) {
+			if err := propagate(r.Context(), db, flow, isTrue(patch.End)); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
 
 		o, err := getObject(r.Context(), db, id)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -482,7 +506,26 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
+		// A part of a copy goes only when it goes from its source.
+		var flow int64
+		var owner *int64
+		err = db.QueryRowContext(r.Context(), "SELECT flow_id, owner_id FROM objects WHERE id = ?", id).Scan(&flow, &owner)
+		if errors.Is(err, sql.ErrNoRows) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if owner != nil && !ownObject(w, r, db, *owner) {
+			return
+		}
 		if _, err := db.ExecContext(r.Context(), "DELETE FROM objects WHERE id = ?", id); err != nil {
+			serverError(w, err)
+			return
+		}
+		if err := propagate(r.Context(), db, flow, false); err != nil {
 			serverError(w, err)
 			return
 		}

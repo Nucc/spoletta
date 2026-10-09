@@ -310,7 +310,7 @@ export default function Board({
 }: {
   flow: Flow
   initialRun: number | null
-  onUpdate: (patch: Partial<Pick<Flow, 'name' | 'settings'>>) => Promise<void>
+  onUpdate: (patch: Partial<Pick<Flow, 'name' | 'module' | 'settings'>>) => Promise<void>
 }) {
   const flowId = flow.id
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([])
@@ -478,6 +478,7 @@ export default function Board({
         max: o.max,
         human: o.human,
         owned: o.owner !== null,
+        copied: o.source !== null,
         editing,
         boundary,
       },
@@ -853,7 +854,15 @@ export default function Board({
     e.dataTransfer.dropEffect = 'copy'
   }
 
-  const flowBlocks = useMemo(() => (otherFlows ?? []).map(flowBlock), [otherFlows])
+  // The module an object is a copy of an object of, if it is one.
+  const moduleOf = (object: number) => {
+    const o = contents?.objects.find((x) => x.id === object)
+    if (!o || o.source === null || o.sourceFlow === null) return undefined
+    return { id: o.sourceFlow, name: otherFlows?.find((f) => f.id === o.sourceFlow)?.name ?? `Module #${o.sourceFlow}` }
+  }
+
+  // Only modules are reused; the flows that run stay on the main page.
+  const flowBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.module).map(flowBlock), [otherFlows])
 
   const onCanvasDrop = (e: DragEvent<HTMLDivElement>) => {
     const id = e.dataTransfer.getData(BLOCK_MIME)
@@ -919,6 +928,12 @@ export default function Board({
   const isFixed = (id: string) => {
     const node = getNode(id)
     return node?.type === 'object' && Boolean(node.data.fixed)
+  }
+
+  // A copy of a module's object changes only in the module.
+  const isCopied = (id: string) => {
+    const node = getNode(id)
+    return node?.type === 'object' && Boolean(node.data.copied)
   }
 
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
@@ -1447,7 +1462,7 @@ export default function Board({
     ...(zoomable(id) ? [{ label: isObject(id) ? 'Unfold' : 'Zoom in', icon: <ZoomInIcon />, onSelect: () => zoomIn(id) }] : []),
     {
       label: 'Rename',
-      disabled: reviewing,
+      disabled: reviewing || isCopied(id),
       icon: <PencilIcon />,
       onSelect: () => {
         // The panel holds its own copy of the name.
@@ -1460,7 +1475,7 @@ export default function Board({
           {
             label: 'Add state',
             icon: <PlusIcon size={16} />,
-            disabled: reviewing,
+            disabled: reviewing || isCopied(id),
             onSelect: () => updateObjectData(id, { addingState: true }),
           },
         ]
@@ -1815,7 +1830,7 @@ export default function Board({
               <SidebarGroup id="connectors" title="Connectors">
                 <ConnectorPalette disabled={reviewing} onAdd={addAtViewportCenter} />
               </SidebarGroup>
-              <SidebarGroup id="flows" title="Flows">
+              <SidebarGroup id="flows" title="Modules">
                 <FlowPalette blocks={flowBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
               </SidebarGroup>
             </>
@@ -1964,6 +1979,7 @@ export default function Board({
             human={objectPanelNode.data.human}
             onHumanChange={(human) => setHuman(objectPanelNode.id, human)}
             editable={!reviewing}
+            module={moduleOf(objectIdOf(objectPanelNode.id))}
             content={objectPanelNode.data.content}
             onRename={(name) => commitName(objectPanelNode.id, name)}
             onAdd={(name) => addAttribute(objectPanelNode.id, name)}
@@ -1984,9 +2000,12 @@ export default function Board({
         {!panelNode && !objectPanelNode && !mcpOpen && settingsOpen && (
           <FlowSettingsPanel
             settings={flow.settings}
+            module={flow.module}
+            usedBy={flow.usedBy}
             defaultPrefix={defaultBranchPrefix(flow.name)}
             readOnly={reviewing}
             onSave={(settings) => onUpdate({ settings })}
+            onModuleChange={(module) => onUpdate({ module })}
             onClose={() => setSettingsOpen(false)}
             onError={report}
           />

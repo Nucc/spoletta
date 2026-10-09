@@ -22,6 +22,7 @@ export default function ObjectPanel({
   quantity,
   human,
   editable,
+  module,
   content,
   generals,
   onPersistentChange,
@@ -47,6 +48,9 @@ export default function ObjectPanel({
   human: boolean
   // False while a run is in progress.
   editable: boolean
+  // For a copy of a module's object, the module: what the object has
+  // changes only there, and here with it.
+  module?: { id: number; name: string }
   // What the object held at the end of the latest run, if it was generated.
   content?: string
   // The objects it can specialize.
@@ -67,6 +71,8 @@ export default function ObjectPanel({
   onRemove: (id: number) => Promise<boolean>
   onClose: () => void
 }) {
+  // Where it goes, and whether this flow stores it, are a copy's own.
+  const own = editable && !module
   const [objectName, setObjectName] = useState(name)
   const [newName, setNewName] = useState('')
   const object = objects.find((o) => o.id === id)
@@ -116,10 +122,17 @@ export default function ObjectPanel({
           ×
         </button>
       </header>
+      {module && (
+        <p className="panel-note module-note">
+          A copy of an object of the module <a href={`#/flows/${module.id}`}>{module.name}</a>, which it follows: its
+          name, how many it is, its states, attributes and what it is made of change only there, and here with it.
+        </p>
+      )}
       <label className="panel-field">
         <span>Name</span>
         <input
           value={objectName}
+          disabled={!own}
           onChange={(e) => setObjectName(e.target.value)}
           onBlur={commitObjectName}
           onKeyDown={(e) => e.key === 'Enter' && commitObjectName()}
@@ -139,7 +152,7 @@ export default function ObjectPanel({
                 type="radio"
                 name={`relation-${id}`}
                 checked={object?.relation !== 'aggregation'}
-                disabled={!editable}
+                disabled={!own}
                 onChange={() => onRelationChange('exhibition')}
               />
               <ExhibitionIcon size={14} />
@@ -150,7 +163,7 @@ export default function ObjectPanel({
                 type="radio"
                 name={`relation-${id}`}
                 checked={object?.relation === 'aggregation'}
-                disabled={!editable}
+                disabled={!own}
                 onChange={() => onRelationChange('aggregation')}
               />
               <AggregationIcon size={14} />
@@ -165,7 +178,7 @@ export default function ObjectPanel({
       ) : (
         <>
           <label className="panel-check">
-            <input type="checkbox" checked={human} disabled={!editable} onChange={(e) => onHumanChange(e.target.checked)} />
+            <input type="checkbox" checked={human} disabled={!own} onChange={(e) => onHumanChange(e.target.checked)} />
             <span>A person</span>
           </label>
           <p className="panel-note">
@@ -177,7 +190,7 @@ export default function ObjectPanel({
       )}
       <label className="panel-field">
         <span>How many</span>
-        <QuantityInput key={quantityText(quantity)} quantity={quantity} disabled={!editable} onChange={onQuantityChange} />
+        <QuantityInput key={quantityText(quantity)} quantity={quantity} disabled={!own} onChange={onQuantityChange} />
       </label>
       <p className="panel-note">
         As its links write it at its end: 1 for one object, or a list of items, such as exactly 4, 2..5, at least one as
@@ -214,7 +227,7 @@ export default function ObjectPanel({
             </span>
             <select
               value={general ?? ''}
-              disabled={!editable}
+              disabled={!own}
               onChange={(e) => onGeneralChange(e.target.value === '' ? null : Number(e.target.value))}
             >
               <option value="">Nothing</option>
@@ -257,7 +270,7 @@ export default function ObjectPanel({
           <AttributeRow
             key={a.id}
             attribute={a}
-            editable={editable}
+            editable={own}
             persistent={persistent && !owner}
             taken={taken(a.id)}
             onUpdate={(patch) => onUpdate(a.id, patch)}
@@ -267,12 +280,12 @@ export default function ObjectPanel({
         <div className="attribute-add">
           <input
             value={newName}
-            disabled={!editable}
+            disabled={!own}
             placeholder="New attribute, e.g. ticket_id"
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && add()}
           />
-          <button disabled={!editable || newName.trim() === '' || duplicate} onClick={add}>
+          <button disabled={!own || newName.trim() === '' || duplicate} onClick={add}>
             Add
           </button>
         </div>

@@ -257,19 +257,19 @@ func checkStructure(ctx context.Context, db *sql.DB, flow int64, change func(str
 
 // Copies an object of another flow into flow, with what makes it up: its
 // states, its attributes and the objects it owns, each copied in turn. What
-// it inherits becomes its own, since its general is in the other flow.
+// it inherits becomes its own, since its general is in the other flow. The
+// copy keeps the object as its source, and follows it; see modules.go.
 // The copy goes at, or where the object is without it. Returns the copy's id.
 func copyStructure(ctx context.Context, tx *sql.Tx, s structure, object, flow int64, parent, owner *int64, at *point) (int64, error) {
-	o := s[object]
-	if o == nil {
+	if s[object] == nil {
 		return 0, fmt.Errorf("object %d isn't in the flow", object)
 	}
 	var x, y *float64
 	if at != nil {
 		x, y = &at.X, &at.Y
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, width, many, min_items, max_items, parent_id, owner_id, relation)
-		SELECT ?, name, COALESCE(?, x), COALESCE(?, y), width, many, min_items, max_items, ?, ?, relation FROM objects WHERE id = ?`,
+	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, width, parent_id, owner_id, relation, source_id)
+		SELECT ?, name, COALESCE(?, x), COALESCE(?, y), width, ?, ?, relation, id FROM objects WHERE id = ?`,
 		flow, x, y, parent, owner, object)
 	if err != nil {
 		return 0, err
@@ -278,32 +278,5 @@ func copyStructure(ctx context.Context, tx *sql.Tx, s structure, object, flow in
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO object_states (object_id, name) SELECT ?, name FROM object_states WHERE object_id = ? ORDER BY id", id, object); err != nil {
-		return 0, err
-	}
-	for _, a := range s.attributes(object) {
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file) VALUES (?, ?, ?, ?, ?)",
-			id, a.Name, a.Definition, a.Unique, a.File)
-		if err != nil {
-			return 0, err
-		}
-	}
-	// What it owns and what its generals own, generals' first.
-	var chain []int64
-	for g, seen := o, map[int64]bool{}; g != nil && !seen[g.id]; {
-		seen[g.id] = true
-		chain = append([]int64{g.id}, chain...)
-		if g.general == nil {
-			break
-		}
-		g = s[*g.general]
-	}
-	for _, g := range chain {
-		for _, c := range s.owned(g) {
-			if _, err := copyStructure(ctx, tx, s, c.id, flow, nil, &id, nil); err != nil {
-				return 0, err
-			}
-		}
-	}
-	return id, nil
+	return id, syncCopy(ctx, tx, s, object, id)
 }

@@ -29,6 +29,8 @@ type attribute struct {
 	// Holds the path of a file the process wrote in its step's files
 	// directory, which must exist.
 	File bool `json:"file"`
+	// The attribute of a module's object it is a copy of; see modules.go.
+	Source *int64 `json:"source,omitempty"`
 }
 
 func migrateAttributes(db *sql.DB) error {
@@ -64,6 +66,9 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
+		if !ownObject(w, r, db, id) {
+			return
+		}
 		if msg, err := checkAttribute(r.Context(), db, id, func(o *structObject) {
 			o.attrs = append(o.attrs, attribute{ID: 1 << 62, Object: id, Name: a.Name})
 		}); err != nil {
@@ -95,6 +100,9 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		if !propagateFrom(w, r, db, id, false) {
+			return
+		}
 		writeJSON(w, http.StatusCreated, a)
 	})
 
@@ -119,6 +127,14 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 				http.Error(w, "name must not be empty", http.StatusBadRequest)
 				return
 			}
+		}
+		object, err := objectOfAttribute(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if !ownObject(w, r, db, object) {
+			return
 		}
 		if patch.Name != nil || isTrue(patch.Unique) {
 			var object int64
@@ -166,6 +182,9 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		if !propagateFrom(w, r, db, object, false) {
+			return
+		}
 
 		var a attribute
 		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name, definition, is_unique, is_file FROM object_attributes WHERE id = ?", id).
@@ -187,8 +206,19 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
+		object, err := objectOfAttribute(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if !ownObject(w, r, db, object) {
+			return
+		}
 		if _, err := db.ExecContext(r.Context(), "DELETE FROM object_attributes WHERE id = ?", id); err != nil {
 			serverError(w, err)
+			return
+		}
+		if !propagateFrom(w, r, db, object, false) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -211,7 +241,7 @@ func checkAttribute(ctx context.Context, db *sql.DB, object int64, change func(*
 // The attributes of every object, or of one if object isn't 0, by object id.
 func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]attribute, error) {
 	rows, err := db.QueryContext(ctx,
-		"SELECT id, object_id, name, definition, is_unique, is_file FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
+		"SELECT id, object_id, name, definition, is_unique, is_file, source_id FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +249,7 @@ func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]
 	attrs := map[int64][]attribute{}
 	for rows.Next() {
 		var a attribute
-		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File); err != nil {
+		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source); err != nil {
 			return nil, err
 		}
 		attrs[a.Object] = append(attrs[a.Object], a)

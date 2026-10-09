@@ -2434,3 +2434,32 @@ body {
   padding: 6px 8px 8px;
   background: #f6f8fa;
 }
+
+/* The main page's flows that run, and apart from them the modules. */
+.flow-section + .flow-section {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid #d8dee4;
+}
+
+.flow-section h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2328;
+}
+
+.flow-section > .flows-note:first-of-type {
+  margin: 0 0 12px;
+}
+
+/* A copy of a module's object says where it is changed. */
+.module-note {
+  padding: 8px 10px;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  background: #f6f8fa;
+}

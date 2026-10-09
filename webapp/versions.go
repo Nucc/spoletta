@@ -48,6 +48,8 @@ type snapshotObject struct {
 	Owner    *int64 `json:"owner,omitempty"`
 	Relation string `json:"relation,omitempty"`
 	General  *int64 `json:"general,omitempty"`
+	// The module's object it is a copy of; left out for others.
+	Source *int64 `json:"source,omitempty"`
 }
 
 type snapshotLink struct {
@@ -148,29 +150,29 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General)
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source)
 		s.Objects = append(s.Objects, o)
 		return err
 	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT st.id, st.object_id, st.name FROM object_states st
+	err = scanAll(ctx, tx, `SELECT st.id, st.object_id, st.name, st.source_id FROM object_states st
 		JOIN objects o ON o.id = st.object_id WHERE o.flow_id = ? ORDER BY st.id`, func(rows *sql.Rows) error {
 		var st objectState
-		err := rows.Scan(&st.ID, &st.Object, &st.Name)
+		err := rows.Scan(&st.ID, &st.Object, &st.Name, &st.Source)
 		s.States = append(s.States, st)
 		return err
 	}, flow)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file FROM object_attributes a
+	err = scanAll(ctx, tx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.source_id FROM object_attributes a
 		JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ? ORDER BY a.id`, func(rows *sql.Rows) error {
 		var a attribute
-		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File)
+		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source)
 		s.Attributes = append(s.Attributes, a)
 		return err
 	}, flow)
@@ -364,14 +366,26 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			}
 		}
 	}
+	// A copy whose source is gone since is an object of its own.
+	for _, o := range s.Objects {
+		var source *int64
+		if o.Source != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT id FROM objects WHERE id = ?", *o.Source).Scan(&source); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE objects SET source_id = ? WHERE id = ?", source, o.ID); err != nil {
+			return err
+		}
+	}
 	for _, st := range s.States {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO object_states (id, object_id, name) VALUES (?, ?, ?)", st.ID, st.Object, st.Name); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO object_states (id, object_id, name, source_id) VALUES (?, ?, ?, ?)", st.ID, st.Object, st.Name, st.Source); err != nil {
 			return err
 		}
 	}
 	for _, a := range s.Attributes {
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (id, object_id, name, definition, is_unique, is_file) VALUES (?, ?, ?, ?, ?, ?)",
-			a.ID, a.Object, a.Name, a.Definition, a.Unique, a.File)
+		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (id, object_id, name, definition, is_unique, is_file, source_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			a.ID, a.Object, a.Name, a.Definition, a.Unique, a.File, a.Source)
 		if err != nil {
 			return err
 		}
@@ -619,6 +633,12 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if err := restoreSnapshot(ctx, tx, f, s); err != nil {
+			serverError(w, err)
+			return
+		}
+		// Its copies of modules' objects follow them as they are now, and
+		// the copies of its own objects follow them as they were.
+		if err := syncCopies(ctx, tx, f, true); err != nil {
 			serverError(w, err)
 			return
 		}

@@ -27,13 +27,20 @@ const githubPath = (url: string) => /^https:\/\/github\.com\/([^/]+\/[^/]+?)(\.g
 // a branch of its own, which every process of the run works on.
 export function FlowSettingsPanel({
   settings,
+  module,
+  usedBy,
   defaultPrefix,
   readOnly,
   onSave,
+  onModuleChange,
   onClose,
   onError,
 }: {
   settings: FlowSettings
+  // Whether other flows reuse it, and how many do.
+  module: boolean
+  usedBy: number
+  onModuleChange: (module: boolean) => Promise<void>
   // The prefix used when none is set.
   defaultPrefix: string
   readOnly: boolean
@@ -51,6 +58,17 @@ export function FlowSettingsPanel({
   const urlOk = /^https:\/\/\S+$/.test(url)
   const name = nameFromURL(url)
   const taken = settings.repositories.some((r) => r.name === name)
+
+  const setModule = async (m: boolean) => {
+    setSaving(true)
+    try {
+      await onModuleChange(m)
+    } catch (err) {
+      onError(err)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const save = async (s: FlowSettings) => {
     setSaving(true)
@@ -87,12 +105,29 @@ export function FlowSettingsPanel({
           ×
         </button>
       </header>
+      <label className="panel-check">
+        <input
+          type="checkbox"
+          checked={module}
+          // A module others run stays one until they no longer do.
+          disabled={readOnly || saving || (module && usedBy > 0)}
+          onChange={(e) => setModule(e.target.checked)}
+        />
+        <span>Module: reused inside other flows</span>
+      </label>
+      <p className="panel-note">
+        {module
+          ? usedBy > 0
+            ? `It is offered in other flows' sidebars, and ${usedBy} ${usedBy === 1 ? 'flow runs' : 'flows run'} it; take it out of them to make it a flow of its own again.`
+            : "It is offered in other flows' sidebars, and listed with the modules on the main page."
+          : 'A flow of its own, listed with the flows that run. Make it a module to reuse it inside others.'}
+      </p>
+      <h3 className="panel-subheading">Repositories</h3>
       <p className="panel-note">
         The repositories this flow's agents and scripts work on. Each run checks them out on a branch of its own,{' '}
         <code>{branchPrefix}/run-&lt;id&gt;</code>, and every process of the run works on that branch. Each item of a list
         gets a branch of its own. Pick in a process's panel which of them it works on.
       </p>
-      <h3 className="panel-subheading">Repositories</h3>
       {settings.repositories.length === 0 ? (
         <p className="panel-note">None yet; agents and scripts run in an empty directory.</p>
       ) : (

@@ -18,6 +18,9 @@ export type ObjectNodeData = {
   general?: string
   // It makes up another object, on whose board it is.
   owned?: boolean
+  // A copy of a module's object, which follows it: what it has changes
+  // only in the module.
+  copied?: boolean
   // On an unfolded object's board, an object that isn't on it: the one
   // unfolded, the one it specializes or one specializing it. It stays where
   // it is shown, and is deleted where it is.
@@ -100,7 +103,9 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
                     ? 'Generated'
                     : data.human
                       ? 'Person'
-                      : data.general
+                      : data.copied && !data.owned
+                        ? `${data.many && !data.boundary ? 'List · ' : ''}From a module`
+                        : data.general
                         ? `${data.many && !data.boundary ? 'List of ' : ''}${data.general}`
                         : !data.many
                         ? 'Object'
@@ -135,7 +140,7 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
       {(data.states.length > 0 || data.addingState) && (
         <div className="object-states">
           {data.states.map((s) => (
-            <StatePill key={s.id} objectId={id} state={s} active={data.activeState === s.name} />
+            <StatePill key={s.id} objectId={id} state={s} active={data.activeState === s.name} editable={actions.editable && !data.copied} />
           ))}
           {data.addingState && (
             <span className="state-pill editing">
@@ -185,7 +190,17 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
 // from the right, so links to and from states stand apart from the object's
 // own. Its handles sit on the object's edges, level with it, so its links
 // run clear of the object. Double-click to rename it.
-function StatePill({ objectId, state, active }: { objectId: string; state: ObjectState; active: boolean }) {
+function StatePill({
+  objectId,
+  state,
+  active,
+  editable,
+}: {
+  objectId: string
+  state: ObjectState
+  active: boolean
+  editable: boolean
+}) {
   const actions = useBoardActions()
   const [editing, setEditing] = useState(false)
 
@@ -197,7 +212,7 @@ function StatePill({ objectId, state, active }: { objectId: string; state: Objec
         className={`state-pill${active ? ' active' : ''}${editing ? ' editing' : ''}`}
         onDoubleClick={(e) => {
           e.stopPropagation()
-          if (actions.editable) setEditing(true)
+          if (editable) setEditing(true)
         }}
       >
         {editing ? (
@@ -213,7 +228,7 @@ function StatePill({ objectId, state, active }: { objectId: string; state: Objec
         ) : (
           <>
             <span className="state-name">{state.name}</span>
-            {actions.editable && (
+            {editable && (
               <button
                 className="state-remove nodrag"
                 title="Delete state"

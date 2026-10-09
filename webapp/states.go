@@ -20,6 +20,8 @@ type objectState struct {
 	ID     int64  `json:"id"`
 	Object int64  `json:"object"`
 	Name   string `json:"name"`
+	// The state of a module's object it is a copy of; see modules.go.
+	Source *int64 `json:"source,omitempty"`
 }
 
 // What older versions' human routes become: the reviewed object gets these
@@ -190,6 +192,9 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "an object making up another has no states of its own; give them to the object on the board", http.StatusBadRequest)
 			return
 		}
+		if !ownObject(w, r, db, s.Object) {
+			return
+		}
 		res, err := db.ExecContext(r.Context(), "INSERT INTO object_states (object_id, name) VALUES (?, ?)", s.Object, s.Name)
 		if mysqlErrorIs(err, mysqlErrForeignKey) {
 			http.Error(w, "object not found", http.StatusBadRequest)
@@ -201,6 +206,9 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		if s.ID, err = res.LastInsertId(); err != nil {
 			serverError(w, err)
+			return
+		}
+		if !propagateFrom(w, r, db, s.Object, false) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, s)
@@ -223,8 +231,19 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "name must not be empty", http.StatusBadRequest)
 			return
 		}
+		object, err := objectOfState(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if !ownObject(w, r, db, object) {
+			return
+		}
 		if _, err := db.ExecContext(r.Context(), "UPDATE object_states SET name = ? WHERE id = ?", patch.Name, id); err != nil {
 			serverError(w, err)
+			return
+		}
+		if !propagateFrom(w, r, db, object, false) {
 			return
 		}
 
@@ -248,8 +267,19 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
+		object, err := objectOfState(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if !ownObject(w, r, db, object) {
+			return
+		}
 		if err := deleteState(r.Context(), db, id); err != nil {
 			serverError(w, err)
+			return
+		}
+		if !propagateFrom(w, r, db, object, false) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -275,7 +305,7 @@ func deleteState(ctx context.Context, db *sql.DB, id int64) error {
 
 // The states of every object, by object id.
 func listStates(ctx context.Context, db *sql.DB) (map[int64][]objectState, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name FROM object_states ORDER BY id")
+	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name, source_id FROM object_states ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +313,7 @@ func listStates(ctx context.Context, db *sql.DB) (map[int64][]objectState, error
 	states := map[int64][]objectState{}
 	for rows.Next() {
 		var s objectState
-		if err := rows.Scan(&s.ID, &s.Object, &s.Name); err != nil {
+		if err := rows.Scan(&s.ID, &s.Object, &s.Name, &s.Source); err != nil {
 			return nil, err
 		}
 		states[s.Object] = append(states[s.Object], s)

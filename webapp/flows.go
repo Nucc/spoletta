@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,10 +14,15 @@ import (
 
 // A flow is a board of its own with everything on it: its processes and
 // objects, the boards of its flow processes, its versions and its runs. Each
-// flow does one job, such as fixing exceptions or bumping dependencies.
+// flow does one job, such as fixing exceptions or bumping dependencies, or
+// is a module, a part of such jobs that other flows reuse; see modules.go.
 type flow struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
+	// Offered to other flows to run; every flow another runs is one.
+	Module bool `json:"module"`
+	// How many other flows run it.
+	UsedBy int `json:"usedBy"`
 	// The repositories its agents and scripts work on, and how its runs'
 	// branches are named; see workspace.go.
 	Settings  flowSettings `json:"settings"`
@@ -221,8 +227,11 @@ func flowFor(ctx context.Context, db *sql.DB, given int64, parent *int64) (int64
 
 func getFlow(ctx context.Context, db *sql.DB, id int64) (flow, error) {
 	var f flow
-	err := db.QueryRowContext(ctx, "SELECT id, name, settings, created_at FROM flows WHERE id = ?", id).Scan(&f.ID, &f.Name, &f.Settings, &f.CreatedAt)
+	err := db.QueryRowContext(ctx, "SELECT id, name, module, settings, created_at FROM flows WHERE id = ?", id).Scan(&f.ID, &f.Name, &f.Module, &f.Settings, &f.CreatedAt)
 	if err != nil {
+		return f, err
+	}
+	if f.UsedBy, err = usersOf(ctx, db, id); err != nil {
 		return f, err
 	}
 	var rn run
@@ -327,7 +336,8 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 
 	mux.HandleFunc("POST /api/flows", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Name string `json:"name"`
+			Name   string `json:"name"`
+			Module bool   `json:"module"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -343,7 +353,7 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name) VALUES (?)", body.Name)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module) VALUES (?, ?)", body.Name, body.Module)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -377,6 +387,8 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		var patch struct {
 			Name *string `json:"name"`
+			// A flow others run stays a module.
+			Module *bool `json:"module"`
 			// Replaces them all; runs going on keep the ones they started with.
 			Settings *flowSettings `json:"settings"`
 		}
@@ -396,8 +408,19 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 				return
 			}
 		}
-		if _, err := db.ExecContext(r.Context(), "UPDATE flows SET name = COALESCE(?, name), settings = COALESCE(?, settings) WHERE id = ?",
-			patch.Name, patch.Settings, id); err != nil {
+		if patch.Module != nil && !*patch.Module {
+			n, err := usersOf(r.Context(), db, id)
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			if n > 0 {
+				http.Error(w, fmt.Sprintf("%d other flows run this module; take it out of them first", n), http.StatusConflict)
+				return
+			}
+		}
+		if _, err := db.ExecContext(r.Context(), "UPDATE flows SET name = COALESCE(?, name), module = COALESCE(?, module), settings = COALESCE(?, settings) WHERE id = ?",
+			patch.Name, patch.Module, patch.Settings, id); err != nil {
 			serverError(w, err)
 			return
 		}

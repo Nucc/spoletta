@@ -198,6 +198,9 @@ func bringOutcomes(ctx context.Context, tx *sql.Tx, process int64) error {
 	if err != nil || kind != kindSubflow || s.Flow == nil {
 		return err
 	}
+	if err := markModule(ctx, tx, *s.Flow); err != nil {
+		return err
+	}
 	type outcome struct {
 		id   int64
 		name string

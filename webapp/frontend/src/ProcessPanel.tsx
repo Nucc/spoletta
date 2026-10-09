@@ -726,17 +726,19 @@ function SubflowFields({
   return (
     <>
       <label className="panel-field">
-        <span>Flow it runs</span>
+        <span>Module it runs</span>
         <select
           value={flow ?? ''}
           disabled={readOnly}
           onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
         >
-          <option value="">Pick a flow…</option>
+          <option value="">Pick a module…</option>
           {flow !== undefined && (flows === null || gone) && (
             <option value={flow}>{gone ? `Flow #${flow} (deleted)` : `Flow #${flow}`}</option>
           )}
-          {flows?.map((f) => (
+          {flows
+            ?.filter((f) => f.module || f.id === flow)
+            .map((f) => (
             <option key={f.id} value={f.id}>
               {f.name}
             </option>

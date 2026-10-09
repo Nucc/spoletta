@@ -37,7 +37,10 @@ import (
 // to one of the states its output links name; the object keeps its content.
 // Instructions they leave go as a change request to the processes taking the
 // object in that state. Each decision starts a fresh pass, so review loops
-// can repeat while cycles without a human still run once per pass.
+// can repeat while cycles without a human still run once per pass. The
+// objects its output links name without states are the person's to fill in,
+// so a run can start from what they enter; see entries.go. Those come out
+// like a process's, in the pass the human process ran in.
 //
 // A step generating a unique value another run stored terminates the run: no
 // further process starts, and reviews still waiting end undecided.
@@ -52,10 +55,13 @@ import (
 // its processes' steps are steps of the run it is in.
 
 // What a human decided on a review: the state they set, if they had any to
-// choose from, and their instructions.
+// choose from, and their instructions; and what they entered of the objects
+// they fill in, by object id, with all of it as the step's output.
 type decision struct {
 	state        *int64
 	instructions string
+	output       string
+	entries      map[int64]string
 }
 
 type engine struct {
@@ -359,12 +365,13 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 			w.successors[c.Source] = append(w.successors[c.Source], c.Target)
 		}
 	}
+	// A human generates only what they fill in, not the objects they decide
+	// on, nor those they review without states to decide between.
 	for p, ends := range w.outputs {
-		if w.kinds[p] == kindHuman {
-			continue
-		}
 		for _, end := range ends {
-			w.generated[end.object] = true
+			if w.kinds[p] != kindHuman || (end.state == 0 && !slices.ContainsFunc(w.inputs[p], func(i linkEnd) bool { return i.object == end.object })) {
+				w.generated[end.object] = true
+			}
 		}
 	}
 	for _, o := range s.Objects {
@@ -522,7 +529,7 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 	w.mu.Unlock()
 
 	if human {
-		w.runHuman(id, given)
+		w.runHuman(id, p, given)
 		return
 	}
 
@@ -913,16 +920,69 @@ func startChildRun(ctx context.Context, db *sql.DB, version, parent, process int
 	return id, err
 }
 
-// Waits for the human's decision, then starts a fresh pass from the object
-// they set, for the processes taking it in that state.
-func (w *walk) runHuman(id int64, given []runInput) {
+// Waits for the human's decision. What they entered goes on in pass p, to the
+// processes taking it; then a fresh pass starts from the object they set, for
+// the processes taking it in that state.
+func (w *walk) runHuman(id int64, p *pass, given []runInput) {
 	stepID, d, ok := w.e.await(w.reviews, w.lr, w.run, id, given)
-	if !ok || d.state == nil {
-		return
-	}
-	object, ok := w.stateObjects[*d.state]
 	if !ok {
 		return
+	}
+	var next []func()
+	if d.entries != nil {
+		next = w.enterValues(stepID, p, d)
+	}
+	if d.state != nil {
+		next = append(next, w.setState(id, stepID, d)...)
+	}
+	all(next)
+}
+
+// Records what the human entered, and returns the processes that can run
+// with it. A unique value another run stored terminates the run, as a step
+// generating it would.
+func (w *walk) enterValues(stepID int64, p *pass, d decision) []func() {
+	dup, err := finishStep(context.Background(), w.e.db, stepID, stepDone, d.output, "", d.entries)
+	if err != nil {
+		log.Printf("record entries of step %d: %v", stepID, err)
+		w.mu.Lock()
+		w.failed = true
+		w.mu.Unlock()
+		return nil
+	}
+	if dup != nil {
+		w.mu.Lock()
+		w.terminated = true
+		w.mu.Unlock()
+		w.terminate()
+		return nil
+	}
+	if w.stopped() {
+		return nil
+	}
+	objects := slices.Sorted(maps.Keys(d.entries))
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, o := range objects {
+		w.values[o] = value{content: d.entries[o]}
+	}
+	var next []func()
+	for _, o := range objects {
+		for _, t := range w.takers[o] {
+			if t.state == 0 && w.ready(t.process) {
+				next = append(next, func() { w.runProcess(t.process, p, 0) })
+			}
+		}
+	}
+	return next
+}
+
+// Sets the object the human decided on to the state they set, and returns the
+// processes taking it in that state, each in a fresh pass.
+func (w *walk) setState(id, stepID int64, d decision) []func() {
+	object, ok := w.stateObjects[*d.state]
+	if !ok {
+		return nil
 	}
 	w.mu.Lock()
 	content := w.values[object].content
@@ -931,7 +991,7 @@ func (w *walk) runHuman(id int64, given []runInput) {
 		log.Printf("record decision of step %d: %v", stepID, err)
 	}
 	if w.stopped() {
-		return
+		return nil
 	}
 	w.mu.Lock()
 	v := value{content: content, state: *d.state}
@@ -945,7 +1005,7 @@ func (w *walk) runHuman(id int64, given []runInput) {
 	for _, t := range w.takersIn(object, *d.state) {
 		next = append(next, func() { w.runProcess(t, newPass(), object) })
 	}
-	all(next)
+	return next
 }
 
 // Executes an agent, script or Sentry process as a step of the run, once a

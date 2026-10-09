@@ -3,7 +3,9 @@ import {
   DEFAULT_SENTRY,
   THINKING_LEVELS,
   updateProcess,
+  type Entries,
   type MCPServer,
+  type ObjectAttribute,
   type Repository,
   type Models,
   type ProcessKind,
@@ -55,13 +57,25 @@ const SENTRY_SORTS = [
 // As many as a flow process runs at once.
 const MAX_SENTRY_ISSUES = 50
 
+// An object a human process generates without deciding on its states, which
+// the person carrying it out fills in.
+export type EntryObject = {
+  id: number
+  name: string
+  many: boolean
+  attributes: ObjectAttribute[]
+}
+
 // A human process waiting for its decision during a run.
 export type Review = {
   inputs: RunInput[]
   // The states the process's output links name, which it decides between.
   options: { state: number; object: string; name: string }[]
-  // Null when there are no states to set, which ends the branch.
-  onDecide: (state: number | null, instructions: string) => void
+  // The objects the person fills in.
+  entries: EntryObject[]
+  // Null when there are no states to set, which ends the branch, unless
+  // there are objects filled in. Resolves to whether the server took it.
+  onDecide: (state: number | null, instructions: string, entries?: Entries) => Promise<boolean>
 }
 
 // Edits one process; mount with key={id} so switching processes resets the form.
@@ -267,15 +281,15 @@ export default function ProcessPanel({
           {repositoryPicker}
         </>
       ) : kind === 'human' ? (
-        // The prompt doubles as the reviewer's instructions; switching kinds keeps it.
+        // The prompt doubles as the person's instructions; switching kinds keeps it.
         <label key="human" className={`panel-field${review ? '' : ' panel-field-grow'}`}>
-          <span>Reviewer instructions</span>
+          <span>Instructions for the person</span>
           <textarea
             ref={bodyRef}
             readOnly={readOnly}
             value={prompt}
             rows={review ? 3 : undefined}
-            placeholder="What should the reviewer check before approving?"
+            placeholder="What should the person check before deciding, or fill in?"
             onChange={(e) => setPrompt(e.target.value)}
           />
         </label>
@@ -400,52 +414,154 @@ function SentryFields({
   )
 }
 
+// What the person typed for one object: the text of an object without
+// attributes, or the attributes of each item, a single one unless a list.
+type Draft = string | Record<string, string>[]
+
+const emptyItem = (o: EntryObject) => Object.fromEntries(o.attributes.map((a) => [a.name, '']))
+const emptyDraft = (o: EntryObject): Draft => (o.attributes.length === 0 ? '' : [emptyItem(o)])
+
+// Every field is needed: the objects are what the run goes on from.
+const filled = (d: Draft) => (typeof d === 'string' ? d.trim() !== '' : d.every((item) => Object.values(item).every((v) => v.trim() !== '')))
+
+const asEntry = (o: EntryObject, d: Draft): Entries[string] => (typeof d === 'string' ? d : o.many ? d : d[0])
+
 function ReviewForm({ review }: { review: Review }) {
   const [instructions, setInstructions] = useState('')
+  const [drafts, setDrafts] = useState<Record<number, Draft>>(() =>
+    Object.fromEntries(review.entries.map((o) => [o.id, emptyDraft(o)])),
+  )
+  const [sending, setSending] = useState(false)
   // Name the object only when the decision is about more than one.
   const objects = new Set(review.options.map((o) => o.object))
+  const entering = review.entries.length > 0
+  const files = review.entries.flatMap((o) => o.attributes.filter((a) => a.file).map((a) => `${o.name}: ${a.name}`))
+  const ready = !sending && files.length === 0 && review.entries.every((o) => drafts[o.id] !== undefined && filled(drafts[o.id]))
+
+  const decide = async (state: number | null) => {
+    if (!entering) {
+      void review.onDecide(state, instructions.trim())
+      return
+    }
+    const entries: Entries = Object.fromEntries(review.entries.map((o) => [String(o.id), asEntry(o, drafts[o.id])]))
+    setSending(true)
+    // Kept as typed when the server turns it down, to fix and send again.
+    await review.onDecide(state, instructions.trim(), entries)
+    setSending(false)
+  }
 
   return (
-    <section className="review" aria-label="Review">
-      <span className="review-title">Waiting for your review</span>
-      {review.inputs.length === 0 ? (
-        <p className="panel-note">This process has no generated inputs to review.</p>
-      ) : (
-        review.inputs.map((input, i) => (
-          <div key={i} className="panel-run">
-            <span>
-              {input.name}
-              {input.state && ` (${input.state})`}
-            </span>
-            <Data text={input.content} />
-          </div>
-        ))
-      )}
-      <label className="panel-field">
-        <span>Instructions</span>
-        <textarea
-          rows={3}
-          value={instructions}
-          placeholder="Optional. Passed with the object to the processes that take it in the state you set."
-          onChange={(e) => setInstructions(e.target.value)}
+    <section className="review" aria-label={entering ? 'Input' : 'Review'}>
+      <span className="review-title">{entering ? 'Waiting for your input' : 'Waiting for your review'}</span>
+      {review.inputs.length === 0
+        ? !entering && <p className="panel-note">This process has no generated inputs to review.</p>
+        : review.inputs.map((input, i) => (
+            <div key={i} className="panel-run">
+              <span>
+                {input.name}
+                {input.state && ` (${input.state})`}
+              </span>
+              <Data text={input.content} />
+            </div>
+          ))}
+      {review.entries.map((o) => (
+        <EntryFields
+          key={o.id}
+          object={o}
+          draft={drafts[o.id] ?? emptyDraft(o)}
+          onChange={(d) => setDrafts((ds) => ({ ...ds, [o.id]: d }))}
         />
-      </label>
-      {review.options.length === 0 ? (
+      ))}
+      {files.length > 0 && (
         <small className="panel-note">
-          Link this process to an object and pick, on the link, the states it decides between. Without any, the branch ends here.
+          Files can't be filled in by hand, so this can't be sent: {files.join(', ')}. Turn those attributes into text.
         </small>
+      )}
+      {(!entering || review.options.length > 0) && (
+        <label className="panel-field">
+          <span>Instructions</span>
+          <textarea
+            rows={3}
+            value={instructions}
+            placeholder="Optional. Passed with the object to the processes that take it in the state you set."
+            onChange={(e) => setInstructions(e.target.value)}
+          />
+        </label>
+      )}
+      {review.options.length === 0 ? (
+        !entering && (
+          <small className="panel-note">
+            Link this process to an object and pick, on the link, the states it decides between. Without any, the branch
+            ends here.
+          </small>
+        )
       ) : (
         <span className="panel-note">Set to:</span>
       )}
       <div className="review-actions">
-        {review.options.length === 0 && <button onClick={() => review.onDecide(null, instructions.trim())}>Done</button>}
+        {review.options.length === 0 && (
+          <button disabled={entering && !ready} onClick={() => decide(null)}>
+            {entering ? 'Submit' : 'Done'}
+          </button>
+        )}
         {review.options.map((o) => (
-          <button key={o.state} onClick={() => review.onDecide(o.state, instructions.trim())}>
+          <button key={o.state} disabled={entering && !ready} onClick={() => decide(o.state)}>
             {objects.size > 1 && `${o.object}: `}
             {o.name}
           </button>
         ))}
       </div>
     </section>
+  )
+}
+
+// The fields of one object the person fills in: one per attribute, for each
+// item of a list, or a single text without attributes.
+function EntryFields({ object, draft, onChange }: { object: EntryObject; draft: Draft; onChange: (d: Draft) => void }) {
+  if (typeof draft === 'string')
+    return (
+      <label className="panel-field">
+        <span>{object.name}</span>
+        <textarea rows={3} value={draft} onChange={(e) => onChange(e.target.value)} />
+      </label>
+    )
+  const set = (i: number, name: string, value: string) => onChange(draft.map((item, j) => (j === i ? { ...item, [name]: value } : item)))
+  return (
+    <fieldset className="entry">
+      <legend>{object.name}</legend>
+      {draft.map((item, i) => (
+        <div key={i} className="entry-item">
+          {object.many && (
+            <div className="entry-item-header">
+              <span>Item {i + 1}</span>
+              <button
+                aria-label={`Remove item ${i + 1}`}
+                title="Remove item"
+                onClick={() => onChange(draft.filter((_, j) => j !== i))}
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {object.attributes.map((a) => (
+            <label key={a.id} className="panel-field">
+              <span>{a.name}</span>
+              <input
+                value={item[a.name] ?? ''}
+                disabled={a.file}
+                placeholder={a.file ? 'A file; can\'t be filled in by hand' : a.definition || undefined}
+                title={a.definition || undefined}
+                onChange={(e) => set(i, a.name, e.target.value)}
+              />
+            </label>
+          ))}
+        </div>
+      ))}
+      {object.many && (
+        <button className="entry-add" onClick={() => onChange([...draft, emptyItem(object)])}>
+          Add item
+        </button>
+      )}
+    </fieldset>
   )
 }

@@ -42,14 +42,14 @@ export const KIND_ICONS: Record<ProcessKind, () => ReactNode> = {
 const KIND_LABELS: Record<ProcessKind, string> = {
   agent: 'Agent',
   script: 'Script',
-  human: 'Human review',
+  human: 'Human',
   flow: 'Flow',
   sentry: 'Sentry',
 }
 
 const STATUS_LABELS: Record<RunStatus, string> = {
   active: 'Running',
-  waiting: 'Waiting for review',
+  waiting: 'Waiting for a person',
   done: 'Done',
   error: 'Failed',
   duplicate: 'Already processed',
@@ -124,8 +124,9 @@ export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNod
           </button>
         </span>
       )}
-      {/* A human process only links to states, so nothing is appended below it. */}
-      {leaf && !human && !draft && actions.editable && <AppendButton id={id} title="Add the object this process generates" />}
+      {leaf && !draft && actions.editable && (
+        <AppendButton id={id} title={human ? 'Add an object the person fills in' : 'Add the object this process generates'} />
+      )}
     </div>
   )
 }

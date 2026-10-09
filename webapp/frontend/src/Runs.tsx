@@ -30,7 +30,7 @@ export const RUN_LABELS: Record<FlowRunStatus, string> = {
 
 const STEP_LABELS: Record<StepStatus, string> = {
   active: 'Running',
-  waiting: 'Waiting for review',
+  waiting: 'Waiting for a person',
   done: 'Done',
   error: 'Failed',
   duplicate: 'Already processed',

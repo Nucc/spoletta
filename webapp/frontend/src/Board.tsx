@@ -47,7 +47,7 @@ import ObjectNode, {
 } from './ObjectNode'
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
 import ObjectPanel from './ObjectPanel'
-import ProcessPanel from './ProcessPanel'
+import ProcessPanel, { type EntryObject } from './ProcessPanel'
 import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
 import { BLOCK_MIME, BlockPalette, BUILDING_BLOCKS, ConnectorPalette, findBlock, type Block } from './Palette'
@@ -111,6 +111,7 @@ import {
   type ObjectAttribute,
   type ObjectState,
   type Process,
+  type Entries,
   type ProcessKind,
   type Start,
 } from './api'
@@ -349,7 +350,7 @@ export default function Board({
         const parent = boardRef.current
         const newId =
           node.type === 'object'
-            ? objectNodeId((await createObject({ flow: flowId, name, x, y, parent })).id)
+            ? objectNodeId((await createObject({ flow: flowId, name, x, y, human: node.data.human, parent })).id)
             : String(
                 (
                   await createProcess({
@@ -389,7 +390,16 @@ export default function Board({
       position: position ?? { x: o.x, y: o.y },
       width: o.width ?? NODE_SIZE.object.width,
       deletable: false,
-      data: { name: o.name, states: o.states, attributes: o.attributes, persistent: o.persistent, many: o.many, editing, boundary },
+      data: {
+        name: o.name,
+        states: o.states,
+        attributes: o.attributes,
+        persistent: o.persistent,
+        many: o.many,
+        human: o.human,
+        editing,
+        boundary,
+      },
     }),
     [],
   )
@@ -669,7 +679,7 @@ export default function Board({
 
   // A process takes the block's kind, such as a connector's.
   const addDraft = useCallback(
-    ({ type, kind = 'agent' }: Block, screenX: number, screenY: number) => {
+    ({ type, kind = 'agent', human = false }: Block, screenX: number, screenY: number) => {
       const center = screenToFlowPosition({ x: screenX, y: screenY })
       const { width, height } = NODE_SIZE[type]
       const base = {
@@ -682,7 +692,7 @@ export default function Board({
       const draft: FlowNode =
         type === 'process'
           ? { ...base, type, data: { name: '', kind, prompt: '', script: '', model: '', thinking: '', recording: false, settings: {}, editing: true } }
-          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, editing: true } }
+          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, human, editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
     [screenToFlowPosition, setNodes],
@@ -899,8 +909,8 @@ export default function Board({
     }
   }
 
-  const newProcess = (position: XYPosition) =>
-    createProcess({ flow: flowId, name: NEW_PROCESS, kind: 'agent', prompt: '', script: '', model: '', thinking: '', parent: boardId, ...position })
+  const newProcess = (position: XYPosition, kind: ProcessKind = 'agent') =>
+    createProcess({ flow: flowId, name: NEW_PROCESS, kind, prompt: '', script: '', model: '', thinking: '', parent: boardId, ...position })
 
   // Where a node of the given type goes right below another, centered on it.
   const below = (node: FlowNode, type: 'process' | 'object'): XYPosition => ({
@@ -909,7 +919,8 @@ export default function Board({
   })
 
   // Below a process goes the object it generates, below an object a process
-  // that takes it. The new node starts out being named.
+  // that takes it; below a person, the human process they carry out. The new
+  // node starts out being named.
   const append = async (id: string) => {
     const node = getNode(id)
     if (!node || node.type === 'start' || node.type === 'end' || reviewing) return
@@ -918,9 +929,9 @@ export default function Board({
         const o = await createObject({ flow: flowId, name: NEW_OBJECT, parent: boardId, ...below(node, 'object') })
         const l = await createLink({ process: Number(id), object: o.id, direction: 'output' })
         setNodes((ns) => [...ns, toObjectNode(o, true)])
-        setEdges((es) => [...es, linkEdge(l, false)])
+        setEdges((es) => [...es, linkEdge(l, node.data.kind === 'human')])
       } else {
-        const p = await newProcess(below(node, 'process'))
+        const p = await newProcess(below(node, 'process'), node.data.human ? 'human' : 'agent')
         const l = await createLink({ process: p.id, object: objectIdOf(id), direction: 'input' })
         setNodes((ns) => [...ns, toNode(p, true)])
         setEdges((es) => [...es, linkEdge(l, false)])
@@ -1013,7 +1024,7 @@ export default function Board({
       const width = node.width ?? null
       const copy: FlowNode =
         node.type === 'object'
-          ? toObjectNode(await createObject({ flow: flowId, name, width, parent: boardId, ...position }))
+          ? toObjectNode(await createObject({ flow: flowId, name, width, human: node.data.human, parent: boardId, ...position }))
           : toNode(
               await createProcess({
                 flow: flowId,
@@ -1120,6 +1131,20 @@ export default function Board({
     try {
       await updateObject(objectIdOf(objectId), { many })
       updateObjectData(objectId, { many })
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
+  // A person's links into processes become agent links, which the server
+  // allows only into human processes.
+  const setHuman = async (objectId: string, human: boolean) => {
+    if (reviewing) return false
+    try {
+      await updateObject(objectIdOf(objectId), { human })
+      updateObjectData(objectId, { human })
       return true
     } catch (err) {
       report(err)
@@ -1341,33 +1366,59 @@ export default function Board({
         .map((s) => ({ state: s.id, object: object.data.name, name: s.name }))
     })
 
-  // Sends the decision on the review the process waits for in the open run,
-  // which goes on in the server.
-  const onDecide = async (id: string, state: number | null, instructions: string) => {
-    const step = shownRun?.steps.filter((s) => String(s.process) === id && s.status === 'waiting').at(-1)
-    if (!shownRun || !step) return
-    const option = decisionOptions(id).find((o) => o.state === state)
-    updateData(id, {
-      status: 'done',
-      review: undefined,
-      output: option ? decisionText(option.name, option.object, instructions) : instructions || 'Reviewed',
+  // The objects a human process fills in: those its output links list no
+  // states for, unless it takes them too, as a review does. Inside a flow
+  // process, a list from outside is one item.
+  const entryObjects = (id: string): EntryObject[] =>
+    edges.flatMap((e) => {
+      const l = e.data?.link
+      if (!l || l.direction !== 'output' || String(l.process) !== id || l.states.length > 0) return []
+      if (edges.some((i) => i.data?.link?.direction === 'input' && String(i.data.link.process) === id && i.data.link.object === l.object)) return []
+      const object = getNode(objectNodeId(l.object))
+      if (object?.type !== 'object') return []
+      const many = object.data.many && !object.data.boundary
+      return [{ id: l.object, name: object.data.name, many, attributes: object.data.attributes }]
     })
+
+  // Sends the decision on the review the process waits for in the open run,
+  // which goes on in the server. What the person entered is checked there
+  // first, so the form stays until the server takes it.
+  const onDecide = async (id: string, state: number | null, instructions: string, entries?: Entries) => {
+    const step = shownRun?.steps.filter((s) => String(s.process) === id && s.status === 'waiting').at(-1)
+    if (!shownRun || !step) return false
+    const option = decisionOptions(id).find((o) => o.state === state)
+    const done = () =>
+      updateData(id, {
+        status: 'done',
+        review: undefined,
+        output: option ? decisionText(option.name, option.object, instructions) : instructions || (entries ? 'Filled in' : 'Reviewed'),
+      })
+    if (!entries) done()
     try {
-      await decideStep(shownRun.id, step.id, { state, instructions })
+      await decideStep(shownRun.id, step.id, { state, instructions, entries })
     } catch (err) {
       report(err)
+      return false
+    } finally {
+      setRunReload((n) => n + 1)
     }
-    setRunReload((n) => n + 1)
+    if (entries) done()
+    return true
   }
 
-  // Becoming or ceasing to be human drops the process's outputs, and becoming
-  // human its direct connections; the server deletes the same links when it
-  // saves the new kind.
+  // Becoming or ceasing to be human drops the process's outputs, becoming
+  // human its direct connections, and ceasing to be human its people's agent
+  // links; the server deletes the same links when it saves the new kind.
   const dropMismatchedEdges = (id: string, from: ProcessKind, to: ProcessKind) => {
     if ((from === 'human') === (to === 'human')) return
+    const person = (object: number) => {
+      const node = getNode(objectNodeId(object))
+      return node?.type === 'object' && node.data.human
+    }
     setEdges((es) =>
       es.filter((e) => {
         const l = e.data?.link
+        if (l && String(l.process) === id && l.direction === 'input' && to !== 'human' && person(l.object)) return false
         if (l) return !(l.direction === 'output' && String(l.process) === id)
         return !(to === 'human' && e.id.startsWith(CONNECTION_PREFIX) && e.source === id)
       }),
@@ -1570,7 +1621,8 @@ export default function Board({
               panelNode.data.review && {
                 inputs: panelNode.data.review,
                 options: decisionOptions(panelNode.id),
-                onDecide: (state, instructions) => onDecide(panelNode.id, state, instructions),
+                entries: entryObjects(panelNode.id),
+                onDecide: (state, instructions, entries) => onDecide(panelNode.id, state, instructions, entries),
               }
             }
             onChange={(fields) => {
@@ -1594,6 +1646,8 @@ export default function Board({
             onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
             many={objectPanelNode.data.many}
             onManyChange={(many) => setMany(objectPanelNode.id, many)}
+            human={objectPanelNode.data.human}
+            onHumanChange={(human) => setHuman(objectPanelNode.id, human)}
             editable={!reviewing}
             content={objectPanelNode.data.content}
             onRename={(name) => commitName(objectPanelNode.id, name)}

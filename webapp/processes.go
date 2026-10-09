@@ -82,7 +82,7 @@ func (s processSettings) Value() (driver.Value, error) {
 
 // A process is either run by an agent from its prompt, executes its script,
 // or is handled by a human, who reviews its inputs following its prompt and
-// approves them or requests changes. A flow process is made of processes
+// approves them or requests changes, and fills in the objects it generates. A flow process is made of processes
 // itself, on a board of its own; see boards.go. A Sentry process fetches
 // issues from Sentry; see sentry.go.
 const (
@@ -408,11 +408,15 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 // other processes leave through the objects they generate and older direct
 // connections. Becoming or ceasing to be human deletes the outputs the new
 // kind can't have: a human's decisions don't say what another process
-// generates, nor the other way round.
+// generates, nor the other way round. Ceasing to be human also deletes the
+// agent links of the people who carried it out.
 func dropMismatchedEdges(ctx context.Context, db *sql.DB, id int64, kind string) error {
 	stmts := []string{"DELETE FROM object_links WHERE process_id = ? AND direction = 'output'"}
 	if kind == kindHuman {
 		stmts = append(stmts, "DELETE FROM connections WHERE source_id = ?")
+	} else {
+		stmts = append(stmts, `DELETE l FROM object_links l JOIN objects o ON o.id = l.object_id
+			WHERE l.process_id = ? AND l.direction = 'input' AND o.human`)
 	}
 	for _, s := range stmts {
 		if _, err := db.ExecContext(ctx, s, id); err != nil {

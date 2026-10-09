@@ -241,7 +241,7 @@ func startStep(ctx context.Context, db *sql.DB, runID, processID int64, status, 
 var errNotFound = errors.New("not found")
 
 // Finishes a step. A successful step generates its process's output objects,
-// each in the state its link names. Objects with attributes hold their part
+// each in the state its link names; a human step those it fills in. Objects with attributes hold their part
 // of the output, given in contents by object id; the others hold all of it.
 //
 // While the run goes on, persistent objects are stored too. If one holds a
@@ -290,7 +290,7 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 		JOIN object_links l ON l.process_id = s.process_id AND l.direction = 'output'
 		JOIN objects o ON o.id = l.object_id
 		LEFT JOIN object_states st ON st.id = l.state_id
-		WHERE s.id = ? AND s.kind <> 'human'
+		WHERE s.id = ? AND (s.kind <> 'human' OR (`+filledIn+`))
 		ORDER BY o.id`,
 		output, stepID)
 	if err != nil {
@@ -637,7 +637,9 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	})
 
 	// Decides a human step waiting for its review: records the state the
-	// human set, if any, and their instructions, and lets the run go on.
+	// human set, if any, their instructions, and what they entered of the
+	// objects the step fills in, by object id; see entries.go. Then the run
+	// goes on.
 	mux.HandleFunc("PATCH /api/runs/{run}/steps/{id}", func(w http.ResponseWriter, r *http.Request) {
 		runID, err1 := strconv.ParseInt(r.PathValue("run"), 10, 64)
 		id, err2 := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -646,8 +648,9 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		var patch struct {
-			State        *int64 `json:"state"`
-			Instructions string `json:"instructions"`
+			State        *int64                     `json:"state"`
+			Instructions string                     `json:"instructions"`
+			Entries      map[string]json.RawMessage `json:"entries"`
 		}
 		err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunRequestBytes)).Decode(&patch)
 		if err != nil {
@@ -663,6 +666,30 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			}
 			if outcome == "" {
 				http.Error(w, "the step's process can't decide on that state", http.StatusBadRequest)
+				return
+			}
+		}
+		// A step whose process was deleted before ids were kept fills in nothing.
+		var process sql.NullInt64
+		err = db.QueryRowContext(r.Context(), "SELECT process_ref FROM run_steps WHERE id = ? AND run_id = ?", id, runID).Scan(&process)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "no review waiting with that id in this run", http.StatusConflict)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		objects, err := entryObjects(r.Context(), db, process.Int64)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		var output string
+		var contents map[int64]string
+		if len(objects) > 0 || patch.Entries != nil {
+			if output, contents, err = checkEntries(objects, patch.Entries); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 		}
@@ -685,7 +712,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		// The run records the object in the state set, with the content it has there.
-		eng.decide(runID, id, decision{state: patch.State, instructions: patch.Instructions})
+		eng.decide(runID, id, decision{state: patch.State, instructions: patch.Instructions, output: output, entries: contents})
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

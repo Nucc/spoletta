@@ -26,6 +26,10 @@ type object struct {
 	// A list of items: an agent generating it replies with a list, and a
 	// flow process taking it runs once per item; see items.go.
 	Many bool `json:"many"`
+	// A person, such as a requester: in OPM a human object, whose input link
+	// is an agent link, saying the person carries out the process. Only a
+	// human process takes it.
+	Human bool `json:"human"`
 	// The flow process whose board it is on; null on the top board. It also
 	// shows inside the flow processes linked to it; see boards.go.
 	Parent     *int64        `json:"parent"`
@@ -84,6 +88,9 @@ func migrateObjects(db *sql.DB) error {
 		return err
 	}
 	if err := addColumn(db, "objects", "width", "DOUBLE NULL AFTER y"); err != nil {
+		return err
+	}
+	if err := addColumn(db, "objects", "human", "BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
 		return err
 	}
 	if err := migrateStates(db); err != nil {
@@ -150,7 +157,7 @@ func migrateObjects(db *sql.DB) error {
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT id, flow_id, name, x, y, width, persistent, many, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent)
+	err := db.QueryRowContext(ctx, "SELECT id, flow_id, name, x, y, width, persistent, many, human, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.Parent)
 	if err != nil {
 		return o, err
 	}
@@ -185,7 +192,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), "SELECT id, flow_id, name, x, y, width, persistent, many, parent_id FROM objects WHERE flow_id = ? ORDER BY id", f)
+		rows, err := db.QueryContext(r.Context(), "SELECT id, flow_id, name, x, y, width, persistent, many, human, parent_id FROM objects WHERE flow_id = ? ORDER BY id", f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -195,7 +202,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent); err != nil {
+			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.Parent); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -258,7 +265,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y, width, parent_id) VALUES (?, ?, ?, ?, ?, ?)", o.Flow, o.Name, o.X, o.Y, o.Width, o.Parent)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y, width, human, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)", o.Flow, o.Name, o.X, o.Y, o.Width, o.Human, o.Parent)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -287,6 +294,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			// Turning it off keeps what was stored.
 			Persistent *bool `json:"persistent"`
 			Many       *bool `json:"many"`
+			Human      *bool `json:"human"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -303,9 +311,24 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 
+		if patch.Human != nil && *patch.Human {
+			var n int
+			err := db.QueryRowContext(r.Context(),
+				`SELECT COUNT(*) FROM object_links l JOIN processes p ON p.id = l.process_id
+				WHERE l.object_id = ? AND l.direction = 'input' AND p.kind <> ?`, id, kindHuman).Scan(&n)
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			if n > 0 {
+				http.Error(w, agentLinkMessage, http.StatusBadRequest)
+				return
+			}
+		}
+
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = COALESCE(?, many) WHERE id = ?",
-			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, patch.Many, id)
+			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = COALESCE(?, many), human = COALESCE(?, human) WHERE id = ?",
+			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, patch.Many, patch.Human, id)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -594,13 +617,34 @@ func setDecisionStates(ctx context.Context, tx *sql.Tx, linkID, object int64, st
 	return "", nil
 }
 
+const agentLinkMessage = "a person carries out only a human process; link them to one"
+
 // Says what is wrong with a new link, if anything. A named state must be one
 // of the object's. A human process decides by setting its object to one of
 // the states its output link lists, and only it lists states; any other
 // process generates an object once, so it has at most one output link to it.
+// A human object's input link is an agent link, so it goes into a human
+// process.
 func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
 	if ok, err := onBoardOf(ctx, db, l.Process, l.Object); err != nil || !ok {
 		return "the object isn't on the process's board", err
+	}
+	var kind string
+	err := db.QueryRowContext(ctx, "SELECT kind FROM processes WHERE id = ?", l.Process).Scan(&kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "process not found", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if l.Direction == directionInput && kind != kindHuman {
+		var human bool
+		if err := db.QueryRowContext(ctx, "SELECT human FROM objects WHERE id = ?", l.Object).Scan(&human); err != nil {
+			return "", err
+		}
+		if human {
+			return agentLinkMessage, nil
+		}
 	}
 	if l.State != nil {
 		var object int64
@@ -619,14 +663,6 @@ func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
 		return "", nil
 	}
 
-	var kind string
-	err := db.QueryRowContext(ctx, "SELECT kind FROM processes WHERE id = ?", l.Process).Scan(&kind)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "process not found", nil
-	}
-	if err != nil {
-		return "", err
-	}
 	if kind == kindHuman {
 		if l.State != nil {
 			return "a human process links to the object and lists the states it decides between", nil

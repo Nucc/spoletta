@@ -14,10 +14,12 @@ export default function ObjectPanel({
   attributes,
   persistent,
   many,
+  human,
   editable,
   content,
   onPersistentChange,
   onManyChange,
+  onHumanChange,
   onRename,
   onAdd,
   onUpdate,
@@ -28,6 +30,7 @@ export default function ObjectPanel({
   attributes: ObjectAttribute[]
   persistent: boolean
   many: boolean
+  human: boolean
   // False while a run is in progress.
   editable: boolean
   // What the object held at the end of the latest run, if it was generated.
@@ -36,6 +39,7 @@ export default function ObjectPanel({
   // Each resolves to whether the server took the change.
   onPersistentChange: (persistent: boolean) => Promise<boolean>
   onManyChange: (many: boolean) => Promise<boolean>
+  onHumanChange: (human: boolean) => Promise<boolean>
   onAdd: (name: string) => Promise<boolean>
   onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean; file?: boolean }) => Promise<boolean>
   onRemove: (id: number) => Promise<boolean>
@@ -70,7 +74,7 @@ export default function ObjectPanel({
   return (
     <aside className="panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
-        <h2>Object</h2>
+        <h2>{human ? 'Person' : 'Object'}</h2>
         <button className="panel-close" onClick={onClose} aria-label="Close panel">
           ×
         </button>
@@ -84,6 +88,15 @@ export default function ObjectPanel({
           onKeyDown={(e) => e.key === 'Enter' && commitObjectName()}
         />
       </label>
+      <label className="panel-check">
+        <input type="checkbox" checked={human} disabled={!editable} onChange={(e) => onHumanChange(e.target.checked)} />
+        <span>A person</span>
+      </label>
+      <p className="panel-note">
+        A human object, such as a requester. Its link into a process is an agent link, ending in a filled circle: the
+        person carries the process out, so it must be a human process. When the run reaches it, the person fills in the
+        objects it generates without decision states, and the processes taking them go on with what they entered.
+      </p>
       <label className="panel-check">
         <input type="checkbox" checked={many} disabled={!editable} onChange={(e) => onManyChange(e.target.checked)} />
         <span>List of items</span>

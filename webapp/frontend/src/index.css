@@ -391,6 +391,11 @@ body {
   border-radius: 2px;
 }
 
+/* A person: an object drawn with a thicker edge, as OPM draws physical ones. */
+.palette-shape.object.human {
+  border-width: 3px;
+}
+
 /* A connector shows its service's logo. */
 .palette-logo {
   display: grid;
@@ -826,10 +831,68 @@ body {
   cursor: pointer;
 }
 
-.review-actions button:hover {
+.review-actions button:hover:not(:disabled) {
   color: #fff;
   background: #1f2328;
   border-color: #1f2328;
+}
+
+.review-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* An object the person fills in, with a field per attribute. */
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.entry legend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.entry-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.entry-item + .entry-item {
+  padding-top: 8px;
+  border-top: 1px dashed #d8dee4;
+}
+
+.entry-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #59636e;
+}
+
+.entry-item-header button,
+.entry-add {
+  font: inherit;
+  font-size: 12px;
+  color: #59636e;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.entry-add {
+  align-self: flex-start;
+  padding: 0;
+  color: #0969da;
 }
 
 .name-input {
@@ -1283,6 +1346,15 @@ body {
 
 .react-flow__edge.selected .react-flow__edge-path {
   stroke: #1f6feb;
+}
+
+/* An agent link: a person carrying out a human process. */
+.agent-dot {
+  fill: #8c959f;
+}
+
+.react-flow__edge.selected .agent-dot {
+  fill: #1f6feb;
 }
 
 /* A human's link to a state it can decide on. */

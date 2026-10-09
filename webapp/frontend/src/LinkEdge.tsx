@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { BaseEdge, EdgeLabelRenderer, useNodesData, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react'
+import { BaseEdge, EdgeLabelRenderer, Position, useEdges, useNodesData, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { Link } from './api'
 import { PlusIcon } from './icons'
@@ -23,12 +23,17 @@ export type LinkEdgeData = {
 
 export type LinkEdgeType = Edge<LinkEdgeData, 'link'>
 
+// The radius of the filled circle an agent link ends in.
+const AGENT_DOT_RADIUS = 5
+
 // A link drawn in straight segments with rounded corners, with a button that
 // inserts a step into it. Once selected, each segment has a grip that drags
 // it sideways, so the link can be routed round other nodes; double-click the
-// link to go back to the default route.
+// link to go back to the default route. A person's link into a process is an
+// OPM agent link, which ends in a filled circle instead of an arrow.
 export default function LinkEdge({
   id,
+  source: sourceId,
   target,
   selected,
   sourceX,
@@ -43,6 +48,8 @@ export default function LinkEdge({
 }: EdgeProps<LinkEdgeType>) {
   const actions = useBoardActions()
   const { screenToFlowPosition } = useReactFlow()
+  const from = useNodesData<ObjectNodeType>(sourceId)
+  const agent = data?.link?.direction === 'input' && from?.type === 'object' && Boolean(from.data.human)
   const source: End = { x: sourceX, y: sourceY, position: sourcePosition }
   const end: End = { x: targetX, y: targetY, position: targetPosition }
   const points = routePoints(source, end, data?.route)
@@ -79,7 +86,8 @@ export default function LinkEdge({
 
   return (
     <>
-      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
+      <BaseEdge id={id} path={path} markerEnd={agent ? undefined : markerEnd} style={style} />
+      {agent && <circle className="agent-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
       {selected && data?.routable && actions.editable && (
         <EdgeLabelRenderer>
           {segments(points, { x: labelX, y: labelY }).map((seg) => (
@@ -98,6 +106,7 @@ export default function LinkEdge({
         <EdgeLabelRenderer>
           <DecisionStates
             edgeId={id}
+            processId={sourceId}
             objectId={target}
             chosen={data.link.states}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
@@ -121,17 +130,34 @@ export default function LinkEdge({
   )
 }
 
-// The states a human decides between, as a pill on its link; clicking it
+// Where the agent link's circle goes: touching the process, outside it.
+function dotCenter(x: number, y: number, side: Position): { cx: number; cy: number } {
+  switch (side) {
+    case Position.Top:
+      return { cx: x, cy: y - AGENT_DOT_RADIUS }
+    case Position.Bottom:
+      return { cx: x, cy: y + AGENT_DOT_RADIUS }
+    case Position.Left:
+      return { cx: x - AGENT_DOT_RADIUS, cy: y }
+    default:
+      return { cx: x + AGENT_DOT_RADIUS, cy: y }
+  }
+}
+
+// The states a human decides between, as a pill on its link; with none, the
+// person fills the object in instead, unless the process takes it too; clicking it
 // opens a checklist of the object's states. Edge labels sit below nodes, so
 // the checklist goes on the page itself, under the pill, and closes when the
 // board moves.
 function DecisionStates({
   edgeId,
+  processId,
   objectId,
   chosen,
   style,
 }: {
   edgeId: string
+  processId: string
   objectId: string
   chosen: number[]
   style: CSSProperties
@@ -144,6 +170,8 @@ function DecisionStates({
   const menu = useRef<HTMLDivElement>(null)
   const states = object?.data.states ?? []
   const names = states.filter((s) => chosen.includes(s.id)).map((s) => s.name)
+  const reviewed = useEdges<LinkEdgeType>().some((e) => e.source === objectId && e.target === processId)
+  const filledIn = names.length === 0 && !reviewed
 
   useEffect(() => {
     if (!at) return
@@ -176,10 +204,14 @@ function DecisionStates({
     <div ref={ref} className="decision nodrag nopan" style={style}>
       <button
         className={`decision-pill${names.length === 0 ? ' empty' : ''}`}
-        title="States this review decides between"
+        title={
+          filledIn
+            ? 'The person fills this object in. Choose states to decide between them instead.'
+            : 'States this review decides between'
+        }
         onClick={onPill}
       >
-        {names.length > 0 ? names.join(' · ') : 'Choose states'}
+        {names.length > 0 ? names.join(' · ') : filledIn ? 'Filled in' : 'Choose states'}
       </button>
       {at &&
         createPortal(

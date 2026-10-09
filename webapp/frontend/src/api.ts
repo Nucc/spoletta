@@ -1,5 +1,6 @@
-// A human process is a review step: a person checks its inputs and decides
-// by setting an object to one of the states the process's output links name.
+// A human process is a step a person carries out: they check its inputs and
+// decide by setting an object to one of the states the process's output links
+// name, and fill in the objects its output links list no states for.
 // A flow process is made of processes, on a board of its own. A Sentry
 // process fetches issues from Sentry.
 export type ProcessKind = 'agent' | 'script' | 'human' | 'flow' | 'sentry'
@@ -91,6 +92,10 @@ export type FlowObject = {
   // process taking it runs once per item. Inside that flow process, it is
   // the item.
   many: boolean
+  // A person, such as a requester: in OPM a human object. Its link into a
+  // process is an agent link, drawn ending in a filled circle: the person
+  // carries the process out, so it must be a human process.
+  human: boolean
   // The flow process whose board it is on; null on the top board. It also
   // shows inside the flow processes linked to it.
   parent: number | null
@@ -282,8 +287,9 @@ export function listObjects(flow: number): Promise<FlowObject[]> {
 
 // On a flow process's board, it goes in that process's flow.
 export function createObject(
-  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'parent'> & {
+  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'human' | 'parent'> & {
     width?: number | null
+    human?: boolean
     parent?: number | null
   },
 ): Promise<FlowObject> {
@@ -598,8 +604,17 @@ export function stopFollowUp(run: number, step: number, id: number): Promise<voi
 }
 
 // Decides a human step waiting for its review, and lets the run go on: the
-// state the human set, if they had any to choose from, and their instructions.
-export function decideStep(run: number, id: number, decision: { state: number | null; instructions: string }): Promise<void> {
+// state the human set, if they had any to choose from, their instructions,
+// and what they entered of the objects the step fills in, by object id: for
+// an object with attributes a JSON object of them, or for a list an array of
+// such objects; otherwise the text entered.
+export type Entries = Record<string, string | Record<string, string> | Record<string, string>[]>
+
+export function decideStep(
+  run: number,
+  id: number,
+  decision: { state: number | null; instructions: string; entries?: Entries },
+): Promise<void> {
   return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(decision) })
 }
 
@@ -645,11 +660,12 @@ export type BoardContents = {
   boards: InnerBoard[]
 }
 
-// Versions from before boards have no parents, recording or boards, and
-// processes from before settings none.
+// Versions from before boards have no parents, recording or boards,
+// processes from before settings none, and objects that aren't people no human.
 type Snapshot = {
   processes: (Omit<Process, 'flow' | 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
-  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many'> & Partial<Pick<FlowObject, 'parent' | 'many'>>)[]
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'human'> &
+    Partial<Pick<FlowObject, 'parent' | 'many' | 'human'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -677,6 +693,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       flow,
       parent: o.parent ?? null,
       many: o.many ?? false,
+      human: o.human ?? false,
       states: s.states.filter((st) => st.object === o.id),
       attributes: s.attributes.filter((a) => a.object === o.id),
     })),

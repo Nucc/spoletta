@@ -11,12 +11,21 @@ export type Block = {
   type: 'process' | 'object'
   // The kind a new process gets.
   kind?: ProcessKind
+  // A new object is a person; see FlowObject.
+  human?: boolean
 }
 
 // Each new OPM element is one more entry.
 export const BUILDING_BLOCKS: Block[] = [
   { id: 'process', label: 'Process', title: 'Something that happens, such as an agent at work', type: 'process', kind: 'agent' },
   { id: 'object', label: 'Object', title: 'Something processes generate and take', type: 'object' },
+  {
+    id: 'person',
+    label: 'Person',
+    title: 'Someone who carries out a human process, such as filling in what a run starts from',
+    type: 'object',
+    human: true,
+  },
 ]
 
 // Each new service is one more entry, once the server runs processes of its kind.
@@ -44,7 +53,7 @@ export function BlockPalette({
       {blocks.map((b) => (
         <li key={b.id}>
           <PaletteTile block={b} disabled={disabled} onAdd={onAdd}>
-            <span className={`palette-shape ${b.type}`} aria-hidden="true" />
+            <span className={`palette-shape ${b.type}${b.human ? ' human' : ''}`} aria-hidden="true" />
           </PaletteTile>
         </li>
       ))}

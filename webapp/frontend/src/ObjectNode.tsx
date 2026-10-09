@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { ObjectAttribute, ObjectState } from './api'
-import { ExhibitionIcon, GearIcon, ObjectIcon, TrashIcon } from './icons'
+import { ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon } from './icons'
 import { AppendButton, NameInput } from './ProcessNode'
 import WidthResizer from './WidthResizer'
 
@@ -15,6 +15,8 @@ export type ObjectNodeData = {
   persistent: boolean
   // A list of items on its own board; inside a flow process taking it, the item.
   many: boolean
+  // A person, who carries out the human processes they link to.
+  human: boolean
   // True while a new object is being named or an existing one renamed.
   editing: boolean
   // True while a new state is being named.
@@ -61,9 +63,7 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
       <Handle type="target" position={Position.Top} />
       <Handle type="source" position={Position.Bottom} />
       <div className="object-main">
-        <span className="node-icon">
-          <ObjectIcon />
-        </span>
+        <span className="node-icon">{data.human ? <HumanIcon /> : <ObjectIcon />}</span>
         <div className="node-text">
           {data.editing ? (
             <NameInput
@@ -80,11 +80,13 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
                   ? `In state ${data.activeState}`
                   : data.status === 'done'
                     ? 'Generated'
-                    : !data.many
-                      ? 'Object'
-                      : data.boundary
-                        ? 'One item of the list'
-                        : 'List of items'}
+                    : data.human
+                      ? 'Person'
+                      : !data.many
+                        ? 'Object'
+                        : data.boundary
+                          ? 'One item of the list'
+                          : 'List of items'}
               </span>
             </>
           )}

@@ -34,7 +34,9 @@ type snapshotObject struct {
 	Width      *float64 `json:"width"`
 	Persistent bool     `json:"persistent"`
 	Many       bool     `json:"many"`
-	Parent     *int64   `json:"parent"`
+	// Left out when false, so versions from before people match boards as they are.
+	Human  bool   `json:"human,omitempty"`
+	Parent *int64 `json:"parent"`
 }
 
 type snapshotLink struct {
@@ -127,9 +129,9 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, parent_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, human, parent_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Parent)
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.Parent)
 		s.Objects = append(s.Objects, o)
 		return err
 	}, flow)
@@ -298,11 +300,11 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		}
 	}
 	for _, o := range s.Objects {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, parent_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, human, parent_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
-				many = saved.many, parent_id = saved.parent_id`,
-			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Parent)
+				many = saved.many, human = saved.human, parent_id = saved.parent_id`,
+			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Human, o.Parent)
 		if err != nil {
 			return err
 		}

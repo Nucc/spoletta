@@ -650,9 +650,18 @@ export default function Board({
     [setNodes, setEdges, toNode, toObjectNode, showObject, structBoard],
   )
 
+  // A struct's board is its object unfolded, where what makes it up is added.
   const loadBoard = useCallback(
-    () => fetchBoard(flowId).then((c) => showBoard(c, boardRef.current, unfoldedRef.current)),
-    [showBoard, flowId],
+    () =>
+      fetchBoard(flowId).then((c) => {
+        let wanted = unfoldedRef.current
+        if (structBoard && !c.objects.some((o) => o.id === wanted)) {
+          wanted = c.objects.find((o) => o.parent === null && o.owner === null)?.id ?? null
+          setUnfolded(wanted)
+        }
+        showBoard(c, boardRef.current, wanted)
+      }),
+    [showBoard, flowId, structBoard],
   )
   reload.current = loadBoard
 
@@ -1533,7 +1542,7 @@ export default function Board({
         setEditing(id, true)
       },
     },
-    ...(isObject(id) && !objectBoard
+    ...(isObject(id) && (!objectBoard || isStructRoot(id))
       ? [
           {
             label: 'Add state',
@@ -1746,7 +1755,10 @@ export default function Board({
     setUnfolded(null)
     setBoardId(id)
   }
-  const trail: { key: string; name: string; show: () => void }[] = [{ key: 'top', name: 'Flow', show: () => showProcessBoard(null) }]
+  // A struct has no board above its object.
+  const trail: { key: string; name: string; show: () => void }[] = structBoard
+    ? []
+    : [{ key: 'top', name: 'Flow', show: () => showProcessBoard(null) }]
   for (let id = boardId; id !== null; ) {
     const p = contents?.processes.find((q) => q.id === id)
     const board = id
@@ -1888,8 +1900,8 @@ export default function Board({
         )}
         {structBoard ? (
           <span className="hint">
-            A struct is one object that flows use. Double-click it for its attributes, right-click it to add states, and
-            unfold it to build its parts.
+            A struct is one object that flows use. Add objects to give it nested fields, and make one a list in its
+            settings. Double-click an object for its attributes; right-click the struct's to add states.
           </span>
         ) : (
           <span
@@ -1966,9 +1978,7 @@ export default function Board({
       <div className="workspace" style={{ '--panel-width': `${panelColumn.width}px` } as CSSProperties}>
         <Sidebar>
           <SidebarGroup id="blocks" title="Building blocks">
-            {structBoard && !objectBoard ? (
-              <p className="panel-note">A struct holds its one object alone. Unfold it to add the objects making it up.</p>
-            ) : (
+            {structBoard && !objectBoard ? null : (
               <BlockPalette
                 blocks={objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS}
                 disabled={reviewing}

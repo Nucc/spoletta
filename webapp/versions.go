@@ -39,6 +39,11 @@ type snapshotObject struct {
 	// Left out when false too, as is it in versions from before ends were drawn.
 	End    bool   `json:"end,omitempty"`
 	Parent *int64 `json:"parent"`
+	// Left out when unset, as in versions from before objects were made up
+	// of others.
+	Owner    *int64 `json:"owner,omitempty"`
+	Relation string `json:"relation,omitempty"`
+	General  *int64 `json:"general,omitempty"`
 }
 
 type snapshotLink struct {
@@ -139,9 +144,9 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, human, at_end, parent_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, human, at_end, parent_id, owner_id, relation, general_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent)
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General)
 		s.Objects = append(s.Objects, o)
 		return err
 	}, flow)
@@ -242,6 +247,33 @@ func parentsFirst(ps []process) []process {
 	return ordered
 }
 
+// The objects with the ones owned by none first, then the ones they own,
+// and so on, so each is saved after its owner.
+func ownersFirst(os []snapshotObject) []snapshotObject {
+	placed := map[int64]bool{}
+	var ordered []snapshotObject
+	for len(ordered) < len(os) {
+		before := len(ordered)
+		for _, o := range os {
+			if !placed[o.ID] && (o.Owner == nil || placed[*o.Owner]) {
+				placed[o.ID] = true
+				ordered = append(ordered, o)
+			}
+		}
+		// Objects whose owner isn't saved go last, and the foreign key turns
+		// them down.
+		if len(ordered) == before {
+			for _, o := range os {
+				if !placed[o.ID] {
+					placed[o.ID] = true
+					ordered = append(ordered, o)
+				}
+			}
+		}
+	}
+	return ordered
+}
+
 // A route as stored: NULL for the default route.
 func storedRoute(r json.RawMessage) any {
 	if len(r) == 0 || string(r) == "null" {
@@ -309,14 +341,23 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			return err
 		}
 	}
-	for _, o := range s.Objects {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
+	// Generals go in once every object is there, since one may come later.
+	for _, o := range ownersFirst(s.Objects) {
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id, owner_id, relation, general_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
-				many = saved.many, human = saved.human, at_end = saved.at_end, parent_id = saved.parent_id`,
-			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Human, o.End, o.Parent)
+				many = saved.many, human = saved.human, at_end = saved.at_end, parent_id = saved.parent_id,
+				owner_id = saved.owner_id, relation = saved.relation, general_id = NULL`,
+			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Human, o.End, o.Parent, o.Owner, o.Relation)
 		if err != nil {
 			return err
+		}
+	}
+	for _, o := range s.Objects {
+		if o.General != nil {
+			if _, err := tx.ExecContext(ctx, "UPDATE objects SET general_id = ? WHERE id = ?", o.General, o.ID); err != nil {
+				return err
+			}
 		}
 	}
 	for _, st := range s.States {

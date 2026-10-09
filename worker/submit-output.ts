@@ -6,15 +6,19 @@
 // file FLOW_OUTPUT_SPEC names.
 //
 // Each object is a JSON object with its attributes, or {"data": ...} when it
-// has none; a list is an array of them. A file attribute holds the path of a
-// file the agent wrote in the run's files directory.
+// has none; a list is an array of them. An attribute that is an object of its
+// own, or a part, holds a JSON object with its attributes in turn, or for a
+// list an array of them. A file attribute holds the path of a file the agent
+// wrote in the run's files directory.
 
 import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 
-type Attribute = { name: string; description: string; file: boolean };
+// With attributes of its own, it holds a JSON object of them, or for many
+// an array of such objects; without, any JSON value, or for many an array.
+type Attribute = { name: string; description: string; file: boolean; many?: boolean; attributes?: Attribute[] };
 type OutputObject = { name: string; many: boolean; attributes: Attribute[] };
 
 type Spec = {
@@ -29,16 +33,22 @@ type Spec = {
 	resultFile: string;
 };
 
-const objectSchema = (o: OutputObject) =>
-	Type.Object(
-		Object.fromEntries(
-			o.attributes.map((a) => [
-				a.name,
-				a.file ? Type.String({ description: a.description }) : Type.Any({ description: a.description }),
-			]),
-		),
-		{ additionalProperties: false },
-	);
+const fieldsSchema = (attributes: Attribute[], options: { description?: string } = {}): TSchema =>
+	Type.Object(Object.fromEntries(attributes.map((a) => [a.name, attributeSchema(a)])), {
+		...options,
+		additionalProperties: false,
+	});
+
+function attributeSchema(a: Attribute): TSchema {
+	const description = a.description || undefined;
+	if (a.file) return Type.String({ description });
+	if (a.attributes?.length) {
+		return a.many ? Type.Array(fieldsSchema(a.attributes), { description }) : fieldsSchema(a.attributes, { description });
+	}
+	return a.many ? Type.Array(Type.Any(), { description }) : Type.Any({ description });
+}
+
+const objectSchema = (o: OutputObject) => fieldsSchema(o.attributes);
 
 const partSchema = (o: OutputObject): TSchema => (o.many ? Type.Array(objectSchema(o)) : objectSchema(o));
 
@@ -69,15 +79,22 @@ function parts(spec: Spec, params: Record<string, unknown>): [OutputObject, unkn
 }
 
 // Says what is wrong with each file attribute that doesn't name a file in
-// the files directory, and makes the paths of those that do absolute.
+// the files directory, at any depth, and makes the paths of those that do
+// absolute.
 function fileProblems(spec: Spec, params: Record<string, unknown>): string[] {
 	const root = realpathSync(spec.filesDir);
 	const problems: string[] = [];
-	for (const [o, items] of parts(spec, params)) {
-		for (const a of o.attributes.filter((a) => a.file)) {
+	const check = (attributes: Attribute[], items: unknown[], at: string, many: boolean) => {
+		for (const a of attributes) {
 			items.forEach((item, i) => {
-				const where = `${o.name}${o.many ? ` item ${i + 1}` : ""} "${a.name}"`;
-				const value = (item as Record<string, unknown>)[a.name];
+				const where = `${at}${many ? ` item ${i + 1}` : ""} "${a.name}"`;
+				const value = (item as Record<string, unknown>)?.[a.name];
+				if (!a.file) {
+					if (a.attributes?.length && value !== undefined) {
+						check(a.attributes, a.many ? (Array.isArray(value) ? value : []) : [value], where, Boolean(a.many));
+					}
+					return;
+				}
 				if (typeof value !== "string" || value === "") {
 					problems.push(`${where} must be the path of a file you wrote in ${spec.filesDir}`);
 					return;
@@ -100,7 +117,8 @@ function fileProblems(spec: Spec, params: Record<string, unknown>): string[] {
 				}
 			});
 		}
-	}
+	};
+	for (const [o, items] of parts(spec, params)) check(o.attributes, items, o.name, o.many);
 	return problems;
 }
 

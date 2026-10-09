@@ -682,9 +682,13 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
-		objects, err := entryObjects(r.Context(), db, process.Int64)
+		objects, msg, err := entryObjects(r.Context(), db, process.Int64)
 		if err != nil {
 			serverError(w, err)
+			return
+		}
+		if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
 		var output string

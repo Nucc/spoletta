@@ -385,7 +385,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		}
 	}
 	for _, o := range s.Objects {
-		if on(o.Parent) && !w.generated[o.ID] {
+		if on(o.Parent) && o.Owner == nil && !w.generated[o.ID] {
 			w.values[o.ID] = value{}
 		}
 	}

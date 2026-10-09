@@ -184,6 +184,12 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 
+		// Processes set an object's states, and only objects on a board meet them.
+		var owned bool
+		if err := db.QueryRowContext(r.Context(), "SELECT owner_id IS NOT NULL FROM objects WHERE id = ?", s.Object).Scan(&owned); err == nil && owned {
+			http.Error(w, "an object making up another has no states of its own; give them to the object on the board", http.StatusBadRequest)
+			return
+		}
 		res, err := db.ExecContext(r.Context(), "INSERT INTO object_states (object_id, name) VALUES (?, ?)", s.Object, s.Name)
 		if mysqlErrorIs(err, mysqlErrForeignKey) {
 			http.Error(w, "object not found", http.StatusBadRequest)

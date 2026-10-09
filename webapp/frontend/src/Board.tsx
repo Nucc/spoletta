@@ -50,6 +50,8 @@ import ObjectPanel from './ObjectPanel'
 import ProcessPanel, { type EntryObject } from './ProcessPanel'
 import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
+import StructureEdge, { type StructureKind } from './StructureEdge'
+import { fieldsOf, onBoard, ownedBy, ownersOf, possibleGenerals, shapeOf, specializationsOf } from './structure'
 import { BLOCK_MIME, BlockPalette, BUILDING_BLOCKS, ConnectorPalette, findBlock, flowBlock, FlowPalette, type Block } from './Palette'
 import { decisionText, RunList, RunPanel } from './Runs'
 import { Sidebar, SidebarGroup } from './Sidebar'
@@ -113,16 +115,17 @@ import {
   type ObjectAttribute,
   type ObjectState,
   type Process,
+  type Relation,
   type Entries,
   type ProcessKind,
   type Start,
 } from './api'
 
 type FlowNode = ProcessNodeType | ObjectNodeType | StartNodeType | EndNodeType
-type FlowEdge = Edge<LinkEdgeData>
+type FlowEdge = Edge<LinkEdgeData & { kind?: StructureKind }>
 
 const nodeTypes = { process: ProcessNode, object: ObjectNode, start: StartNode, end: EndNode }
-const edgeTypes = { link: LinkEdge }
+const edgeTypes = { link: LinkEdge, structure: StructureEdge }
 
 // The column on the right of the board that holds the open panel.
 const PANEL_COLUMN = { storageKey: 'panel-width', min: 320, max: 1600, initial: 420, edge: 'left' } as const
@@ -160,6 +163,12 @@ const LINK_PREFIX = 'link-'
 const END_EDGE_PREFIX = 'ends-'
 // Objects and processes have separate id sequences, so object node ids are prefixed.
 const OBJECT_PREFIX = 'obj-'
+// The structural links on an unfolded object's board.
+const STRUCTURE_PREFIX = 'struct-'
+// Where an unfolded object sits on its own board, and how far from it the
+// object it specializes, above, and those specializing it, beside it.
+const UNFOLDED_AT = { x: 0, y: 0 }
+const UNFOLD_GAP = { x: 60, y: 160 }
 
 const markerEnd = { type: MarkerType.ArrowClosed }
 
@@ -244,6 +253,18 @@ const fetchBoard = (flow: number): Promise<BoardContents> =>
     boards,
   }))
 
+// From the whole to what makes it up, or from the general to what specializes it.
+const structureEdge = (source: number, target: number, kind: StructureKind): FlowEdge => ({
+  id: `${STRUCTURE_PREFIX}${source}-${target}`,
+  type: 'structure',
+  source: objectNodeId(source),
+  target: objectNodeId(target),
+  data: { kind },
+  selectable: false,
+  deletable: false,
+  focusable: false,
+})
+
 const boundaryEdge = (source: string, target: string): FlowEdge => ({
   id: `${BOUNDARY_PREFIX}${source}-${target}`,
   source,
@@ -318,6 +339,13 @@ export default function Board({
   const [boardId, setBoardId] = useState<BoardId>(null)
   const boardRef = useRef<BoardId>(null)
   boardRef.current = boardId
+  // The object unfolded into a board of its own, if any, shown instead of
+  // the board above; see structure.ts. The ref has it for loads started
+  // before it changed.
+  const [unfolded, setUnfolded] = useState<number | null>(null)
+  const unfoldedRef = useRef<number | null>(null)
+  unfoldedRef.current = unfolded
+  const objectBoard = unfolded !== null
   // The whole flow the board shows part of, for the names of the boards above it.
   const [contents, setContents] = useState<BoardContents | null>(null)
   // Bumped each time a board is shown, so the open run shows on it again.
@@ -361,6 +389,13 @@ export default function Board({
     [setNodes],
   )
 
+  // Where a new object goes: on the unfolded object's board, making it up,
+  // or on the board shown.
+  const placement = useCallback(
+    () => (unfoldedRef.current !== null ? { owner: unfoldedRef.current } : { parent: boardRef.current }),
+    [],
+  )
+
   // Processes and objects are named inline when they are created, and renamed
   // inline from their menu. A draft only gets saved once it has a name.
   const commitName = useCallback(
@@ -378,7 +413,7 @@ export default function Board({
         const parent = boardRef.current
         const newId =
           node.type === 'object'
-            ? objectNodeId((await createObject({ flow: flowId, name, x, y, human: node.data.human, parent })).id)
+            ? objectNodeId((await createObject({ flow: flowId, name, x, y, human: node.data.human, ...placement() })).id)
             : String(
                 (
                   await createProcess({
@@ -397,13 +432,14 @@ export default function Board({
                 ).id,
               )
         setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: newId } : n)))
-        // A new subflow process brings the outcomes of the flow it runs.
-        if (node.type === 'process' && node.data.kind === 'subflow') await reload.current()
+        // A new subflow process brings the outcomes of the flow it runs, and
+        // a new object on an unfolded one's board makes it up.
+        if ((node.type === 'process' && node.data.kind === 'subflow') || unfoldedRef.current !== null) await reload.current()
       } catch (err) {
         report(err)
       }
     },
-    [getNode, setNodes, report, flowId],
+    [getNode, setNodes, report, flowId, placement],
   )
 
   const cancelName = useCallback(
@@ -414,8 +450,9 @@ export default function Board({
     [setNodes, setEditing],
   )
 
+  // The objects of the flow tell what it is made of and what it specializes.
   const toObjectNode = useCallback(
-    (o: FlowObject, editing = false, boundary?: 'in' | 'out', position?: XYPosition): ObjectNodeType => ({
+    (o: FlowObject, editing = false, boundary?: 'in' | 'out', position?: XYPosition, objects: FlowObject[] = []): ObjectNodeType => ({
       id: objectNodeId(o.id),
       type: 'object',
       position: position ?? { x: o.x, y: o.y },
@@ -425,9 +462,12 @@ export default function Board({
         name: o.name,
         states: o.states,
         attributes: o.attributes,
+        parts: ownedBy(objects, o.id).map((c) => ({ id: c.id, name: c.name, many: c.many, relation: c.relation || 'exhibition' })),
+        general: objects.find((g) => g.id === o.general)?.name,
         persistent: o.persistent,
         many: o.many,
         human: o.human,
+        owned: o.owner !== null,
         editing,
         boundary,
       },
@@ -461,6 +501,37 @@ export default function Board({
 
   const refreshVersions = useCallback(() => listVersions(flowId).then(setVersions).catch(report), [report, flowId])
 
+  // Shows an object unfolded, as OPM does: the object, the objects it owns,
+  // linked to it by the structural link of how they make it up, the object it
+  // specializes above it and those specializing it beside it. Only what it
+  // owns is on its board; the others are where they are, and unfold in turn.
+  const showObject = useCallback(
+    (c: BoardContents, object: FlowObject) => {
+      const fixed = (n: ObjectNodeType): ObjectNodeType => ({ ...n, draggable: false, data: { ...n.data, fixed: true } })
+      const general = c.objects.find((o) => o.id === object.general)
+      const specializations = specializationsOf(c.objects, object.id)
+      const parts = ownedBy(c.objects, object.id)
+      const width = object.width ?? NODE_SIZE.object.width
+      // Each object once, though the general may be a part too.
+      const nodes = new Map<string, ObjectNodeType>()
+      const add = (n: ObjectNodeType) => nodes.has(n.id) || nodes.set(n.id, n)
+      const root = fixed(toObjectNode(object, false, undefined, UNFOLDED_AT, c.objects))
+      add({ ...root, data: { ...root.data, root: true } })
+      for (const p of parts) add(toObjectNode(p, false, undefined, undefined, c.objects))
+      if (general) add(fixed(toObjectNode(general, false, undefined, { x: UNFOLDED_AT.x, y: UNFOLDED_AT.y - UNFOLD_GAP.y }, c.objects)))
+      specializations.forEach((sp, i) =>
+        add(fixed(toObjectNode(sp, false, undefined, { x: UNFOLDED_AT.x + (i + 1) * (width + UNFOLD_GAP.x), y: UNFOLDED_AT.y }, c.objects))),
+      )
+      setNodes([...nodes.values()])
+      setEdges([
+        ...parts.map((p) => structureEdge(object.id, p.id, p.relation || 'exhibition')),
+        ...(general ? [structureEdge(general.id, object.id, 'generalization')] : []),
+        ...specializations.map((sp) => structureEdge(object.id, sp.id, 'generalization')),
+      ])
+    },
+    [setNodes, setEdges, toObjectNode],
+  )
+
   // Shows one board of the flow: its processes, its objects and their links.
   // A flow process's board also shows the objects the flow process is linked
   // to, the ones it takes above its start, leading into it, and the ones it
@@ -469,15 +540,23 @@ export default function Board({
   // that is gone, such as after jumping to a version without its flow
   // process, gives way to the top board.
   const showBoard = useCallback(
-    (c: BoardContents, wanted: BoardId) => {
+    (c: BoardContents, wanted: BoardId, wantedObject: number | null) => {
       const inner = wanted === null ? undefined : c.boards.find((b) => b.process === wanted)
       const board = inner ? wanted : null
       if (board !== wanted) setBoardId(board)
+      const object = c.objects.find((o) => o.id === wantedObject)
+      if (wantedObject !== null && !object) setUnfolded(null)
+      setContents(c)
+      setShownSeq((n) => n + 1)
+      if (object) {
+        showObject(c, object)
+        return
+      }
       const ps = c.processes.filter((p) => p.parent === board)
       const ids = new Set(ps.map((p) => p.id))
       const humans = new Set(ps.filter((p) => p.kind === 'human').map((p) => p.id))
       const start = inner?.start ?? c.start
-      const own = c.objects.filter((o) => o.parent === board)
+      const own = c.objects.filter((o) => o.parent === board && onBoard(o))
       // A top board's end without a place of its own sits below what is on it.
       const lowest = Math.max(
         start.y,
@@ -503,14 +582,14 @@ export default function Board({
         objects.flatMap((id, i) => {
           const o = byId.get(id)
           const x = at.x + i * (NODE_SIZE.object.width + BOUNDARY_GAP.x)
-          return o ? [toObjectNode(o, false, side, placed(id) ?? { x, y: at.y })] : []
+          return o ? [toObjectNode(o, false, side, placed(id) ?? { x, y: at.y }, c.objects)] : []
         })
 
       setNodes([
         toStartNode(start),
         toEndNode(end, !inner),
         ...ps.map((p) => toNode(p)),
-        ...own.map((o) => toObjectNode(o)),
+        ...own.map((o) => toObjectNode(o, false, undefined, undefined, c.objects)),
         ...row(ins, { x: start.x, y: start.y - BOUNDARY_GAP.y }, 'in'),
         ...(inner ? row(outs, { x: inner.end.x, y: inner.end.y - BOUNDARY_GAP.y }, 'out') : []),
       ])
@@ -522,14 +601,12 @@ export default function Board({
         ...ends.map((o) => boundaryEdge(objectNodeId(o), END_ID)),
         ...(inner ? [] : own.filter((o) => o.end).map((o) => endEdge(o.id))),
       ])
-      setContents(c)
-      setShownSeq((n) => n + 1)
     },
-    [setNodes, setEdges, toNode, toObjectNode],
+    [setNodes, setEdges, toNode, toObjectNode, showObject],
   )
 
   const loadBoard = useCallback(
-    () => fetchBoard(flowId).then((c) => showBoard(c, boardRef.current)),
+    () => fetchBoard(flowId).then((c) => showBoard(c, boardRef.current, unfoldedRef.current)),
     [showBoard, flowId],
   )
   reload.current = loadBoard
@@ -661,26 +738,28 @@ export default function Board({
   // its boards it shows.
   const [shownVersion, setShownVersion] = useState<number | null>(null)
   const [shownBoard, setShownBoard] = useState<BoardId>(null)
+  const [shownUnfolded, setShownUnfolded] = useState<number | null>(null)
   const reviewing = shownVersion !== null
   useEffect(() => {
-    if (runVersion === shownVersion && boardId === shownBoard) return
+    if (runVersion === shownVersion && boardId === shownBoard && unfolded === shownUnfolded) return
     let stale = false
     ;(runVersion === null ? fetchBoard(flowId) : getVersionBoard(flowId, runVersion))
       .then((c) => {
         if (stale) return
         setPanelId(null)
         setMenu(null)
-        showBoard(c, boardId)
+        showBoard(c, boardId, unfolded)
         setShownVersion(runVersion)
         setShownBoard(boardId)
+        setShownUnfolded(unfolded)
         // Another board is a different place; show all of it once its nodes are measured.
-        if (boardId !== shownBoard) window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
+        if (boardId !== shownBoard || unfolded !== shownUnfolded) window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
       })
       .catch(report)
     return () => {
       stale = true
     }
-  }, [runVersion, shownVersion, boardId, shownBoard, showBoard, fitView, report, flowId])
+  }, [runVersion, shownVersion, boardId, shownBoard, unfolded, shownUnfolded, showBoard, fitView, report, flowId])
 
   // Shows the open run on the board: each process as its last step in the
   // run left it, each object with the content and state it last got. A
@@ -725,6 +804,8 @@ export default function Board({
   // A process takes the block's kind, such as a connector's.
   const addDraft = useCallback(
     ({ type, kind = 'agent', human = false, name = '', settings = {} }: Block, screenX: number, screenY: number) => {
+      // What makes up an object is objects.
+      if (unfoldedRef.current !== null && (type !== 'object' || human)) return
       const center = screenToFlowPosition({ x: screenX, y: screenY })
       const { width, height } = NODE_SIZE[type]
       const base = {
@@ -750,7 +831,7 @@ export default function Board({
 
   const onPaneDoubleClick = (e: MouseEvent<HTMLDivElement>) => {
     if (!reviewing && (e.target as HTMLElement).classList.contains('react-flow__pane')) {
-      addDraft(BUILDING_BLOCKS.find((b) => b.id === (e.shiftKey ? 'object' : 'process'))!, e.clientX, e.clientY)
+      addDraft(BUILDING_BLOCKS.find((b) => b.id === (e.shiftKey || objectBoard ? 'object' : 'process'))!, e.clientX, e.clientY)
     }
   }
 
@@ -773,21 +854,37 @@ export default function Board({
   }
 
   // A flow process opens its board, a subflow process the flow it runs;
-  // other nodes their settings.
+  // other nodes their settings. An object unfolds from its menu or button.
   const onNodeDoubleClick: NodeMouseHandler<FlowNode> = (_, node) => {
-    if (zoomable(node.id)) zoomIn(node.id)
+    if (node.type === 'process' && zoomable(node.id)) zoomIn(node.id)
     else if (!isDraft(node.id) && node.type !== 'start' && node.type !== 'end') setPanelId(node.id)
   }
 
+  // An object, other than a person, unfolds, unless it is the one unfolded.
   const zoomable = (id: string) => {
     const node = getNode(id)
-    if (node?.type !== 'process' || isDraft(id)) return false
+    if (isDraft(id)) return false
+    if (node?.type === 'object') return !node.data.human && objectIdOf(id) !== unfolded
+    if (node?.type !== 'process') return false
     return node.data.kind === 'flow' || (node.data.kind === 'subflow' && node.data.settings.flow !== undefined)
+  }
+
+  // Shows the object unfolded, under the board of the object it makes up.
+  const unfold = (id: number) => {
+    setPanelId(null)
+    setMenu(null)
+    const top = ownersOf(contents?.objects ?? [], id)[0]
+    if (top && top.parent !== boardId && (top.parent === null || contents?.boards.some((b) => b.process === top.parent))) setBoardId(top.parent)
+    setUnfolded(id)
   }
 
   // Zooming into a subflow process goes to the flow it runs, on the run it
   // ran there if a run is shown, and the browser's back button comes back.
   const zoomIn = (id: string) => {
+    if (isObject(id)) {
+      unfold(objectIdOf(id))
+      return
+    }
     setPanelId(null)
     setMenu(null)
     const node = getNode(id)
@@ -798,12 +895,20 @@ export default function Board({
       window.location.hash = child ? `#/flows/${target}/runs/${child}` : `#/flows/${target}`
       return
     }
+    setUnfolded(null)
     setBoardId(Number(id))
   }
 
   const isBoundary = (id: string) => {
     const node = getNode(id)
     return node?.type === 'object' && node.data.boundary !== undefined
+  }
+
+  // On an unfolded object's board, the objects that aren't on it: itself,
+  // the one it specializes and those specializing it.
+  const isFixed = (id: string) => {
+    const node = getNode(id)
+    return node?.type === 'object' && Boolean(node.data.fixed)
   }
 
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
@@ -823,7 +928,7 @@ export default function Board({
     for (const [id, { x, y }] of positions) {
       if (id === START_ID) updateStart(flowId, boardId, { x, y }).catch(report)
       else if (id === END_ID) updateEnd(flowId, boardId, { x, y }).catch(report)
-      else if (isDraft(id)) continue
+      else if (isDraft(id) || isFixed(id)) continue
       // An object outside keeps its place here on its links to the board's process.
       else if (isBoundary(id)) {
         for (const l of contents?.links ?? [])
@@ -850,7 +955,12 @@ export default function Board({
   // Saves a node's new width, and its position, which moves when resized from the left.
   const resize = (id: string, x: number, width: number) => {
     if (isDraft(id)) return
-    const req = isObject(id) ? updateObject(objectIdOf(id), { x, width }) : updateProcess(Number(id), { x, width })
+    // An unfolded object keeps its place on the board it is on.
+    const req = isFixed(id)
+      ? updateObject(objectIdOf(id), { width })
+      : isObject(id)
+        ? updateObject(objectIdOf(id), { x, width })
+        : updateProcess(Number(id), { x, width })
     req.catch(report)
   }
 
@@ -893,7 +1003,8 @@ export default function Board({
   // which would orphan their edges, so they can't be connected until they
   // have a name.
   const isValidConnection: IsValidConnection = ({ source, target, sourceHandle, targetHandle }) => {
-    if (isDraft(source) || isDraft(target)) return false
+    // An unfolded object's links come from what makes it up.
+    if (objectBoard || isDraft(source) || isDraft(target)) return false
     const same = (a: string | null | undefined, b: string | null | undefined) => (a ?? null) === (b ?? null)
     if (edges.some((e) => e.source === source && e.target === target && same(e.sourceHandle, sourceHandle) && same(e.targetHandle, targetHandle))) {
       return false
@@ -1006,7 +1117,7 @@ export default function Board({
   // node starts out being named.
   const append = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || node.type === 'end' || reviewing) return
+    if (!node || node.type === 'start' || node.type === 'end' || reviewing || objectBoard) return
     try {
       if (node.type === 'process') {
         const o = await createObject({ flow: flowId, name: NEW_OBJECT, parent: boardId, ...below(node, 'object') })
@@ -1082,8 +1193,13 @@ export default function Board({
   // belong to the board outside.
   const remove = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || node.type === 'end' || reviewing || isBoundary(id)) return
-    const inside = node.type === 'process' && node.data.kind === 'flow' ? ', its links and everything on its board' : ' and its links'
+    if (!node || node.type === 'start' || node.type === 'end' || reviewing || isBoundary(id) || isFixed(id)) return
+    const inside =
+      node.type === 'process' && node.data.kind === 'flow'
+        ? ', its links and everything on its board'
+        : node.type === 'object' && objectBoard
+          ? ' and everything it is made of'
+          : ' and its links'
     if (!window.confirm(`Delete “${node.data.name}”${inside}?`)) return
     try {
       if (node.type === 'object') await deleteObject(objectIdOf(id))
@@ -1095,6 +1211,8 @@ export default function Board({
     setNodes((ns) => ns.filter((n) => n.id !== id))
     setEdges((es) => es.filter((e) => e.source !== id && e.target !== id))
     setPanelId((open) => (open === id ? null : open))
+    // The object it made up has one field less.
+    if (objectBoard) reload.current().catch(report)
   }
 
   // A copy without links, next to the original.
@@ -1197,11 +1315,16 @@ export default function Board({
       ),
     )
 
+  // What an object is made of shows on the objects specializing it or made
+  // up of it too, so the board loads again once it changed.
+  const restructured = () => reload.current().catch(report)
+
   const addAttribute = async (objectId: string, name: string) => {
     if (reviewing) return false
     try {
       const attribute = await createAttribute(objectIdOf(objectId), { name, definition: '' })
       setAttributes(objectId, (as) => [...as, attribute])
+      restructured()
       return true
     } catch (err) {
       report(err)
@@ -1214,6 +1337,7 @@ export default function Board({
     try {
       await updateObject(objectIdOf(objectId), { many })
       updateObjectData(objectId, { many })
+      restructured()
       return true
     } catch (err) {
       report(err)
@@ -1228,6 +1352,30 @@ export default function Board({
     try {
       await updateObject(objectIdOf(objectId), { human })
       updateObjectData(objectId, { human })
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
+  const setRelation = async (objectId: string, relation: Relation) => {
+    if (reviewing) return false
+    try {
+      await updateObject(objectIdOf(objectId), { relation })
+      restructured()
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
+  const setGeneral = async (objectId: string, general: number | null) => {
+    if (reviewing) return false
+    try {
+      await updateObject(objectIdOf(objectId), { general })
+      restructured()
       return true
     } catch (err) {
       report(err)
@@ -1255,6 +1403,7 @@ export default function Board({
     try {
       const attribute = await updateAttribute(id, patch)
       setAttributes(objectId, (as) => as.map((a) => (a.id === id ? attribute : a)))
+      if (patch.name !== undefined || patch.file !== undefined) restructured()
       return true
     } catch (err) {
       report(err)
@@ -1273,6 +1422,7 @@ export default function Board({
       return false
     }
     setAttributes(objectId, (as) => as.filter((a) => a.id !== id))
+    restructured()
     return true
   }
 
@@ -1284,7 +1434,7 @@ export default function Board({
   }
 
   const menuItems = (id: string): MenuItem[] => [
-    ...(zoomable(id) ? [{ label: 'Zoom in', icon: <ZoomInIcon />, onSelect: () => zoomIn(id) }] : []),
+    ...(zoomable(id) ? [{ label: isObject(id) ? 'Unfold' : 'Zoom in', icon: <ZoomInIcon />, onSelect: () => zoomIn(id) }] : []),
     {
       label: 'Rename',
       disabled: reviewing,
@@ -1295,7 +1445,7 @@ export default function Board({
         setEditing(id, true)
       },
     },
-    ...(isObject(id)
+    ...(isObject(id) && !objectBoard
       ? [
           {
             label: 'Add state',
@@ -1305,8 +1455,9 @@ export default function Board({
           },
         ]
       : []),
-    { label: 'Duplicate', icon: <CopyIcon />, disabled: reviewing, onSelect: () => duplicate(id) },
-    { label: 'Delete', icon: <TrashIcon />, danger: true, disabled: reviewing || isBoundary(id), onSelect: () => remove(id) },
+    // Two objects making up one can't share a name.
+    { label: 'Duplicate', icon: <CopyIcon />, disabled: reviewing || objectBoard, onSelect: () => duplicate(id) },
+    { label: 'Delete', icon: <TrashIcon />, danger: true, disabled: reviewing || isBoundary(id) || isFixed(id), onSelect: () => remove(id) },
   ]
 
   const onStopStep = async (run: number, step: number) => {
@@ -1378,6 +1529,7 @@ export default function Board({
     setPanelId(null)
     setVersionsOpen(false)
     setRunId(run.id)
+    setUnfolded(null)
     setBoardId(run.process)
   }
 
@@ -1437,12 +1589,23 @@ export default function Board({
     }
   }
 
-  // The boards from the top one down to the one shown.
-  const trail: { id: BoardId; name: string }[] = [{ id: null, name: 'Flow' }]
+  // The boards from the top one down to the one shown, then the objects
+  // unfolded down to the one shown.
+  const showProcessBoard = (id: BoardId) => {
+    setUnfolded(null)
+    setBoardId(id)
+  }
+  const trail: { key: string; name: string; show: () => void }[] = [{ key: 'top', name: 'Flow', show: () => showProcessBoard(null) }]
   for (let id = boardId; id !== null; ) {
     const p = contents?.processes.find((q) => q.id === id)
-    trail.splice(1, 0, { id, name: p?.name ?? `Process ${id}` })
+    const board = id
+    trail.splice(1, 0, { key: `process-${id}`, name: p?.name ?? `Process ${id}`, show: () => showProcessBoard(board) })
     id = p?.parent ?? null
+  }
+  if (unfolded !== null) {
+    for (const o of ownersOf(contents?.objects ?? [], unfolded)) {
+      trail.push({ key: `object-${o.id}`, name: o.name, show: () => setUnfolded(o.id) })
+    }
   }
 
   const onStop = async (id: number) => {
@@ -1478,7 +1641,7 @@ export default function Board({
       const object = getNode(objectNodeId(l.object))
       if (object?.type !== 'object') return []
       const many = object.data.many && !object.data.boundary
-      return [{ id: l.object, name: object.data.name, many, attributes: object.data.attributes }]
+      return [{ id: l.object, name: object.data.name, many, fields: fieldsOf(contents?.objects ?? [], l.object) }]
     })
 
   // The names of the objects a process takes or generates, which a subflow
@@ -1555,17 +1718,17 @@ export default function Board({
         </h1>
         <button
           onClick={onWrap}
-          disabled={reviewing || selectedProcesses.length === 0}
+          disabled={reviewing || objectBoard || selectedProcesses.length === 0}
           title="Move the selected processes into a new flow process; shift-click or drag to select several"
         >
           <FlowIcon /> Group into flow
         </button>
-        <button onClick={onTidy} disabled={reviewing} title="Lay the board out from the top">
+        <button onClick={onTidy} disabled={reviewing || objectBoard} title="Lay the board out from the top">
           <LayoutIcon /> Tidy up
         </button>
         <span
           className="hint"
-          title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it."
+          title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it."
         >
           Processes connect through the objects they generate and take. Right-click a node for more.
         </span>
@@ -1630,14 +1793,22 @@ export default function Board({
       <div className="workspace" style={{ '--panel-width': `${panelColumn.width}px` } as CSSProperties}>
         <Sidebar>
           <SidebarGroup id="blocks" title="Building blocks">
-            <BlockPalette blocks={BUILDING_BLOCKS} disabled={reviewing} onAdd={addAtViewportCenter} />
+            <BlockPalette
+              blocks={objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS}
+              disabled={reviewing}
+              onAdd={addAtViewportCenter}
+            />
           </SidebarGroup>
-          <SidebarGroup id="connectors" title="Connectors">
-            <ConnectorPalette disabled={reviewing} onAdd={addAtViewportCenter} />
-          </SidebarGroup>
-          <SidebarGroup id="flows" title="Flows">
-            <FlowPalette blocks={flowBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
-          </SidebarGroup>
+          {!objectBoard && (
+            <>
+              <SidebarGroup id="connectors" title="Connectors">
+                <ConnectorPalette disabled={reviewing} onAdd={addAtViewportCenter} />
+              </SidebarGroup>
+              <SidebarGroup id="flows" title="Flows">
+                <FlowPalette blocks={flowBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
+              </SidebarGroup>
+            </>
+          )}
           <SidebarGroup id="runs" title="Runs" fill>
             <RunList
               runs={runs}
@@ -1676,7 +1847,7 @@ export default function Board({
               onDoubleClick={onPaneDoubleClick}
               zoomOnDoubleClick={false}
               nodesDraggable={!reviewing}
-              nodesConnectable={!reviewing}
+              nodesConnectable={!reviewing && !objectBoard}
               deleteKeyCode={reviewing ? null : undefined}
             >
               <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
@@ -1687,12 +1858,12 @@ export default function Board({
             <nav className="breadcrumb" aria-label="Boards">
               {trail.map((b, i) =>
                 i === trail.length - 1 ? (
-                  <span key={b.id ?? 'top'} aria-current="page">
+                  <span key={b.key} aria-current="page">
                     {b.name}
                   </span>
                 ) : (
-                  <span key={b.id ?? 'top'}>
-                    <button onClick={() => setBoardId(b.id)}>{b.name}</button>
+                  <span key={b.key}>
+                    <button onClick={b.show}>{b.name}</button>
                     <span className="breadcrumb-sep" aria-hidden="true">
                       ›
                     </span>
@@ -1751,6 +1922,11 @@ export default function Board({
             onFlowSaved={() => loadBoard().catch(report)}
             takes={linkedNames(panelNode.id, 'input')}
             generates={linkedNames(panelNode.id, 'output')}
+            shapes={Object.fromEntries(
+              (contents?.objects ?? [])
+                .filter((o) => edges.some((e) => e.data?.link && String(e.data.link.process) === panelNode.id && e.data.link.object === o.id))
+                .map((o) => [o.name, shapeOf(fieldsOf(contents?.objects ?? [], o.id))]),
+            )}
             onOpenMCPSettings={() => openMCPSettings(true)}
             repositories={flow.settings.repositories}
             onOpenFlowSettings={() => openFlowSettings(true)}
@@ -1761,8 +1937,15 @@ export default function Board({
         {objectPanelNode && (
           <ObjectPanel
             key={objectPanelNode.id}
+            id={objectIdOf(objectPanelNode.id)}
+            objects={contents?.objects ?? []}
             name={objectPanelNode.data.name}
             attributes={objectPanelNode.data.attributes}
+            onRelationChange={(relation) => setRelation(objectPanelNode.id, relation)}
+            generals={possibleGenerals(contents?.objects ?? [], objectIdOf(objectPanelNode.id))}
+            onGeneralChange={(general) => setGeneral(objectPanelNode.id, general)}
+            onUnfold={zoomable(objectPanelNode.id) ? () => unfold(objectIdOf(objectPanelNode.id)) : undefined}
+            onUnfoldPart={unfold}
             persistent={objectPanelNode.data.persistent}
             onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
             many={objectPanelNode.data.many}

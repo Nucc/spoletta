@@ -64,6 +64,19 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
+		if msg, err := checkAttribute(r.Context(), db, id, func(o *structObject) {
+			o.attrs = append(o.attrs, attribute{ID: 1 << 62, Object: id, Name: a.Name})
+		}); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "object not found", http.StatusBadRequest)
+				return
+			}
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 
 		res, err := db.ExecContext(r.Context(), "INSERT INTO object_attributes (object_id, name, definition) VALUES (?, ?, ?)",
 			a.Object, a.Name, a.Definition)
@@ -107,6 +120,41 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		if patch.Name != nil || isTrue(patch.Unique) {
+			var object int64
+			var owned bool
+			err := db.QueryRowContext(r.Context(), "SELECT a.object_id, o.owner_id IS NOT NULL FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE a.id = ?", id).
+				Scan(&object, &owned)
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "attribute not found", http.StatusNotFound)
+				return
+			}
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			if owned && isTrue(patch.Unique) {
+				http.Error(w, "only an object on a board is stored, so only its own attributes can be unique", http.StatusBadRequest)
+				return
+			}
+			if patch.Name != nil {
+				msg, err := checkAttribute(r.Context(), db, object, func(o *structObject) {
+					for i := range o.attrs {
+						if o.attrs[i].ID == id {
+							o.attrs[i].Name = *patch.Name
+						}
+					}
+				})
+				if err != nil {
+					serverError(w, err)
+					return
+				}
+				if msg != "" {
+					http.Error(w, msg, http.StatusBadRequest)
+					return
+				}
+			}
+		}
 		_, err = db.ExecContext(r.Context(),
 			"UPDATE object_attributes SET name = COALESCE(?, name), definition = COALESCE(?, definition), is_unique = COALESCE(?, is_unique), is_file = COALESCE(?, is_file) WHERE id = ?",
 			patch.Name, patch.Definition, patch.Unique, patch.File, id)
@@ -147,6 +195,19 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
+// Says what is wrong with the structure of the object's flow once change is
+// made to the object, if anything.
+func checkAttribute(ctx context.Context, db *sql.DB, object int64, change func(*structObject)) (string, error) {
+	s, _, err := structureOf(ctx, db, object)
+	if err != nil {
+		return "", err
+	}
+	if o := s[object]; o != nil {
+		change(o)
+	}
+	return s.check(), nil
+}
+
 // The attributes of every object, or of one if object isn't 0, by object id.
 func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]attribute, error) {
 	rows, err := db.QueryContext(ctx,
@@ -167,7 +228,8 @@ func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]
 }
 
 // The interface of what a process generates, which its output always
-// follows: a JSON object with the attributes of the object it generates, or
+// follows: a JSON object with the fields of the object it generates, its
+// attributes and the objects it is made of (see structure.go), or
 // {"data": ...} when the object has none; for a list of items a JSON array
 // of such objects. When it generates several objects, the output holds one
 // such JSON object or array per generated object, under the object's name.
@@ -179,11 +241,11 @@ type outputContract struct {
 }
 
 type shapedObject struct {
-	id         int64
-	name       string
-	many       bool
-	attributes []attribute
-	// The object has no attributes, so it holds its value under data.
+	id     int64
+	name   string
+	many   bool
+	fields []field
+	// The object has no fields, so it holds its value under data.
 	data bool
 }
 
@@ -191,13 +253,43 @@ type shapedObject struct {
 const dataAttribute = "data"
 
 // The contract for what a process generates, or nil if it generates
-// nothing. With all false, only objects with attributes are in it, and nil
+// nothing. With all false, only objects with fields are in it, and nil
 // means none has any. Says what is wrong if the objects can't be told apart.
 func contractFor(ctx context.Context, db *sql.DB, process int64, all bool) (*outputContract, string, error) {
-	rows, err := db.QueryContext(ctx,
+	objects, msg, err := shapedObjects(ctx, db, process,
 		`SELECT DISTINCT o.id, o.name, o.many AND o.parent_id <=> p.parent_id
 		FROM object_links l JOIN objects o ON o.id = l.object_id JOIN processes p ON p.id = l.process_id
 		WHERE l.process_id = ? AND l.direction = 'output' ORDER BY o.id`, process)
+	if err != nil || msg != "" {
+		return nil, msg, err
+	}
+
+	c := &outputContract{}
+	names := map[string]bool{}
+	for _, o := range objects {
+		if o.data {
+			if !all {
+				continue
+			}
+			o.fields = []field{{name: dataAttribute, definition: fmt.Sprintf("What %s holds, as any JSON value", quote(o.name))}}
+		}
+		if names[o.name] {
+			return nil, fmt.Sprintf("the process generates two objects named %q; rename one so its output can tell them apart", o.name), nil
+		}
+		names[o.name] = true
+		c.shaped = append(c.shaped, o)
+	}
+	if len(c.shaped) == 0 {
+		return nil, "", nil
+	}
+	return c, "", nil
+}
+
+// The objects query finds, each as id, name and whether a list, with the
+// fields of what it holds; the query's objects are all in the process's
+// flow. Says what is wrong if their fields never end.
+func shapedObjects(ctx context.Context, db *sql.DB, process int64, query string, args ...any) ([]shapedObject, string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, "", err
 	}
@@ -210,34 +302,26 @@ func contractFor(ctx context.Context, db *sql.DB, process int64, all bool) (*out
 		}
 		objects = append(objects, o)
 	}
-	if err := rows.Err(); err != nil {
+	if err := rows.Err(); err != nil || len(objects) == 0 {
 		return nil, "", err
 	}
-
-	attrs, err := listAttributes(ctx, db, 0)
+	var flow int64
+	if err := db.QueryRowContext(ctx, "SELECT flow_id FROM processes WHERE id = ?", process).Scan(&flow); err != nil {
+		return nil, "", err
+	}
+	s, err := loadStructure(ctx, db, flow)
 	if err != nil {
 		return nil, "", err
 	}
-	c := &outputContract{}
-	names := map[string]bool{}
-	for _, o := range objects {
-		if o.attributes = attrs[o.id]; len(o.attributes) == 0 {
-			if !all {
-				continue
-			}
-			o.data = true
-			o.attributes = []attribute{{Name: dataAttribute, Definition: fmt.Sprintf("What %s holds, as any JSON value", quote(o.name))}}
+	for i := range objects {
+		fs, err := s.fields(objects[i].id)
+		if err != nil {
+			return nil, err.Error(), nil
 		}
-		if names[o.name] {
-			return nil, fmt.Sprintf("the process generates two objects named %q; rename one so its output can tell them apart", o.name), nil
-		}
-		names[o.name] = true
-		c.shaped = append(c.shaped, o)
+		objects[i].fields = fs
+		objects[i].data = len(fs) == 0
 	}
-	if len(c.shaped) == 0 {
-		return nil, "", nil
-	}
-	return c, "", nil
+	return objects, "", nil
 }
 
 // Where a step keeps the files it generates, in the volume the worker
@@ -258,10 +342,14 @@ type specObject struct {
 	Attributes []specAttribute `json:"attributes"`
 }
 
+// An attribute, or an object the object is made of: a JSON object with
+// its own attributes, or for a list an array of them.
 type specAttribute struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	File        bool   `json:"file"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	File        bool            `json:"file"`
+	Many        bool            `json:"many,omitempty"`
+	Attributes  []specAttribute `json:"attributes,omitempty"`
 }
 
 // Tool arguments must be a JSON object, so a single list goes under items.
@@ -274,25 +362,36 @@ func (c *outputContract) spec() *outputSpec {
 		}
 	}
 	for _, o := range c.shaped {
-		so := specObject{Name: o.name, Many: o.many}
-		for _, a := range o.attributes {
-			desc := strings.TrimSpace(a.Definition)
-			if a.File {
-				desc = strings.TrimSpace("The path of a file you wrote in " + c.filesDir + ". " + desc)
-			}
-			so.Attributes = append(so.Attributes, specAttribute{Name: a.Name, Description: desc, File: a.File})
-		}
-		s.Objects = append(s.Objects, so)
+		s.Objects = append(s.Objects, specObject{Name: o.name, Many: o.many, Attributes: c.specFields(o.fields)})
 	}
 	return s
 }
 
+func (c *outputContract) specFields(fs []field) []specAttribute {
+	var as []specAttribute
+	for _, f := range fs {
+		desc := strings.TrimSpace(f.definition)
+		if f.file {
+			desc = strings.TrimSpace("The path of a file you wrote in " + c.filesDir + ". " + desc)
+		}
+		as = append(as, specAttribute{Name: f.name, Description: desc, File: f.file, Many: f.many, Attributes: c.specFields(f.fields)})
+	}
+	return as
+}
+
 func (c *outputContract) hasFiles() bool {
 	for _, o := range c.shaped {
-		for _, a := range o.attributes {
-			if a.File {
-				return true
-			}
+		if hasFile(o.fields) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFile(fs []field) bool {
+	for _, f := range fs {
+		if f.file || hasFile(f.fields) {
+			return true
 		}
 	}
 	return false
@@ -321,26 +420,36 @@ func (c *outputContract) withContract(prompt string) string {
 		default:
 			fmt.Fprintf(&b, "\n%q:\n", o.name)
 		}
-		writeAttributes(&b, o.attributes, "  ")
+		writeFields(&b, o.fields, "  ")
 	}
 	if c.hasFiles() {
 		fmt.Fprintf(&b, "\nWrite the files you generate in %s, and give their paths.\n", c.filesDir)
 	}
-	b.WriteString("Keys not listed are not allowed. Each value can be any JSON value that fits its definition.\n</output_format>\n")
+	b.WriteString("Keys not listed are not allowed, at any depth. Each value without keys of its own can be any JSON value that fits its definition.\n</output_format>\n")
 	return b.String()
 }
 
-func writeAttributes(b *strings.Builder, attrs []attribute, indent string) {
-	for _, a := range attrs {
-		def := strings.TrimSpace(a.Definition)
-		if a.File {
+// Each field, and the keys of a field holding an object, indented below it.
+func writeFields(b *strings.Builder, fs []field, indent string) {
+	for _, f := range fs {
+		def := strings.TrimSpace(f.definition)
+		if f.file {
 			def = strings.TrimSpace("the path of a file you wrote. " + def)
 		}
-		if def == "" {
-			fmt.Fprintf(b, "%s- %s\n", indent, quote(a.Name))
-		} else {
-			fmt.Fprintf(b, "%s- %s: %s\n", indent, quote(a.Name), strings.ReplaceAll(def, "\n", "\n"+indent+"  "))
+		switch {
+		case len(f.fields) > 0 && f.many:
+			def = "a list of JSON objects, one per item, each with:"
+		case len(f.fields) > 0:
+			def = "a JSON object with:"
+		case f.many:
+			def = "a JSON array of any values"
 		}
+		if def == "" {
+			fmt.Fprintf(b, "%s- %s\n", indent, quote(f.name))
+		} else {
+			fmt.Fprintf(b, "%s- %s: %s\n", indent, quote(f.name), strings.ReplaceAll(def, "\n", "\n"+indent+"  "))
+		}
+		writeFields(b, f.fields, indent+"  ")
 	}
 }
 
@@ -387,31 +496,54 @@ func (c *outputContract) parse(reply string) (string, map[int64]string, error) {
 	return ordered(keys, parts), contents, nil
 }
 
-// The object's part of a reply, checked and with its attributes in order:
-// a JSON object, or for a list a JSON array of them.
+// The object's part of a reply, checked and with its fields in order: a
+// JSON object, or for a list a JSON array of them.
 func (c *outputContract) shapeObject(o shapedObject, s string) (string, error) {
-	if !o.many {
-		fields, err := jsonObject(s)
-		if err != nil {
-			return "", err
-		}
-		return c.shape(fields, o.attributes)
+	out, err := c.shapeValue(field{name: o.name, many: o.many, fields: o.fields}, json.RawMessage(s), true)
+	return string(out), err
+}
+
+// A field's value, checked: for a list a JSON array of its items, each a
+// JSON object with its fields in order if it has any. Whole, an object
+// without fields is a JSON object too, holding data.
+func (c *outputContract) shapeValue(f field, v json.RawMessage, whole bool) (json.RawMessage, error) {
+	if !f.many {
+		return c.shapeItem(f, v, whole)
 	}
-	items, err := jsonArray(s)
+	items, err := jsonArray(string(v))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	parts := make([]string, len(items))
 	for i, item := range items {
-		fields, err := jsonObject(string(item))
+		out, err := c.shapeItem(f, item, whole)
 		if err != nil {
-			return "", fmt.Errorf("item %d: %w", i+1, err)
+			return nil, fmt.Errorf("item %d: %w", i+1, err)
 		}
-		if parts[i], err = c.shape(fields, o.attributes); err != nil {
-			return "", fmt.Errorf("item %d: %w", i+1, err)
-		}
+		parts[i] = string(out)
 	}
-	return indentJSON("[" + strings.Join(parts, ",") + "]"), nil
+	return json.RawMessage(indentJSON("[" + strings.Join(parts, ",") + "]")), nil
+}
+
+func (c *outputContract) shapeItem(f field, v json.RawMessage, whole bool) (json.RawMessage, error) {
+	switch {
+	case f.file:
+		// A file's path is kept whole, so it means the same to every process.
+		path, err := c.checkFile(v)
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(quote(path)), nil
+	case len(f.fields) > 0 || whole:
+		fields, err := jsonObject(string(v))
+		if err != nil {
+			return nil, err
+		}
+		out, err := c.shape(fields, f.fields)
+		return json.RawMessage(out), err
+	default:
+		return v, nil
+	}
 }
 
 func jsonArray(s string) ([]json.RawMessage, error) {
@@ -459,30 +591,24 @@ func jsonObject(s string) (map[string]json.RawMessage, error) {
 	return fields, nil
 }
 
-// The object's attributes as indented JSON, in their order.
-func (c *outputContract) shape(fields map[string]json.RawMessage, attrs []attribute) (string, error) {
-	keys := make([]string, len(attrs))
-	for i, a := range attrs {
-		keys[i] = a.Name
+// The fields as indented JSON, in their order, each checked.
+func (c *outputContract) shape(values map[string]json.RawMessage, fs []field) (string, error) {
+	keys := make([]string, len(fs))
+	for i, f := range fs {
+		keys[i] = f.name
 	}
-	if err := exactKeys(fields, keys); err != nil {
+	if err := exactKeys(values, keys); err != nil {
 		return "", err
 	}
-	// A file's path is kept whole, so it means the same to every process.
-	for _, a := range attrs {
-		if a.File {
-			path, err := c.checkFile(fields[a.Name])
-			if err != nil {
-				return "", fmt.Errorf("%s: %w", quote(a.Name), err)
-			}
-			fields[a.Name] = json.RawMessage(quote(path))
+	out := make([]json.RawMessage, len(fs))
+	for i, f := range fs {
+		v, err := c.shapeValue(f, values[f.name], false)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", quote(f.name), err)
 		}
+		out[i] = v
 	}
-	values := make([]json.RawMessage, len(keys))
-	for i, k := range keys {
-		values[i] = fields[k]
-	}
-	return ordered(keys, values), nil
+	return ordered(keys, out), nil
 }
 
 // Checks that a file attribute's value is the path of a file in the step's

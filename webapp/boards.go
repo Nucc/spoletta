@@ -104,12 +104,13 @@ func checkParent(ctx context.Context, db *sql.DB, parent *int64) (string, error)
 }
 
 // Whether a process can link to an object: one on its board, or one its
-// board's flow process is linked to.
+// board's flow process is linked to. An object making up another is on that
+// object's board instead.
 func onBoardOf(ctx context.Context, db *sql.DB, process, object int64) (bool, error) {
 	var n int
 	err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM processes p JOIN objects o ON o.id = ? AND o.flow_id = p.flow_id
-		WHERE p.id = ? AND (o.parent_id <=> p.parent_id
+		WHERE p.id = ? AND o.`+onProcessBoard+` AND (o.parent_id <=> p.parent_id
 			OR EXISTS (SELECT 1 FROM object_links l WHERE l.process_id = p.parent_id AND l.object_id = o.id))`,
 		object, process).Scan(&n)
 	return n > 0, err
@@ -456,7 +457,7 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 		args := append(int64Args(objects), p.Parent, p.Flow)
 		args = append(args, int64Args(processes)...)
 		rows, err := tx.QueryContext(ctx,
-			`SELECT o.id FROM objects o WHERE o.id IN `+placeholders(len(objects))+` AND o.parent_id <=> ? AND o.flow_id = ?
+			`SELECT o.id FROM objects o WHERE o.id IN `+placeholders(len(objects))+` AND o.parent_id <=> ? AND o.flow_id = ? AND o.`+onProcessBoard+`
 			AND NOT EXISTS (SELECT 1 FROM object_links l WHERE l.object_id = o.id AND l.process_id NOT IN `+placeholders(len(processes))+`)`,
 			args...)
 		if err != nil {

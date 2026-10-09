@@ -36,7 +36,14 @@ type object struct {
 	End bool `json:"end"`
 	// The flow process whose board it is on; null on the top board. It also
 	// shows inside the flow processes linked to it; see boards.go.
-	Parent     *int64        `json:"parent"`
+	Parent *int64 `json:"parent"`
+	// The object it makes up, as an attribute it exhibits or a part it
+	// aggregates, as relation says; it is on that object's board rather than
+	// a process's. See structure.go.
+	Owner    *int64 `json:"owner"`
+	Relation string `json:"relation"`
+	// The object it specializes, whose fields it has too.
+	General    *int64        `json:"general"`
 	States     []objectState `json:"states"`
 	Attributes []attribute   `json:"attributes"`
 }
@@ -162,9 +169,15 @@ func migrateObjects(db *sql.DB) error {
 	return err
 }
 
+const objectColumns = "id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id, owner_id, relation, general_id"
+
+// Whether an object is on a board of processes, rather than owned by
+// another object.
+const onProcessBoard = "owner_id IS NULL"
+
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent)
+	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General)
 	if err != nil {
 		return o, err
 	}
@@ -199,7 +212,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), "SELECT id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id FROM objects WHERE flow_id = ? ORDER BY id", f)
+		rows, err := db.QueryContext(r.Context(), "SELECT "+objectColumns+" FROM objects WHERE flow_id = ? ORDER BY id", f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -209,7 +222,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent); err != nil {
+			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -256,23 +269,26 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, invalidWidthMessage, http.StatusBadRequest)
 			return
 		}
-		if msg, err := checkParent(r.Context(), db, o.Parent); err != nil {
-			serverError(w, err)
-			return
-		} else if msg != "" {
-			http.Error(w, msg, http.StatusBadRequest)
-			return
-		}
 		var msg string
 		var err error
-		if o.Flow, msg, err = flowFor(r.Context(), db, o.Flow, o.Parent); err != nil {
+		if o.Owner != nil {
+			msg, err = checkOwned(r.Context(), db, &o)
+		} else {
+			o.Relation = ""
+			o.General = nil
+			if msg, err = checkParent(r.Context(), db, o.Parent); err == nil && msg == "" {
+				o.Flow, msg, err = flowFor(r.Context(), db, o.Flow, o.Parent)
+			}
+		}
+		if err != nil {
 			serverError(w, err)
 			return
 		} else if msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y, width, human, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)", o.Flow, o.Name, o.X, o.Y, o.Width, o.Human, o.Parent)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y, width, human, parent_id, owner_id, relation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			o.Flow, o.Name, o.X, o.Y, o.Width, o.Human, o.Parent, o.Owner, o.Relation)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -304,6 +320,11 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			Human      *bool `json:"human"`
 			// Only an object of the top board other than a person can end it.
 			End *bool `json:"end"`
+			// Only an owned object has one.
+			Relation *string `json:"relation"`
+			// Raw so that an explicit null, specializing nothing, is told apart
+			// from an absent field.
+			General json.RawMessage `json:"general"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -316,6 +337,54 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		if patch.Name != nil {
 			if *patch.Name = strings.TrimSpace(*patch.Name); *patch.Name == "" {
 				http.Error(w, "name must not be empty", http.StatusBadRequest)
+				return
+			}
+		}
+
+		var owned bool
+		var flow int64
+		err = db.QueryRowContext(r.Context(), "SELECT owner_id IS NOT NULL, flow_id FROM objects WHERE id = ?", id).Scan(&owned, &flow)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "object not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if owned && (isTrue(patch.Human) || isTrue(patch.Persistent) || isTrue(patch.End)) {
+			http.Error(w, "an object making up another is part of what that one holds: it can't be a person, stored or lead into an end on its own", http.StatusBadRequest)
+			return
+		}
+		if patch.Relation != nil && (!owned || (*patch.Relation != relationExhibition && *patch.Relation != relationAggregation)) {
+			http.Error(w, "only an object making up another has a relation, exhibition or aggregation", http.StatusBadRequest)
+			return
+		}
+		var general *int64
+		setGeneral := len(patch.General) > 0
+		if setGeneral {
+			if err := json.Unmarshal(patch.General, &general); err != nil {
+				http.Error(w, "invalid general: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if setGeneral || patch.Name != nil {
+			msg, err := checkStructure(r.Context(), db, flow, func(s structure) {
+				if o := s[id]; o != nil {
+					if setGeneral {
+						o.general = general
+					}
+					if patch.Name != nil {
+						o.name = *patch.Name
+					}
+				}
+			})
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			if msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
 				return
 			}
 		}
@@ -337,7 +406,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 
 		if patch.End != nil && *patch.End {
 			var n int
-			err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM objects WHERE id = ? AND parent_id IS NULL AND NOT human", id).Scan(&n)
+			err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM objects WHERE id = ? AND parent_id IS NULL AND "+onProcessBoard+" AND NOT human", id).Scan(&n)
 			if err != nil {
 				serverError(w, err)
 				return
@@ -349,11 +418,17 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = COALESCE(?, many), human = COALESCE(?, human), at_end = COALESCE(?, at_end) WHERE id = ?",
-			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, patch.Many, patch.Human, patch.End, id)
+			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = COALESCE(?, many), human = COALESCE(?, human), at_end = COALESCE(?, at_end), relation = COALESCE(?, relation) WHERE id = ?",
+			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, patch.Many, patch.Human, patch.End, patch.Relation, id)
 		if err != nil {
 			serverError(w, err)
 			return
+		}
+		if setGeneral {
+			if _, err := db.ExecContext(r.Context(), "UPDATE objects SET general_id = ? WHERE id = ?", general, id); err != nil {
+				serverError(w, err)
+				return
+			}
 		}
 
 		o, err := getObject(r.Context(), db, id)
@@ -637,6 +712,35 @@ func setDecisionStates(ctx context.Context, tx *sql.Tx, linkID, object int64, st
 		}
 	}
 	return "", nil
+}
+
+func isTrue(b *bool) bool { return b != nil && *b }
+
+// Fills in what a new object making up o.Owner takes from it, and says what
+// is wrong with it, if anything: it is on its owner's board, in its flow,
+// and its name is a field of its owner's.
+func checkOwned(ctx context.Context, db *sql.DB, o *object) (string, error) {
+	if o.Human {
+		return "a person can't make up an object", nil
+	}
+	if o.Relation == "" {
+		o.Relation = relationExhibition
+	}
+	if o.Relation != relationExhibition && o.Relation != relationAggregation {
+		return "relation must be exhibition or aggregation", nil
+	}
+	err := db.QueryRowContext(ctx, "SELECT flow_id FROM objects WHERE id = ?", *o.Owner).Scan(&o.Flow)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "owner not found", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	o.Parent, o.General = nil, nil
+	return checkStructure(ctx, db, o.Flow, func(s structure) {
+		// Ids only grow, so the new object comes last, as it will.
+		s[1<<62] = &structObject{id: 1 << 62, name: o.Name, owner: o.Owner, relation: o.Relation}
+	})
 }
 
 const agentLinkMessage = "a person carries out only a human process; link them to one"

@@ -21,38 +21,28 @@ const filledIn = `NOT EXISTS (SELECT 1 FROM link_states ls WHERE ls.link_id = l.
 	AND NOT EXISTS (SELECT 1 FROM object_links i
 		WHERE i.process_id = l.process_id AND i.object_id = l.object_id AND i.direction = 'input')`
 
-// The objects a human process fills in, in id order.
-func entryObjects(ctx context.Context, db *sql.DB, process int64) ([]shapedObject, error) {
-	rows, err := db.QueryContext(ctx,
+// The objects a human process fills in, in id order. Says what is wrong if
+// what they hold never ends.
+func entryObjects(ctx context.Context, db *sql.DB, process int64) ([]shapedObject, string, error) {
+	return shapedObjects(ctx, db, process,
 		`SELECT DISTINCT o.id, o.name, o.many AND o.parent_id <=> p.parent_id
 		FROM object_links l JOIN objects o ON o.id = l.object_id JOIN processes p ON p.id = l.process_id
 		WHERE l.process_id = ? AND l.direction = 'output' AND p.kind = ?
 			AND `+filledIn+`
 		ORDER BY o.id`, process, kindHuman)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var objects []shapedObject
-	for rows.Next() {
-		var o shapedObject
-		if err := rows.Scan(&o.id, &o.name, &o.many); err != nil {
-			return nil, err
+}
+
+// The name of the first field holding a file, at any depth; empty if none does.
+func fileField(fs []field) string {
+	for _, f := range fs {
+		if f.file {
+			return f.name
 		}
-		objects = append(objects, o)
+		if inner := fileField(f.fields); inner != "" {
+			return inner
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	attrs, err := listAttributes(ctx, db, 0)
-	if err != nil {
-		return nil, err
-	}
-	for i := range objects {
-		objects[i].attributes = attrs[objects[i].id]
-		objects[i].data = len(objects[i].attributes) == 0
-	}
-	return objects, nil
+	return ""
 }
 
 // Checks what a person entered, by object id, against the objects their
@@ -82,10 +72,8 @@ func checkEntries(objects []shapedObject, entries map[string]json.RawMessage) (s
 			parts[i] = json.RawMessage(quote(text))
 			continue
 		}
-		for _, a := range o.attributes {
-			if a.File {
-				return "", nil, fmt.Errorf("%s can't be filled in by hand: %s holds a file", quote(o.name), quote(a.Name))
-			}
+		if f := fileField(o.fields); f != "" {
+			return "", nil, fmt.Errorf("%s can't be filled in by hand: %s holds a file", quote(o.name), quote(f))
 		}
 		out, err := c.shapeObject(o, string(entry))
 		if err != nil {

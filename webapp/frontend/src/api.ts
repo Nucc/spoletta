@@ -107,9 +107,20 @@ export type FlowObject = {
   // The flow process whose board it is on; null on the top board. It also
   // shows inside the flow processes linked to it.
   parent: number | null
+  // The object it makes up, which it is on the board of instead of a
+  // process's: as an attribute that object exhibits, or a part it
+  // aggregates. See structure.ts.
+  owner: number | null
+  // '' for an object owned by none.
+  relation: Relation | ''
+  // The object it specializes: it has that object's fields too.
+  general: number | null
   states: ObjectState[]
   attributes: ObjectAttribute[]
 }
+
+// How an owned object makes up its owner, as OPM's structural links say.
+export type Relation = 'exhibition' | 'aggregation'
 
 // Something an object exhibits, such as a ticket's subject. An agent
 // generating an object with attributes replies with a JSON object holding
@@ -299,12 +310,18 @@ export function listObjects(flow: number): Promise<FlowObject[]> {
   return request(`/api/objects?flow=${flow}`)
 }
 
-// On a flow process's board, it goes in that process's flow.
+// On a flow process's board, it goes in that process's flow; owned, in its
+// owner's.
 export function createObject(
-  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'human' | 'end' | 'parent'> & {
+  o: Omit<
+    FlowObject,
+    'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'human' | 'end' | 'parent' | 'owner' | 'relation' | 'general'
+  > & {
     width?: number | null
     human?: boolean
     parent?: number | null
+    owner?: number | null
+    relation?: Relation
   },
 ): Promise<FlowObject> {
   return request('/api/objects', { method: 'POST', body: JSON.stringify(o) })
@@ -623,7 +640,10 @@ export function stopFollowUp(run: number, step: number, id: number): Promise<voi
 // and what they entered of the objects the step fills in, by object id: for
 // an object with attributes a JSON object of them, or for a list an array of
 // such objects; otherwise the text entered.
-export type Entries = Record<string, string | Record<string, string> | Record<string, string>[]>
+// What a person entered for each object, by object id: the text of one
+// without fields, or a JSON value with its fields, nested as they are.
+export type EntryValue = string | EntryValue[] | { [name: string]: EntryValue }
+export type Entries = Record<string, EntryValue>
 
 export function decideStep(
   run: number,
@@ -680,8 +700,8 @@ export type BoardContents = {
 // processes from before settings none, and objects that aren't people no human.
 type Snapshot = {
   processes: (Omit<Process, 'flow' | 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
-  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'human' | 'end'> &
-    Partial<Pick<FlowObject, 'parent' | 'many' | 'human' | 'end'>>)[]
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'human' | 'end' | 'owner' | 'relation' | 'general'> &
+    Partial<Pick<FlowObject, 'parent' | 'many' | 'human' | 'end' | 'owner' | 'relation' | 'general'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -712,6 +732,9 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       many: o.many ?? false,
       human: o.human ?? false,
       end: o.end ?? false,
+      owner: o.owner ?? null,
+      relation: o.relation ?? '',
+      general: o.general ?? null,
       states: s.states.filter((st) => st.object === o.id),
       attributes: s.attributes.filter((a) => a.object === o.id),
     })),

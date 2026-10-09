@@ -187,22 +187,30 @@ func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64,
 	return nil, nil
 }
 
+// The object's unique attributes, its generals' first, since it has those too.
 func uniqueAttributes(ctx context.Context, tx *sql.Tx, object int64) ([]attribute, error) {
-	rows, err := tx.QueryContext(ctx,
-		"SELECT id, object_id, name, definition, is_unique FROM object_attributes WHERE object_id = ? AND is_unique ORDER BY id", object)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	var attrs []attribute
-	for rows.Next() {
-		var a attribute
-		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique); err != nil {
+	for seen := map[int64]bool{}; !seen[object]; {
+		seen[object] = true
+		var own []attribute
+		err := scanAll(ctx, tx, "SELECT id, object_id, name, definition, is_unique FROM object_attributes WHERE object_id = ? AND is_unique ORDER BY id",
+			func(rows *sql.Rows) error {
+				var a attribute
+				err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique)
+				own = append(own, a)
+				return err
+			}, object)
+		if err != nil {
 			return nil, err
 		}
-		attrs = append(attrs, a)
+		attrs = append(own, attrs...)
+		var general *int64
+		if err := tx.QueryRowContext(ctx, "SELECT general_id FROM objects WHERE id = ?", object).Scan(&general); err != nil || general == nil {
+			return attrs, err
+		}
+		object = *general
 	}
-	return attrs, rows.Err()
+	return attrs, nil
 }
 
 // The hash a unique value is stored by. Agents word the same value

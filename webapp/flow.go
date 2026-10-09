@@ -55,6 +55,9 @@ func migrateFlow(db *sql.DB) error {
 	if err := migrateBoards(db); err != nil {
 		return err
 	}
+	if err := migrateStructure(db); err != nil {
+		return err
+	}
 	if err := migrateRoutes(db); err != nil {
 		return err
 	}

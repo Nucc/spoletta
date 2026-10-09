@@ -2301,3 +2301,88 @@ body {
   border-color: #d0d7de;
   cursor: default;
 }
+
+/* An object made of other objects: a thick border, as OPM marks a refined
+   thing. Its parts are listed under its attributes, each with the symbol of
+   how it makes it up. */
+.object-node.refined {
+  border-width: 2px;
+  border-color: #57606a;
+}
+
+.object-parts ul li {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.object-parts li svg {
+  margin-top: 0;
+}
+
+.part-many {
+  color: #8c959f;
+}
+
+/* The OPM structural links on an unfolded object's board: a triangle under
+   the whole or the general, its apex towards it. */
+.react-flow__edge .structure-path {
+  stroke: #57606a;
+  stroke-width: 1.5;
+}
+
+.structure-symbol {
+  fill: #fff;
+  stroke: #57606a;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.structure-symbol.aggregation {
+  fill: #57606a;
+}
+
+.structure-symbol-inner {
+  fill: #57606a;
+}
+
+/* What an object inherits and is made of, listed in its panel. */
+.inherited-fields {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.inherited-fields li {
+  padding: 4px 8px;
+  color: #57606a;
+  background: #f6f8fa;
+  border-radius: 4px;
+}
+
+.inherited-fields li + li {
+  margin-top: 4px;
+}
+
+.inherited-fields small {
+  font-family: system-ui, sans-serif;
+  color: #8c959f;
+}
+
+.field-label-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel-check svg {
+  flex: none;
+}
+
+/* An object the person fills in that is made of others nests their fields. */
+.entry-nested {
+  padding: 6px 8px 8px;
+  background: #f6f8fa;
+}

@@ -5,9 +5,9 @@ import {
   listObjects,
   updateProcess,
   type Entries,
+  type EntryValue,
   type Flow,
   type MCPServer,
-  type ObjectAttribute,
   type Repository,
   type Models,
   type ProcessKind,
@@ -17,6 +17,7 @@ import {
   type ThinkingLevel,
 } from './api'
 import { Data } from './Data'
+import { fieldsOf, holdsFile, shapeOf, type Field } from './structure'
 import { MCPServerPicker } from './MCPSettings'
 import { RepositoryPicker } from './FlowSettings'
 import type { RunStatus } from './ProcessNode'
@@ -66,7 +67,8 @@ export type EntryObject = {
   id: number
   name: string
   many: boolean
-  attributes: ObjectAttribute[]
+  // The fields the person fills in, nested as the objects it is made of are.
+  fields: Field[]
 }
 
 // A human process waiting for its decision during a run.
@@ -96,6 +98,7 @@ export default function ProcessPanel({
   onFlowSaved,
   takes,
   generates,
+  shapes,
   onOpenMCPSettings,
   repositories,
   onOpenFlowSettings,
@@ -123,6 +126,8 @@ export default function ProcessPanel({
   onFlowSaved: () => void
   takes: string[]
   generates: string[]
+  // The shape of what each of those objects holds, by name; see shapeOf.
+  shapes: Record<string, string>
   onOpenMCPSettings: () => void
   // The flow's repositories, which agents and scripts pick from.
   repositories: Repository[]
@@ -283,6 +288,7 @@ export default function ProcessPanel({
           flow={settings.flow}
           takes={takes}
           generates={generates}
+          shapes={shapes}
           readOnly={readOnly}
           onChange={(flow) => setSettings(({ flow: _, ...rest }) => (flow === undefined ? rest : { ...rest, flow }))}
           onOpen={onZoomIn}
@@ -446,16 +452,19 @@ function SentryFields({
 }
 
 // What the person typed for one object: the text of an object without
-// attributes, or the attributes of each item, a single one unless a list.
-type Draft = string | Record<string, string>[]
+// fields, or its fields, each the text typed for it, the fields of an object
+// it is made of, or for a list one such value per item. It is sent as it is.
+type Draft = EntryValue
 
-const emptyItem = (o: EntryObject) => Object.fromEntries(o.attributes.map((a) => [a.name, '']))
-const emptyDraft = (o: EntryObject): Draft => (o.attributes.length === 0 ? '' : [emptyItem(o)])
+// One item of a field: its fields, or the text typed for it.
+const emptyOne = (fields: Field[]): Draft => (fields.length === 0 ? '' : Object.fromEntries(fields.map((f) => [f.name, emptyValue(f)])))
+const emptyValue = (f: Pick<Field, 'fields' | 'many'>): Draft => (f.many ? [emptyOne(f.fields)] : emptyOne(f.fields))
+const emptyDraft = (o: EntryObject): Draft => (o.fields.length === 0 ? '' : emptyValue(o))
 
-// Every field is needed: the objects are what the run goes on from.
-const filled = (d: Draft) => (typeof d === 'string' ? d.trim() !== '' : d.every((item) => Object.values(item).every((v) => v.trim() !== '')))
-
-const asEntry = (o: EntryObject, d: Draft): Entries[string] => (typeof d === 'string' ? d : o.many ? d : d[0])
+// Every field is needed: the objects are what the run goes on from. A list
+// may have no items.
+const filled = (d: Draft): boolean =>
+  typeof d === 'string' ? d.trim() !== '' : Array.isArray(d) ? d.every(filled) : Object.values(d).every(filled)
 
 function ReviewForm({ review }: { review: Review }) {
   const [instructions, setInstructions] = useState('')
@@ -466,7 +475,7 @@ function ReviewForm({ review }: { review: Review }) {
   // Name the object only when the decision is about more than one.
   const objects = new Set(review.options.map((o) => o.object))
   const entering = review.entries.length > 0
-  const files = review.entries.flatMap((o) => o.attributes.filter((a) => a.file).map((a) => `${o.name}: ${a.name}`))
+  const files = review.entries.flatMap((o) => o.fields.filter(holdsFile).map((f) => `${o.name}: ${f.name}`))
   const ready = !sending && files.length === 0 && review.entries.every((o) => drafts[o.id] !== undefined && filled(drafts[o.id]))
 
   const decide = async (state: number | null) => {
@@ -474,7 +483,7 @@ function ReviewForm({ review }: { review: Review }) {
       void review.onDecide(state, instructions.trim())
       return
     }
-    const entries: Entries = Object.fromEntries(review.entries.map((o) => [String(o.id), asEntry(o, drafts[o.id])]))
+    const entries: Entries = Object.fromEntries(review.entries.map((o) => [String(o.id), drafts[o.id]]))
     setSending(true)
     // Kept as typed when the server turns it down, to fix and send again.
     await review.onDecide(state, instructions.trim(), entries)
@@ -546,8 +555,9 @@ function ReviewForm({ review }: { review: Review }) {
   )
 }
 
-// The fields of one object the person fills in: one per attribute, for each
-// item of a list, or a single text without attributes.
+// The fields of one object the person fills in: one per field, nested for
+// the objects it is made of, for each item of a list, or a single text
+// without fields.
 function EntryFields({ object, draft, onChange }: { object: EntryObject; draft: Draft; onChange: (d: Draft) => void }) {
   if (typeof draft === 'string')
     return (
@@ -556,44 +566,77 @@ function EntryFields({ object, draft, onChange }: { object: EntryObject; draft: 
         <textarea rows={3} value={draft} onChange={(e) => onChange(e.target.value)} />
       </label>
     )
-  const set = (i: number, name: string, value: string) => onChange(draft.map((item, j) => (j === i ? { ...item, [name]: value } : item)))
   return (
     <fieldset className="entry">
       <legend>{object.name}</legend>
-      {draft.map((item, i) => (
+      <EntryValueFields fields={object.fields} many={object.many} value={draft} onChange={onChange} />
+    </fieldset>
+  )
+}
+
+// A value with fields, or for a list its items, each with a header to remove it.
+function EntryValueFields({
+  fields,
+  many,
+  value,
+  onChange,
+}: {
+  fields: Field[]
+  many: boolean
+  value: Draft
+  onChange: (d: Draft) => void
+}) {
+  if (!many) return <EntryItem fields={fields} value={value} onChange={onChange} />
+  const items = Array.isArray(value) ? value : []
+  return (
+    <>
+      {items.map((item, i) => (
         <div key={i} className="entry-item">
-          {object.many && (
-            <div className="entry-item-header">
-              <span>Item {i + 1}</span>
-              <button
-                aria-label={`Remove item ${i + 1}`}
-                title="Remove item"
-                onClick={() => onChange(draft.filter((_, j) => j !== i))}
-              >
-                ×
-              </button>
-            </div>
-          )}
-          {object.attributes.map((a) => (
-            <label key={a.id} className="panel-field">
-              <span>{a.name}</span>
-              <input
-                value={item[a.name] ?? ''}
-                disabled={a.file}
-                placeholder={a.file ? 'A file; can\'t be filled in by hand' : a.definition || undefined}
-                title={a.definition || undefined}
-                onChange={(e) => set(i, a.name, e.target.value)}
-              />
-            </label>
-          ))}
+          <div className="entry-item-header">
+            <span>Item {i + 1}</span>
+            <button aria-label={`Remove item ${i + 1}`} title="Remove item" onClick={() => onChange(items.filter((_, j) => j !== i))}>
+              ×
+            </button>
+          </div>
+          <EntryItem fields={fields} value={item} onChange={(d) => onChange(items.map((it, j) => (j === i ? d : it)))} />
         </div>
       ))}
-      {object.many && (
-        <button className="entry-add" onClick={() => onChange([...draft, emptyItem(object)])}>
-          Add item
-        </button>
+      <button className="entry-add" onClick={() => onChange([...items, emptyOne(fields)])}>
+        Add item
+      </button>
+    </>
+  )
+}
+
+// One item: a field per field, an object it is made of in a box of its own.
+function EntryItem({ fields, value, onChange }: { fields: Field[]; value: Draft; onChange: (d: Draft) => void }) {
+  if (fields.length === 0) {
+    return <input value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value)} />
+  }
+  const item = typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const set = (name: string, v: Draft) => onChange({ ...item, [name]: v })
+  return (
+    <>
+      {fields.map((f) =>
+        f.fields.length > 0 || f.many ? (
+          <fieldset key={f.name} className="entry entry-nested">
+            <legend>{f.name}</legend>
+            <EntryValueFields fields={f.fields} many={f.many} value={item[f.name] ?? emptyValue(f)} onChange={(v) => set(f.name, v)} />
+          </fieldset>
+        ) : (
+          <label key={f.name} className="panel-field">
+            <span>{f.name}</span>
+            <input
+              value={typeof item[f.name] === 'string' ? (item[f.name] as string) : ''}
+              disabled={f.file}
+              placeholder={f.file ? "A file; can't be filled in by hand" : f.definition || undefined}
+              title={f.definition || undefined}
+              onChange={(e) => set(f.name, e.target.value)}
+            />
+          </label>
+        ),
       )}
-    </fieldset>
+    </>
   )
 }
 
@@ -604,6 +647,7 @@ function SubflowFields({
   flow,
   takes,
   generates,
+  shapes,
   readOnly,
   onChange,
   onOpen,
@@ -613,19 +657,25 @@ function SubflowFields({
   flow: number | undefined
   takes: string[]
   generates: string[]
+  shapes: Record<string, string>
   readOnly: boolean
   onChange: (flow: number | undefined) => void
   onOpen: () => void
   onError: (err: unknown) => void
 }) {
-  // The names of the objects on that flow's top board, once loaded.
-  const [names, setNames] = useState<Set<string> | null>(null)
+  // The shapes of what the objects on that flow's top board hold, by name,
+  // once loaded.
+  const [names, setNames] = useState<Map<string, string> | null>(null)
   useEffect(() => {
     setNames(null)
     if (flow === undefined) return
     let stale = false
     listObjects(flow)
-      .then((os) => !stale && setNames(new Set(os.filter((o) => o.parent === null).map((o) => o.name))))
+      .then(
+        (os) =>
+          !stale &&
+          setNames(new Map(os.filter((o) => o.parent === null && o.owner === null).map((o) => [o.name, shapeOf(fieldsOf(os, o.id))]))),
+      )
       .catch((err) => !stale && onError(err))
     return () => {
       stale = true
@@ -640,10 +690,13 @@ function SubflowFields({
         <ul className="subflow-names">
           {list.map((n) => {
             const unmatched = names !== null && !names.has(n)
+            // Handed over as it is, so what doesn't fit fails there.
+            const unlike = names !== null && !unmatched && shapes[n] !== undefined && names.get(n) !== shapes[n]
             return (
-              <li key={n} className={unmatched ? 'unmatched' : undefined}>
+              <li key={n} className={unmatched || unlike ? 'unmatched' : undefined}>
                 {n}
                 {unmatched && <small> · no object of that name on its top board</small>}
+                {unlike && <small> · its namesake there holds different fields</small>}
               </li>
             )
           })}

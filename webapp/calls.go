@@ -120,7 +120,7 @@ func (fr *flowRun) call(ctx context.Context, db *sql.DB, flow *int64) (*flowRun,
 // 0 for none.
 func (fr *flowRun) topObject(name string) int64 {
 	for _, o := range fr.board.Objects {
-		if o.Parent == nil && o.Name == name {
+		if o.Parent == nil && o.Owner == nil && o.Name == name {
 			return o.ID
 		}
 	}
@@ -184,7 +184,7 @@ const (
 // Brings the outcomes of the flow a subflow process runs onto its board, as
 // objects it generates: the objects connected to its top board's end. Each
 // is the object of the same name on the board if there is one, or else a new
-// one with the same states and attributes, so what comes out of that flow has
+// one with the same states, attributes and objects making it up, so what comes out of that flow has
 // somewhere to go here.
 // Does nothing for other processes, or one that runs no flow.
 func bringOutcomes(ctx context.Context, tx *sql.Tx, process int64) error {
@@ -205,7 +205,7 @@ func bringOutcomes(ctx context.Context, tx *sql.Tx, process int64) error {
 	}
 	var outcomes []outcome
 	err = scanAll(ctx, tx, `SELECT o.id, o.name, o.many FROM objects o
-		WHERE o.flow_id = ? AND o.parent_id IS NULL AND NOT o.human AND o.at_end
+		WHERE o.flow_id = ? AND o.parent_id IS NULL AND o.`+onProcessBoard+` AND NOT o.human AND o.at_end
 		ORDER BY o.x, o.id`, func(rows *sql.Rows) error {
 		var o outcome
 		err := rows.Scan(&o.id, &o.name, &o.many)
@@ -215,11 +215,19 @@ func bringOutcomes(ctx context.Context, tx *sql.Tx, process int64) error {
 	if err != nil {
 		return err
 	}
+	// What the outcomes are made of, loaded once one needs copying.
+	var made structure
 	for i, o := range outcomes {
 		var here int64
-		err := tx.QueryRowContext(ctx, "SELECT id FROM objects WHERE flow_id = ? AND parent_id <=> ? AND name = ? ORDER BY id LIMIT 1", flow, parent, o.name).Scan(&here)
+		err := tx.QueryRowContext(ctx, "SELECT id FROM objects WHERE flow_id = ? AND parent_id <=> ? AND "+onProcessBoard+" AND name = ? ORDER BY id LIMIT 1", flow, parent, o.name).Scan(&here)
 		if errors.Is(err, sql.ErrNoRows) {
-			if here, err = copyObject(ctx, tx, o.id, flow, parent, x+float64(i)*outcomeGapX, y+outcomeGapY); err != nil {
+			if made == nil {
+				if made, err = loadStructure(ctx, tx, *s.Flow); err != nil {
+					return err
+				}
+			}
+			at := &point{x + float64(i)*outcomeGapX, y + outcomeGapY}
+			if here, err = copyStructure(ctx, tx, made, o.id, flow, parent, nil, at); err != nil {
 				return err
 			}
 		} else if err != nil {
@@ -230,30 +238,4 @@ func bringOutcomes(ctx context.Context, tx *sql.Tx, process int64) error {
 		}
 	}
 	return nil
-}
-
-// Copies an object of another flow onto a board of flow, with its states and
-// attributes, and returns the copy's id. Whether to store it is this flow's
-// choice, so the copy isn't persistent.
-func copyObject(ctx context.Context, tx *sql.Tx, object, flow int64, parent *int64, x, y float64) (int64, error) {
-	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, many, parent_id)
-		SELECT ?, name, ?, ?, many, ? FROM objects WHERE id = ?`, flow, x, y, parent, object)
-	if err != nil {
-		return 0, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-	stmts := []string{
-		"INSERT INTO object_states (object_id, name) SELECT ?, name FROM object_states WHERE object_id = ? ORDER BY id",
-		`INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file)
-		SELECT ?, name, definition, is_unique, is_file FROM object_attributes WHERE object_id = ? ORDER BY id`,
-	}
-	for _, q := range stmts {
-		if _, err := tx.ExecContext(ctx, q, id, object); err != nil {
-			return 0, err
-		}
-	}
-	return id, nil
 }

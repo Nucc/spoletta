@@ -63,6 +63,22 @@ export const ExhibitionIcon = ({ size = 12 }: { size?: number }) => (
   </Icon>
 )
 
+// OPM's aggregation-participation symbol: a filled triangle, linking a whole
+// to the parts it aggregates.
+export const AggregationIcon = ({ size = 12 }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="M8 2.5L14 13.5H2z" fill="currentColor" />
+  </Icon>
+)
+
+// OPM's generalization-specialization symbol: an empty triangle, linking a
+// general to the objects specializing it.
+export const GeneralizationIcon = ({ size = 12 }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="M8 2.5L14 13.5H2z" />
+  </Icon>
+)
+
 // The app's mark: a start node feeding a process, which hands its result
 // on to the next step, drawn white on a filled tile. public/favicon.svg
 // is the same drawing.

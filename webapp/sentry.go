@@ -226,8 +226,8 @@ func runSentryStep(ctx context.Context, db *sql.DB, cfg sentryConfig, runID, id 
 		res.Error = fmt.Sprintf("%q isn't a list; mark it as a list of items to hold the issues", contract.shaped[0].name)
 	case contract != nil:
 		fields, lenient = nil, false
-		for _, a := range contract.shaped[0].attributes {
-			fields = append(fields, a.Name)
+		for _, f := range contract.shaped[0].fields {
+			fields = append(fields, f.name)
 		}
 	}
 

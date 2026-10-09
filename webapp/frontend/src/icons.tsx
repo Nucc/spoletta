@@ -160,6 +160,14 @@ export const CopyIcon = () => (
   </Icon>
 )
 
+// A clipboard, for pasting what was copied.
+export const PasteIcon = () => (
+  <Icon>
+    <path d="M5.5 2.75H4a1 1 0 00-1 1v9.5a1 1 0 001 1h8a1 1 0 001-1v-9.5a1 1 0 00-1-1h-1.5" />
+    <rect x="5.5" y="1.5" width="5" height="2.5" rx=".75" />
+  </Icon>
+)
+
 export const LayoutIcon = () => (
   <Icon>
     <rect x="5.5" y="1.75" width="5" height="3.5" rx="1" />

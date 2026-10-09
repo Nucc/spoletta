@@ -308,6 +308,26 @@ export function wrapProcesses(w: { name: string; processes: number[]; objects: n
   return request('/api/processes/wrap', { method: 'POST', body: JSON.stringify(w) })
 }
 
+// What was copied from a board: the processes and objects selected on it,
+// and the top left of where they were.
+export type Copied = { flow: number; processes: number[]; objects: number[]; at: { x: number; y: number } }
+
+// Copies what was copied onto a board of a flow, moved by dx and dy, with
+// what it takes along: a flow process's board, what makes an object up, and
+// the links between them. Resolves to the copies of what was selected.
+export function pasteCopied(
+  c: Copied,
+  flow: number,
+  board: BoardId,
+  dx: number,
+  dy: number,
+): Promise<{ processes: number[]; objects: number[] }> {
+  return request('/api/paste', {
+    method: 'POST',
+    body: JSON.stringify({ from: c.flow, processes: c.processes, objects: c.objects, flow, board, dx, dy }),
+  })
+}
+
 export function listConnections(flow: number): Promise<Connection[]> {
   return request(`/api/connections?flow=${flow}`)
 }

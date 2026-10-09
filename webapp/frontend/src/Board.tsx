@@ -29,6 +29,7 @@ import {
   GearIcon,
   HistoryIcon,
   LayoutIcon,
+  PasteIcon,
   PencilIcon,
   PlayIcon,
   PlugIcon,
@@ -58,6 +59,7 @@ import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
+import { onCopiedElsewhere, readCopied, writeCopied } from './clipboard'
 import { FlowSettingsPanel } from './FlowSettings'
 import {
   createAttribute,
@@ -86,6 +88,7 @@ import {
   listProcesses,
   listRuns,
   listVersions,
+  pasteCopied,
   renameState,
   restoreVersion,
   saveVersion,
@@ -104,6 +107,7 @@ import {
   type BoardContents,
   type BoardId,
   type Connection,
+  type Copied,
   type FlowObject,
   defaultBranchPrefix,
   type Flow,
@@ -353,6 +357,13 @@ export default function Board({
   const [shownSeq, setShownSeq] = useState(0)
   // The node whose context menu is open, and where.
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  // Where the board's own context menu is open, if it is.
+  const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(null)
+  // What was copied, from any board of any flow; see clipboard.ts.
+  const [copied, setCopied] = useState<Copied | null>(readCopied)
+  useEffect(() => onCopiedElsewhere(() => setCopied(readCopied())), [])
+  // Where the pointer is over the canvas, on the screen, for pasting there.
+  const pointer = useRef<XYPosition | null>(null)
   const { getNode, getNodes, screenToFlowPosition, fitView } = useReactFlow<FlowNode>()
   const wrapper = useRef<HTMLDivElement>(null)
   const draftSeq = useRef(0)
@@ -1482,6 +1493,7 @@ export default function Board({
       : []),
     // Two objects making up one can't share a name.
     { label: 'Duplicate', icon: <CopyIcon />, disabled: reviewing || objectBoard, onSelect: () => duplicate(id) },
+    { label: 'Copy', icon: <CopyIcon />, disabled: reviewing || objectBoard || isBoundary(id), onSelect: () => copySelection(id) },
     { label: 'Delete', icon: <TrashIcon />, danger: true, disabled: reviewing || isBoundary(id) || isFixed(id), onSelect: () => remove(id) },
   ]
 
@@ -1614,6 +1626,61 @@ export default function Board({
       report(err)
     }
   }
+
+  // Remembers the processes and objects selected, for pasting on any board
+  // of any flow; from a node's menu, the selection it is in, or else the
+  // node. The objects outside a flow process belong to the board outside.
+  const copySelection = (id?: string) => {
+    if (reviewing || objectBoard) return
+    const copyable = (n: FlowNode) => !isDraft(n.id) && (n.type === 'process' || (n.type === 'object' && n.data.boundary === undefined))
+    const inSelection = id === undefined || getNode(id)?.selected
+    const chosen = getNodes().filter((n) => copyable(n) && (inSelection ? n.selected : n.id === id))
+    if (chosen.length === 0) return
+    const c: Copied = {
+      flow: flowId,
+      processes: chosen.filter((n) => n.type === 'process').map((n) => Number(n.id)),
+      objects: chosen.filter((n) => n.type === 'object').map((n) => objectIdOf(n.id)),
+      at: { x: Math.min(...chosen.map((n) => n.position.x)), y: Math.min(...chosen.map((n) => n.position.y)) },
+    }
+    writeCopied(c)
+    setCopied(c)
+  }
+
+  // Pastes what was copied with its top left at a point on the screen: the
+  // one given, where the pointer is over the board, or the board's middle.
+  // The copies come selected.
+  const pasteAt = async (screen?: XYPosition) => {
+    const c = readCopied()
+    const rect = wrapper.current?.getBoundingClientRect()
+    const point = screen ?? pointer.current ?? (rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+    if (!c || !point || reviewing || objectBoard) return
+    const at = screenToFlowPosition(point)
+    try {
+      const res = await pasteCopied(c, flowId, boardId, at.x - c.at.x, at.y - c.at.y)
+      await loadBoard()
+      const ids = new Set([...res.processes.map(String), ...res.objects.map(objectNodeId)])
+      setNodes((ns) => ns.map((n) => ({ ...n, selected: ids.has(n.id) })))
+    } catch (err) {
+      report(err)
+    }
+  }
+
+  // Cmd or Ctrl and C copies the selection, and with V pastes it, but not
+  // while typing or with text selected, which they copy and paste as ever.
+  const clipboard = useRef({ copySelection, pasteAt })
+  clipboard.current = { copySelection, pasteAt }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      const target = e.target as HTMLElement | null
+      if (target?.isContentEditable || target?.closest('input, textarea, select')) return
+      const key = e.key.toLowerCase()
+      if (key === 'c' && !window.getSelection()?.toString()) clipboard.current.copySelection()
+      else if (key === 'v') clipboard.current.pasteAt()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // The boards from the top one down to the one shown, then the objects
   // unfolded down to the one shown.
@@ -1754,7 +1821,7 @@ export default function Board({
         </button>
         <span
           className="hint"
-          title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it."
+          title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
         >
           Processes connect through the objects they generate and take. Right-click a node for more.
         </span>
@@ -1849,6 +1916,8 @@ export default function Board({
         <div
           className={`canvas${linkingTo ? ` linking-to-${linkingTo}` : ''}`}
           ref={wrapper}
+          onMouseMove={(e) => (pointer.current = { x: e.clientX, y: e.clientY })}
+          onMouseLeave={() => (pointer.current = null)}
           onDragOver={onCanvasDragOver}
           onDrop={onCanvasDrop}
         >
@@ -1867,6 +1936,10 @@ export default function Board({
               isValidConnection={isValidConnection}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeContextMenu={onNodeContextMenu}
+              onPaneContextMenu={(e) => {
+                e.preventDefault()
+                if (!reviewing && !objectBoard) setPaneMenu({ x: e.clientX, y: e.clientY })
+              }}
               onEdgeDoubleClick={(_, edge) => !reviewing && edge.data?.route && setRoute(edge.id, null, true)}
               onPaneClick={() => setPanelId(null)}
               onNodeDragStop={onNodeDragStop}
@@ -1908,6 +1981,14 @@ export default function Board({
           )}
           {menu && (
             <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
+          )}
+          {paneMenu && (
+            <ContextMenu
+              x={paneMenu.x}
+              y={paneMenu.y}
+              items={[{ label: 'Paste', icon: <PasteIcon />, disabled: copied === null, onSelect: () => pasteAt(paneMenu) }]}
+              onClose={() => setPaneMenu(null)}
+            />
           )}
         </div>
         {panelOpen && (

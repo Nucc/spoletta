@@ -222,7 +222,10 @@ func bringOutcomes(ctx context.Context, tx *sql.Tx, process int64) error {
 	var made structure
 	for i, o := range outcomes {
 		var here int64
-		err := tx.QueryRowContext(ctx, "SELECT id FROM objects WHERE flow_id = ? AND parent_id <=> ? AND "+onProcessBoard+" AND name = ? ORDER BY id LIMIT 1", flow, parent, o.name).Scan(&here)
+		// One it already generates first, such as one pasted along with it.
+		err := tx.QueryRowContext(ctx, `SELECT o.id FROM objects o WHERE o.flow_id = ? AND o.parent_id <=> ? AND o.`+onProcessBoard+` AND o.name = ?
+			ORDER BY EXISTS (SELECT 1 FROM object_links l WHERE l.process_id = ? AND l.object_id = o.id AND l.direction = 'output') DESC, o.id LIMIT 1`,
+			flow, parent, o.name, process).Scan(&here)
 		if errors.Is(err, sql.ErrNoRows) {
 			if made == nil {
 				if made, err = loadStructure(ctx, tx, *s.Flow); err != nil {

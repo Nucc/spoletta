@@ -411,6 +411,10 @@ body {
   background: #362d59;
 }
 
+.palette-logo.subflow {
+  background: #1b7c83;
+}
+
 .run-list {
   margin: 0;
   padding: 0;
@@ -1765,6 +1769,27 @@ body {
 }
 
 .process-node.flow .node-icon {
+  background: #1b7c83;
+}
+
+/* The objects a subflow process hands to and from the flow it runs, those
+   with no namesake there marked. */
+.subflow-names {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.subflow-names .unmatched {
+  color: #9a6700;
+}
+
+/* A subflow process runs a flow kept elsewhere: drawn double too, dashed
+   where the flow process's is solid. */
+.process-node.subflow {
+  border: 3px dashed #1b7c83;
+}
+
+.process-node.subflow .node-icon {
   background: #1b7c83;
 }
 

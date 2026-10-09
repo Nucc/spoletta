@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Handle, Position, useNodeConnections, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { ProcessKind, ProcessSettings, RunInput, ThinkingLevel } from './api'
-import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, SentryIcon, StopIcon, TrashIcon, ZoomInIcon } from './icons'
+import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, SentryIcon, StopIcon, SubflowIcon, TrashIcon, ZoomInIcon } from './icons'
 import { stoppable } from './Runs'
 import WidthResizer from './WidthResizer'
 
@@ -36,6 +36,7 @@ export const KIND_ICONS: Record<ProcessKind, () => ReactNode> = {
   script: ScriptIcon,
   human: HumanIcon,
   flow: FlowIcon,
+  subflow: SubflowIcon,
   sentry: SentryIcon,
 }
 
@@ -44,6 +45,7 @@ const KIND_LABELS: Record<ProcessKind, string> = {
   script: 'Script',
   human: 'Human',
   flow: 'Flow',
+  subflow: 'Another flow',
   sentry: 'Sentry',
 }
 
@@ -106,8 +108,12 @@ export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNod
               <StopIcon />
             </button>
           )}
-          {data.kind === 'flow' && (
-            <button title="Zoom in" aria-label="Zoom in" onClick={() => actions.zoomIn(id)}>
+          {(data.kind === 'flow' || (data.kind === 'subflow' && data.settings.flow !== undefined)) && (
+            <button
+              title={data.kind === 'flow' ? 'Zoom in' : 'Open the flow it runs'}
+              aria-label="Zoom in"
+              onClick={() => actions.zoomIn(id)}
+            >
               <ZoomInIcon />
             </button>
           )}

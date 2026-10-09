@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import {
   DEFAULT_SENTRY,
   THINKING_LEVELS,
+  listObjects,
   updateProcess,
   type Entries,
+  type Flow,
   type MCPServer,
   type ObjectAttribute,
   type Repository,
@@ -42,6 +44,7 @@ const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'script', label: 'Script' },
   { value: 'human', label: 'Human' },
   { value: 'flow', label: 'Flow' },
+  { value: 'subflow', label: 'Another flow' },
   { value: 'sentry', label: 'Sentry' },
 ]
 
@@ -89,6 +92,10 @@ export default function ProcessPanel({
   review,
   onChange,
   onZoomIn,
+  flows,
+  onFlowSaved,
+  takes,
+  generates,
   onOpenMCPSettings,
   repositories,
   onOpenFlowSettings,
@@ -107,8 +114,15 @@ export default function ProcessPanel({
   run?: { status?: RunStatus; output?: string; error?: string }
   review?: Review
   onChange: (fields: Fields) => void
-  // Shows a flow process's board.
+  // Shows a flow process's board, or the flow a subflow process runs.
   onZoomIn: () => void
+  // The flows a subflow process can run, null while they load, and the
+  // names of the objects it takes and generates.
+  flows: Flow[] | null
+  // A subflow process's flow was saved, which brings its outcomes onto the board.
+  onFlowSaved: () => void
+  takes: string[]
+  generates: string[]
   onOpenMCPSettings: () => void
   // The flow's repositories, which agents and scripts pick from.
   repositories: Repository[]
@@ -134,7 +148,12 @@ export default function ProcessPanel({
     const patch = pending.current
     pending.current = null
     if (!patch) return
-    updateProcess(id, patch).catch(onError)
+    const kindNow = saved.current.kind
+    updateProcess(id, patch)
+      .then(() => {
+        if (kindNow === 'subflow' && (patch.kind !== undefined || patch.settings !== undefined)) onFlowSaved()
+      })
+      .catch(onError)
   }
 
   // Autosave shortly after typing stops, and flush whatever is left when the panel closes.
@@ -257,6 +276,18 @@ export default function ProcessPanel({
             Open its board
           </button>
         </div>
+      ) : kind === 'subflow' ? (
+        <SubflowFields
+          key="subflow"
+          flows={flows}
+          flow={settings.flow}
+          takes={takes}
+          generates={generates}
+          readOnly={readOnly}
+          onChange={(flow) => setSettings(({ flow: _, ...rest }) => (flow === undefined ? rest : { ...rest, flow }))}
+          onOpen={onZoomIn}
+          onError={onError}
+        />
       ) : kind === 'agent' ? (
         <>
           <label key="agent" className="panel-field panel-field-grow">
@@ -563,5 +594,94 @@ function EntryFields({ object, draft, onChange }: { object: EntryObject; draft: 
         </button>
       )}
     </fieldset>
+  )
+}
+
+// The flow a subflow process runs, and how its objects meet that flow's: by
+// name, on that flow's top board. Names with no namesake there are marked.
+function SubflowFields({
+  flows,
+  flow,
+  takes,
+  generates,
+  readOnly,
+  onChange,
+  onOpen,
+  onError,
+}: {
+  flows: Flow[] | null
+  flow: number | undefined
+  takes: string[]
+  generates: string[]
+  readOnly: boolean
+  onChange: (flow: number | undefined) => void
+  onOpen: () => void
+  onError: (err: unknown) => void
+}) {
+  // The names of the objects on that flow's top board, once loaded.
+  const [names, setNames] = useState<Set<string> | null>(null)
+  useEffect(() => {
+    setNames(null)
+    if (flow === undefined) return
+    let stale = false
+    listObjects(flow)
+      .then((os) => !stale && setNames(new Set(os.filter((o) => o.parent === null).map((o) => o.name))))
+      .catch((err) => !stale && onError(err))
+    return () => {
+      stale = true
+    }
+  }, [flow])
+
+  const gone = flow !== undefined && flows !== null && !flows.some((f) => f.id === flow)
+  const matches = (label: string, list: string[]) =>
+    list.length > 0 && (
+      <div className="panel-field">
+        <span>{label}</span>
+        <ul className="subflow-names">
+          {list.map((n) => {
+            const unmatched = names !== null && !names.has(n)
+            return (
+              <li key={n} className={unmatched ? 'unmatched' : undefined}>
+                {n}
+                {unmatched && <small> · no object of that name on its top board</small>}
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    )
+
+  return (
+    <>
+      <label className="panel-field">
+        <span>Flow it runs</span>
+        <select
+          value={flow ?? ''}
+          disabled={readOnly}
+          onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
+        >
+          <option value="">Pick a flow…</option>
+          {flow !== undefined && (flows === null || gone) && (
+            <option value={flow}>{gone ? `Flow #${flow} (deleted)` : `Flow #${flow}`}</option>
+          )}
+          {flows?.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="panel-note">
+        Each time it runs is a run of that flow. The objects it takes are given to the objects of the same names on
+        that flow's top board, and it generates what the run leaves of the objects named like the ones it generates.
+      </p>
+      {matches('Takes', takes)}
+      {matches('Generates', generates)}
+      {flow !== undefined && !gone && (
+        <button className="panel-button" onClick={onOpen}>
+          Open the flow
+        </button>
+      )}
+    </>
   )
 }

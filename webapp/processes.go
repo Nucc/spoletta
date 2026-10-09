@@ -44,6 +44,8 @@ type processSettings struct {
 	// The flow's repositories an agent or script process works on, by name;
 	// all of them when absent, none when empty. See workspace.go.
 	Repositories *[]string `json:"repositories,omitempty"`
+	// The flow a subflow process runs, by id; see calls.go.
+	Flow *int64 `json:"flow,omitempty"`
 }
 
 func (s processSettings) sentry() sentrySettings {
@@ -83,20 +85,22 @@ func (s processSettings) Value() (driver.Value, error) {
 // A process is either run by an agent from its prompt, executes its script,
 // or is handled by a human, who reviews its inputs following its prompt and
 // approves them or requests changes, and fills in the objects it generates. A flow process is made of processes
-// itself, on a board of its own; see boards.go. A Sentry process fetches
-// issues from Sentry; see sentry.go.
+// itself, on a board of its own; see boards.go. A subflow process runs
+// another flow, which other flows can reuse the same way; see calls.go. A
+// Sentry process fetches issues from Sentry; see sentry.go.
 const (
-	kindAgent  = "agent"
-	kindScript = "script"
-	kindHuman  = "human"
-	kindFlow   = "flow"
-	kindSentry = "sentry"
+	kindAgent   = "agent"
+	kindScript  = "script"
+	kindHuman   = "human"
+	kindFlow    = "flow"
+	kindSubflow = "subflow"
+	kindSentry  = "sentry"
 )
 
-const invalidKindMessage = "kind must be agent, script, human, flow or sentry"
+const invalidKindMessage = "kind must be agent, script, human, flow, subflow or sentry"
 
 func validKind(k string) bool {
-	return k == kindAgent || k == kindScript || k == kindHuman || k == kindFlow || k == kindSentry
+	return k == kindAgent || k == kindScript || k == kindHuman || k == kindFlow || k == kindSubflow || k == kindSentry
 }
 
 const processColumns = "id, flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings"
@@ -263,6 +267,13 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		if msg, err := checkCall(r.Context(), db, p.Flow, p.Kind, p.Settings); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
@@ -284,6 +295,10 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 				serverError(w, err)
 				return
 			}
+		}
+		if err := bringOutcomes(r.Context(), tx, p.ID); err != nil {
+			serverError(w, err)
+			return
 		}
 		if err := tx.Commit(); err != nil {
 			serverError(w, err)
@@ -344,10 +359,26 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var oldKind string
-		if patch.Kind != nil {
-			err := db.QueryRowContext(r.Context(), "SELECT kind FROM processes WHERE id = ?", id).Scan(&oldKind)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		var flow int64
+		var oldSettings processSettings
+		err = db.QueryRowContext(r.Context(), "SELECT kind, flow_id, settings FROM processes WHERE id = ?", id).Scan(&oldKind, &flow, &oldSettings)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			serverError(w, err)
+			return
+		}
+		if oldKind != "" && (patch.Kind != nil || patch.Settings != nil) {
+			kind, settings := oldKind, oldSettings
+			if patch.Kind != nil {
+				kind = *patch.Kind
+			}
+			if patch.Settings != nil {
+				settings = *patch.Settings
+			}
+			if msg, err := checkCall(r.Context(), db, flow, kind, settings); err != nil {
 				serverError(w, err)
+				return
+			} else if msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
 				return
 			}
 		}
@@ -370,6 +401,13 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		if patch.Kind != nil && *patch.Kind != oldKind && (oldKind == kindHuman || *patch.Kind == kindHuman) {
 			if err := dropMismatchedEdges(r.Context(), db, id, *patch.Kind); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
+		// Picking the flow a subflow process runs brings its outcomes in.
+		if (patch.Kind != nil && *patch.Kind != oldKind) || (patch.Settings != nil && !sameFlow(patch.Settings.Flow, oldSettings.Flow)) {
+			if err := inTx(r.Context(), db, func(tx *sql.Tx) error { return bringOutcomes(r.Context(), tx, id) }); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -437,4 +475,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func serverError(w http.ResponseWriter, err error) {
 	log.Printf("internal error: %v", err)
 	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+func sameFlow(a, b *int64) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
+}
+
+// Runs fn in a transaction, committed if it succeeds.
+func inTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

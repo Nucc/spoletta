@@ -176,6 +176,16 @@ export const FlowIcon = () => (
   </Icon>
 )
 
+// A flow kept elsewhere: a node leading to two steps.
+export const SubflowIcon = () => (
+  <Icon>
+    <circle cx="4" cy="4" r="2" />
+    <rect x="9.5" y="2.25" width="5" height="3.5" rx="1" />
+    <rect x="9.5" y="10.25" width="5" height="3.5" rx="1" />
+    <path d="M6 4h3.5M4 6v6h5.5" />
+  </Icon>
+)
+
 // UML activity final node: a ring around a dot.
 export const EndIcon = () => (
   <Icon>

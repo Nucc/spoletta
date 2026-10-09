@@ -4,28 +4,31 @@ import { getFlow, updateFlow, type Flow } from './api'
 import Board from './Board'
 import FlowList from './FlowList'
 
-// The page the URL's hash names: #/flows/<id> for a flow's board, anything
-// else for the list of flows.
-const flowInHash = () => {
-  const m = /^#\/flows\/(\d+)$/.exec(window.location.hash)
-  return m ? Number(m[1]) : null
+// The page the URL's hash names: #/flows/<id> for a flow's board,
+// #/flows/<id>/runs/<run> for it with one of its runs open, anything else
+// for the list of flows.
+type Page = { flow: number; run: number | null } | null
+
+const pageInHash = (): Page => {
+  const m = /^#\/flows\/(\d+)(?:\/runs\/(\d+))?$/.exec(window.location.hash)
+  return m ? { flow: Number(m[1]), run: m[2] ? Number(m[2]) : null } : null
 }
 
 export default function App() {
-  const [flowId, setFlowId] = useState(flowInHash)
+  const [page, setPage] = useState(pageInHash)
 
   useEffect(() => {
-    const onHash = () => setFlowId(flowInHash())
+    const onHash = () => setPage(pageInHash())
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  if (flowId === null) return <FlowList onOpen={(id) => (window.location.hash = `#/flows/${id}`)} />
+  if (page === null) return <FlowList onOpen={(id) => (window.location.hash = `#/flows/${id}`)} />
   // A new board for each flow, so nothing of one shows on another.
-  return <FlowPage key={flowId} id={flowId} />
+  return <FlowPage key={page.flow} id={page.flow} run={page.run} />
 }
 
-function FlowPage({ id }: { id: number }) {
+function FlowPage({ id, run }: { id: number; run: number | null }) {
   const [flow, setFlow] = useState<Flow | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -59,7 +62,7 @@ function FlowPage({ id }: { id: number }) {
   if (!flow) return null
   return (
     <ReactFlowProvider>
-      <Board flow={flow} onUpdate={onUpdate} />
+      <Board flow={flow} initialRun={run} onUpdate={onUpdate} />
     </ReactFlowProvider>
   )
 }

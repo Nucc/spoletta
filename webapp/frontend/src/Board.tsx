@@ -50,7 +50,7 @@ import ObjectPanel from './ObjectPanel'
 import ProcessPanel, { type EntryObject } from './ProcessPanel'
 import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
-import { BLOCK_MIME, BlockPalette, BUILDING_BLOCKS, ConnectorPalette, findBlock, type Block } from './Palette'
+import { BLOCK_MIME, BlockPalette, BUILDING_BLOCKS, ConnectorPalette, findBlock, flowBlock, FlowPalette, type Block } from './Palette'
 import { decisionText, RunList, RunPanel } from './Runs'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
@@ -71,6 +71,7 @@ import {
   deleteState,
   getRun,
   getEnd,
+  listFlows,
   getStart,
   getVersionBoard,
   listConnections,
@@ -155,6 +156,8 @@ const BOUNDARY_GAP = { x: 24, y: 90 }
 // drawn, but existing ones still show, run and can be deleted.
 const CONNECTION_PREFIX = 'conn-'
 const LINK_PREFIX = 'link-'
+// The lines from the objects a flow leaves into its top board's end.
+const END_EDGE_PREFIX = 'ends-'
 // Objects and processes have separate id sequences, so object node ids are prefixed.
 const OBJECT_PREFIX = 'obj-'
 
@@ -259,21 +262,32 @@ const toStartNode = (s: Start): StartNodeType => ({
   data: {},
 })
 
-const toEndNode = (e: { x: number; y: number }): EndNodeType => ({
+// Only a top board's end takes links drawn to it.
+const toEndNode = (e: { x: number; y: number }, connectable: boolean): EndNodeType => ({
   id: END_ID,
   type: 'end',
   position: { x: e.x, y: e.y },
   deletable: false,
-  data: {},
+  data: { connectable },
+})
+
+// Drawn like the lines into a flow process's end, but drawn and deleted by hand.
+const endEdge = (object: number): FlowEdge => ({
+  id: `${END_EDGE_PREFIX}${object}`,
+  source: objectNodeId(object),
+  target: END_ID,
+  className: 'boundary-edge',
 })
 
 // A flow's board, its runs and its versions. Opening another flow mounts a
-// new board.
+// new board, showing the run given, if any.
 export default function Board({
   flow,
+  initialRun,
   onUpdate,
 }: {
   flow: Flow
+  initialRun: number | null
   onUpdate: (patch: Partial<Pick<Flow, 'name' | 'settings'>>) => Promise<void>
 }) {
   const flowId = flow.id
@@ -287,6 +301,8 @@ export default function Board({
   const [mcpServers, setMCPServers] = useState<MCPServer[] | null>(null)
   const [mcpOpen, setMCPOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Every other flow, which this one can run; null while they load.
+  const [otherFlows, setOtherFlows] = useState<Flow[] | null>(null)
   const [runs, setRuns] = useState<FlowRun[]>([])
   // The run open in the side panel, and its steps once loaded.
   const [runId, setRunId] = useState<number | null>(null)
@@ -311,6 +327,8 @@ export default function Board({
   const { getNode, getNodes, screenToFlowPosition, fitView } = useReactFlow<FlowNode>()
   const wrapper = useRef<HTMLDivElement>(null)
   const draftSeq = useRef(0)
+  // Loads the board again, for callbacks made before loadBoard is.
+  const reload = useRef<() => Promise<void>>(async () => {})
   // The reviews whose process's panel was opened for them, so closing it keeps it closed.
   const shownReviews = useRef(new Set<number>())
 
@@ -374,10 +392,13 @@ export default function Board({
                     x,
                     y,
                     parent,
+                    settings: node.data.settings,
                   })
                 ).id,
               )
         setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: newId } : n)))
+        // A new subflow process brings the outcomes of the flow it runs.
+        if (node.type === 'process' && node.data.kind === 'subflow') await reload.current()
       } catch (err) {
         report(err)
       }
@@ -443,8 +464,8 @@ export default function Board({
   // Shows one board of the flow: its processes, its objects and their links.
   // A flow process's board also shows the objects the flow process is linked
   // to, the ones it takes above its start, leading into it, and the ones it
-  // only generates above its end. On the top board, the objects that its
-  // processes generate and none of them takes lead into its end. A board
+  // only generates above its end. On the top board, the objects connected to
+  // its end by hand lead into it. A board
   // that is gone, such as after jumping to a version without its flow
   // process, gives way to the top board.
   const showBoard = useCallback(
@@ -471,13 +492,10 @@ export default function Board({
       ]
       const ins = board === null ? [] : outside('input', new Set(own.map((o) => o.id)))
       const outs = board === null ? [] : outside('output', new Set([...own.map((o) => o.id), ...ins]))
-      // What leads into the end.
-      const linked = (direction: 'input' | 'output') =>
-        new Set(c.links.filter((l) => ids.has(l.process) && l.direction === direction).map((l) => l.object))
-      const taken = linked('input')
+      // What leads into a flow process's end.
       const ends = inner
         ? [...new Set(c.links.filter((l) => l.process === board && l.direction === 'output').map((l) => l.object))]
-        : [...linked('output')].filter((o) => !taken.has(o))
+        : []
       const byId = new Map(c.objects.map((o) => [o.id, o]))
       // In a row, unless moved by hand.
       const placed = (id: number) => c.links.find((l) => l.process === board && l.object === id && l.at)?.at ?? undefined
@@ -490,7 +508,7 @@ export default function Board({
 
       setNodes([
         toStartNode(start),
-        toEndNode(end),
+        toEndNode(end, !inner),
         ...ps.map((p) => toNode(p)),
         ...own.map((o) => toObjectNode(o)),
         ...row(ins, { x: start.x, y: start.y - BOUNDARY_GAP.y }, 'in'),
@@ -502,6 +520,7 @@ export default function Board({
         ...c.links.filter((l) => ids.has(l.process)).map((l) => linkEdge(l, humans.has(l.process))),
         ...ins.map((o) => boundaryEdge(objectNodeId(o), START_ID)),
         ...ends.map((o) => boundaryEdge(objectNodeId(o), END_ID)),
+        ...(inner ? [] : own.filter((o) => o.end).map((o) => endEdge(o.id))),
       ])
       setContents(c)
       setShownSeq((n) => n + 1)
@@ -513,6 +532,7 @@ export default function Board({
     () => fetchBoard(flowId).then((c) => showBoard(c, boardRef.current)),
     [showBoard, flowId],
   )
+  reload.current = loadBoard
 
   const refreshMCPServers = useCallback(() => listMCPServers().then(setMCPServers).catch(report), [report])
 
@@ -533,6 +553,9 @@ export default function Board({
 
   useEffect(() => {
     listModels().then(setModels).catch(report)
+    listFlows()
+      .then((fs) => setOtherFlows(fs.filter((f) => f.id !== flowId)))
+      .catch(report)
     refreshMCPServers()
     refreshRuns()
     refreshVersions()
@@ -540,7 +563,7 @@ export default function Board({
     loadBoard()
       .then(() => window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS))
       .catch(report)
-  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, fitView])
+  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, fitView, flowId])
 
   // The settings take the side panel; a node opened afterwards takes it back.
   const openMCPSettings = (open: boolean) => {
@@ -701,7 +724,7 @@ export default function Board({
 
   // A process takes the block's kind, such as a connector's.
   const addDraft = useCallback(
-    ({ type, kind = 'agent', human = false }: Block, screenX: number, screenY: number) => {
+    ({ type, kind = 'agent', human = false, name = '', settings = {} }: Block, screenX: number, screenY: number) => {
       const center = screenToFlowPosition({ x: screenX, y: screenY })
       const { width, height } = NODE_SIZE[type]
       const base = {
@@ -713,7 +736,7 @@ export default function Board({
       }
       const draft: FlowNode =
         type === 'process'
-          ? { ...base, type, data: { name: '', kind, prompt: '', script: '', model: '', thinking: '', recording: false, settings: {}, editing: true } }
+          ? { ...base, type, data: { name, kind, prompt: '', script: '', model: '', thinking: '', recording: false, settings, editing: true } }
           : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, human, editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
@@ -739,22 +762,42 @@ export default function Board({
     e.dataTransfer.dropEffect = 'copy'
   }
 
+  const flowBlocks = useMemo(() => (otherFlows ?? []).map(flowBlock), [otherFlows])
+
   const onCanvasDrop = (e: DragEvent<HTMLDivElement>) => {
-    const block = findBlock(e.dataTransfer.getData(BLOCK_MIME))
+    const id = e.dataTransfer.getData(BLOCK_MIME)
+    const block = findBlock(id) ?? flowBlocks.find((b) => b.id === id)
     if (reviewing || !block) return
     e.preventDefault()
     addDraft(block, e.clientX, e.clientY)
   }
 
-  // A flow process opens its board; other nodes their settings.
+  // A flow process opens its board, a subflow process the flow it runs;
+  // other nodes their settings.
   const onNodeDoubleClick: NodeMouseHandler<FlowNode> = (_, node) => {
-    if (node.type === 'process' && node.data.kind === 'flow' && !isDraft(node.id)) zoomIn(node.id)
+    if (zoomable(node.id)) zoomIn(node.id)
     else if (!isDraft(node.id) && node.type !== 'start' && node.type !== 'end') setPanelId(node.id)
   }
 
+  const zoomable = (id: string) => {
+    const node = getNode(id)
+    if (node?.type !== 'process' || isDraft(id)) return false
+    return node.data.kind === 'flow' || (node.data.kind === 'subflow' && node.data.settings.flow !== undefined)
+  }
+
+  // Zooming into a subflow process goes to the flow it runs, on the run it
+  // ran there if a run is shown, and the browser's back button comes back.
   const zoomIn = (id: string) => {
     setPanelId(null)
     setMenu(null)
+    const node = getNode(id)
+    if (node?.type === 'process' && node.data.kind === 'subflow') {
+      const target = node.data.settings.flow
+      if (target === undefined) return
+      const child = shownRun?.steps.filter((s) => String(s.process) === id && s.childRun !== null).at(-1)?.childRun
+      window.location.hash = child ? `#/flows/${target}/runs/${child}` : `#/flows/${target}`
+      return
+    }
     setBoardId(Number(id))
   }
 
@@ -855,6 +898,11 @@ export default function Board({
     if (edges.some((e) => e.source === source && e.target === target && same(e.sourceHandle, sourceHandle) && same(e.targetHandle, targetHandle))) {
       return false
     }
+    // An object of the top board, not a person, leads into its end.
+    if (target === END_ID) {
+      const node = getNode(source)
+      return boardId === null && node?.type === 'object' && !node.data.human && stateOfHandle(sourceHandle) === null
+    }
     if (source === START_ID || isObject(source)) return isProcess(target)
     if (!isProcess(source) || !isObject(target)) return false
     if (edges.some((e) => e.source === source && e.target === target)) return false
@@ -867,6 +915,11 @@ export default function Board({
         // The initial node has a single outgoing transition; a new one replaces it.
         await updateStart(flowId, boardId, { target: Number(target) })
         setEdges((es) => [...es.filter((e) => e.id !== START_EDGE_ID), startEdge(target)])
+        return
+      }
+      if (target === END_ID) {
+        await updateObject(objectIdOf(source), { end: true })
+        setEdges((es) => [...es, endEdge(objectIdOf(source))])
         return
       }
       // A human starts out deciding between all of the object's states.
@@ -930,9 +983,11 @@ export default function Board({
       const req =
         e.id === START_EDGE_ID
           ? updateStart(flowId, boardId, { target: null })
-          : e.id.startsWith(LINK_PREFIX)
-            ? deleteLink(Number(e.id.slice(LINK_PREFIX.length)))
-            : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length)))
+          : e.id.startsWith(END_EDGE_PREFIX)
+            ? updateObject(Number(e.id.slice(END_EDGE_PREFIX.length)), { end: false })
+            : e.id.startsWith(LINK_PREFIX)
+              ? deleteLink(Number(e.id.slice(LINK_PREFIX.length)))
+              : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length)))
       req.catch(report)
     }
   }
@@ -1224,17 +1279,12 @@ export default function Board({
   const onNodeContextMenu: NodeMouseHandler<FlowNode> = (e, node) => {
     e.preventDefault()
     if (node.type === 'start' || node.type === 'end' || isDraft(node.id)) return
-    // Viewing a run, a flow process can still be opened.
-    if (!reviewing || (node.type === 'process' && node.data.kind === 'flow')) setMenu({ id: node.id, x: e.clientX, y: e.clientY })
-  }
-
-  const flowProcess = (id: string) => {
-    const node = getNode(id)
-    return node?.type === 'process' && node.data.kind === 'flow'
+    // Viewing a run, a flow process, or the flow a subflow process runs, can still be opened.
+    if (!reviewing || zoomable(node.id)) setMenu({ id: node.id, x: e.clientX, y: e.clientY })
   }
 
   const menuItems = (id: string): MenuItem[] => [
-    ...(flowProcess(id) ? [{ label: 'Zoom in', icon: <ZoomInIcon />, onSelect: () => zoomIn(id) }] : []),
+    ...(zoomable(id) ? [{ label: 'Zoom in', icon: <ZoomInIcon />, onSelect: () => zoomIn(id) }] : []),
     {
       label: 'Rename',
       disabled: reviewing,
@@ -1322,7 +1372,8 @@ export default function Board({
   }
 
   // Opens a run on the board it ran on: a recording flow process's run on
-  // the flow process's board, a run of the whole flow on the top board.
+  // the flow process's board, a run of the whole flow, or of a flow a subflow
+  // process ran, on the top board.
   const showRun = (run: { id: number; process: number | null }) => {
     setPanelId(null)
     setVersionsOpen(false)
@@ -1330,20 +1381,42 @@ export default function Board({
     setBoardId(run.process)
   }
 
-  // A run the list may not have yet, such as a flow process's that just started.
+  // A run the list may not have yet, such as a flow process's that just
+  // started. A run of another flow, such as one a subflow process ran, or
+  // the run that ran this one, opens on that flow's page.
   const openRunById = async (id: number) => {
     let run = runs.find((r) => r.id === id)
-    if (!run) {
-      try {
+    try {
+      if (!run) {
         const rs = await listRuns(flowId)
         setRuns(rs)
         run = rs.find((r) => r.id === id)
-      } catch (err) {
-        report(err)
       }
+      if (!run) {
+        const other = await getRun(id)
+        if (other.flow !== flowId) window.location.hash = `#/flows/${other.flow}/runs/${id}`
+        return
+      }
+    } catch (err) {
+      report(err)
+      return
     }
-    if (run) showRun(run)
+    showRun(run)
   }
+
+  // The run asked for in the address opens once.
+  const openedInitial = useRef(false)
+  useEffect(() => {
+    if (initialRun === null || openedInitial.current) return
+    openedInitial.current = true
+    openRunById(initialRun)
+  })
+
+  // The address names the open run, so going back to this flow opens it again.
+  useEffect(() => {
+    const want = runId === null ? `#/flows/${flowId}` : `#/flows/${flowId}/runs/${runId}`
+    if (window.location.hash !== want) window.history.replaceState(null, '', want)
+  }, [runId, flowId])
 
   // The selected processes, and the objects among the selection, move into a
   // new flow process, which is then named.
@@ -1407,6 +1480,19 @@ export default function Board({
       const many = object.data.many && !object.data.boundary
       return [{ id: l.object, name: object.data.name, many, attributes: object.data.attributes }]
     })
+
+  // The names of the objects a process takes or generates, which a subflow
+  // process hands to and from their namesakes in the flow it runs.
+  const linkedNames = (id: string, direction: 'input' | 'output'): string[] => [
+    ...new Set(
+      edges.flatMap((e) => {
+        const l = e.data?.link
+        if (!l || l.direction !== direction || String(l.process) !== id) return []
+        const object = getNode(objectNodeId(l.object))
+        return object?.type === 'object' ? [object.data.name] : []
+      }),
+    ),
+  ]
 
   // Sends the decision on the review the process waits for in the open run,
   // which goes on in the server. What the person entered is checked there
@@ -1549,6 +1635,9 @@ export default function Board({
           <SidebarGroup id="connectors" title="Connectors">
             <ConnectorPalette disabled={reviewing} onAdd={addAtViewportCenter} />
           </SidebarGroup>
+          <SidebarGroup id="flows" title="Flows">
+            <FlowPalette blocks={flowBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
+          </SidebarGroup>
           <SidebarGroup id="runs" title="Runs" fill>
             <RunList
               runs={runs}
@@ -1658,6 +1747,10 @@ export default function Board({
               updateData(panelNode.id, fields)
             }}
             onZoomIn={() => zoomIn(panelNode.id)}
+            flows={otherFlows}
+            onFlowSaved={() => loadBoard().catch(report)}
+            takes={linkedNames(panelNode.id, 'input')}
+            generates={linkedNames(panelNode.id, 'output')}
             onOpenMCPSettings={() => openMCPSettings(true)}
             repositories={flow.settings.repositories}
             onOpenFlowSettings={() => openFlowSettings(true)}

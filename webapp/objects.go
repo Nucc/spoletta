@@ -30,6 +30,10 @@ type object struct {
 	// is an agent link, saying the person carries out the process. Only a
 	// human process takes it.
 	Human bool `json:"human"`
+	// Leads into the end of the flow's top board, as one of what the flow
+	// leaves: an object of its top board a person connected to the end.
+	// Flows running it take these as its outcomes; see calls.go.
+	End bool `json:"end"`
 	// The flow process whose board it is on; null on the top board. It also
 	// shows inside the flow processes linked to it; see boards.go.
 	Parent     *int64        `json:"parent"`
@@ -91,6 +95,9 @@ func migrateObjects(db *sql.DB) error {
 		return err
 	}
 	if err := addColumn(db, "objects", "human", "BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if err := addColumn(db, "objects", "at_end", "BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
 		return err
 	}
 	if err := migrateStates(db); err != nil {
@@ -157,7 +164,7 @@ func migrateObjects(db *sql.DB) error {
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT id, flow_id, name, x, y, width, persistent, many, human, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.Parent)
+	err := db.QueryRowContext(ctx, "SELECT id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent)
 	if err != nil {
 		return o, err
 	}
@@ -192,7 +199,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), "SELECT id, flow_id, name, x, y, width, persistent, many, human, parent_id FROM objects WHERE flow_id = ? ORDER BY id", f)
+		rows, err := db.QueryContext(r.Context(), "SELECT id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id FROM objects WHERE flow_id = ? ORDER BY id", f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -202,7 +209,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.Parent); err != nil {
+			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -295,6 +302,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			Persistent *bool `json:"persistent"`
 			Many       *bool `json:"many"`
 			Human      *bool `json:"human"`
+			// Only an object of the top board other than a person can end it.
+			End *bool `json:"end"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -326,9 +335,22 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 
+		if patch.End != nil && *patch.End {
+			var n int
+			err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM objects WHERE id = ? AND parent_id IS NULL AND NOT human", id).Scan(&n)
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			if n == 0 {
+				http.Error(w, "only an object of the top board, not a person, can lead into its end", http.StatusBadRequest)
+				return
+			}
+		}
+
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = COALESCE(?, many), human = COALESCE(?, human) WHERE id = ?",
-			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, patch.Many, patch.Human, id)
+			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = COALESCE(?, many), human = COALESCE(?, human), at_end = COALESCE(?, at_end) WHERE id = ?",
+			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, patch.Many, patch.Human, patch.End, id)
 		if err != nil {
 			serverError(w, err)
 			return

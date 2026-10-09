@@ -53,6 +53,10 @@ import (
 // own; the step in the run it is in refers to it, and how it ended doesn't
 // end the outer run: a duplicate, or a stop, just ends that branch. Otherwise
 // its processes' steps are steps of the run it is in.
+//
+// A subflow process runs another flow's top board the same way, always as a
+// run of that flow; see calls.go. What comes out of it is stored as an agent
+// step's output is, since it is made of objects of this flow.
 
 // What a human decided on a review: the state they set, if they had any to
 // choose from, and their instructions; and what they entered of the objects
@@ -93,11 +97,11 @@ func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker
 // the background, and ends it once nothing in it is left to run.
 // Its agents and scripts work in a workspace with the repositories, on a
 // branch of the run's own, whose name starts with prefix.
-func (e *engine) start(id, version int64, board snapshot, repos []repository, prefix string) {
+func (e *engine) start(id, flow, version int64, board snapshot, repos []repository, prefix string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	lr := e.register(id, cancel)
 	go func() {
-		fr := newFlowRun(version, board, repos, prefix)
+		fr := newFlowRun(flow, version, board, repos, prefix)
 		w := newWalk(ctx, e, id, lr, fr, nil, nil, fr.workspace("run-"+strconv.FormatInt(id, 10)))
 		w.enter()
 		e.finish(ctx, id, w)
@@ -239,16 +243,20 @@ func (p *pass) visit(id int64) bool {
 
 // What every board of a run of the whole flow walks on.
 type flowRun struct {
+	flow    int64
 	version int64
 	board   snapshot
 	objects map[int64]snapshotObject
 	// The flow's repositories as the run started, and its branches' prefix.
 	repos  []repository
 	prefix string
+	// For a flow a subflow process runs: the flows it runs inside, outermost
+	// first.
+	callers []int64
 }
 
-func newFlowRun(version int64, board snapshot, repos []repository, prefix string) *flowRun {
-	fr := &flowRun{version: version, board: board, objects: map[int64]snapshotObject{}, repos: repos, prefix: prefix}
+func newFlowRun(flow, version int64, board snapshot, repos []repository, prefix string) *flowRun {
+	fr := &flowRun{flow: flow, version: version, board: board, objects: map[int64]snapshotObject{}, repos: repos, prefix: prefix}
 	for _, o := range board.Objects {
 		fr.objects[o.ID] = o
 	}
@@ -285,6 +293,7 @@ type walk struct {
 
 	kinds, names map[int64]string
 	recording    map[int64]bool
+	settings     map[int64]processSettings
 	// Process to the objects it generates, or the states a human decides on.
 	outputs map[int64][]linkEnd
 	// Process to the objects it takes, and object to the processes taking it.
@@ -312,7 +321,7 @@ type taker struct {
 func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun, board *int64, given map[int64]value, ws *runWorkspace) *walk {
 	w := &walk{
 		e: e, ctx: ctx, run: run, lr: lr, fr: fr, board: board, ws: ws,
-		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{},
+		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{}, settings: map[int64]processSettings{},
 		outputs: map[int64][]linkEnd{}, inputs: map[int64][]linkEnd{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{},
@@ -328,6 +337,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 			w.kinds[p.ID] = p.Kind
 			w.names[p.ID] = p.Name
 			w.recording[p.ID] = p.Recording
+			w.settings[p.ID] = p.Settings
 		}
 	}
 	// Objects show on more boards than their own, so all are known by name.
@@ -448,10 +458,11 @@ func (w *walk) plainInputs(p int64) []linkEnd {
 	return plain
 }
 
-// The objects given from outside lead into a flow process's start, so the
-// process it points at takes them, linked to them or not.
+// The objects given from outside lead into a flow process's start, or the
+// start of the flow a subflow process runs, so the process it points at takes
+// them, linked to them or not.
 func (w *walk) startGiven(p int64) []int64 {
-	if w.board == nil || w.target == nil || *w.target != p {
+	if w.target == nil || *w.target != p {
 		return nil
 	}
 	return w.given
@@ -535,7 +546,7 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 
 	var out map[int64]value
 	var ok bool
-	if w.kinds[id] == kindFlow {
+	if w.kinds[id] == kindFlow || w.kinds[id] == kindSubflow {
 		out, ok = w.runFlow(id)
 	} else {
 		out, ok = w.runStep(id, given, cr)
@@ -606,8 +617,22 @@ func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64
 // An object the flow process generates in a state comes out in that state,
 // unless it got one inside. False if the board didn't finish; only a
 // failure inside fails this run. A flow process taking a list runs once per
-// item; see runItems.
+// item; see runItems. A subflow process runs the flow it names that way.
 func (w *walk) runFlow(id int64) (map[int64]value, bool) {
+	var callee *flowRun
+	if w.kinds[id] == kindSubflow {
+		var msg string
+		var err error
+		if callee, msg, err = w.fr.call(w.ctx, w.e.db, w.settings[id].Flow); err != nil || msg != "" {
+			if err != nil {
+				log.Printf("run the flow of process %d in run %d: %v", id, w.run, err)
+				msg = "The flow it runs couldn't start."
+			}
+			w.note(id, stepError, msg)
+			w.fail()
+			return nil, false
+		}
+	}
 	w.mu.Lock()
 	given := map[int64]value{}
 	for _, i := range w.inputs[id] {
@@ -626,9 +651,9 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 		}
 	}
 	if len(lists) > 0 {
-		return w.runItems(id, given, lists)
+		return w.runItems(id, given, lists, callee)
 	}
-	out, status, _ := w.runBoard(id, given, nil)
+	out, status, _ := w.runBoard(id, given, nil, callee)
 	return out, status == runDone
 }
 
@@ -650,10 +675,11 @@ type item struct {
 const itemSkipped = "skipped"
 
 // Runs a flow process's board once, as a step of this run, and as a run of
-// its own if it records; for an item of a list, that run is the item's.
-// Returns what came out, how the board's run ended, and for an item another
-// run claimed, that run's claim.
-func (w *walk) runBoard(id int64, given map[int64]value, it *item) (map[int64]value, string, *duplicate) {
+// its own if it records; for an item of a list, that run is the item's. For a
+// subflow process, runs the top board of callee, the flow it runs, always as
+// a run of that flow. Returns what came out, how the board's run ended, and
+// for an item another run claimed, that run's claim.
+func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowRun) (map[int64]value, string, *duplicate) {
 	inputs := []runInput{}
 	for _, o := range slices.Sorted(maps.Keys(given)) {
 		v := given[o]
@@ -670,13 +696,18 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item) (map[int64]va
 	}
 
 	run, lr, ctx := w.run, w.lr, w.reviews
-	recording := w.recording[id]
+	recording := w.recording[id] || callee != nil
 	if recording {
 		key := ""
 		if it != nil {
 			key = it.key
 		}
-		if run, err = startChildRun(w.ctx, db, w.fr.version, w.run, id, w.names[id], key, stepID); err != nil {
+		// A flow process's run is on its board; another flow's on its top board.
+		fr, board := w.fr, &id
+		if callee != nil {
+			fr, board = callee, nil
+		}
+		if run, err = startChildRun(w.ctx, db, fr.flow, fr.version, w.run, board, w.names[id], key, stepID); err != nil {
 			log.Printf("start run of process %d in run %d: %v", id, w.run, err)
 			w.endStep(stepID, stepError, "Its run couldn't start.")
 			w.fail()
@@ -714,7 +745,13 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item) (map[int64]va
 		}
 		ws = w.fr.workspace(name)
 	}
-	inner := newWalk(ctx, w.e, run, lr, w.fr, &id, given, ws)
+	// Another flow works on its own repositories, in a workspace of its run's.
+	var inner *walk
+	if callee != nil {
+		inner = newWalk(ctx, w.e, run, lr, callee, nil, w.toCallee(callee, given), callee.workspace("run-"+strconv.FormatInt(run, 10)))
+	} else {
+		inner = newWalk(ctx, w.e, run, lr, w.fr, &id, given, ws)
+	}
 	inner.enter()
 
 	var status string
@@ -758,25 +795,41 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item) (map[int64]va
 		return nil, status, nil
 	}
 
-	out := map[int64]value{}
-	contents := map[int64]string{}
-	inner.mu.Lock()
-	for _, end := range w.outputs[id] {
-		v, ok := inner.values[end.object]
-		if !ok || !inner.generated[end.object] {
-			continue
+	var out map[int64]value
+	if callee != nil {
+		out = w.fromCallee(id, callee, inner)
+	} else {
+		out = map[int64]value{}
+		inner.mu.Lock()
+		for _, end := range w.outputs[id] {
+			v, ok := inner.values[end.object]
+			if !ok || !inner.generated[end.object] {
+				continue
+			}
+			if v.state == 0 {
+				v.state = end.state
+			}
+			out[end.object] = v
 		}
-		if v.state == 0 {
-			v.state = end.state
-		}
-		out[end.object] = v
-		contents[end.object] = v.content
+		inner.mu.Unlock()
 	}
-	inner.mu.Unlock()
-	if _, err := finishStep(context.Background(), db, stepID, stepDone, "", "", contents); err != nil {
+	contents := map[int64]string{}
+	for o, v := range out {
+		contents[o] = v.content
+	}
+	// Only another flow's objects are stored here; a flow process's processes
+	// stored theirs. One another run stored terminates this run.
+	dup, err := finishStep(context.Background(), db, stepID, stepDone, "", "", contents)
+	if err != nil {
 		log.Printf("record step %d: %v", stepID, err)
 		w.fail()
 		return nil, runFailed, nil
+	}
+	if dup != nil {
+		w.mu.Lock()
+		w.terminated = true
+		w.mu.Unlock()
+		w.terminate()
 	}
 	// The run keeps the state each object came out in, and only the objects
 	// that came out.
@@ -798,16 +851,8 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item) (map[int64]va
 // skipped, and one step says which. What comes out are lists: each list the
 // flow process generates holds what each item's run left of it, in the
 // order of the items. Objects that aren't lists don't come out.
-func (w *walk) runItems(id int64, given map[int64]value, lists []int64) (map[int64]value, bool) {
-	note := func(status, msg string) {
-		inputs := []runInput{}
-		stepID, err := startStep(w.ctx, w.e.db, w.run, id, stepActive, "", inputs, nil)
-		if err != nil {
-			log.Printf("record process %d in run %d: %v", id, w.run, err)
-			return
-		}
-		w.endStep(stepID, status, msg)
-	}
+func (w *walk) runItems(id int64, given map[int64]value, lists []int64, callee *flowRun) (map[int64]value, bool) {
+	note := func(status, msg string) { w.note(id, status, msg) }
 	if len(lists) > 1 {
 		names := make([]string, len(lists))
 		for i, o := range lists {
@@ -829,7 +874,7 @@ func (w *walk) runItems(id int64, given map[int64]value, lists []int64) (map[int
 		dropped = len(items) - maxItems
 		items = items[:maxItems]
 	}
-	claim := w.recording[id] && w.fr.objects[list].Persistent
+	claim := (w.recording[id] || callee != nil) && w.fr.objects[list].Persistent
 
 	type result struct {
 		out    map[int64]value
@@ -848,7 +893,7 @@ func (w *walk) runItems(id int64, given map[int64]value, lists []int64) (map[int
 		g := maps.Clone(given)
 		g[list] = value{content: content}
 		runs[i] = func() {
-			results[i].out, results[i].status, results[i].dup = w.runBoard(id, g, &item{list: list, key: key, claim: claim})
+			results[i].out, results[i].status, results[i].dup = w.runBoard(id, g, &item{list: list, key: key, claim: claim}, callee)
 		}
 	}
 	all(runs)
@@ -895,6 +940,16 @@ func notIn(n int) string {
 	return " AND object_id NOT IN " + placeholders(n)
 }
 
+// Records a step of a process that ran nothing, saying why.
+func (w *walk) note(id int64, status, msg string) {
+	stepID, err := startStep(w.ctx, w.e.db, w.run, id, stepActive, "", []runInput{}, nil)
+	if err != nil {
+		log.Printf("record process %d in run %d: %v", id, w.run, err)
+		return
+	}
+	w.endStep(stepID, status, msg)
+}
+
 // Ends a step that generated nothing.
 func (w *walk) endStep(stepID int64, status, msg string) {
 	if _, err := finishStep(context.Background(), w.e.db, stepID, status, "", msg, nil); err != nil {
@@ -902,13 +957,14 @@ func (w *walk) endStep(stepID int64, status, msg string) {
 	}
 }
 
-// Starts the run of a recording flow process, and refers its step in the
-// outer run to it.
-func startChildRun(ctx context.Context, db *sql.DB, version, parent, process int64, name, key string, stepID int64) (int64, error) {
+// Starts the run of a recording flow process, or of the flow a subflow
+// process runs, on version of flow, and refers its step in the outer run to
+// it. board is the flow process whose board it runs, nil for the top board.
+func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64, board *int64, name, key string, stepID int64) (int64, error) {
 	res, err := db.ExecContext(ctx,
 		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key)
-		SELECT flow_id, ?, ?, id, ?, ?, ? FROM runs WHERE id = ?`,
-		runRunning, version, process, name, key, parent)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		flow, runRunning, version, parent, board, name, key)
 	if err != nil {
 		return 0, err
 	}

@@ -21,7 +21,9 @@ type run struct {
 	// versions were recorded.
 	Version *int64 `json:"version"`
 	// For the run of a recording flow process: the run it ran in, and the
-	// process, kept after it is deleted. Null for runs of the whole flow.
+	// process, kept after it is deleted. Null for runs of the whole flow. The
+	// run of a flow a subflow process ran has a parent in that process's
+	// flow, and no process: it ran on its own flow's top board.
 	Parent      *int64 `json:"parent"`
 	Process     *int64 `json:"process"`
 	ProcessName string `json:"processName"`
@@ -479,7 +481,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
-		eng.start(id, version, board, settings.Repositories, settings.prefix(name))
+		eng.start(id, f, version, board, settings.Repositories, settings.prefix(name))
 		rn, err := getRun(ctx, db, id)
 		if err != nil {
 			serverError(w, err)

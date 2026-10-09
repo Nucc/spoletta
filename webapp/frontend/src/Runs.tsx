@@ -288,7 +288,7 @@ function Step({
           <Block label="Decision" text={decisionText(s.outcome, objects[0]?.name, s.instructions)} />
         )}
         {s.error && <Block label={s.status === 'duplicate' ? 'Duplicate' : 'Error'} text={s.error} failed={s.status !== 'duplicate'} />}
-        {s.kind !== 'human' && s.kind !== 'flow' && (s.status === 'done' || s.status === 'duplicate') && (
+        {s.kind !== 'human' && s.kind !== 'flow' && s.kind !== 'subflow' && (s.status === 'done' || s.status === 'duplicate') && (
           <Block label="Output" text={s.output || '(empty)'} data />
         )}
         {s.kind !== 'human' && objects.length > 0 && (

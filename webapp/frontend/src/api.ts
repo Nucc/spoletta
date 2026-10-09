@@ -1,9 +1,12 @@
 // A human process is a step a person carries out: they check its inputs and
 // decide by setting an object to one of the states the process's output links
 // name, and fill in the objects its output links list no states for.
-// A flow process is made of processes, on a board of its own. A Sentry
-// process fetches issues from Sentry.
-export type ProcessKind = 'agent' | 'script' | 'human' | 'flow' | 'sentry'
+// A flow process is made of processes, on a board of its own. A subflow
+// process runs another flow, so flows can reuse each other: the objects it
+// takes are given to the objects of the same names on that flow's top board,
+// and it generates what that flow's run leaves of the objects named like the
+// ones it generates. A Sentry process fetches issues from Sentry.
+export type ProcessKind = 'agent' | 'script' | 'human' | 'flow' | 'subflow' | 'sentry'
 
 // Which of Sentry's issues a Sentry process fetches.
 export type SentrySettings = {
@@ -34,6 +37,8 @@ export type ProcessSettings = {
   // The flow's repositories an agent or script process works on, by name;
   // all of them when absent, none when empty.
   repositories?: string[]
+  // The flow a subflow process runs, by id.
+  flow?: number
 }
 
 export type Process = {
@@ -96,6 +101,9 @@ export type FlowObject = {
   // process is an agent link, drawn ending in a filled circle: the person
   // carries the process out, so it must be a human process.
   human: boolean
+  // Leads into the end of the flow's top board, as one of what the flow
+  // leaves, connected there by hand. Flows running it get these objects.
+  end: boolean
   // The flow process whose board it is on; null on the top board. It also
   // shows inside the flow processes linked to it.
   parent: number | null
@@ -293,7 +301,7 @@ export function listObjects(flow: number): Promise<FlowObject[]> {
 
 // On a flow process's board, it goes in that process's flow.
 export function createObject(
-  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'human' | 'parent'> & {
+  o: Omit<FlowObject, 'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'human' | 'end' | 'parent'> & {
     width?: number | null
     human?: boolean
     parent?: number | null
@@ -447,7 +455,8 @@ export type FlowRun = {
   // since its version as a new one. Null for runs from before versions were kept.
   version: number | null
   // For the run of a recording flow process: the run it ran in, and the
-  // process. Null for runs of the whole flow.
+  // process. Null for runs of the whole flow. The run of a flow a subflow
+  // process ran has a parent in that process's flow, and no process.
   parent: number | null
   process: number | null
   processName: string
@@ -671,8 +680,8 @@ export type BoardContents = {
 // processes from before settings none, and objects that aren't people no human.
 type Snapshot = {
   processes: (Omit<Process, 'flow' | 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
-  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'human'> &
-    Partial<Pick<FlowObject, 'parent' | 'many' | 'human'>>)[]
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'human' | 'end'> &
+    Partial<Pick<FlowObject, 'parent' | 'many' | 'human' | 'end'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -702,6 +711,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       parent: o.parent ?? null,
       many: o.many ?? false,
       human: o.human ?? false,
+      end: o.end ?? false,
       states: s.states.filter((st) => st.object === o.id),
       attributes: s.attributes.filter((a) => a.object === o.id),
     })),

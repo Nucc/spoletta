@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -23,7 +24,7 @@ func env(key, fallback string) string {
 func openDB() (*sql.DB, error) {
 	cfg := mysql.NewConfig()
 	cfg.Net = "tcp"
-	cfg.Addr = env("DB_HOST", "127.0.0.1") + ":" + env("DB_PORT", "3306")
+	cfg.Addr = net.JoinHostPort(env("DB_HOST", "127.0.0.1"), env("DB_PORT", "3306"))
 	cfg.DBName = env("DB_NAME", "app")
 	cfg.User = env("DB_USER", "app")
 	cfg.Passwd = env("DB_PASSWORD", "apppass")

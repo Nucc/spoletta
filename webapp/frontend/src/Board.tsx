@@ -56,6 +56,7 @@ import { BLOCK_MIME, BlockPalette, BUILDING_BLOCKS, ConnectorPalette, findBlock,
 import { decisionText, RunList, RunPanel } from './Runs'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
+import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
 import { FlowSettingsPanel } from './FlowSettings'
 import {
@@ -462,10 +463,19 @@ export default function Board({
         name: o.name,
         states: o.states,
         attributes: o.attributes,
-        parts: ownedBy(objects, o.id).map((c) => ({ id: c.id, name: c.name, many: c.many, relation: c.relation || 'exhibition' })),
+        parts: ownedBy(objects, o.id).map((c) => ({
+          id: c.id,
+          name: c.name,
+          many: c.many,
+          min: c.min,
+          max: c.max,
+          relation: c.relation || 'exhibition',
+        })),
         general: objects.find((g) => g.id === o.general)?.name,
         persistent: o.persistent,
         many: o.many,
+        min: o.min,
+        max: o.max,
         human: o.human,
         owned: o.owner !== null,
         editing,
@@ -818,7 +828,7 @@ export default function Board({
       const draft: FlowNode =
         type === 'process'
           ? { ...base, type, data: { name, kind, prompt: '', script: '', model: '', thinking: '', recording: false, settings, editing: true } }
-          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, human, editing: true } }
+          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, min: 0, max: null, human, editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
     [screenToFlowPosition, setNodes],
@@ -1332,11 +1342,11 @@ export default function Board({
     }
   }
 
-  const setMany = async (objectId: string, many: boolean) => {
+  const setQuantity = async (objectId: string, quantity: Quantity) => {
     if (reviewing) return false
     try {
-      await updateObject(objectIdOf(objectId), { many })
-      updateObjectData(objectId, { many })
+      await updateObject(objectIdOf(objectId), quantity)
+      updateObjectData(objectId, quantity)
       restructured()
       return true
     } catch (err) {
@@ -1477,8 +1487,8 @@ export default function Board({
 
   // Nodes and edges reach the board through a context whose functions stay
   // the same, so they don't all re-render whenever the board does.
-  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRoute, resize, zoomIn, stopProcess })
-  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRoute, resize, zoomIn, stopProcess }
+  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setQuantity, setRoute, resize, zoomIn, stopProcess })
+  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setQuantity, setRoute, resize, zoomIn, stopProcess }
   const actions = useMemo<BoardActions>(
     () => ({
       commitName: (id, name) => latest.current.commitName(id, name),
@@ -1494,6 +1504,7 @@ export default function Board({
       renameState: (objectId, stateId, name) => latest.current.renameObjectState(objectId, stateId, name),
       removeState: (objectId, stateId) => latest.current.removeState(objectId, stateId),
       setDecisionStates: (edgeId, states) => latest.current.setDecisionStates(edgeId, states),
+      setQuantity: (objectId, quantity) => latest.current.setQuantity(objectId, quantity),
       setRoute: (edgeId, route, save) => latest.current.setRoute(edgeId, route, save),
       resize: (id, x, width) => latest.current.resize(id, x, width),
       editable: !reviewing,
@@ -1641,7 +1652,7 @@ export default function Board({
       const object = getNode(objectNodeId(l.object))
       if (object?.type !== 'object') return []
       const many = object.data.many && !object.data.boundary
-      return [{ id: l.object, name: object.data.name, many, fields: fieldsOf(contents?.objects ?? [], l.object) }]
+      return [{ id: l.object, name: object.data.name, many, min: object.data.min, max: object.data.max, fields: fieldsOf(contents?.objects ?? [], l.object) }]
     })
 
   // The names of the objects a process takes or generates, which a subflow
@@ -1948,8 +1959,8 @@ export default function Board({
             onUnfoldPart={unfold}
             persistent={objectPanelNode.data.persistent}
             onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
-            many={objectPanelNode.data.many}
-            onManyChange={(many) => setMany(objectPanelNode.id, many)}
+            quantity={objectPanelNode.data}
+            onQuantityChange={(quantity) => setQuantity(objectPanelNode.id, quantity)}
             human={objectPanelNode.data.human}
             onHumanChange={(human) => setHuman(objectPanelNode.id, human)}
             editable={!reviewing}

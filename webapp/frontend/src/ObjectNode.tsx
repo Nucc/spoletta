@@ -4,6 +4,7 @@ import { useBoardActions } from './actions'
 import type { ObjectAttribute, ObjectState, Relation } from './api'
 import { AggregationIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
 import { AppendButton, NameInput } from './ProcessNode'
+import { quantityText, type Quantity } from './quantity'
 import WidthResizer from './WidthResizer'
 
 export type ObjectNodeData = {
@@ -12,7 +13,7 @@ export type ObjectNodeData = {
   // Edited in the side panel; only the names show on the node.
   attributes: ObjectAttribute[]
   // The objects it owns, which make it up; they show on its own board.
-  parts?: { id: number; name: string; many: boolean; relation: Relation }[]
+  parts?: (Quantity & { id: number; name: string; relation: Relation })[]
   // The name of the object it specializes.
   general?: string
   // It makes up another object, on whose board it is.
@@ -23,8 +24,11 @@ export type ObjectNodeData = {
   fixed?: boolean
   // Runs store what they generate it with; see FlowObject.
   persistent: boolean
-  // A list of items on its own board; inside a flow process taking it, the item.
+  // A list of items on its own board; inside a flow process taking it, the
+  // item. Its links write how many items it holds at its end.
   many: boolean
+  min: number
+  max: number | null
   // A person, who carries out the human processes they link to.
   human: boolean
   // The object unfolded on the board shown.
@@ -164,7 +168,7 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
               <li key={p.id}>
                 {p.relation === 'aggregation' ? <AggregationIcon /> : <ExhibitionIcon />}
                 {p.name}
-                {p.many && <span className="part-many">[ ]</span>}
+                {p.many && <span className="part-many">[{quantityText(p)}]</span>}
               </li>
             ))}
           </ul>

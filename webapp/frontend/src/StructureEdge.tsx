@@ -1,4 +1,5 @@
 import { BaseEdge, getSmoothStepPath, Position, type Edge, type EdgeProps } from '@xyflow/react'
+import QuantityLabel from './QuantityLabel'
 
 // The OPM structural link an edge draws on an unfolded object's board.
 export type StructureKind = 'exhibition' | 'aggregation' | 'generalization'
@@ -13,8 +14,9 @@ const TRIANGLE = { height: 16, half: 9 }
 // An OPM structural link: from the whole, or the general, down to what makes
 // it up, or what specializes it. Its triangle sits under the whole, its apex
 // towards it: filled for a part it aggregates, with a filled triangle inside
-// for an attribute it exhibits, and empty for a specialization.
-export default function StructureEdge({ sourceX, sourceY, targetX, targetY, targetPosition, data }: EdgeProps<StructureEdgeType>) {
+// for an attribute it exhibits, and empty for a specialization. At the
+// part's end, it says how many of it make up the whole.
+export default function StructureEdge({ target, sourceX, sourceY, targetX, targetY, targetPosition, data }: EdgeProps<StructureEdgeType>) {
   const kind = data?.kind ?? 'exhibition'
   const base = sourceY + TRIANGLE.height
   const [path] = getSmoothStepPath({
@@ -33,6 +35,7 @@ export default function StructureEdge({ sourceX, sourceY, targetX, targetY, targ
       <BaseEdge path={path} className="structure-path" />
       <path d={outline} className={`structure-symbol ${kind}`} />
       {kind === 'exhibition' && <path d={inner} className="structure-symbol-inner" />}
+      {kind !== 'generalization' && <QuantityLabel objectId={target} x={targetX} y={targetY} side={targetPosition} />}
     </>
   )
 }

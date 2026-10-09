@@ -61,6 +61,7 @@ type structObject struct {
 	id       int64
 	name     string
 	many     bool
+	quantity quantity
 	owner    *int64
 	general  *int64
 	relation string
@@ -76,13 +77,13 @@ type rowsQuerier interface {
 
 func loadStructure(ctx context.Context, db rowsQuerier, flow int64) (structure, error) {
 	s := structure{}
-	rows, err := db.QueryContext(ctx, "SELECT id, name, many, owner_id, general_id, relation FROM objects WHERE flow_id = ? ORDER BY id", flow)
+	rows, err := db.QueryContext(ctx, "SELECT id, name, many, min_items, max_items, owner_id, general_id, relation FROM objects WHERE flow_id = ? ORDER BY id", flow)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		o := &structObject{}
-		if err := rows.Scan(&o.id, &o.name, &o.many, &o.owner, &o.general, &o.relation); err != nil {
+		if err := rows.Scan(&o.id, &o.name, &o.many, &o.quantity.min, &o.quantity.max, &o.owner, &o.general, &o.relation); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -126,8 +127,10 @@ type field struct {
 	name       string
 	definition string
 	file       bool
-	// An owned object: a list of its items, each holding fields.
-	many bool
+	// An owned object: a list of its items, each holding fields, as many
+	// as quantity says.
+	many     bool
+	quantity quantity
 	// The owned object's fields; none for an attribute, or an owned object
 	// holding any JSON value.
 	fields []field
@@ -193,7 +196,7 @@ func (s structure) fieldsOf(id int64, seen map[int64]bool) ([]field, error) {
 		if err != nil {
 			return nil, err
 		}
-		fs = append(fs, field{name: c.name, many: c.many, fields: inner, object: c.id})
+		fs = append(fs, field{name: c.name, many: c.many, quantity: c.quantity, fields: inner, object: c.id})
 	}
 	return fs, nil
 }
@@ -265,8 +268,8 @@ func copyStructure(ctx context.Context, tx *sql.Tx, s structure, object, flow in
 	if at != nil {
 		x, y = &at.X, &at.Y
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, width, many, parent_id, owner_id, relation)
-		SELECT ?, name, COALESCE(?, x), COALESCE(?, y), width, many, ?, ?, relation FROM objects WHERE id = ?`,
+	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, width, many, min_items, max_items, parent_id, owner_id, relation)
+		SELECT ?, name, COALESCE(?, x), COALESCE(?, y), width, many, min_items, max_items, ?, ?, relation FROM objects WHERE id = ?`,
 		flow, x, y, parent, owner, object)
 	if err != nil {
 		return 0, err

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { FlowObject, ObjectAttribute, Relation } from './api'
 import { Data } from './Data'
 import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TrashIcon, ZoomInIcon } from './icons'
+import { quantityText, type Quantity } from './quantity'
+import QuantityInput from './QuantityInput'
 import { fieldsOf, ownedBy, type Field } from './structure'
 
 const SAVE_DELAY_MS = 500
@@ -17,13 +19,13 @@ export default function ObjectPanel({
   name,
   attributes,
   persistent,
-  many,
+  quantity,
   human,
   editable,
   content,
   generals,
   onPersistentChange,
-  onManyChange,
+  onQuantityChange,
   onHumanChange,
   onRelationChange,
   onGeneralChange,
@@ -41,7 +43,7 @@ export default function ObjectPanel({
   name: string
   attributes: ObjectAttribute[]
   persistent: boolean
-  many: boolean
+  quantity: Quantity
   human: boolean
   // False while a run is in progress.
   editable: boolean
@@ -52,7 +54,7 @@ export default function ObjectPanel({
   onRename: (name: string) => void
   // Each resolves to whether the server took the change.
   onPersistentChange: (persistent: boolean) => Promise<boolean>
-  onManyChange: (many: boolean) => Promise<boolean>
+  onQuantityChange: (quantity: Quantity) => Promise<boolean>
   onHumanChange: (human: boolean) => Promise<boolean>
   onRelationChange: (relation: Relation) => Promise<boolean>
   onGeneralChange: (general: number | null) => Promise<boolean>
@@ -173,15 +175,18 @@ export default function ObjectPanel({
           </p>
         </>
       )}
-      <label className="panel-check">
-        <input type="checkbox" checked={many} disabled={!editable} onChange={(e) => onManyChange(e.target.checked)} />
-        <span>List of items</span>
+      <label className="panel-field">
+        <span>How many</span>
+        <QuantityInput key={quantityText(quantity)} quantity={quantity} disabled={!editable} onChange={onQuantityChange} />
       </label>
       <p className="panel-note">
+        As its links write it at its end: 1 for one object, or a list of items, such as exactly 4, 2..5, at least one as
+        1..*, or * for any number.{' '}
         {owner
-          ? `Its field holds a JSON array, one item per ${name}.`
-          : `A process generating it hands in a JSON array, and a flow process taking it runs once per item, each item as
-        this object inside it. Stored, each item's run claims its item, so an item another run took is skipped.`}
+          ? `A list's field holds a JSON array, one item per ${name}, and what is handed in must have as many.`
+          : `A process generating a list hands in a JSON array with as many items, or is asked again, and a flow process
+        taking it runs once per item, each item as this object inside it; a list it collects from its items' runs has as
+        many as ran. Stored, each item's run claims its item, so an item another run took is skipped.`}
       </p>
       {!owner && !human && (
         <>
@@ -283,7 +288,7 @@ export default function ObjectPanel({
                 <li key={p.id}>
                   <button className="link-button" title={`Unfold ${p.name}`} onClick={() => onUnfoldPart(p.id)}>
                     {p.name}
-                    {p.many && ' [ ]'}
+                    {p.many && ` [${quantityText(p)}]`}
                   </button>
                   <small> · {p.relation === 'aggregation' ? 'part' : 'attribute'}</small>
                 </li>
@@ -297,7 +302,7 @@ export default function ObjectPanel({
       </section>
       <div className="panel-run">
         <span>{owner ? `Its field in ${owner.name}` : 'Processes hand in'}</span>
-        <pre>{example(fields, many)}</pre>
+        <pre>{example(fields, quantity.many)}</pre>
       </div>
       {content !== undefined && (
         <div className="panel-run">
@@ -432,6 +437,6 @@ function example(fields: Field[], many: boolean): string {
     fs.length === 0
       ? '…'
       : `{\n${fs.map((f) => `${indent}  ${JSON.stringify(f.name)}: ${f.many ? `[${value(f.fields, indent + '  ')}]` : value(f.fields, indent + '  ')}`).join(',\n')}\n${indent}}`
-  const object = (indent: string) => value(fields.length > 0 ? fields : [{ name: 'data', definition: '', file: false, many: false, fields: [], inherited: false }], indent)
+  const object = (indent: string) => value(fields.length > 0 ? fields : [{ name: 'data', definition: '', file: false, many: false, min: 0, max: null, fields: [], inherited: false }], indent)
   return many ? `[\n  ${object('  ')}\n]` : object('')
 }

@@ -1697,6 +1697,54 @@ body {
   background: #f3f4f6;
 }
 
+/* How many of an object there are, at its end of a link. */
+.quantity-label {
+  position: absolute;
+  pointer-events: all;
+}
+
+.quantity-pill {
+  min-width: 20px;
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #24292f;
+  background: #fff;
+  border: 1px solid #8c959f;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.quantity-pill:hover:not(:disabled) {
+  border-color: #0969da;
+  color: #0969da;
+}
+
+.quantity-pill:disabled {
+  cursor: default;
+}
+
+.quantity-label .quantity-input {
+  width: 64px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.quantity-input.invalid,
+.panel-field .quantity-input.invalid {
+  border-color: #cf222e;
+  outline-color: #cf222e;
+}
+
+.entry-item-header button:disabled,
+.entry-add:disabled {
+  color: #8c959f;
+  cursor: not-allowed;
+}
+
 /* Grips on the segments of a selected link; dragging one moves the segment sideways. */
 .segment-grip {
   position: absolute;

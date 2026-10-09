@@ -241,10 +241,11 @@ type outputContract struct {
 }
 
 type shapedObject struct {
-	id     int64
-	name   string
-	many   bool
-	fields []field
+	id       int64
+	name     string
+	many     bool
+	quantity quantity
+	fields   []field
 	// The object has no fields, so it holds its value under data.
 	data bool
 }
@@ -320,6 +321,10 @@ func shapedObjects(ctx context.Context, db *sql.DB, process int64, query string,
 		}
 		objects[i].fields = fs
 		objects[i].data = len(fs) == 0
+		// Inside a flow process a list is one item of it.
+		if objects[i].many {
+			objects[i].quantity = s[objects[i].id].quantity
+		}
 	}
 	return objects, "", nil
 }
@@ -339,6 +344,8 @@ type outputSpec struct {
 type specObject struct {
 	Name       string          `json:"name"`
 	Many       bool            `json:"many"`
+	MinItems   int             `json:"minItems,omitempty"`
+	MaxItems   *int            `json:"maxItems,omitempty"`
 	Attributes []specAttribute `json:"attributes"`
 }
 
@@ -349,6 +356,8 @@ type specAttribute struct {
 	Description string          `json:"description"`
 	File        bool            `json:"file"`
 	Many        bool            `json:"many,omitempty"`
+	MinItems    int             `json:"minItems,omitempty"`
+	MaxItems    *int            `json:"maxItems,omitempty"`
 	Attributes  []specAttribute `json:"attributes,omitempty"`
 }
 
@@ -362,7 +371,7 @@ func (c *outputContract) spec() *outputSpec {
 		}
 	}
 	for _, o := range c.shaped {
-		s.Objects = append(s.Objects, specObject{Name: o.name, Many: o.many, Attributes: c.specFields(o.fields)})
+		s.Objects = append(s.Objects, specObject{Name: o.name, Many: o.many, MinItems: o.quantity.min, MaxItems: o.quantity.max, Attributes: c.specFields(o.fields)})
 	}
 	return s
 }
@@ -374,7 +383,7 @@ func (c *outputContract) specFields(fs []field) []specAttribute {
 		if f.file {
 			desc = strings.TrimSpace("The path of a file you wrote in " + c.filesDir + ". " + desc)
 		}
-		as = append(as, specAttribute{Name: f.name, Description: desc, File: f.file, Many: f.many, Attributes: c.specFields(f.fields)})
+		as = append(as, specAttribute{Name: f.name, Description: desc, File: f.file, Many: f.many, MinItems: f.quantity.min, MaxItems: f.quantity.max, Attributes: c.specFields(f.fields)})
 	}
 	return as
 }
@@ -408,15 +417,17 @@ func (c *outputContract) withContract(prompt string) string {
 	switch {
 	case len(c.shaped) > 1:
 		b.WriteString("Its arguments hold one key per object below, each a JSON object with exactly that object's keys, or for a list an array of such objects, one per item.\n")
-	case c.shaped[0].many:
+	case c.shaped[0].many && c.shaped[0].quantity.min == 0:
 		b.WriteString("Its argument items is an array with one JSON object per item, each with exactly the keys below; an empty array if there are no items.\n")
+	case c.shaped[0].many:
+		b.WriteString("Its argument items is an array with one JSON object per item, each with exactly the keys below.\n")
 	default:
 		b.WriteString("Its arguments are exactly the keys below.\n")
 	}
 	for _, o := range c.shaped {
 		switch {
 		case o.many:
-			fmt.Fprintf(&b, "\n%q, a list of items each with:\n", o.name)
+			fmt.Fprintf(&b, "\n%q, a list of items%s, each with:\n", o.name, itemsCount(o.quantity))
 		default:
 			fmt.Fprintf(&b, "\n%q:\n", o.name)
 		}
@@ -438,11 +449,11 @@ func writeFields(b *strings.Builder, fs []field, indent string) {
 		}
 		switch {
 		case len(f.fields) > 0 && f.many:
-			def = "a list of JSON objects, one per item, each with:"
+			def = "a list of JSON objects" + itemsCount(f.quantity) + ", one per item, each with:"
 		case len(f.fields) > 0:
 			def = "a JSON object with:"
 		case f.many:
-			def = "a JSON array of any values"
+			def = "a JSON array of any values" + itemsCount(f.quantity)
 		}
 		if def == "" {
 			fmt.Fprintf(b, "%s- %s\n", indent, quote(f.name))
@@ -451,6 +462,15 @@ func writeFields(b *strings.Builder, fs []field, indent string) {
 		}
 		writeFields(b, f.fields, indent+"  ")
 	}
+}
+
+// How many items a list must have, in brackets after a space, or nothing
+// for any number.
+func itemsCount(q quantity) string {
+	if w := q.words(); w != "" {
+		return " (" + w + ")"
+	}
+	return ""
 }
 
 func quote(s string) string {
@@ -499,7 +519,7 @@ func (c *outputContract) parse(reply string) (string, map[int64]string, error) {
 // The object's part of a reply, checked and with its fields in order: a
 // JSON object, or for a list a JSON array of them.
 func (c *outputContract) shapeObject(o shapedObject, s string) (string, error) {
-	out, err := c.shapeValue(field{name: o.name, many: o.many, fields: o.fields}, json.RawMessage(s), true)
+	out, err := c.shapeValue(field{name: o.name, many: o.many, quantity: o.quantity, fields: o.fields}, json.RawMessage(s), true)
 	return string(out), err
 }
 
@@ -512,6 +532,9 @@ func (c *outputContract) shapeValue(f field, v json.RawMessage, whole bool) (jso
 	}
 	items, err := jsonArray(string(v))
 	if err != nil {
+		return nil, err
+	}
+	if err := f.quantity.check(len(items)); err != nil {
 		return nil, err
 	}
 	parts := make([]string, len(items))

@@ -97,6 +97,10 @@ export type FlowObject = {
   // process taking it runs once per item. Inside that flow process, it is
   // the item.
   many: boolean
+  // How many items the list holds: at least min, and at most max unless it
+  // is null; see quantity.ts.
+  min: number
+  max: number | null
   // A person, such as a requester: in OPM a human object. Its link into a
   // process is an agent link, drawn ending in a filled circle: the person
   // carries the process out, so it must be a human process.
@@ -315,7 +319,20 @@ export function listObjects(flow: number): Promise<FlowObject[]> {
 export function createObject(
   o: Omit<
     FlowObject,
-    'id' | 'states' | 'attributes' | 'width' | 'persistent' | 'many' | 'human' | 'end' | 'parent' | 'owner' | 'relation' | 'general'
+    | 'id'
+    | 'states'
+    | 'attributes'
+    | 'width'
+    | 'persistent'
+    | 'many'
+    | 'min'
+    | 'max'
+    | 'human'
+    | 'end'
+    | 'parent'
+    | 'owner'
+    | 'relation'
+    | 'general'
   > & {
     width?: number | null
     human?: boolean
@@ -697,11 +714,12 @@ export type BoardContents = {
 }
 
 // Versions from before boards have no parents, recording or boards,
-// processes from before settings none, and objects that aren't people no human.
+// processes from before settings none, objects that aren't people no human,
+// and lists holding any number of items no min or max.
 type Snapshot = {
   processes: (Omit<Process, 'flow' | 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
-  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'human' | 'end' | 'owner' | 'relation' | 'general'> &
-    Partial<Pick<FlowObject, 'parent' | 'many' | 'human' | 'end' | 'owner' | 'relation' | 'general'>>)[]
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general'> &
+    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -730,6 +748,8 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       flow,
       parent: o.parent ?? null,
       many: o.many ?? false,
+      min: o.min ?? 0,
+      max: o.max ?? null,
       human: o.human ?? false,
       end: o.end ?? false,
       owner: o.owner ?? null,

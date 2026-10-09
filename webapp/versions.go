@@ -34,6 +34,10 @@ type snapshotObject struct {
 	Width      *float64 `json:"width"`
 	Persistent bool     `json:"persistent"`
 	Many       bool     `json:"many"`
+	// Left out when unset, as in versions from before lists said how many
+	// items they hold.
+	Min int  `json:"min,omitempty"`
+	Max *int `json:"max,omitempty"`
 	// Left out when false, so versions from before people match boards as they are.
 	Human bool `json:"human,omitempty"`
 	// Left out when false too, as is it in versions from before ends were drawn.
@@ -144,9 +148,9 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, human, at_end, parent_id, owner_id, relation, general_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General)
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General)
 		s.Objects = append(s.Objects, o)
 		return err
 	}, flow)
@@ -343,12 +347,12 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 	}
 	// Generals go in once every object is there, since one may come later.
 	for _, o := range ownersFirst(s.Objects) {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id, owner_id, relation, general_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) AS saved
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
-				many = saved.many, human = saved.human, at_end = saved.at_end, parent_id = saved.parent_id,
+				many = saved.many, min_items = saved.min_items, max_items = saved.max_items, human = saved.human, at_end = saved.at_end, parent_id = saved.parent_id,
 				owner_id = saved.owner_id, relation = saved.relation, general_id = NULL`,
-			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Human, o.End, o.Parent, o.Owner, o.Relation)
+			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation)
 		if err != nil {
 			return err
 		}

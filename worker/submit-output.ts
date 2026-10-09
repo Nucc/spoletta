@@ -16,10 +16,13 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 
+// How many items a list holds: at least minItems, and at most maxItems if given.
+type Bounds = { minItems?: number; maxItems?: number };
+
 // With attributes of its own, it holds a JSON object of them, or for many
 // an array of such objects; without, any JSON value, or for many an array.
-type Attribute = { name: string; description: string; file: boolean; many?: boolean; attributes?: Attribute[] };
-type OutputObject = { name: string; many: boolean; attributes: Attribute[] };
+type Attribute = Bounds & { name: string; description: string; file: boolean; many?: boolean; attributes?: Attribute[] };
+type OutputObject = Bounds & { name: string; many: boolean; attributes: Attribute[] };
 
 type Spec = {
 	// "object": one object, the arguments are its attributes. "items": one
@@ -39,18 +42,27 @@ const fieldsSchema = (attributes: Attribute[], options: { description?: string }
 		additionalProperties: false,
 	});
 
+const bounds = (b: Bounds): Bounds => ({
+	...(b.minItems ? { minItems: b.minItems } : {}),
+	...(b.maxItems !== undefined ? { maxItems: b.maxItems } : {}),
+});
+
 function attributeSchema(a: Attribute): TSchema {
 	const description = a.description || undefined;
 	if (a.file) return Type.String({ description });
 	if (a.attributes?.length) {
-		return a.many ? Type.Array(fieldsSchema(a.attributes), { description }) : fieldsSchema(a.attributes, { description });
+		return a.many
+			? Type.Array(fieldsSchema(a.attributes), { description, ...bounds(a) })
+			: fieldsSchema(a.attributes, { description });
 	}
-	return a.many ? Type.Array(Type.Any(), { description }) : Type.Any({ description });
+	return a.many ? Type.Array(Type.Any(), { description, ...bounds(a) }) : Type.Any({ description });
 }
 
 const objectSchema = (o: OutputObject) => fieldsSchema(o.attributes);
 
-const partSchema = (o: OutputObject): TSchema => (o.many ? Type.Array(objectSchema(o)) : objectSchema(o));
+const listSchema = (o: OutputObject) => Type.Array(objectSchema(o), bounds(o));
+
+const partSchema = (o: OutputObject): TSchema => (o.many ? listSchema(o) : objectSchema(o));
 
 function parameters(spec: Spec): TSchema {
 	const [first] = spec.objects;
@@ -58,7 +70,7 @@ function parameters(spec: Spec): TSchema {
 		case "object":
 			return objectSchema(first);
 		case "items":
-			return Type.Object({ items: Type.Array(objectSchema(first)) }, { additionalProperties: false });
+			return Type.Object({ items: listSchema(first) }, { additionalProperties: false });
 		default:
 			return Type.Object(Object.fromEntries(spec.objects.map((o) => [o.name, partSchema(o)])), {
 				additionalProperties: false,

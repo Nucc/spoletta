@@ -4,6 +4,7 @@ import { BaseEdge, EdgeLabelRenderer, Position, useEdges, useNodesData, useReact
 import { useBoardActions } from './actions'
 import type { Link } from './api'
 import { PlusIcon } from './icons'
+import QuantityLabel from './QuantityLabel'
 import type { ObjectNodeType } from './ObjectNode'
 import { lanesOf, moveSegment, roundedPath, routePoints, segments, type End, type Lanes } from './route'
 
@@ -50,6 +51,17 @@ export default function LinkEdge({
   const { screenToFlowPosition } = useReactFlow()
   const from = useNodesData<ObjectNodeType>(sourceId)
   const agent = data?.link?.direction === 'input' && from?.type === 'object' && Boolean(from.data.human)
+  // The object's end says how many of it there are: always for a list, and
+  // for one object once the link is selected, to make it a list. Inside a
+  // flow process a list from outside is one item, and a person is one.
+  const objectAtSource = data?.link?.direction === 'input'
+  const objectId = data?.link ? (objectAtSource ? sourceId : target) : undefined
+  const object = useNodesData<ObjectNodeType>(objectId ?? '')
+  const counted =
+    object?.type === 'object' &&
+    !object.data.boundary &&
+    !object.data.human &&
+    (object.data.many || (selected && actions.editable))
   const source: End = { x: sourceX, y: sourceY, position: sourcePosition }
   const end: End = { x: targetX, y: targetY, position: targetPosition }
   const points = routePoints(source, end, data?.route)
@@ -101,6 +113,14 @@ export default function LinkEdge({
             />
           ))}
         </EdgeLabelRenderer>
+      )}
+      {counted && objectId && (
+        <QuantityLabel
+          objectId={objectId}
+          x={objectAtSource ? sourceX : targetX}
+          y={objectAtSource ? sourceY : targetY}
+          side={objectAtSource ? sourcePosition : targetPosition}
+        />
       )}
       {data?.decision && data.link && (
         <EdgeLabelRenderer>

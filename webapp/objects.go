@@ -26,6 +26,10 @@ type object struct {
 	// A list of items: an agent generating it replies with a list, and a
 	// flow process taking it runs once per item; see items.go.
 	Many bool `json:"many"`
+	// How many items the list holds: at least min, and at most max unless
+	// it is null; see items.go.
+	Min int  `json:"min"`
+	Max *int `json:"max"`
 	// A person, such as a requester: in OPM a human object, whose input link
 	// is an agent link, saying the person carries out the process. Only a
 	// human process takes it.
@@ -169,7 +173,7 @@ func migrateObjects(db *sql.DB) error {
 	return err
 }
 
-const objectColumns = "id, flow_id, name, x, y, width, persistent, many, human, at_end, parent_id, owner_id, relation, general_id"
+const objectColumns = "id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id"
 
 // Whether an object is on a board of processes, rather than owned by
 // another object.
@@ -177,7 +181,7 @@ const onProcessBoard = "owner_id IS NULL"
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General)
+	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General)
 	if err != nil {
 		return o, err
 	}
@@ -222,7 +226,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General); err != nil {
+			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -317,7 +321,12 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			// Turning it off keeps what was stored.
 			Persistent *bool `json:"persistent"`
 			Many       *bool `json:"many"`
-			Human      *bool `json:"human"`
+			// How many items a list holds; raw so that an explicit null max,
+			// no most, is told apart from an absent one. Checked with what
+			// the object has once patched.
+			Min   *int            `json:"min"`
+			Max   json.RawMessage `json:"max"`
+			Human *bool           `json:"human"`
 			// Only an object of the top board other than a person can end it.
 			End *bool `json:"end"`
 			// Only an owned object has one.
@@ -341,9 +350,11 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 
-		var owned bool
+		var owned, many bool
 		var flow int64
-		err = db.QueryRowContext(r.Context(), "SELECT owner_id IS NOT NULL, flow_id FROM objects WHERE id = ?", id).Scan(&owned, &flow)
+		var q quantity
+		err = db.QueryRowContext(r.Context(), "SELECT owner_id IS NOT NULL, flow_id, many, min_items, max_items FROM objects WHERE id = ?", id).
+			Scan(&owned, &flow, &many, &q.min, &q.max)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "object not found", http.StatusNotFound)
 			return
@@ -360,6 +371,27 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "only an object making up another has a relation, exhibition or aggregation", http.StatusBadRequest)
 			return
 		}
+		if patch.Many != nil {
+			many = *patch.Many
+		}
+		if patch.Min != nil {
+			q.min = *patch.Min
+		}
+		if len(patch.Max) > 0 {
+			if err := json.Unmarshal(patch.Max, &q.max); err != nil {
+				http.Error(w, "invalid max: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if !many && patch.Min == nil && len(patch.Max) == 0 {
+			// One object holds no bounds of a list it was.
+			q = quantity{}
+		}
+		if msg := checkQuantity(many, q); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+
 		var general *int64
 		setGeneral := len(patch.General) > 0
 		if setGeneral {
@@ -418,8 +450,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = COALESCE(?, many), human = COALESCE(?, human), at_end = COALESCE(?, at_end), relation = COALESCE(?, relation) WHERE id = ?",
-			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, patch.Many, patch.Human, patch.End, patch.Relation, id)
+			"UPDATE objects SET name = COALESCE(?, name), x = COALESCE(?, x), y = COALESCE(?, y), width = COALESCE(?, width), persistent = COALESCE(?, persistent), many = ?, min_items = ?, max_items = ?, human = COALESCE(?, human), at_end = COALESCE(?, at_end), relation = COALESCE(?, relation) WHERE id = ?",
+			patch.Name, patch.X, patch.Y, patch.Width, patch.Persistent, many, q.min, q.max, patch.Human, patch.End, patch.Relation, id)
 		if err != nil {
 			serverError(w, err)
 			return

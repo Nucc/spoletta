@@ -17,6 +17,7 @@ import {
   type ThinkingLevel,
 } from './api'
 import { Data } from './Data'
+import { quantityWords, type Quantity } from './quantity'
 import { fieldsOf, holdsFile, shapeOf, type Field } from './structure'
 import { MCPServerPicker } from './MCPSettings'
 import { RepositoryPicker } from './FlowSettings'
@@ -63,10 +64,9 @@ const MAX_SENTRY_ISSUES = 50
 
 // An object a human process generates without deciding on its states, which
 // the person carrying it out fills in.
-export type EntryObject = {
+export type EntryObject = Quantity & {
   id: number
   name: string
-  many: boolean
   // The fields the person fills in, nested as the objects it is made of are.
   fields: Field[]
 }
@@ -458,11 +458,15 @@ type Draft = EntryValue
 
 // One item of a field: its fields, or the text typed for it.
 const emptyOne = (fields: Field[]): Draft => (fields.length === 0 ? '' : Object.fromEntries(fields.map((f) => [f.name, emptyValue(f)])))
-const emptyValue = (f: Pick<Field, 'fields' | 'many'>): Draft => (f.many ? [emptyOne(f.fields)] : emptyOne(f.fields))
+// A list starts with as many items as it holds at least, and one if it may
+// have none.
+const emptyValue = (f: Pick<Field, 'fields' | 'many' | 'min'>): Draft =>
+  f.many ? Array.from({ length: Math.max(f.min, 1) }, () => emptyOne(f.fields)) : emptyOne(f.fields)
 const emptyDraft = (o: EntryObject): Draft => (o.fields.length === 0 ? '' : emptyValue(o))
 
 // Every field is needed: the objects are what the run goes on from. A list
-// may have no items.
+// may have no items, unless it holds at least some; the form keeps it within
+// how many it holds.
 const filled = (d: Draft): boolean =>
   typeof d === 'string' ? d.trim() !== '' : Array.isArray(d) ? d.every(filled) : Object.values(d).every(filled)
 
@@ -569,39 +573,54 @@ function EntryFields({ object, draft, onChange }: { object: EntryObject; draft: 
   return (
     <fieldset className="entry">
       <legend>{object.name}</legend>
-      <EntryValueFields fields={object.fields} many={object.many} value={draft} onChange={onChange} />
+      <EntryValueFields fields={object.fields} quantity={object} value={draft} onChange={onChange} />
     </fieldset>
   )
 }
 
-// A value with fields, or for a list its items, each with a header to remove it.
+// A value with fields, or for a list its items, each with a header to remove
+// it, as many as the list holds.
 function EntryValueFields({
   fields,
-  many,
+  quantity,
   value,
   onChange,
 }: {
   fields: Field[]
-  many: boolean
+  quantity: Quantity
   value: Draft
   onChange: (d: Draft) => void
 }) {
-  if (!many) return <EntryItem fields={fields} value={value} onChange={onChange} />
+  if (!quantity.many) return <EntryItem fields={fields} value={value} onChange={onChange} />
   const items = Array.isArray(value) ? value : []
+  const words = quantityWords(quantity)
+  const fewest = items.length <= quantity.min
+  const most = quantity.max !== null && items.length >= quantity.max
   return (
     <>
+      {words && <small className="panel-note">Holds {words} items.</small>}
       {items.map((item, i) => (
         <div key={i} className="entry-item">
           <div className="entry-item-header">
             <span>Item {i + 1}</span>
-            <button aria-label={`Remove item ${i + 1}`} title="Remove item" onClick={() => onChange(items.filter((_, j) => j !== i))}>
+            <button
+              aria-label={`Remove item ${i + 1}`}
+              title={fewest ? `It holds ${words} items` : 'Remove item'}
+              disabled={fewest}
+              onClick={() => onChange(items.filter((_, j) => j !== i))}
+            >
               ×
             </button>
           </div>
           <EntryItem fields={fields} value={item} onChange={(d) => onChange(items.map((it, j) => (j === i ? d : it)))} />
         </div>
       ))}
-      <button className="entry-add" onClick={() => onChange([...items, emptyOne(fields)])}>
+      <button
+        className="entry-add"
+        disabled={most}
+        title={most ? `It holds ${words} items` : undefined}
+        onClick={() => onChange([...items, emptyOne(fields)])}
+      >
         Add item
       </button>
     </>
@@ -621,7 +640,7 @@ function EntryItem({ fields, value, onChange }: { fields: Field[]; value: Draft;
         f.fields.length > 0 || f.many ? (
           <fieldset key={f.name} className="entry entry-nested">
             <legend>{f.name}</legend>
-            <EntryValueFields fields={f.fields} many={f.many} value={item[f.name] ?? emptyValue(f)} onChange={(v) => set(f.name, v)} />
+            <EntryValueFields fields={f.fields} quantity={f} value={item[f.name] ?? emptyValue(f)} onChange={(v) => set(f.name, v)} />
           </fieldset>
         ) : (
           <label key={f.name} className="panel-field">

@@ -1,4 +1,5 @@
 import type { FlowObject, ObjectAttribute } from './api'
+import { quantityText } from './quantity'
 
 // What an object is made of, as OPM unfolds an object into a diagram of its
 // own, the same way the server reads it (see structure.go): the attributes
@@ -14,8 +15,11 @@ export type Field = {
   name: string
   definition: string
   file: boolean
-  // An owned object that is a list: an array of items, each with its fields.
+  // An owned object that is a list: an array of items, each with its fields,
+  // at least min and at most max of them unless it is null.
   many: boolean
+  min: number
+  max: number | null
   // An owned object's fields; none for an attribute, or for an owned object
   // holding any JSON value.
   fields: Field[]
@@ -44,12 +48,14 @@ export function fieldsOf(objects: FlowObject[], id: number, seen: Set<number> = 
   const inherited = o.general === null ? [] : fieldsOf(objects, o.general, inner).map((f) => ({ ...f, inherited: true }))
   return [
     ...inherited,
-    ...o.attributes.map((a) => ({ name: a.name, definition: a.definition, file: a.file, many: false, fields: [], attribute: a, inherited: false })),
+    ...o.attributes.map((a) => ({ name: a.name, definition: a.definition, file: a.file, many: false, min: 0, max: null, fields: [], attribute: a, inherited: false })),
     ...ownedBy(objects, id).map((c) => ({
       name: c.name,
       definition: '',
       file: false,
       many: c.many,
+      min: c.min,
+      max: c.max,
       fields: fieldsOf(objects, c.id, inner),
       object: c,
       inherited: false,
@@ -98,6 +104,7 @@ export function possibleGenerals(objects: FlowObject[], id: number): FlowObject[
 }
 
 // The shape of what fields hold, as text that is the same for the same
-// shape: names, lists and nested fields, in order.
+// shape: names, lists with how many items they hold, and nested fields, in
+// order.
 export const shapeOf = (fields: Field[]): string =>
-  fields.map((f) => `${JSON.stringify(f.name)}${f.many ? '[]' : ''}${f.fields.length > 0 ? `{${shapeOf(f.fields)}}` : ''}`).join(',')
+  fields.map((f) => `${JSON.stringify(f.name)}${f.many ? `[${quantityText(f)}]` : ''}${f.fields.length > 0 ? `{${shapeOf(f.fields)}}` : ''}`).join(',')

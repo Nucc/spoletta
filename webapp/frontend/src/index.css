@@ -1134,6 +1134,18 @@ body {
   border-radius: 32px;
 }
 
+/* A never resized node widens to fit its name, up to a limit; resizing it by
+   hand goes past that. The min-widths match NODE_SIZE in Board.tsx. */
+.process-node.auto-width {
+  min-width: 240px;
+  max-width: 480px;
+}
+
+.object-node.auto-width {
+  min-width: 200px;
+  max-width: 400px;
+}
+
 .object-node {
   width: 100%;
   min-height: 56px;

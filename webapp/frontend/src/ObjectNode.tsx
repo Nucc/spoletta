@@ -65,7 +65,7 @@ export const stateSourceHandle = (state: number) => `state-out-${state}`
 // listed below them, then the objects it is made of, which its own board
 // shows, unfolded, linked to it. An object made of others has a thick
 // border, as OPM marks a refined thing.
-export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeType>) {
+export default function ObjectNode({ id, data, selected, width }: NodeProps<ObjectNodeType>) {
   const actions = useBoardActions()
   const draft = id.startsWith('draft-')
   const leaf = useNodeConnections({ handleType: 'source' }).length === 0
@@ -77,7 +77,7 @@ export default function ObjectNode({ id, data, selected }: NodeProps<ObjectNodeT
 
   return (
     <div
-      className={`object-node${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}${data.boundary ? ' boundary' : ''}${data.many && !data.boundary ? ' many' : ''}${data.parts?.length ? ' refined' : ''}`}
+      className={`object-node${width === undefined ? ' auto-width' : ''}${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}${data.boundary ? ' boundary' : ''}${data.many && !data.boundary ? ' many' : ''}${data.parts?.length ? ' refined' : ''}`}
       title={data.content}
     >
       <WidthResizer id={id} minWidth={140} />

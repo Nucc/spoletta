@@ -71,7 +71,7 @@ function subtitle(data: ProcessNodeData): string {
 
 // OPM process: a rounded card, its corners as round as the card is tall, with
 // an icon for who carries it out. Inputs arrive on top, outputs leave below.
-export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeType>) {
+export default function ProcessNode({ id, data, selected, width }: NodeProps<ProcessNodeType>) {
   const actions = useBoardActions()
   const human = data.kind === 'human'
   const draft = id.startsWith('draft-')
@@ -79,7 +79,7 @@ export default function ProcessNode({ id, data, selected }: NodeProps<ProcessNod
   const KindIcon = KIND_ICONS[data.kind]
 
   return (
-    <div className={`process-node ${data.kind}${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}`}>
+    <div className={`process-node ${data.kind}${width === undefined ? ' auto-width' : ''}${selected ? ' selected' : ''}${data.status ? ` ${data.status}` : ''}`}>
       <WidthResizer id={id} minWidth={160} />
       <Handle type="target" position={Position.Top} />
       <Handle type="source" position={Position.Bottom} />

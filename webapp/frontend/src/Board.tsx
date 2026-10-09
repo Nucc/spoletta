@@ -135,8 +135,9 @@ const edgeTypes = { link: LinkEdge, structure: StructureEdge }
 // The column on the right of the board that holds the open panel.
 const PANEL_COLUMN = { storageKey: 'panel-width', min: 320, max: 1600, initial: 420, edge: 'left' } as const
 
-// Default sizes of new or never resized nodes; resizing changes only the
-// width. Used to place new nodes before they are measured.
+// Default sizes of new nodes; resizing changes only the width. Used to place
+// new nodes before they are measured. A never resized node widens to fit its
+// name, up to the max-width of .auto-width in index.css.
 const NODE_SIZE = {
   process: { width: 240, height: 64 },
   object: { width: 200, height: 56 },
@@ -443,7 +444,8 @@ export default function Board({
                   })
                 ).id,
               )
-        setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: newId } : n)))
+        // Once named, it widens to fit its name.
+        setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, id: newId, width: undefined } : n)))
         // A new subflow process brings the outcomes of the flow it runs, and
         // a new object on an unfolded one's board makes it up.
         if ((node.type === 'process' && node.data.kind === 'subflow') || unfoldedRef.current !== null) await reload.current()
@@ -468,7 +470,7 @@ export default function Board({
       id: objectNodeId(o.id),
       type: 'object',
       position: position ?? { x: o.x, y: o.y },
-      width: o.width ?? NODE_SIZE.object.width,
+      width: o.width ?? undefined,
       deletable: false,
       data: {
         name: o.name,
@@ -502,7 +504,7 @@ export default function Board({
       id: String(p.id),
       type: 'process',
       position: { x: p.x, y: p.y },
-      width: p.width ?? NODE_SIZE.process.width,
+      width: p.width ?? undefined,
       deletable: false,
       data: {
         name: p.name,

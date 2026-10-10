@@ -280,8 +280,13 @@ func (o *oplWriter) processSentences(p process, indent string) {
 			takes[l.Object] = true
 		}
 	}
+	// With a quorum each condition only counts towards it.
 	for _, ob := range conditionOrder {
-		o.line(indent, "%s occurs if %s is %s, and is skipped otherwise.", name, o.object(ob), o.stateList(conditions[ob], "or"))
+		if p.Settings.Quorum != nil {
+			o.line(indent, "%s takes %s if it is %s.", name, o.object(ob), o.stateList(conditions[ob], "or"))
+		} else {
+			o.line(indent, "%s occurs if %s is %s, and is skipped otherwise.", name, o.object(ob), o.stateList(conditions[ob], "or"))
+		}
 	}
 
 	for _, l := range outs {
@@ -310,16 +315,24 @@ func (o *oplWriter) processSentences(p process, indent string) {
 
 	st := p.Settings
 	if st.Quorum != nil {
-		o.line(indent, "%s needs %d of what it takes.", name, *st.Quorum)
+		o.line(indent, "%s needs %d of what it takes, and is skipped once it can't get them.", name, *st.Quorum)
 	}
-	if p.Kind == kindAgent && slices.ContainsFunc(outs, func(l snapshotLink) bool { return len(o.linkStates[l.ID]) > 0 }) {
+	// Rounds bound only a review, which can send work back.
+	reviews := slices.ContainsFunc(outs, func(l snapshotLink) bool {
+		return len(o.linkStates[l.ID]) > 0 && slices.ContainsFunc(ins, func(i snapshotLink) bool { return i.Object == l.Object })
+	})
+	if p.Kind == kindAgent && reviews {
 		o.line(indent, "%s runs at most %d rounds.", name, st.rounds())
 	}
 	if st.Timeout != nil {
 		o.line(indent, "%s fails after %d seconds.", name, *st.Timeout)
 	}
 	if st.Retries != nil && *st.Retries > 0 {
-		o.line(indent, "%s is tried again up to %d times when it fails.", name, *st.Retries)
+		times := "times"
+		if *st.Retries == 1 {
+			times = "time"
+		}
+		o.line(indent, "%s is tried again up to %d %s when it fails.", name, *st.Retries, times)
 	}
 	for _, c := range o.s.Connections {
 		if c.Source != p.ID {

@@ -81,7 +81,7 @@ func TestOPL(t *testing.T) {
 		`"Editor" handles "Review".`,
 		`"Patch" entering "good" triggers "Review".`,
 		`"Merge" consumes "Queue".`,
-		`"Merge" needs 2 of what it takes.`,
+		`"Merge" needs 2 of what it takes, and is skipped once it can't get them.`,
 		`"Release" follows "Merge".`,
 		`"Deploy" is a procedure, which runs the flow "Deploy prod".`,
 		`The flow starts with "Triage".`,
@@ -97,6 +97,9 @@ func TestOPL(t *testing.T) {
 	// What the flow process's board has isn't said on the top board.
 	if strings.Contains(got, "\n\"Tag\" is") {
 		t.Errorf("an inner process is on the top board:\n%s", got)
+	}
+	if strings.Contains(got, `"Triage" runs at most`) {
+		t.Errorf("a classifier has rounds:\n%s", got)
 	}
 	if strings.Contains(got, `"Critic" takes "Patch"`) || strings.Contains(got, `"Critic" yields "Patch"`) {
 		t.Errorf("a review reads as taking or yielding:\n%s", got)
@@ -115,5 +118,24 @@ func TestOPLEffect(t *testing.T) {
 	got := opl(s, nil)
 	if !strings.Contains(got, `"Edit" affects "Doc".`) || strings.Contains(got, "takes") || strings.Contains(got, "yields") {
 		t.Errorf("OPL of an effect:\n%s", got)
+	}
+}
+
+func TestOPLQuorumOfConditions(t *testing.T) {
+	two, one := 2, 1
+	s := snapshot{
+		Processes: []process{{ID: 1, Name: "Merge", Kind: kindScript, Settings: processSettings{Quorum: &two, Retries: &one}}},
+		Objects:   []snapshotObject{{ID: 2, Name: "Verdict"}},
+		States:    []objectState{{ID: 3, Object: 2, Name: "approved"}},
+		Links:     []snapshotLink{{ID: 4, Process: 1, Object: 2, Direction: directionInput, State: 3, Condition: true}},
+	}
+	got := opl(s, nil)
+	for _, want := range []string{`"Merge" takes "Verdict" if it is "approved".`, `is tried again up to 1 time when it fails.`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("OPL lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "skipped otherwise") {
+		t.Errorf("a condition under a quorum reads as one that must hold:\n%s", got)
 	}
 }

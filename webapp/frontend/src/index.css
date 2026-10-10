@@ -1380,6 +1380,23 @@ body {
   fill: #1f6feb;
 }
 
+/* A failure connection: OPM's exception link, to what handles a failure. */
+.react-flow__edge.failure .react-flow__edge-path {
+  stroke: #cf222e;
+  stroke-dasharray: 6 4;
+}
+
+.failure-label {
+  position: absolute;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #cf222e;
+  color: #cf222e;
+  font-size: 11px;
+  pointer-events: all;
+}
+
 /* A human's link to a state it can decide on. */
 .react-flow__edge.decision .react-flow__edge-path {
   stroke: #e16f24;

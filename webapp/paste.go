@@ -298,7 +298,7 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 		source, ok := p.procMap[c.Source]
 		target, ok2 := p.procMap[c.Target]
 		if ok && ok2 {
-			if _, err := tx.ExecContext(ctx, "INSERT INTO connections (source_id, target_id) VALUES (?, ?)", source, target); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO connections (source_id, target_id, kind) VALUES (?, ?, ?)", source, target, c.Kind); err != nil {
 				return res, "", err
 			}
 		}

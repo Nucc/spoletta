@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type process struct {
@@ -51,6 +52,32 @@ type processSettings struct {
 	// decisions can no longer send the object back to a process that ran;
 	// defaultRounds when absent. See engine.go.
 	Rounds *int `json:"rounds,omitempty"`
+	// How long an agent, script or Sentry step may take, in seconds, before
+	// it fails; the worker's own limit when absent.
+	Timeout *int `json:"timeout,omitempty"`
+	// How many more times a failed agent, script or Sentry step is tried, as
+	// a step of its own each time; none when absent.
+	Retries *int `json:"retries,omitempty"`
+}
+
+// The longest a step may be given, a day, and the most retries.
+const (
+	maxTimeout = 24 * 60 * 60
+	maxRetries = 5
+)
+
+func (s processSettings) timeout() time.Duration {
+	if s.Timeout == nil {
+		return 0
+	}
+	return time.Duration(*s.Timeout) * time.Second
+}
+
+func (s processSettings) retries() int {
+	if s.Retries == nil {
+		return 0
+	}
+	return *s.Retries
 }
 
 // How many rounds an agent deciding states runs at most by default, and at
@@ -78,6 +105,12 @@ func (s processSettings) sentry() sentrySettings {
 func (s processSettings) problem() string {
 	if s.Rounds != nil && (*s.Rounds < 1 || *s.Rounds > maxRounds) {
 		return fmt.Sprintf("rounds must be from 1 to %d", maxRounds)
+	}
+	if s.Timeout != nil && (*s.Timeout < 1 || *s.Timeout > maxTimeout) {
+		return fmt.Sprintf("timeout must be from 1 to %d seconds", maxTimeout)
+	}
+	if s.Retries != nil && (*s.Retries < 0 || *s.Retries > maxRetries) {
+		return fmt.Sprintf("retries must be from 0 to %d", maxRetries)
 	}
 	if s.Sentry != nil {
 		return s.Sentry.problem()

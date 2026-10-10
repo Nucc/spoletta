@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // The engine executes runs in the server, so a run goes on without the page
@@ -37,7 +39,13 @@ import (
 //
 // A failure stops its branch, and every process runs at most once per pass,
 // so cycles end. An agent, script or Sentry step stopped while it goes
-// fails, so stops its branch the same way; the rest of the run goes on.
+// fails, so stops its branch the same way; the rest of the run goes on. Such
+// a step can have a timeout, after which it fails, and retries, each a step
+// of its own, before it fails for good; a stopped one isn't retried. A
+// failure connection, OPM's exception link, handles a failure instead: the
+// failed process's branch ends, but the run doesn't fail, and the processes
+// it leads to run in a fresh pass, taking what the failed one took and what
+// went wrong. A step stopped by a person or with its run isn't handled.
 // Processes still connected directly run right after their predecessor.
 //
 // A human process waits for a person to review its inputs and set an object
@@ -310,6 +318,8 @@ type walk struct {
 	inputs     map[int64][]linkEnd
 	takers     map[int64][]taker
 	successors map[int64][]int64
+	// Process to those handling its failure.
+	handlers   map[int64][]int64
 	objects    map[int64]string
 	stateNames map[int64]string
 	// State to the object it belongs to.
@@ -335,7 +345,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		e: e, ctx: ctx, run: run, lr: lr, fr: fr, board: board, ws: ws,
 		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{}, settings: map[int64]processSettings{},
 		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{},
-		takers: map[int64][]taker{}, successors: map[int64][]int64{},
+		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{},
 		generated: map[int64]bool{}, values: map[int64]value{}, ran: map[int64]int{},
 	}
@@ -390,7 +400,12 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		}
 	}
 	for _, c := range s.Connections {
-		if _, ok := w.kinds[c.Source]; ok {
+		if _, ok := w.kinds[c.Source]; !ok {
+			continue
+		}
+		if c.Kind == connectionFailure {
+			w.handlers[c.Source] = append(w.handlers[c.Source], c.Target)
+		} else {
 			w.successors[c.Source] = append(w.successors[c.Source], c.Target)
 		}
 	}
@@ -534,6 +549,12 @@ func all(fns []func()) {
 // trigger: the object whose entering a state the process takes it in made it
 // run, 0 for none.
 func (w *walk) runProcess(id int64, p *pass, trigger int64) {
+	w.runProcessWith(id, p, trigger, nil)
+}
+
+// Runs a process taking extra besides what it takes, such as a failure it
+// handles.
+func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput) {
 	if w.stopped() || !p.visit(id) {
 		return
 	}
@@ -567,6 +588,11 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 			}
 		} else {
 			given = append(given, w.asInput(trigger))
+		}
+	}
+	for _, in := range extra {
+		if !slices.ContainsFunc(given, func(g runInput) bool { return g.Name == in.Name }) {
+			given = append(given, in)
 		}
 	}
 	w.mu.Unlock()
@@ -605,9 +631,10 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 			if w.decides[id][o] {
 				if w.ran[id] >= w.settings[id].rounds() && slices.ContainsFunc(takers, func(t int64) bool { return w.ran[t] > 0 }) {
 					w.mu.Unlock()
-					w.note(id, stepError, fmt.Sprintf("It decided %s is %s again after %d rounds, the most it runs; it can no longer send it back.",
-						strconv.Quote(w.objects[o]), strconv.Quote(w.stateNames[st]), w.ran[id]))
-					w.fail()
+					msg := fmt.Sprintf("It decided %s is %s again after %d rounds, the most it runs; it can no longer send it back.",
+						strconv.Quote(w.objects[o]), strconv.Quote(w.stateNames[st]), w.ran[id])
+					w.note(id, stepError, msg)
+					w.handleFailure(id, given, msg)
 					return
 				}
 				if fresh == nil {
@@ -636,11 +663,20 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 // object in the state its link names. False if it failed or found a
 // duplicate, which terminates the run and so still returns what it generated.
 func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64]value, bool) {
-	res, ok := w.execute(id, given, cr)
+	var res runResult
+	var ok, stopped bool
+	for try := 0; ; try++ {
+		res, ok, stopped = w.execute(id, given, cr)
+		if ok || stopped || w.stopped() || try >= w.settings[id].retries() {
+			break
+		}
+	}
 	if !ok {
-		w.mu.Lock()
-		w.failed = true
-		w.mu.Unlock()
+		if stopped {
+			w.fail()
+		} else {
+			w.handleFailure(id, given, res.Error)
+		}
 		return nil, false
 	}
 	out := map[int64]value{}
@@ -716,6 +752,26 @@ func (w *walk) fail() {
 	w.mu.Lock()
 	w.failed = true
 	w.mu.Unlock()
+}
+
+// The process failed, saying why: what handles its failure runs, each in a
+// fresh pass, taking what it took and what went wrong; without any, the
+// run fails.
+func (w *walk) handleFailure(id int64, given []runInput, msg string) {
+	handlers := w.handlers[id]
+	if len(handlers) == 0 || w.stopped() {
+		w.fail()
+		return
+	}
+	if msg == "" {
+		msg = "It failed."
+	}
+	extra := append([]runInput{{Name: "Failure of " + w.names[id], Content: msg}}, given...)
+	next := make([]func(), len(handlers))
+	for i, h := range handlers {
+		next[i] = func() { w.runProcessWith(h, newPass(), 0, extra) }
+	}
+	all(next)
 }
 
 // One item of a list a flow process runs for.
@@ -1121,15 +1177,27 @@ func (w *walk) setState(id, stepID int64, d decision) []func() {
 
 // Executes an agent, script or Sentry process as a step of the run, once a
 // slot is free; the step can be stopped on its own while it goes. False if
-// it failed or was stopped; a duplicate is a result, and terminates the run.
-func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool) {
+// it failed or was stopped, and whether it was stopped, by a person or with
+// its run, rather than failed; a duplicate is a result, and terminates the
+// run. A step with a timeout fails once it runs out: the worker ends agents
+// and scripts then, and the engine a little later if the worker doesn't.
+func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool, bool) {
 	select {
 	case w.e.slots <- struct{}{}:
 	case <-w.ctx.Done():
-		return runResult{}, false
+		return runResult{}, false, true
 	}
-	ctx, cancel := context.WithCancel(w.ctx)
+	stop, cancel := context.WithCancel(w.ctx)
 	defer cancel()
+	ctx := stop
+	if t := w.settings[id].timeout(); t > 0 {
+		if w.kinds[id] != kindSentry {
+			t += timeoutGrace
+		}
+		var end context.CancelFunc
+		ctx, end = context.WithTimeout(stop, t)
+		defer end()
+	}
 	var stepID int64
 	started := func(id int64) {
 		w.e.mu.Lock()
@@ -1157,7 +1225,18 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 		if ctx.Err() == nil {
 			log.Printf("run process %d in run %d: %v", id, w.run, err)
 		}
-		return res, false
+		return res, false, stop.Err() != nil
 	}
-	return res, res.OK || res.Duplicate != nil
+	return res, res.OK || res.Duplicate != nil, stop.Err() != nil
+}
+
+// How long after its timeout the engine ends a step the worker didn't.
+const timeoutGrace = 30 * time.Second
+
+// Why a step's context ended, as the step's error.
+func stopReason(ctx context.Context) string {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "it ran longer than its timeout"
+	}
+	return "it was stopped"
 }

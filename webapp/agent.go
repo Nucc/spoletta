@@ -69,6 +69,9 @@ type agentRun struct {
 	// Resume carries on one that exists.
 	SessionID string `json:"sessionId,omitempty"`
 	Resume    bool   `json:"resume,omitempty"`
+	// How long the run may take, if the process has a timeout; the
+	// worker's own limit otherwise.
+	TimeoutMS int64 `json:"timeoutMs,omitempty"`
 }
 
 // The pi session of a step that worked in a workspace, which follow-ups carry on.
@@ -148,6 +151,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	if err != nil {
 		return res, err
 	}
+	run.TimeoutMS = settings.timeout().Milliseconds()
 	switch {
 	case strings.TrimSpace(run.Prompt) == "":
 		res.Error = "the process has no prompt"
@@ -263,7 +267,7 @@ func recordDecisions(ctx context.Context, db *sql.DB, stepID int64, decisions ma
 func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, stepID int64, attempt int) runResult {
 	failed := func(err error) runResult {
 		if ctx.Err() != nil {
-			return runResult{Error: "it was stopped"}
+			return runResult{Error: stopReason(ctx)}
 		}
 		return runResult{Error: "worker unavailable: " + err.Error()}
 	}

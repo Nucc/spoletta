@@ -21,6 +21,8 @@ export type LinkEdgeData = {
   // board keeps routes of links and the start edge, not of direct connections.
   route?: Lanes | null
   routable?: boolean
+  // A failure connection, which runs its target once its source fails.
+  failure?: boolean
 }
 
 export type LinkEdgeType = Edge<LinkEdgeData, 'link'>
@@ -145,6 +147,17 @@ export default function LinkEdge({
             chosen={data.link.states}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           />
+        </EdgeLabelRenderer>
+      )}
+      {data?.failure && (
+        <EdgeLabelRenderer>
+          <div
+            className="failure-label nodrag nopan"
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            title="Runs when the process it leaves fails, taking what it took and what went wrong"
+          >
+            on failure
+          </div>
         </EdgeLabelRenderer>
       )}
       {insertable && (

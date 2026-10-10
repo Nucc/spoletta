@@ -29,6 +29,9 @@ type scriptRun struct {
 	// The workspace it works in, its working directory, if it works on
 	// repositories; $WORKSPACE and $BRANCH say where and on which branch.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// How long the script may take, if the process has a timeout; the
+	// worker's own limit otherwise.
+	TimeoutMS int64 `json:"timeoutMs,omitempty"`
 }
 
 type scriptInput struct {
@@ -65,6 +68,7 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 	}
 
 	run.Workspace = ws.forProcess(settings)
+	run.TimeoutMS = settings.timeout().Milliseconds()
 	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Script, inputs, nil)
 	if err != nil {
 		return res, err
@@ -81,7 +85,7 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 		if err := callWorker(ctx, http.MethodPost, workerURL+"/script", run, &res); err != nil {
 			res = runResult{Error: "worker unavailable: " + err.Error()}
 			if ctx.Err() != nil {
-				res.Error = "it was stopped"
+				res.Error = stopReason(ctx)
 			}
 		}
 		if err := recordCommits(context.Background(), db, stepID, res.Commits); err != nil {

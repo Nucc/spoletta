@@ -43,10 +43,18 @@ export type ProcessSettings = {
   // no longer send the object back to a process that ran; DEFAULT_ROUNDS
   // when absent.
   rounds?: number
+  // How long an agent, script or Sentry step may take, in seconds; the
+  // worker's own limit when absent.
+  timeout?: number
+  // How many more times a failed step is tried; none when absent.
+  retries?: number
 }
 
 export const DEFAULT_ROUNDS = 3
 export const MAX_ROUNDS = 20
+// The longest timeout, a day in seconds, and the most retries.
+export const MAX_TIMEOUT = 24 * 60 * 60
+export const MAX_RETRIES = 5
 
 export type Process = {
   id: number
@@ -81,10 +89,13 @@ export type Start = {
   route: number[] | null
 }
 
+// A process running right after another, or for a failure connection, OPM's
+// exception link, instead of it once it fails, handling the failure.
 export type Connection = {
   id: number
   source: number
   target: number
+  kind: '' | 'failure'
 }
 
 // An OPM object: something a process generates and other processes take as input.

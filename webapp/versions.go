@@ -204,10 +204,10 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT c.id, c.source_id, c.target_id FROM connections c
+	err = scanAll(ctx, tx, `SELECT c.id, c.source_id, c.target_id, c.kind FROM connections c
 		JOIN processes p ON p.id = c.source_id WHERE p.flow_id = ? ORDER BY c.id`, func(rows *sql.Rows) error {
 		var c connection
-		err := rows.Scan(&c.ID, &c.Source, &c.Target)
+		err := rows.Scan(&c.ID, &c.Source, &c.Target, &c.Kind)
 		s.Connections = append(s.Connections, c)
 		return err
 	}, flow)
@@ -407,7 +407,7 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		}
 	}
 	for _, c := range s.Connections {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO connections (id, source_id, target_id) VALUES (?, ?, ?)", c.ID, c.Source, c.Target); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO connections (id, source_id, target_id, kind) VALUES (?, ?, ?, ?)", c.ID, c.Source, c.Target, c.Kind); err != nil {
 			return err
 		}
 	}

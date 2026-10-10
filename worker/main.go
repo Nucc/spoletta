@@ -71,6 +71,8 @@ type runRequest struct {
 	// which a step's first run creates.
 	SessionID string `json:"sessionId"`
 	Resume    bool   `json:"resume"`
+	// How long the run may take, if not the worker's own limit.
+	TimeoutMS int64 `json:"timeoutMs"`
 }
 
 type mcpServer struct {
@@ -101,6 +103,16 @@ type scriptRequest struct {
 	FilesDir string `json:"filesDir"`
 	// The workspace it works in, if the flow has repositories.
 	Workspace *workspaceSpec `json:"workspace"`
+	// How long the script may take, if not the worker's own limit.
+	TimeoutMS int64 `json:"timeoutMs"`
+}
+
+// The run's own limit, if it has one, or the worker's.
+func limit(ms int64, fallback time.Duration) time.Duration {
+	if ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return fallback
 }
 
 type scriptInput struct {
@@ -215,7 +227,7 @@ func main() {
 		}
 
 		started := time.Now()
-		res := runPi(r.Context(), run, timeout, func(m json.RawMessage) {
+		res := runPi(r.Context(), run, limit(run.TimeoutMS, timeout), func(m json.RawMessage) {
 			send(map[string]json.RawMessage{"message": m})
 		})
 		logRun(run, res, time.Since(started))
@@ -243,7 +255,7 @@ func main() {
 		}
 
 		started := time.Now()
-		res := runScript(r.Context(), run, timeout)
+		res := runScript(r.Context(), run, limit(run.TimeoutMS, timeout))
 		logOutcome(processLabel(run.ProcessID, run.ProcessName), "bash", res, time.Since(started))
 		if r.Context().Err() == nil {
 			reply(w, http.StatusOK, res)
@@ -457,7 +469,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 	output, failure := events.outcome()
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
-		return runResult{Output: output, Error: "timed out"}
+		return runResult{Output: output, Error: "timed out after " + timeout.String()}
 	case ctx.Err() != nil:
 		return runResult{Output: output, Error: "cancelled"}
 	case err != nil:
@@ -658,7 +670,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) (r
 	output := strings.TrimSpace(stdout.String())
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
-		return runResult{Output: output, Error: "timed out"}
+		return runResult{Output: output, Error: "timed out after " + timeout.String()}
 	case ctx.Err() != nil:
 		return runResult{Output: output, Error: "cancelled"}
 	case stdout.over:

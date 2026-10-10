@@ -241,7 +241,7 @@ func runSentryStep(ctx context.Context, db *sql.DB, cfg sentryConfig, runID, id 
 		issues, err := cfg.fetch(ctx, u)
 		switch {
 		case ctx.Err() != nil:
-			res.Error = "it was stopped"
+			res.Error = stopReason(ctx)
 		case err != nil:
 			res.Error = err.Error()
 		default:

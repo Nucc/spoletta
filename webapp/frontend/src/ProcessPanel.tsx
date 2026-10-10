@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import {
   DEFAULT_ROUNDS,
   DEFAULT_SENTRY,
+  MAX_RETRIES,
   MAX_ROUNDS,
+  MAX_TIMEOUT,
   THINKING_LEVELS,
   listObjects,
   updateProcess,
@@ -318,18 +320,6 @@ export default function ProcessPanel({
             onOpenSettings={onOpenMCPSettings}
           />
           {repositoryPicker}
-          <div className="panel-row">
-            <NumberSetting
-              label="Rounds"
-              title="When this agent decides states of what it reviews: how many times it runs in a run before sending the work back fails it"
-              value={settings.rounds}
-              fallback={DEFAULT_ROUNDS}
-              min={1}
-              max={MAX_ROUNDS}
-              readOnly={readOnly}
-              onChange={(rounds) => setSettings(({ rounds: _, ...rest }) => (rounds === undefined ? rest : { ...rest, rounds }))}
-            />
-          </div>
         </>
       ) : kind === 'human' ? (
         // The prompt doubles as the person's instructions; switching kinds keeps it.
@@ -364,6 +354,42 @@ export default function ProcessPanel({
         </label>
       )}
       {kind === 'script' && repositoryPicker}
+      {(kind === 'agent' || kind === 'script' || kind === 'sentry') && (
+        <div className="panel-row">
+          {kind === 'agent' && (
+            <NumberSetting
+              label="Rounds"
+              title="When this agent decides states of what it reviews: how many times it runs in a run before sending the work back fails it"
+              value={settings.rounds}
+              fallback={DEFAULT_ROUNDS}
+              min={1}
+              max={MAX_ROUNDS}
+              readOnly={readOnly}
+              onChange={(rounds) => setSettings(({ rounds: _, ...rest }) => (rounds === undefined ? rest : { ...rest, rounds }))}
+            />
+          )}
+          <NumberSetting
+            label="Timeout (s)"
+            title="How long a step may take before it fails; the worker's own limit when empty"
+            value={settings.timeout}
+            fallback="Worker's"
+            min={1}
+            max={MAX_TIMEOUT}
+            readOnly={readOnly}
+            onChange={(timeout) => setSettings(({ timeout: _, ...rest }) => (timeout === undefined ? rest : { ...rest, timeout }))}
+          />
+          <NumberSetting
+            label="Retries"
+            title="How many more times a failed step is tried before it fails for good; a stopped step isn't. Drag from this process onto another to run that one when it fails."
+            value={settings.retries}
+            fallback={0}
+            min={0}
+            max={MAX_RETRIES}
+            readOnly={readOnly}
+            onChange={(retries) => setSettings(({ retries: _, ...rest }) => (retries === undefined ? rest : { ...rest, retries }))}
+          />
+        </div>
+      )}
       {review && <ReviewForm review={review} />}
       {run?.status === 'active' && <p className="panel-note">Running…</p>}
       {run?.error &&

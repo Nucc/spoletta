@@ -71,6 +71,9 @@ type agentRun struct {
 	// Resume carries on one that exists.
 	SessionID string `json:"sessionId,omitempty"`
 	Resume    bool   `json:"resume,omitempty"`
+	// How long the run may take, if the process has a timeout; the
+	// worker's own limit otherwise.
+	TimeoutMS int64 `json:"timeoutMs,omitempty"`
 }
 
 // An attribute is something an OPM object exhibits, such as a ticket's
@@ -109,10 +112,18 @@ type changeRequest struct {
 
 // A connection is a directed edge between two processes.
 type connection struct {
-	ID     int64 `json:"id"`
-	Source int64 `json:"source"`
-	Target int64 `json:"target"`
+	ID     int64  `json:"id"`
+	Source int64  `json:"source"`
+	Target int64  `json:"target"`
+	Kind   string `json:"kind"`
 }
+
+const (
+	connectionNext    = ""
+	connectionFailure = "failure"
+)
+
+const failureSourceMessage = "only an agent, script or Sentry process fails, so only one leads to what handles its failure"
 
 // A flow is a board of its own with everything on it: its processes and
 // objects, the boards of its flow processes, its versions and its runs. Each
@@ -311,11 +322,19 @@ type processSettings struct {
 	// decisions can no longer send the object back to a process that ran;
 	// defaultRounds when absent. See engine.go.
 	Rounds *int `json:"rounds,omitempty"`
+	// How long an agent, script or Sentry step may take, in seconds, before
+	// it fails; the worker's own limit when absent.
+	Timeout *int `json:"timeout,omitempty"`
+	// How many more times a failed agent, script or Sentry step is tried, as
+	// a step of its own each time; none when absent.
+	Retries *int `json:"retries,omitempty"`
 }
 
 const (
 	defaultRounds = 3
 	maxRounds     = 20
+	maxTimeout    = 24 * 60 * 60
+	maxRetries    = 5
 )
 
 // What a step did to a repository it worked on.
@@ -439,6 +458,9 @@ type scriptRun struct {
 	// The workspace it works in, its working directory, if it works on
 	// repositories; $WORKSPACE and $BRANCH say where and on which branch.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// How long the script may take, if the process has a timeout; the
+	// worker's own limit otherwise.
+	TimeoutMS int64 `json:"timeoutMs,omitempty"`
 }
 
 type sentrySettings struct {

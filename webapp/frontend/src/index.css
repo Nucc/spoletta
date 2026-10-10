@@ -2046,11 +2046,26 @@ body {
 
 /* The MCP servers agents can use, in the settings, and picked per process. */
 .toolbar .mcp-toggle.open,
+.toolbar .opl-toggle.open,
 .toolbar .settings-toggle.open {
   background: #ddf4ff;
   border-color: #54aeff;
 }
 
+/* The flow in OPL, a sentence a line. */
+.opl-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.opl-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.opl-panel,
 .mcp-panel,
 .flow-settings-panel {
   overflow-y: auto;

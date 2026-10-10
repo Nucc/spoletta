@@ -66,6 +66,7 @@ import {
   type Block,
 } from './Palette'
 import { decisionText, RunList, RunPanel } from './Runs'
+import OPLPanel from './OPLPanel'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
 import type { Quantity } from './quantity'
@@ -355,6 +356,7 @@ export default function Board({
   const [mcpServers, setMCPServers] = useState<MCPServer[] | null>(null)
   const [mcpOpen, setMCPOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [oplOpen, setOPLOpen] = useState(false)
   // Every other flow, which this one can run; null while they load.
   const [otherFlows, setOtherFlows] = useState<Flow[] | null>(null)
   const [runs, setRuns] = useState<FlowRun[]>([])
@@ -714,6 +716,7 @@ export default function Board({
       setPanelId(null)
       setVersionsOpen(false)
       setSettingsOpen(false)
+      setOPLOpen(false)
       refreshMCPServers()
     }
     setMCPOpen(open)
@@ -724,8 +727,19 @@ export default function Board({
       setPanelId(null)
       setVersionsOpen(false)
       setMCPOpen(false)
+      setOPLOpen(false)
     }
     setSettingsOpen(open)
+  }
+
+  const openOPL = (open: boolean) => {
+    if (open) {
+      setPanelId(null)
+      setVersionsOpen(false)
+      setMCPOpen(false)
+      setSettingsOpen(false)
+    }
+    setOPLOpen(open)
   }
 
   const onSave = async () => {
@@ -1021,7 +1035,7 @@ export default function Board({
 
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
   const objectPanelNode = nodes.find((n): n is ObjectNodeType => n.type === 'object' && n.id === panelId)
-  const panelOpen = Boolean(panelNode || objectPanelNode || mcpOpen || settingsOpen || versionsOpen || runDetail)
+  const panelOpen = Boolean(panelNode || objectPanelNode || mcpOpen || settingsOpen || oplOpen || versionsOpen || runDetail)
 
   // The panel opening or closing changes the canvas's width; the board moves
   // to the middle of it once the canvas has taken its new width.
@@ -2014,6 +2028,7 @@ export default function Board({
                 setPanelId(null)
                 setMCPOpen(false)
                 setSettingsOpen(false)
+                setOPLOpen(false)
                 refreshVersions()
               }
               setVersionsOpen(!versionsOpen)
@@ -2035,6 +2050,14 @@ export default function Board({
                 title="The MCP servers agents can use"
               >
                 <PlugIcon /> MCP servers
+              </button>
+              <button
+                className={`opl-toggle${oplOpen ? ' open' : ''}`}
+                aria-expanded={oplOpen}
+                onClick={() => openOPL(!oplOpen)}
+                title="The flow in sentences, in OPM's Object-Process Language"
+              >
+                OPL
               </button>
               <button
                 className={`settings-toggle${settingsOpen ? ' open' : ''}`}
@@ -2286,7 +2309,10 @@ export default function Board({
             onError={report}
           />
         )}
-        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && versionsOpen && (
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && oplOpen && (
+          <OPLPanel flowId={flowId} onClose={() => setOPLOpen(false)} onError={report} />
+        )}
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && versionsOpen && (
           <VersionPanel
             versions={versions.versions}
             current={versions.current}
@@ -2295,7 +2321,7 @@ export default function Board({
             onClose={() => setVersionsOpen(false)}
           />
         )}
-        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !versionsOpen && runDetail && (
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !versionsOpen && runDetail && (
           <RunPanel
             run={runDetail}
             onStop={() => onStop(runDetail.id)}

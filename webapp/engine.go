@@ -287,6 +287,17 @@ type flowRun struct {
 	// For a flow a subflow process runs: the flows it runs inside, outermost
 	// first.
 	callers []int64
+	// The board's OPL, made once an agent asks for it.
+	describe sync.Once
+	about    string
+}
+
+// The OPL of the board the run walks, as an agent describing the flow gets it.
+func (fr *flowRun) opl(ctx context.Context, db *sql.DB) string {
+	fr.describe.Do(func() {
+		fr.about = opl(fr.board, func(id int64) string { return flowNameOf(ctx, db, id) })
+	})
+	return fr.about
 }
 
 func newFlowRun(flow, version int64, board snapshot, repos []repository, prefix string) *flowRun {
@@ -1444,7 +1455,11 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 	var err error
 	switch w.kinds[id] {
 	case kindAgent:
-		res, err = runAgentStep(ctx, w.e.db, w.e.workerURL, w.e.mcp, w.ws, w.run, id, inputs, cr, started)
+		var about string
+		if w.settings[id].DescribeFlow {
+			about = w.fr.opl(ctx, w.e.db)
+		}
+		res, err = runAgentStep(ctx, w.e.db, w.e.workerURL, w.e.mcp, w.ws, w.run, id, inputs, cr, about, started)
 	case kindSentry:
 		res, err = runSentryStep(ctx, w.e.db, w.e.sentry, w.run, id, inputs, started)
 	default:

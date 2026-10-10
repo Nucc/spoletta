@@ -144,8 +144,9 @@ func registerAgentRoutes(mux *http.ServeMux, workerURL string) {
 // for the result. Its input objects and a human's change request are
 // appended to the prompt. Problems with the process itself are step
 // failures, so they show up on the node like any other; the error is for
-// recording the step. started gets the step's id once it is recorded.
-func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, ws *runWorkspace, runID, id int64, inputs []runInput, cr *changeRequest, started func(int64)) (runResult, error) {
+// recording the step. about, if not empty, is the flow's OPL, which goes
+// before the inputs. started gets the step's id once it is recorded.
+func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, ws *runWorkspace, runID, id int64, inputs []runInput, cr *changeRequest, about string, started func(int64)) (runResult, error) {
 	var res runResult
 	run := agentRun{ProcessID: id}
 	var settings processSettings
@@ -169,7 +170,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		res.Error = msg
 	default:
 		run.Workspace = ws.forProcess(settings)
-		run.Prompt = withChangeRequest(withInputs(withWorkspace(run.Prompt, run.Workspace), inputs), cr)
+		run.Prompt = withChangeRequest(withInputs(withFlow(withWorkspace(run.Prompt, run.Workspace), run.ProcessName, about), inputs), cr)
 	}
 
 	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Prompt, inputs, cr)
@@ -350,6 +351,15 @@ func (c *outputContract) handedIn(res runResult) (string, map[int64]string, map[
 		return "", nil, nil, errors.New("it wasn't handed in by calling submit_output")
 	}
 	return c.parseDecisions(res.Output)
+}
+
+// Appends what the flow the agent works in is, in OPL, if given.
+func withFlow(prompt, process, about string) string {
+	if about == "" {
+		return prompt
+	}
+	return fmt.Sprintf("%s\n\nYou carry out the process %q of the flow described below in OPL, OPM's Object-Process Language, one sentence per fact.\n\n<flow>\n%s\n</flow>\n",
+		prompt, process, about)
 }
 
 // Appends each input object to the prompt, tagged with its name so the agent

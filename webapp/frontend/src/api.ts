@@ -51,6 +51,8 @@ export type ProcessSettings = {
   // How many of the objects it takes without waiting for a state a process
   // needs before it runs; all of them when absent.
   quorum?: number
+  // Whether an agent's prompt describes the flow it works in, in OPL.
+  describeFlow?: boolean
 }
 
 export const DEFAULT_ROUNDS = 3
@@ -371,6 +373,12 @@ export function pasteCopied(
     method: 'POST',
     body: JSON.stringify({ from: c.flow, processes: c.processes, objects: c.objects, flow, board, dx, dy }),
   })
+}
+
+// The flow's board in OPL, OPM's Object-Process Language, as it is now.
+export async function getFlowOPL(flow: number): Promise<string> {
+  const { text } = await request<{ text: string }>(`/api/flows/${flow}/opl`)
+  return text
 }
 
 export function listConnections(flow: number): Promise<Connection[]> {

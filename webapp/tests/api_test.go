@@ -343,6 +343,8 @@ type processSettings struct {
 	// How many of the objects a process takes without waiting for a state
 	// it needs before it runs; all of them when absent. See engine.go.
 	Quorum *int `json:"quorum,omitempty"`
+	// Whether an agent's prompt describes the flow it works in, in OPL; see opl.go.
+	DescribeFlow bool `json:"describeFlow,omitempty"`
 }
 
 const (

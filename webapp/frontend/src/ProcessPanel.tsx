@@ -320,6 +320,17 @@ export default function ProcessPanel({
             onOpenSettings={onOpenMCPSettings}
           />
           {repositoryPicker}
+          <label className="panel-check" title="The flow in OPL goes into the prompt, so the agent knows where its work comes from and goes">
+            <input
+              type="checkbox"
+              checked={Boolean(settings.describeFlow)}
+              disabled={readOnly}
+              onChange={(e) =>
+                setSettings(({ describeFlow: _, ...rest }) => (e.target.checked ? { ...rest, describeFlow: true } : rest))
+              }
+            />
+            <span>Tell it about the flow it works in, in OPL</span>
+          </label>
         </>
       ) : kind === 'human' ? (
         // The prompt doubles as the person's instructions; switching kinds keeps it.

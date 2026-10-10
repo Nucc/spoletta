@@ -1345,6 +1345,13 @@ body {
   border-color: #cf222e;
 }
 
+/* Its condition didn't hold, so it didn't run. */
+.process-node.skipped {
+  background: #f6f8fa;
+  border-color: #8c959f;
+  border-style: dashed;
+}
+
 /* Generated a unique value another run already stored. */
 .process-node.duplicate {
   background: #fbefff;
@@ -1400,6 +1407,11 @@ body {
   background: #fff;
   border: 1px solid #8c959f;
   color: #57606a;
+}
+
+.link-role span.condition {
+  font-weight: 600;
+  font-style: italic;
 }
 
 .link-role select {

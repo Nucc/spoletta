@@ -37,6 +37,8 @@ export type BoardActions = {
   setDecisionStates: (edgeId: string, states: number[]) => void
   // Sets how an input link's process takes its object.
   setRole: (edgeId: string, role: LinkRole) => void
+  // Makes an input link naming a state a condition, or an event again.
+  setCondition: (edgeId: string, condition: boolean) => void
   // Sets how many of an object there are; resolves to whether the server took it.
   setQuantity: (objectId: string, quantity: Quantity) => Promise<boolean>
   // False while a run is in progress, when the flow can't change shape.

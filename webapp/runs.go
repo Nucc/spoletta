@@ -106,6 +106,8 @@ const (
 	stepWaiting = "waiting"
 	stepDone    = "done"
 	stepError   = "error"
+	// A process whose condition didn't hold, so it didn't run; see engine.go.
+	stepSkipped = "skipped"
 )
 
 func validRunEnd(s string) bool {

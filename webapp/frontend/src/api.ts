@@ -48,6 +48,9 @@ export type ProcessSettings = {
   timeout?: number
   // How many more times a failed step is tried; none when absent.
   retries?: number
+  // How many of the objects it takes without waiting for a state a process
+  // needs before it runs; all of them when absent.
+  quorum?: number
 }
 
 export const DEFAULT_ROUNDS = 3
@@ -189,6 +192,9 @@ export type Link = {
   // How an input link's process takes the object, as in OPM: as an
   // instrument it doesn't change, or consuming it; empty when it just takes it.
   role: LinkRole
+  // For an input link naming a state: its process runs only if the object
+  // is in it, and is skipped otherwise, rather than running once it enters it.
+  condition: boolean
   // Where the link's segments run, if moved by hand; see route.ts.
   route: number[] | null
   // Where the object shows on the process's own board, if moved there by
@@ -426,7 +432,12 @@ export function listLinks(flow: number): Promise<Link[]> {
 
 // Without a state, the link names none; without states, it lists none.
 export function createLink(
-  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at' | 'role'> & { state?: number | null; states?: number[]; role?: LinkRole },
+  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at' | 'role' | 'condition'> & {
+    state?: number | null
+    states?: number[]
+    role?: LinkRole
+    condition?: boolean
+  },
 ): Promise<Link> {
   return request('/api/links', { method: 'POST', body: JSON.stringify(l) })
 }
@@ -443,6 +454,10 @@ export function setLinkAt(id: number, at: { x: number; y: number } | null): Prom
 
 // Replaces the states a human's output link decides between.
 export type LinkRole = '' | 'instrument' | 'consumption'
+
+export function setLinkCondition(id: number, condition: boolean): Promise<void> {
+  return request(`/api/links/${id}/condition`, { method: 'PUT', body: JSON.stringify({ condition }) })
+}
 
 export function setLinkRole(id: number, role: LinkRole): Promise<void> {
   return request(`/api/links/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) })
@@ -587,7 +602,8 @@ export type RepoCommits = {
   uncommitted: boolean
 }
 
-export type StepStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate'
+// A skipped step's process didn't run, its condition not holding.
+export type StepStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate' | 'skipped'
 
 // One execution of a process in a run, with the process as it was then.
 export type RunStep = {
@@ -848,7 +864,7 @@ type Snapshot = {
   // state is 0 when the link names none; versions from before boundary
   // places have no at, from before roles no role, and from before failure
   // connections no kind.
-  links: (Omit<Link, 'state' | 'states' | 'at' | 'role'> & { state: number; at?: Link['at']; role?: LinkRole })[]
+  links: (Omit<Link, 'state' | 'states' | 'at' | 'role' | 'condition'> & { state: number; at?: Link['at']; role?: LinkRole; condition?: boolean })[]
   linkStates: { link: number; state: number }[]
   connections: (Omit<Connection, 'kind'> & { kind?: Connection['kind'] })[]
   start: Start
@@ -889,6 +905,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
     links: s.links.map((l) => ({
       ...l,
       role: l.role ?? '',
+      condition: l.condition ?? false,
       state: l.state || null,
       at: l.at ?? null,
       states: s.linkStates.filter((ls) => ls.link === l.id).map((ls) => ls.state),

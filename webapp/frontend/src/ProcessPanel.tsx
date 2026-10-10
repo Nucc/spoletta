@@ -390,12 +390,31 @@ export default function ProcessPanel({
           />
         </div>
       )}
+      {kind !== 'human' && (
+        <div className="panel-row">
+          <NumberSetting
+            label="Needs"
+            title="How many of the objects it takes without waiting for a state must come, holding their conditions, before it runs; all of them when empty. The rest that come later are left."
+            value={settings.quorum}
+            fallback="All inputs"
+            min={1}
+            max={99}
+            readOnly={readOnly}
+            onChange={(quorum) => setSettings(({ quorum: _, ...rest }) => (quorum === undefined ? rest : { ...rest, quorum }))}
+          />
+        </div>
+      )}
       {review && <ReviewForm review={review} />}
       {run?.status === 'active' && <p className="panel-note">Running…</p>}
       {run?.error &&
         (run.status === 'duplicate' ? (
           <div className="panel-run">
             <span>Already processed; the run was terminated</span>
+            <pre>{run.error}</pre>
+          </div>
+        ) : run.status === 'skipped' ? (
+          <div className="panel-run">
+            <span>Skipped</span>
             <pre>{run.error}</pre>
           </div>
         ) : (

@@ -35,6 +35,7 @@ const STEP_LABELS: Record<StepStatus, string> = {
   done: 'Done',
   error: 'Failed',
   duplicate: 'Already processed',
+  skipped: 'Skipped',
 }
 
 export const formatTime = (s: string) =>
@@ -293,7 +294,13 @@ function Step({
         {s.kind === 'human' && s.outcome && (
           <Block label="Decision" text={decisionText(s.outcome, objects[0]?.name, s.instructions)} />
         )}
-        {s.error && <Block label={s.status === 'duplicate' ? 'Duplicate' : 'Error'} text={s.error} failed={s.status !== 'duplicate'} />}
+        {s.error && (
+          <Block
+            label={s.status === 'duplicate' ? 'Duplicate' : s.status === 'skipped' ? 'Skipped' : 'Error'}
+            text={s.error}
+            failed={s.status !== 'duplicate' && s.status !== 'skipped'}
+          />
+        )}
         {s.kind !== 'human' && s.kind !== 'flow' && s.kind !== 'subflow' && (s.status === 'done' || s.status === 'duplicate') && (
           <Block label="Output" text={s.output || '(empty)'} data />
         )}

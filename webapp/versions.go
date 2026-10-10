@@ -63,7 +63,8 @@ type snapshotLink struct {
 	// Versions from before boundary places have none.
 	At *point `json:"at,omitempty"`
 	// Versions from before roles have none.
-	Role string `json:"role,omitempty"`
+	Role      string `json:"role,omitempty"`
+	Condition bool   `json:"condition,omitempty"`
 }
 
 type snapshotLinkState struct {
@@ -181,12 +182,12 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role FROM object_links l
+	err = scanAll(ctx, tx, `SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role, l.is_condition FROM object_links l
 		JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, func(rows *sql.Rows) error {
 		var l snapshotLink
 		var route []byte
 		var atX, atY sql.NullFloat64
-		err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &l.State, &route, &atX, &atY, &l.Role)
+		err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &l.State, &route, &atX, &atY, &l.Role, &l.Condition)
 		l.Route = routeJSON(route)
 		l.At = pointOf(atX, atY)
 		s.Links = append(s.Links, l)
@@ -397,8 +398,8 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		if l.At != nil {
 			atX, atY = sql.NullFloat64{Float64: l.At.X, Valid: true}, sql.NullFloat64{Float64: l.At.Y, Valid: true}
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			l.ID, l.Process, l.Object, l.Direction, l.State, storedRoute(l.Route), atX, atY, l.Role)
+		_, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			l.ID, l.Process, l.Object, l.Direction, l.State, storedRoute(l.Route), atX, atY, l.Role, l.Condition)
 		if err != nil {
 			return err
 		}

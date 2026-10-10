@@ -37,6 +37,7 @@ const stepActive = "active"
 const stepDone = "done"
 const stepDuplicate = "duplicate"
 const stepError = "error"
+const stepSkipped = "skipped"
 const stepWaiting = "waiting"
 
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -190,6 +191,7 @@ type link struct {
 	State     *int64  `json:"state"`
 	States    []int64 `json:"states"`
 	Role      string  `json:"role"`
+	Condition bool    `json:"condition"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
 	// Where the object shows on the process's own board, if moved there by
@@ -329,6 +331,9 @@ type processSettings struct {
 	// How many more times a failed agent, script or Sentry step is tried, as
 	// a step of its own each time; none when absent.
 	Retries *int `json:"retries,omitempty"`
+	// How many of the objects a process takes without waiting for a state
+	// it needs before it runs; all of them when absent. See engine.go.
+	Quorum *int `json:"quorum,omitempty"`
 }
 
 const (

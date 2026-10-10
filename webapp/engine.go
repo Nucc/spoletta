@@ -31,6 +31,16 @@ import (
 //     takes without a state exist. Several such links are alternatives, not
 //     all required.
 //
+// A condition link takes an object, as one without a state does, but lets
+// its process run only if the object is in the state it names, or one of
+// those its process's condition links to it name; otherwise the process is
+// skipped once it is ready to run. A skipped process generates nothing:
+// what it would have is settled as absent, so the processes taking it go on
+// without it, and are skipped in turn if they would get nothing at all. A
+// process with a quorum runs once that many of the objects it takes without
+// waiting for a state exist, and hold their conditions, rather than all of
+// them; it is skipped once too few can.
+//
 // An input link's role says how the process takes the object: an
 // instrument goes into an agent's prompt as a reference not to change, and
 // an object the process consumes is gone once it takes it, so no process
@@ -322,7 +332,9 @@ type walk struct {
 	// Process to the objects it takes, and object to the processes taking it.
 	inputs map[int64][]linkEnd
 	// Process to the role of each object it takes in a role.
-	roles      map[int64]map[int64]string
+	roles map[int64]map[int64]string
+	// Process to the states each object it takes on a condition must be in.
+	conditions map[int64]map[int64][]int64
 	takers     map[int64][]taker
 	successors map[int64][]int64
 	// Process to those handling its failure.
@@ -335,6 +347,8 @@ type walk struct {
 
 	mu     sync.Mutex
 	values map[int64]value
+	// Objects a skipped process would have generated, settled as absent.
+	skipped map[int64]bool
 	// How many times each process has run, over all passes.
 	ran        map[int64]int
 	failed     bool
@@ -351,10 +365,10 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 	w := &walk{
 		e: e, ctx: ctx, run: run, lr: lr, fr: fr, board: board, ws: ws,
 		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{}, settings: map[int64]processSettings{},
-		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{}, roles: map[int64]map[int64]string{},
+		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{}, roles: map[int64]map[int64]string{}, conditions: map[int64]map[int64][]int64{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{},
-		generated: map[int64]bool{}, values: map[int64]value{}, ran: map[int64]int{},
+		generated: map[int64]bool{}, values: map[int64]value{}, skipped: map[int64]bool{}, ran: map[int64]int{},
 	}
 	w.reviews, w.terminate = context.WithCancel(ctx)
 	s := fr.board
@@ -402,8 +416,19 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 				w.outputs[l.Process] = append(w.outputs[l.Process], linkEnd{l.Object, l.State})
 			}
 		} else {
-			w.inputs[l.Process] = append(w.inputs[l.Process], linkEnd{l.Object, l.State})
-			w.takers[l.Object] = append(w.takers[l.Object], taker{l.Process, l.State})
+			// A condition takes its object as a link without a state does.
+			end := linkEnd{l.Object, l.State}
+			if l.Condition && l.State != 0 {
+				if w.conditions[l.Process] == nil {
+					w.conditions[l.Process] = map[int64][]int64{}
+				}
+				w.conditions[l.Process][l.Object] = append(w.conditions[l.Process][l.Object], l.State)
+				end.state = 0
+			}
+			if !slices.Contains(w.inputs[l.Process], end) {
+				w.inputs[l.Process] = append(w.inputs[l.Process], end)
+				w.takers[l.Object] = append(w.takers[l.Object], taker{l.Process, end.state})
+			}
 			if l.Role != roleNone {
 				if w.roles[l.Process] == nil {
 					w.roles[l.Process] = map[int64]string{}
@@ -477,11 +502,7 @@ func (w *walk) enter() {
 				next = append(next, func() { w.runProcess(t, p, o) })
 			}
 		}
-		for _, t := range w.takers[o] {
-			if t.state == 0 && w.ready(t.process) {
-				next = append(next, func() { w.runProcess(t.process, p, 0) })
-			}
-		}
+		next = append(next, w.follow(o, p)...)
 	}
 	w.mu.Unlock()
 	all(next)
@@ -536,20 +557,137 @@ func (w *walk) startGiven(p int64) []int64 {
 	return w.given
 }
 
-// Whether a process runs now that objects it takes without a state exist:
-// it takes some that way and all of them exist. A process with a condition
-// waits for its object to enter that state instead. Called with w.mu held.
-func (w *walk) ready(p int64) bool {
+// What becomes of a process now that objects it takes without waiting for a
+// state exist or were skipped: it runs once all of them are settled and
+// some exist, holding their conditions, or as many as its quorum says; it
+// is skipped once that can no longer be; otherwise it waits. A process
+// waiting for an object to enter a state waits for that instead. Called
+// with w.mu held.
+func (w *walk) readiness(p int64) (run, skip bool) {
 	plain := w.plainInputs(p)
-	if len(plain) < len(w.inputs[p]) {
-		return false
+	if len(plain) == 0 || len(plain) < len(w.inputs[p]) {
+		return false, false
 	}
+	var exist, settled, holding int
 	for _, i := range plain {
-		if _, ok := w.values[i.object]; !ok {
-			return false
+		v, ok := w.values[i.object]
+		switch {
+		case ok:
+			exist++
+			settled++
+			if w.holds(p, i.object, v.state) {
+				holding++
+			}
+		case w.skipped[i.object]:
+			settled++
 		}
 	}
-	return len(plain) > 0
+	if q := w.settings[p].Quorum; q != nil {
+		if holding >= min(*q, len(plain)) {
+			return true, false
+		}
+		return false, settled == len(plain)
+	}
+	if settled < len(plain) {
+		return false, false
+	}
+	if exist == 0 || holding < exist {
+		return false, true
+	}
+	return true, false
+}
+
+// Whether an object in state holds the conditions p takes it on, if any.
+func (w *walk) holds(p, o, state int64) bool {
+	states, ok := w.conditions[p][o]
+	return !ok || slices.Contains(states, state)
+}
+
+// The processes that run, or are skipped, in pass p now that o exists or
+// was skipped. Called with w.mu held.
+func (w *walk) follow(o int64, p *pass) []func() {
+	var next []func()
+	for _, t := range w.takers[o] {
+		if t.state != 0 {
+			continue
+		}
+		switch run, skip := w.readiness(t.process); {
+		case run:
+			next = append(next, func() { w.runProcess(t.process, p, 0) })
+		case skip:
+			next = append(next, func() { w.skip(t.process, p) })
+		}
+	}
+	return next
+}
+
+// Why a process's conditions don't hold of what it takes, or "" if they
+// do. Called with w.mu held.
+func (w *walk) unmet(p int64) string {
+	var why []string
+	for _, o := range slices.Sorted(maps.Keys(w.conditions[p])) {
+		v, ok := w.values[o]
+		if ok && !w.holds(p, o, v.state) {
+			names := make([]string, len(w.conditions[p][o]))
+			for i, st := range w.conditions[p][o] {
+				names[i] = strconv.Quote(w.stateNames[st])
+			}
+			state := "in no state"
+			if v.state != 0 {
+				state = strconv.Quote(w.stateNames[v.state])
+			}
+			why = append(why, fmt.Sprintf("%s is %s, not %s", strconv.Quote(w.objects[o]), state, strings.Join(names, " or ")))
+		}
+	}
+	return strings.Join(why, "; ")
+}
+
+// Skips a process in pass p, unless it ran in it already.
+func (w *walk) skip(id int64, p *pass) {
+	if w.stopped() || !p.visit(id) {
+		return
+	}
+	w.skipVisited(id, p)
+}
+
+// Records why the process didn't run, settles what it generates as absent
+// and goes on to what follows it, as after it ran.
+func (w *walk) skipVisited(id int64, p *pass) {
+	w.mu.Lock()
+	why := w.unmet(id)
+	switch q := w.settings[id].Quorum; {
+	case q != nil:
+		why = fmt.Sprintf("Fewer than %d of what it takes came, holding its conditions.", *q)
+	case why != "":
+		why = "Its condition doesn't hold: " + why + "."
+	default:
+		why = "Nothing it takes came; what would have was skipped."
+	}
+	w.mu.Unlock()
+	w.note(id, stepSkipped, why)
+
+	w.mu.Lock()
+	var next []func()
+	for _, end := range w.outputs[id] {
+		if _, ok := w.values[end.object]; !ok {
+			w.skipped[end.object] = true
+		}
+	}
+	for _, end := range w.outputs[id] {
+		next = append(next, w.follow(end.object, p)...)
+	}
+	w.mu.Unlock()
+	for _, s := range w.successors[id] {
+		next = append(next, func() { w.runProcess(s, p, 0) })
+	}
+	all(next)
+}
+
+// Sets what an object holds, which settles it as existing. Called with w.mu
+// held.
+func (w *walk) set(o int64, v value) {
+	w.values[o] = v
+	delete(w.skipped, o)
 }
 
 func (w *walk) takersIn(object, state int64) []int64 {
@@ -588,15 +726,23 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 		return
 	}
 	human := w.kinds[id] == kindHuman
+	// A process run from the start or by an event still keeps to its
+	// conditions, unless its quorum is met.
 	w.mu.Lock()
+	if w.settings[id].Quorum == nil && w.unmet(id) != "" {
+		w.mu.Unlock()
+		w.skipVisited(id, p)
+		return
+	}
 	w.ran[id]++
 	w.mu.Unlock()
 
 	w.mu.Lock()
 	given := []runInput{}
 	taken := map[int64]bool{}
+	// What doesn't hold its condition doesn't go in, as with a quorum.
 	for _, i := range w.plainInputs(id) {
-		if _, ok := w.values[i.object]; ok && w.generated[i.object] {
+		if v, ok := w.values[i.object]; ok && w.generated[i.object] && w.holds(id, i.object, v.state) {
 			given = append(given, w.inputOf(id, i.object))
 			taken[i.object] = true
 		}
@@ -650,7 +796,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 	objects := slices.Sorted(maps.Keys(out))
 	w.mu.Lock()
 	for _, o := range objects {
-		w.values[o] = out[o]
+		w.set(o, out[o])
 	}
 	if w.terminated {
 		w.mu.Unlock()
@@ -681,11 +827,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 				next = append(next, func() { w.runProcess(t, from, o) })
 			}
 		}
-		for _, t := range w.takers[o] {
-			if t.state == 0 && w.ready(t.process) {
-				next = append(next, func() { w.runProcess(t.process, p, 0) })
-			}
-		}
+		next = append(next, w.follow(o, p)...)
 	}
 	w.mu.Unlock()
 	for _, s := range w.successors[id] {
@@ -1166,15 +1308,11 @@ func (w *walk) enterValues(stepID int64, p *pass, d decision) []func() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, o := range objects {
-		w.values[o] = value{content: d.entries[o]}
+		w.set(o, value{content: d.entries[o]})
 	}
 	var next []func()
 	for _, o := range objects {
-		for _, t := range w.takers[o] {
-			if t.state == 0 && w.ready(t.process) {
-				next = append(next, func() { w.runProcess(t.process, p, 0) })
-			}
-		}
+		next = append(next, w.follow(o, p)...)
 	}
 	return next
 }
@@ -1200,7 +1338,7 @@ func (w *walk) setState(id, stepID int64, d decision) []func() {
 	if d.instructions != "" {
 		v.review = &review{reviewer: w.names[id], instructions: d.instructions}
 	}
-	w.values[object] = v
+	w.set(object, v)
 	w.mu.Unlock()
 
 	var next []func()

@@ -68,6 +68,11 @@ type object struct {
 // doesn't change, or consumes it, so it is gone once taken. A process
 // taking an object and generating it too affects it, as OPM's effect link:
 // it hands in the object changed.
+//
+// An input link naming a state is an event link: the object entering that
+// state makes its process run. One marked a condition, OPM's condition link,
+// instead lets its process run only if the object is in that state once it
+// is ready to; otherwise the process is skipped.
 type link struct {
 	ID        int64   `json:"id"`
 	Process   int64   `json:"process"`
@@ -76,6 +81,7 @@ type link struct {
 	State     *int64  `json:"state"`
 	States    []int64 `json:"states"`
 	Role      string  `json:"role"`
+	Condition bool    `json:"condition"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
 	// Where the object shows on the process's own board, if moved there by
@@ -181,6 +187,9 @@ func migrateObjects(db *sql.DB) error {
 		return err
 	}
 	if err := addColumn(db, "object_links", "role", "VARCHAR(16) NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumn(db, "object_links", "is_condition", "BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
 		return err
 	}
 
@@ -583,7 +592,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		rows, err := db.QueryContext(r.Context(),
-			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role
+			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role, l.is_condition
 			FROM object_links l JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, f)
 		if err != nil {
 			serverError(w, err)
@@ -597,7 +606,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			var state int64
 			var route []byte
 			var atX, atY sql.NullFloat64
-			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY, &l.Role); err != nil {
+			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY, &l.Role, &l.Condition); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -671,8 +680,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO object_links (process_id, object_id, direction, state_id, role) VALUES (?, ?, ?, ?, ?)",
-			l.Process, l.Object, l.Direction, state, l.Role)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO object_links (process_id, object_id, direction, state_id, role, is_condition) VALUES (?, ?, ?, ?, ?, ?)",
+			l.Process, l.Object, l.Direction, state, l.Role, l.Condition)
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "link already exists", http.StatusConflict)
@@ -743,6 +752,46 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			x, y = sql.NullFloat64{Float64: at.X, Valid: true}, sql.NullFloat64{Float64: at.Y, Valid: true}
 		}
 		if _, err := db.ExecContext(r.Context(), "UPDATE object_links SET at_x = ?, at_y = ? WHERE id = ?", x, y, id); err != nil {
+			serverError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Makes an input link naming a state a condition, or an event again.
+	mux.HandleFunc("PUT /api/links/{id}/condition", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Condition bool `json:"condition"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var l link
+		var state int64
+		err = db.QueryRowContext(r.Context(), "SELECT direction, state_id FROM object_links WHERE id = ?", id).Scan(&l.Direction, &state)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "link not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if state != 0 {
+			l.State = &state
+		}
+		l.Condition = body.Condition
+		if msg := checkCondition(l); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if _, err := db.ExecContext(r.Context(), "UPDATE object_links SET is_condition = ? WHERE id = ?", l.Condition, id); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -876,6 +925,14 @@ func setDecisionStates(ctx context.Context, tx *sql.Tx, linkID, object int64, st
 
 func isTrue(b *bool) bool { return b != nil && *b }
 
+// Says what is wrong with a link being a condition, if it is one.
+func checkCondition(l link) string {
+	if l.Condition && (l.Direction != directionInput || l.State == nil) {
+		return "only an input link naming a state is a condition"
+	}
+	return ""
+}
+
 // Says what is wrong with a link's role, if anything: only an input link
 // has one, a person is neither an instrument nor consumed, and only one
 // process consumes an object, so no two take it from each other.
@@ -956,6 +1013,9 @@ func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
 	}
 	if msg, err := checkRole(ctx, db, l); err != nil || msg != "" {
 		return msg, err
+	}
+	if msg := checkCondition(l); msg != "" {
+		return msg, nil
 	}
 	var kind string
 	err := db.QueryRowContext(ctx, "SELECT kind FROM processes WHERE id = ?", l.Process).Scan(&kind)

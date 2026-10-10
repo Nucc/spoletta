@@ -58,6 +58,9 @@ type processSettings struct {
 	// How many more times a failed agent, script or Sentry step is tried, as
 	// a step of its own each time; none when absent.
 	Retries *int `json:"retries,omitempty"`
+	// How many of the objects a process takes without waiting for a state
+	// it needs before it runs; all of them when absent. See engine.go.
+	Quorum *int `json:"quorum,omitempty"`
 }
 
 // The longest a step may be given, a day, and the most retries.
@@ -111,6 +114,9 @@ func (s processSettings) problem() string {
 	}
 	if s.Retries != nil && (*s.Retries < 0 || *s.Retries > maxRetries) {
 		return fmt.Sprintf("retries must be from 0 to %d", maxRetries)
+	}
+	if s.Quorum != nil && *s.Quorum < 1 {
+		return "quorum must be at least 1"
 	}
 	if s.Sentry != nil {
 		return s.Sentry.problem()

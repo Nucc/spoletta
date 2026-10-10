@@ -126,24 +126,47 @@ export default function LinkEdge({
       <BaseEdge id={id} path={path} markerEnd={agent || role === 'instrument' ? undefined : markerEnd} style={style} />
       {agent && <circle className="agent-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
       {role === 'instrument' && <circle className="instrument-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
-      {role !== undefined && ((selected && actions.editable) || role === 'consumption') && (
+      {role !== undefined && ((selected && actions.editable) || role === 'consumption' || data?.link?.condition) && (
         <EdgeLabelRenderer>
           <div className="link-role nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${roleAt(targetX, targetY, targetPosition)})` }}>
             {selected && actions.editable ? (
-              <select
-                aria-label="How the process takes the object"
-                value={role}
-                title={ROLES.find((r) => r.value === role)?.title}
-                onChange={(e) => actions.setRole(id, e.target.value as LinkRole)}
-              >
-                {ROLES.map((r) => (
-                  <option key={r.value} value={r.value} title={r.title}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  aria-label="How the process takes the object"
+                  value={role}
+                  title={ROLES.find((r) => r.value === role)?.title}
+                  onChange={(e) => actions.setRole(id, e.target.value as LinkRole)}
+                >
+                  {ROLES.map((r) => (
+                    <option key={r.value} value={r.value} title={r.title}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+                {data?.link?.state !== null && (
+                  <select
+                    aria-label="When the state makes the process run"
+                    value={data?.link?.condition ? 'condition' : 'event'}
+                    onChange={(e) => actions.setCondition(id, e.target.value === 'condition')}
+                  >
+                    <option value="event" title="The process runs when the object enters the state">
+                      when it enters
+                    </option>
+                    <option value="condition" title="The process runs only if the object is in the state once it is ready, and is skipped otherwise">
+                      only if in it
+                    </option>
+                  </select>
+                )}
+              </>
             ) : (
-              <span title="The process consumes the object: once taken, it is gone">consumes</span>
+              <>
+                {data?.link?.condition && (
+                  <span className="condition" title="A condition: the process runs only if the object is in this state, and is skipped otherwise">
+                    c
+                  </span>
+                )}
+                {role === 'consumption' && <span title="The process consumes the object: once taken, it is gone">consumes</span>}
+              </>
             )}
           </div>
         </EdgeLabelRenderer>

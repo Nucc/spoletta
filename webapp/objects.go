@@ -62,6 +62,12 @@ type object struct {
 // process's output link names no state; it lists the states the human
 // decides between instead. An agent's output link can list states too, for
 // the agent to decide between.
+//
+// An input link has a role, as in OPM: the process takes the object and
+// leaves it for others (none), uses it as an instrument, a reference it
+// doesn't change, or consumes it, so it is gone once taken. A process
+// taking an object and generating it too affects it, as OPM's effect link:
+// it hands in the object changed.
 type link struct {
 	ID        int64   `json:"id"`
 	Process   int64   `json:"process"`
@@ -69,6 +75,7 @@ type link struct {
 	Direction string  `json:"direction"`
 	State     *int64  `json:"state"`
 	States    []int64 `json:"states"`
+	Role      string  `json:"role"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
 	// Where the object shows on the process's own board, if moved there by
@@ -92,6 +99,13 @@ func pointOf(x, y sql.NullFloat64) *point {
 const (
 	directionOutput = "output"
 	directionInput  = "input"
+)
+
+// The roles of an input link.
+const (
+	roleNone        = ""
+	roleInstrument  = "instrument"
+	roleConsumption = "consumption"
 )
 
 // A link's state_id is 0 when it names no state; a NULL would let the unique
@@ -164,6 +178,9 @@ func migrateObjects(db *sql.DB) error {
 		return err
 	}
 	if err := addColumn(db, "object_links", "at_y", "DOUBLE NULL"); err != nil {
+		return err
+	}
+	if err := addColumn(db, "object_links", "role", "VARCHAR(16) NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 
@@ -566,7 +583,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		rows, err := db.QueryContext(r.Context(),
-			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y
+			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role
 			FROM object_links l JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, f)
 		if err != nil {
 			serverError(w, err)
@@ -580,7 +597,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			var state int64
 			var route []byte
 			var atX, atY sql.NullFloat64
-			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY); err != nil {
+			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY, &l.Role); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -654,8 +671,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO object_links (process_id, object_id, direction, state_id) VALUES (?, ?, ?, ?)",
-			l.Process, l.Object, l.Direction, state)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO object_links (process_id, object_id, direction, state_id, role) VALUES (?, ?, ?, ?, ?)",
+			l.Process, l.Object, l.Direction, state, l.Role)
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "link already exists", http.StatusConflict)
@@ -726,6 +743,46 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			x, y = sql.NullFloat64{Float64: at.X, Valid: true}, sql.NullFloat64{Float64: at.Y, Valid: true}
 		}
 		if _, err := db.ExecContext(r.Context(), "UPDATE object_links SET at_x = ?, at_y = ? WHERE id = ?", x, y, id); err != nil {
+			serverError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Sets the role of an input link.
+	mux.HandleFunc("PUT /api/links/{id}/role", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Role string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var l link
+		err = db.QueryRowContext(r.Context(), "SELECT id, process_id, object_id, direction FROM object_links WHERE id = ?", id).
+			Scan(&l.ID, &l.Process, &l.Object, &l.Direction)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "link not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		l.Role = body.Role
+		if msg, err := checkRole(r.Context(), db, l); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if _, err := db.ExecContext(r.Context(), "UPDATE object_links SET role = ? WHERE id = ?", l.Role, id); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -819,6 +876,41 @@ func setDecisionStates(ctx context.Context, tx *sql.Tx, linkID, object int64, st
 
 func isTrue(b *bool) bool { return b != nil && *b }
 
+// Says what is wrong with a link's role, if anything: only an input link
+// has one, a person is neither an instrument nor consumed, and only one
+// process consumes an object, so no two take it from each other.
+func checkRole(ctx context.Context, db *sql.DB, l link) (string, error) {
+	switch l.Role {
+	case roleNone:
+		return "", nil
+	case roleInstrument, roleConsumption:
+	default:
+		return "role must be empty, instrument or consumption", nil
+	}
+	if l.Direction != directionInput {
+		return "only an input link has a role", nil
+	}
+	var human bool
+	if err := db.QueryRowContext(ctx, "SELECT human FROM objects WHERE id = ?", l.Object).Scan(&human); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	if human {
+		return "a person carries out a process; they are neither its instrument nor consumed", nil
+	}
+	if l.Role != roleConsumption {
+		return "", nil
+	}
+	var n int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM object_links WHERE object_id = ? AND role = ? AND id <> ?", l.Object, roleConsumption, l.ID).Scan(&n)
+	if err != nil {
+		return "", err
+	}
+	if n > 0 {
+		return "another process consumes the object already; only one can", nil
+	}
+	return "", nil
+}
+
 // Fills in what a new object making up o.Owner takes from it, and says what
 // is wrong with it, if anything: it is on its owner's board, in its flow,
 // and its name is a field of its owner's.
@@ -861,6 +953,9 @@ const decisionLinkMessage = "only a human's or an agent's output link lists stat
 func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
 	if ok, err := onBoardOf(ctx, db, l.Process, l.Object); err != nil || !ok {
 		return "the object isn't on the process's board", err
+	}
+	if msg, err := checkRole(ctx, db, l); err != nil || msg != "" {
+		return msg, err
 	}
 	var kind string
 	err := db.QueryRowContext(ctx, "SELECT kind FROM processes WHERE id = ?", l.Process).Scan(&kind)

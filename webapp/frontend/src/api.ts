@@ -186,6 +186,9 @@ export type Link = {
   direction: LinkDirection
   state: number | null
   states: number[]
+  // How an input link's process takes the object, as in OPM: as an
+  // instrument it doesn't change, or consuming it; empty when it just takes it.
+  role: LinkRole
   // Where the link's segments run, if moved by hand; see route.ts.
   route: number[] | null
   // Where the object shows on the process's own board, if moved there by
@@ -423,7 +426,7 @@ export function listLinks(flow: number): Promise<Link[]> {
 
 // Without a state, the link names none; without states, it lists none.
 export function createLink(
-  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at'> & { state?: number | null; states?: number[] },
+  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at' | 'role'> & { state?: number | null; states?: number[]; role?: LinkRole },
 ): Promise<Link> {
   return request('/api/links', { method: 'POST', body: JSON.stringify(l) })
 }
@@ -439,6 +442,12 @@ export function setLinkAt(id: number, at: { x: number; y: number } | null): Prom
 }
 
 // Replaces the states a human's output link decides between.
+export type LinkRole = '' | 'instrument' | 'consumption'
+
+export function setLinkRole(id: number, role: LinkRole): Promise<void> {
+  return request(`/api/links/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) })
+}
+
 export function setLinkStates(id: number, states: number[]): Promise<void> {
   return request(`/api/links/${id}/states`, { method: 'PUT', body: JSON.stringify({ states }) })
 }
@@ -837,10 +846,11 @@ type Snapshot = {
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
-  // places have no at.
-  links: (Omit<Link, 'state' | 'states' | 'at'> & { state: number; at?: Link['at'] })[]
+  // places have no at, from before roles no role, and from before failure
+  // connections no kind.
+  links: (Omit<Link, 'state' | 'states' | 'at' | 'role'> & { state: number; at?: Link['at']; role?: LinkRole })[]
   linkStates: { link: number; state: number }[]
-  connections: Connection[]
+  connections: (Omit<Connection, 'kind'> & { kind?: Connection['kind'] })[]
   start: Start
   end?: End
   boards?: InnerBoard[]
@@ -875,9 +885,10 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
     start: s.start,
     end: s.end ?? null,
     boards: s.boards ?? [],
-    connections: s.connections,
+    connections: s.connections.map((c) => ({ ...c, kind: c.kind ?? '' })),
     links: s.links.map((l) => ({
       ...l,
+      role: l.role ?? '',
       state: l.state || null,
       at: l.at ?? null,
       states: s.linkStates.filter((ls) => ls.link === l.id).map((ls) => ls.state),

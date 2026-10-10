@@ -1376,6 +1376,37 @@ body {
   fill: #8c959f;
 }
 
+/* An instrument link ends in a hollow circle, as in OPM. */
+.instrument-dot {
+  fill: #fff;
+  stroke: #8c959f;
+  stroke-width: 1.5;
+}
+
+.react-flow__edge.selected .instrument-dot {
+  stroke: #1f6feb;
+}
+
+/* How an input link's process takes the object. */
+.link-role {
+  position: absolute;
+  pointer-events: all;
+  font-size: 11px;
+}
+
+.link-role span {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #8c959f;
+  color: #57606a;
+}
+
+.link-role select {
+  font-size: 11px;
+  padding: 1px 2px;
+}
+
 .react-flow__edge.selected .agent-dot {
   fill: #1f6feb;
 }

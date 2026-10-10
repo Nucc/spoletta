@@ -31,6 +31,11 @@ import (
 //     takes without a state exist. Several such links are alternatives, not
 //     all required.
 //
+// An input link's role says how the process takes the object: an
+// instrument goes into an agent's prompt as a reference not to change, and
+// an object the process consumes is gone once it takes it, so no process
+// waiting for it later runs on it, until it is generated again.
+//
 // An agent deciding the state of an object starts a fresh pass from it, as
 // a human's decision does, so an agent reviewing what another generated can
 // send it back to be revised, round after round. Its rounds setting bounds
@@ -315,7 +320,9 @@ type walk struct {
 	// reviews, rather than generates.
 	decides map[int64]map[int64]bool
 	// Process to the objects it takes, and object to the processes taking it.
-	inputs     map[int64][]linkEnd
+	inputs map[int64][]linkEnd
+	// Process to the role of each object it takes in a role.
+	roles      map[int64]map[int64]string
 	takers     map[int64][]taker
 	successors map[int64][]int64
 	// Process to those handling its failure.
@@ -344,7 +351,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 	w := &walk{
 		e: e, ctx: ctx, run: run, lr: lr, fr: fr, board: board, ws: ws,
 		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{}, settings: map[int64]processSettings{},
-		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{},
+		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{}, roles: map[int64]map[int64]string{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{},
 		generated: map[int64]bool{}, values: map[int64]value{}, ran: map[int64]int{},
@@ -397,6 +404,12 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		} else {
 			w.inputs[l.Process] = append(w.inputs[l.Process], linkEnd{l.Object, l.State})
 			w.takers[l.Object] = append(w.takers[l.Object], taker{l.Process, l.State})
+			if l.Role != roleNone {
+				if w.roles[l.Process] == nil {
+					w.roles[l.Process] = map[int64]string{}
+				}
+				w.roles[l.Process][l.Object] = l.Role
+			}
 		}
 	}
 	for _, c := range s.Connections {
@@ -487,6 +500,22 @@ func (w *walk) asInput(o int64) runInput {
 	return runInput{Name: w.objects[o], State: w.stateNames[v.state], Content: v.content}
 }
 
+// The object as process p takes it, in its role. Called with w.mu held.
+func (w *walk) inputOf(p, o int64) runInput {
+	in := w.asInput(o)
+	switch w.roles[p][o] {
+	case roleInstrument:
+		in.Role = inputInstrument
+	case roleConsumption:
+		in.Role = inputConsumed
+	default:
+		if slices.ContainsFunc(w.outputs[p], func(e linkEnd) bool { return e.object == o }) {
+			in.Role = inputAffected
+		}
+	}
+	return in
+}
+
 func (w *walk) plainInputs(p int64) []linkEnd {
 	var plain []linkEnd
 	for _, i := range w.inputs[p] {
@@ -568,13 +597,13 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 	taken := map[int64]bool{}
 	for _, i := range w.plainInputs(id) {
 		if _, ok := w.values[i.object]; ok && w.generated[i.object] {
-			given = append(given, w.asInput(i.object))
+			given = append(given, w.inputOf(id, i.object))
 			taken[i.object] = true
 		}
 	}
 	for _, o := range w.startGiven(id) {
 		if !taken[o] && o != trigger {
-			given = append(given, w.asInput(o))
+			given = append(given, w.inputOf(id, o))
 		}
 	}
 	var cr *changeRequest
@@ -587,12 +616,18 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 				Reviewed:     []runInput{w.asInput(trigger)},
 			}
 		} else {
-			given = append(given, w.asInput(trigger))
+			given = append(given, w.inputOf(id, trigger))
 		}
 	}
 	for _, in := range extra {
 		if !slices.ContainsFunc(given, func(g runInput) bool { return g.Name == in.Name }) {
 			given = append(given, in)
+		}
+	}
+	// What it consumes is gone once it takes it.
+	for o, role := range w.roles[id] {
+		if role == roleConsumption {
+			delete(w.values, o)
 		}
 	}
 	w.mu.Unlock()

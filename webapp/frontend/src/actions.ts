@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { LinkRole } from './api'
 import type { Quantity } from './quantity'
 
 // The flows that are structs, which say where a copy of an object comes from.
@@ -34,6 +35,8 @@ export type BoardActions = {
   resize: (id: string, x: number, width: number) => void
   // Replaces the states a human's link to an object decides between.
   setDecisionStates: (edgeId: string, states: number[]) => void
+  // Sets how an input link's process takes its object.
+  setRole: (edgeId: string, role: LinkRole) => void
   // Sets how many of an object there are; resolves to whether the server took it.
   setQuantity: (objectId: string, quantity: Quantity) => Promise<boolean>
   // False while a run is in progress, when the flow can't change shape.

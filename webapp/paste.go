@@ -276,8 +276,20 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 		if l.At != nil {
 			atX, atY = sql.NullFloat64{Float64: l.At.X, Valid: true}, sql.NullFloat64{Float64: l.At.Y, Valid: true}
 		}
-		r, err := tx.ExecContext(ctx, "INSERT INTO object_links (process_id, object_id, direction, state_id, route, at_x, at_y) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			process, object, l.Direction, state, route, atX, atY)
+		// Only one process consumes an object; a copy consuming one that is
+		// consumed already takes it instead.
+		role := l.Role
+		if role == roleConsumption {
+			var n int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM object_links WHERE object_id = ? AND role = ?", object, roleConsumption).Scan(&n); err != nil {
+				return res, "", err
+			}
+			if n > 0 {
+				role = roleNone
+			}
+		}
+		r, err := tx.ExecContext(ctx, "INSERT INTO object_links (process_id, object_id, direction, state_id, route, at_x, at_y, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			process, object, l.Direction, state, route, atX, atY, role)
 		if err != nil {
 			return res, "", err
 		}

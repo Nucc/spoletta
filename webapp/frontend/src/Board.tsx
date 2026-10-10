@@ -107,6 +107,7 @@ import {
   saveVersion,
   setLinkAt,
   setLinkRoute,
+  setLinkRole,
   setLinkStates,
   startRun,
   stopRun,
@@ -129,6 +130,7 @@ import {
   type MCPServer,
   type FlowRunDetail,
   type Link,
+  type LinkRole,
   type Models,
   type ObjectAttribute,
   type ObjectState,
@@ -1431,6 +1433,19 @@ export default function Board({
     )
   }
 
+  const setRole = async (edgeId: string, role: LinkRole) => {
+    const edge = edges.find((e) => e.id === edgeId)
+    const l = edge?.data?.link
+    if (!l || reviewing) return
+    try {
+      await setLinkRole(l.id, role)
+    } catch (err) {
+      report(err)
+      return
+    }
+    setEdges((es) => es.map((e) => (e.id === edgeId ? { ...e, data: { ...e.data, link: { ...l, role } } } : e)))
+  }
+
   const setDecisionStates = async (edgeId: string, states: number[]) => {
     const edge = edges.find((e) => e.id === edgeId)
     const l = edge?.data?.link
@@ -1620,8 +1635,8 @@ export default function Board({
 
   // Nodes and edges reach the board through a context whose functions stay
   // the same, so they don't all re-render whenever the board does.
-  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setQuantity, setRoute, resize, zoomIn, stopProcess })
-  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setQuantity, setRoute, resize, zoomIn, stopProcess }
+  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setQuantity, setRoute, resize, zoomIn, stopProcess })
+  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setQuantity, setRoute, resize, zoomIn, stopProcess }
   const actions = useMemo<BoardActions>(
     () => ({
       commitName: (id, name) => latest.current.commitName(id, name),
@@ -1637,6 +1652,7 @@ export default function Board({
       renameState: (objectId, stateId, name) => latest.current.renameObjectState(objectId, stateId, name),
       removeState: (objectId, stateId) => latest.current.removeState(objectId, stateId),
       setDecisionStates: (edgeId, states) => latest.current.setDecisionStates(edgeId, states),
+      setRole: (edgeId, role) => latest.current.setRole(edgeId, role),
       setQuantity: (objectId, quantity) => latest.current.setQuantity(objectId, quantity),
       setRoute: (edgeId, route, save) => latest.current.setRoute(edgeId, route, save),
       resize: (id, x, width) => latest.current.resize(id, x, width),
@@ -1954,7 +1970,7 @@ export default function Board({
         ) : (
           <span
             className="hint"
-            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, reviewing the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or Sentry process onto another process to run that one when it fails. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
+            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, reviewing the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or Sentry process onto another process to run that one when it fails. Select an object's link into a process to pick how the process takes it: just takes it, uses it as an instrument it doesn't change, or consumes it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
           >
             Processes connect through the objects they generate and take. Right-click a node for more.
           </span>

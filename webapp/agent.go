@@ -33,7 +33,17 @@ type runInput struct {
 	Name    string `json:"name"`
 	State   string `json:"state,omitempty"`
 	Content string `json:"content"`
+	// How the process takes it: as an instrument, consumed, or affected,
+	// to hand in changed; empty when it just takes it.
+	Role string `json:"role,omitempty"`
 }
+
+// The roles of a run's input, as the agent is told them.
+const (
+	inputInstrument = "instrument"
+	inputConsumed   = "consumed"
+	inputAffected   = "affected"
+)
 
 // Sent when a human process set an object to a state this process takes it
 // in, and left instructions: the work the human reviewed, the state they set
@@ -350,11 +360,29 @@ func withInputs(prompt string, inputs []runInput) string {
 	}
 	var b strings.Builder
 	b.WriteString(prompt)
-	b.WriteString("\n\nYour inputs follow, one <input> element per object.\n")
+	b.WriteString("\n\nYour inputs follow, one <input> element per object.")
+	roles := map[string]bool{}
 	for _, in := range inputs {
-		fmt.Fprintf(&b, "\n<input name=\"%s\"%s>\n%s\n</input>\n", html.EscapeString(in.Name), stateAttr(in.State), in.Content)
+		roles[in.Role] = true
+	}
+	if roles[inputInstrument] {
+		fmt.Fprintf(&b, " One whose role is %s is a reference to work with: use it, but don't change it.", inputInstrument)
+	}
+	if roles[inputAffected] {
+		fmt.Fprintf(&b, " One whose role is %s is yours to change: what you hand in for it is its new version.", inputAffected)
+	}
+	b.WriteString("\n")
+	for _, in := range inputs {
+		fmt.Fprintf(&b, "\n<input name=\"%s\"%s%s>\n%s\n</input>\n", html.EscapeString(in.Name), stateAttr(in.State), roleAttr(in.Role), in.Content)
 	}
 	return b.String()
+}
+
+func roleAttr(role string) string {
+	if role == "" || role == inputConsumed {
+		return ""
+	}
+	return fmt.Sprintf(" role=\"%s\"", role)
 }
 
 func stateAttr(state string) string {

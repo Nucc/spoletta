@@ -189,6 +189,7 @@ type link struct {
 	Direction string  `json:"direction"`
 	State     *int64  `json:"state"`
 	States    []int64 `json:"states"`
+	Role      string  `json:"role"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
 	// Where the object shows on the process's own board, if moved there by
@@ -409,7 +410,19 @@ type runInput struct {
 	Name    string `json:"name"`
 	State   string `json:"state,omitempty"`
 	Content string `json:"content"`
+	// How the process takes it: as an instrument, consumed, or affected,
+	// to hand in changed; empty when it just takes it.
+	Role string `json:"role,omitempty"`
 }
+
+const (
+	roleNone        = ""
+	roleInstrument  = "instrument"
+	roleConsumption = "consumption"
+	inputInstrument = "instrument"
+	inputConsumed   = "consumed"
+	inputAffected   = "affected"
+)
 
 // The content and state an object got in a run from the step that generated
 // it, or the state a human step set it to.

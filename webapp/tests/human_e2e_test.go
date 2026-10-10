@@ -151,9 +151,10 @@ func TestHumanReviewRoutesEachState(t *testing.T) {
 				}
 			case "Draft":
 				a.waitStep(rn.ID, "Review", stepWaiting, review.ID)
-				// Without instructions the draft comes back as an input in its state.
+				// Without instructions the draft comes back as an input in its
+				// state, to change, since Draft generates it too.
 				runs := a.worker.runsOf("Draft")
-				if len(runs) != 2 || !strings.Contains(runs[1].Prompt, `<input name="Notes" state="changes">`) || strings.Contains(runs[1].Prompt, "<change_request>") {
+				if len(runs) != 2 || !strings.Contains(runs[1].Prompt, `<input name="Notes" state="changes" role="affected">`) || strings.Contains(runs[1].Prompt, "<change_request>") {
 					t.Errorf("the revision's prompt:\n%s", runs[len(runs)-1].Prompt)
 				}
 				a.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)

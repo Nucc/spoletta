@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as R
 import { createPortal } from 'react-dom'
 import { BaseEdge, EdgeLabelRenderer, Position, useEdges, useNodesData, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
-import type { Link } from './api'
+import type { Link, LinkRole } from './api'
 import { PlusIcon } from './icons'
 import QuantityLabel from './QuantityLabel'
 import type { ObjectNodeType } from './ObjectNode'
@@ -30,11 +30,20 @@ export type LinkEdgeType = Edge<LinkEdgeData, 'link'>
 // The radius of the filled circle an agent link ends in.
 const AGENT_DOT_RADIUS = 5
 
+// How an input link's process takes the object, as the picker names them.
+const ROLES: { value: LinkRole; label: string; title: string }[] = [
+  { value: '', label: 'takes', title: 'Takes the object and leaves it for other processes' },
+  { value: 'instrument', label: 'instrument', title: 'Uses the object as a reference, without changing it' },
+  { value: 'consumption', label: 'consumes', title: 'Consumes the object: once taken, it is gone' },
+]
+
 // A link drawn in straight segments with rounded corners, with a button that
 // inserts a step into it. Once selected, each segment has a grip that drags
 // it sideways, so the link can be routed round other nodes; double-click the
 // link to go back to the default route. A person's link into a process is an
-// OPM agent link, which ends in a filled circle instead of an arrow.
+// OPM agent link, which ends in a filled circle instead of an arrow, and an
+// instrument link in a hollow one; a consumed object's link says so. A
+// selected input link picks how its process takes the object.
 export default function LinkEdge({
   id,
   source: sourceId,
@@ -54,6 +63,7 @@ export default function LinkEdge({
   const { screenToFlowPosition } = useReactFlow()
   const from = useNodesData<ObjectNodeType>(sourceId)
   const agent = data?.link?.direction === 'input' && from?.type === 'object' && Boolean(from.data.human)
+  const role = data?.link?.direction === 'input' && !agent ? data.link.role : undefined
   // The object's end says how many of it there are: always for a list, and
   // for one object once the link is selected, to make it a list. Inside a
   // flow process a list from outside is one item, and a person is one.
@@ -113,8 +123,31 @@ export default function LinkEdge({
 
   return (
     <>
-      <BaseEdge id={id} path={path} markerEnd={agent ? undefined : markerEnd} style={style} />
+      <BaseEdge id={id} path={path} markerEnd={agent || role === 'instrument' ? undefined : markerEnd} style={style} />
       {agent && <circle className="agent-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
+      {role === 'instrument' && <circle className="instrument-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
+      {role !== undefined && ((selected && actions.editable) || role === 'consumption') && (
+        <EdgeLabelRenderer>
+          <div className="link-role nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${roleAt(targetX, targetY, targetPosition)})` }}>
+            {selected && actions.editable ? (
+              <select
+                aria-label="How the process takes the object"
+                value={role}
+                title={ROLES.find((r) => r.value === role)?.title}
+                onChange={(e) => actions.setRole(id, e.target.value as LinkRole)}
+              >
+                {ROLES.map((r) => (
+                  <option key={r.value} value={r.value} title={r.title}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span title="The process consumes the object: once taken, it is gone">consumes</span>
+            )}
+          </div>
+        </EdgeLabelRenderer>
+      )}
       {selected && data?.routable && actions.editable && (
         <EdgeLabelRenderer>
           {segments(points, { x: labelX, y: labelY }).map((seg) => (
@@ -175,6 +208,21 @@ export default function LinkEdge({
       )}
     </>
   )
+}
+
+// Where an input link's role shows: on the link, just before the process.
+function roleAt(x: number, y: number, side: Position): string {
+  const away = 26
+  switch (side) {
+    case Position.Top:
+      return `${x}px, ${y - away}px`
+    case Position.Bottom:
+      return `${x}px, ${y + away}px`
+    case Position.Left:
+      return `${x - away - 20}px, ${y}px`
+    default:
+      return `${x + away + 20}px, ${y}px`
+  }
 }
 
 // Where the agent link's circle goes: touching the process, outside it.

@@ -295,6 +295,29 @@ export type FlowSettings = {
 export const defaultBranchPrefix = (flowName: string) =>
   'flow/' + (flowName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'flow')
 
+// The setup, every MCP server, struct, procedure and flow, as a YAML file
+// to keep under version control; see SETUP.md.
+export const SETUP_URL = '/api/setup'
+
+// The setup as a YAML file, refused with why, such as flows sharing a name.
+export async function exportSetup(): Promise<Blob> {
+  return (await send(SETUP_URL)).blob()
+}
+
+// What importing a setup file did to each of its flows.
+export type ImportedFlow = { id: number; name: string; created: boolean }
+
+// Imports a setup file: creates the flows it has that the app doesn't, and
+// makes over the ones it has by name. A file with anything wrong changes nothing.
+export async function importSetup(file: string): Promise<ImportedFlow[]> {
+  const res = await request<{ flows: ImportedFlow[] }>(SETUP_URL, {
+    method: 'POST',
+    body: file,
+    headers: { 'Content-Type': 'application/yaml' },
+  })
+  return res.flows
+}
+
 export function listFlows(): Promise<Flow[]> {
   return request('/api/flows')
 }

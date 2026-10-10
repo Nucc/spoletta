@@ -96,6 +96,7 @@ func main() {
 	registerVersionRoutes(mux, db)
 	registerHistoryRoutes(mux, db)
 	registerOPLRoutes(mux, db)
+	registerSetupRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
 	registerFileRoutes(mux)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

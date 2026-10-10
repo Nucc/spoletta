@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { createFlow, deleteFlow, listFlows, type Flow } from './api'
-import { ClockIcon, FlowBuilderIcon, ObjectIcon, PlusIcon, SubflowIcon, TrashIcon } from './icons'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { createFlow, deleteFlow, exportSetup, importSetup, listFlows, type Flow } from './api'
+import { ClockIcon, DownloadIcon, FlowBuilderIcon, ObjectIcon, PlusIcon, SubflowIcon, TrashIcon, UploadIcon } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
 
 // The main page: the flows that run, each a job of its own, such as fixing
@@ -10,6 +10,8 @@ import { formatTime, RUN_LABELS } from './Runs'
 export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const [flows, setFlows] = useState<Flow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const picker = useRef<HTMLInputElement>(null)
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
   const refresh = useCallback(() => listFlows().then(setFlows).catch(report), [report])
@@ -41,6 +43,38 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
     }
   }
 
+  // Saves the setup as a file.
+  const onExport = async () => {
+    setError(null)
+    try {
+      const url = URL.createObjectURL(await exportSetup())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'genie-setup.yaml'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      report(err)
+    }
+  }
+
+  // Reads the setup file picked and imports it.
+  const onImport = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setError(null)
+    setNotice(null)
+    try {
+      const flows = await importSetup(await file.text())
+      const created = flows.filter((f) => f.created).length
+      setNotice(`Imported ${file.name}: ${created} created, ${flows.length - created} updated.`)
+      await refresh()
+    } catch (err) {
+      report(err)
+    }
+  }
+
   return (
     <div className="flows-page">
       <header className="toolbar">
@@ -50,10 +84,26 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         <a className="toolbar-link" href="#/schedules">
           <ClockIcon /> Schedules
         </a>
+        <button className="toolbar-link" onClick={onExport} title="Download every flow, procedure, struct and MCP server as a YAML file">
+          <DownloadIcon /> Export
+        </button>
+        <button
+          className="toolbar-link"
+          onClick={() => picker.current?.click()}
+          title="Create or update flows, procedures, structs and MCP servers from a YAML file"
+        >
+          <UploadIcon /> Import
+        </button>
+        <input ref={picker} type="file" accept=".yaml,.yml,.json" hidden onChange={onImport} />
       </header>
       {error && (
         <div className="error-banner" role="alert" onClick={() => setError(null)}>
           {error} (click to dismiss)
+        </div>
+      )}
+      {notice && (
+        <div className="notice-banner" role="status" onClick={() => setNotice(null)}>
+          {notice} (click to dismiss)
         </div>
       )}
       <main className="flows">

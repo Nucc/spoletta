@@ -16,6 +16,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 - `versions.go`: full-board snapshots; `history.go` undo/redo reuses them. Adding board data means updating `snapshot` and `restoreSnapshot`, and usually `paste.go` and `opl.go`.
 - `opl.go`: renders the board as OPL sentences, shown in the UI and given to agents.
 - `mcp.go`: MCP servers via OAuth, proxied per agent step at `/mcp/{id}`.
+- `docs/FLOWS.md`: how to author flows for a user (OPM, run semantics, step contracts, worked setup-file examples). Read it before generating a flow.
 
 ## Database
 - No migration files. Each domain file has `migrateX(db)` with `CREATE TABLE IF NOT EXISTS` plus `addColumn(...)` for new columns; called at startup from `main.go`. Changes must work on existing databases.

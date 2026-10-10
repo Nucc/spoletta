@@ -198,6 +198,10 @@ const RUN_LIST_REFRESH_MS = 5000
 // How long a board just shown gets to measure its nodes before it is fitted into view.
 const BOARD_FIT_DELAY_MS = 100
 
+// Fitting the board into view; a board of a few nodes is not blown up past
+// its natural size.
+const FIT_VIEW = { duration: 300, maxZoom: 1 }
+
 // The state a handle of an object node belongs to, if any.
 const stateOfHandle = (handle: string | null | undefined): number | null => {
   const m = handle?.match(/^state-(?:in|out)-(\d+)$/)
@@ -692,7 +696,7 @@ export default function Board({
     refreshVersions()
     // The flow just loaded; show all of it once its nodes are measured.
     loadBoard()
-      .then(() => window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS))
+      .then(() => window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS))
       .catch(report)
   }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, fitView, flowId])
 
@@ -807,7 +811,7 @@ export default function Board({
         setShownBoard(boardId)
         setShownUnfolded(unfolded)
         // Another board is a different place; show all of it once its nodes are measured.
-        if (boardId !== shownBoard || unfolded !== shownUnfolded) window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
+        if (boardId !== shownBoard || unfolded !== shownUnfolded) window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
       })
       .catch(report)
     return () => {
@@ -1017,7 +1021,7 @@ export default function Board({
   useEffect(() => {
     if (panelOpen === panelWasOpen.current) return
     panelWasOpen.current = panelOpen
-    window.setTimeout(() => fitView({ duration: 300 }), BOARD_FIT_DELAY_MS)
+    window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
   }, [panelOpen, fitView])
 
   const savePositions = (positions: Map<string, XYPosition>) => {
@@ -1087,7 +1091,7 @@ export default function Board({
           .map((n) => ({ id: `${BOUNDARY_PREFIX}${n.id}-${END_ID}`, source: n.id, target: END_ID }))
     moveNodes(tidy(nodes, [...edges, ...leads]))
     for (const e of edges) if (e.data?.route) setRoute(e.id, null, true)
-    window.requestAnimationFrame(() => fitView({ duration: 300 }))
+    window.requestAnimationFrame(() => fitView(FIT_VIEW))
   }
 
   // An unfolded object stays where it is, and what makes it up is laid out
@@ -1103,7 +1107,7 @@ export default function Board({
     const dy = root.position.y - at.y
     const moved = [...laid].filter(([id]) => id !== root.id)
     moveNodes(new Map(moved.map(([id, p]) => [id, { x: p.x + dx, y: p.y + dy }])))
-    window.requestAnimationFrame(() => fitView({ duration: 300 }))
+    window.requestAnimationFrame(() => fitView(FIT_VIEW))
   }
 
   const humanProcess = (id: string) => {
@@ -2068,7 +2072,7 @@ export default function Board({
                 deleteKeyCode={reviewing ? null : undefined}
               >
                 <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
-                <Controls />
+                <Controls fitViewOptions={FIT_VIEW} />
               </ReactFlow>
             </StructFlowsContext.Provider>
           </BoardActionsContext.Provider>

@@ -1139,13 +1139,16 @@ body {
 }
 
 /* A never resized node widens to fit its name, up to a limit; resizing it by
-   hand goes past that. The min-widths match NODE_SIZE in Board.tsx. */
+   hand goes past that. The min-widths match NODE_SIZE in Board.tsx. Its
+   width is its content's, not squeezed by a canvas narrowed by the panel. */
 .process-node.auto-width {
+  width: max-content;
   min-width: 240px;
   max-width: 480px;
 }
 
 .object-node.auto-width {
+  width: max-content;
   min-width: 200px;
   max-width: 400px;
 }

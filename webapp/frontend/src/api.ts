@@ -39,7 +39,14 @@ export type ProcessSettings = {
   repositories?: string[]
   // The flow a subflow process runs, by id.
   flow?: number
+  // How many times an agent deciding states runs before its decisions can
+  // no longer send the object back to a process that ran; DEFAULT_ROUNDS
+  // when absent.
+  rounds?: number
 }
+
+export const DEFAULT_ROUNDS = 3
+export const MAX_ROUNDS = 20
 
 export type Process = {
   id: number

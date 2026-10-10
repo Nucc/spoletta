@@ -307,7 +307,16 @@ type processSettings struct {
 	Repositories *[]string `json:"repositories,omitempty"`
 	// The flow a subflow process runs, by id; see calls.go.
 	Flow *int64 `json:"flow,omitempty"`
+	// How many times an agent deciding states runs in a run before its
+	// decisions can no longer send the object back to a process that ran;
+	// defaultRounds when absent. See engine.go.
+	Rounds *int `json:"rounds,omitempty"`
 }
+
+const (
+	defaultRounds = 3
+	maxRounds     = 20
+)
 
 // What a step did to a repository it worked on.
 type repoCommits struct {

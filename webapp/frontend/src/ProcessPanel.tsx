@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  DEFAULT_ROUNDS,
   DEFAULT_SENTRY,
+  MAX_ROUNDS,
   THINKING_LEVELS,
   listObjects,
   updateProcess,
@@ -316,6 +318,18 @@ export default function ProcessPanel({
             onOpenSettings={onOpenMCPSettings}
           />
           {repositoryPicker}
+          <div className="panel-row">
+            <NumberSetting
+              label="Rounds"
+              title="When this agent decides states of what it reviews: how many times it runs in a run before sending the work back fails it"
+              value={settings.rounds}
+              fallback={DEFAULT_ROUNDS}
+              min={1}
+              max={MAX_ROUNDS}
+              readOnly={readOnly}
+              onChange={(rounds) => setSettings(({ rounds: _, ...rest }) => (rounds === undefined ? rest : { ...rest, rounds }))}
+            />
+          </div>
         </>
       ) : kind === 'human' ? (
         // The prompt doubles as the person's instructions; switching kinds keeps it.
@@ -448,6 +462,53 @@ function SentryFields({
         or <code>metadata.value</code>; without attributes, the list holds the main fields.
       </small>
     </div>
+  )
+}
+
+// A whole number a process's settings may hold, from min to max; empty
+// leaves it out, which means fallback. What is typed shows as it is, and only
+// a number in range is saved.
+function NumberSetting({
+  label,
+  title,
+  value,
+  fallback,
+  min,
+  max,
+  readOnly,
+  onChange,
+}: {
+  label: string
+  title: string
+  value: number | undefined
+  fallback: number | string
+  min: number
+  max: number
+  readOnly: boolean
+  onChange: (n: number | undefined) => void
+}) {
+  const [text, setText] = useState(value === undefined ? '' : String(value))
+  useEffect(() => {
+    setText((t) => (Number(t) === value || (t === '' && value === undefined) ? t : value === undefined ? '' : String(value)))
+  }, [value])
+  return (
+    <label className="panel-field" title={title}>
+      <span>{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={text}
+        placeholder={String(fallback)}
+        readOnly={readOnly}
+        onChange={(e) => {
+          setText(e.target.value)
+          if (e.target.value === '') return onChange(undefined)
+          const n = Number(e.target.value)
+          if (Number.isInteger(n) && n >= min && n <= max) onChange(n)
+        }}
+      />
+    </label>
   )
 }
 

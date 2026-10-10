@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -46,6 +47,24 @@ type processSettings struct {
 	Repositories *[]string `json:"repositories,omitempty"`
 	// The flow a subflow process runs, by id; see calls.go.
 	Flow *int64 `json:"flow,omitempty"`
+	// How many times an agent deciding states runs in a run before its
+	// decisions can no longer send the object back to a process that ran;
+	// defaultRounds when absent. See engine.go.
+	Rounds *int `json:"rounds,omitempty"`
+}
+
+// How many rounds an agent deciding states runs at most by default, and at
+// most whatever it says.
+const (
+	defaultRounds = 3
+	maxRounds     = 20
+)
+
+func (s processSettings) rounds() int {
+	if s.Rounds == nil {
+		return defaultRounds
+	}
+	return *s.Rounds
 }
 
 func (s processSettings) sentry() sentrySettings {
@@ -57,6 +76,9 @@ func (s processSettings) sentry() sentrySettings {
 
 // Why the settings can't be saved, or "".
 func (s processSettings) problem() string {
+	if s.Rounds != nil && (*s.Rounds < 1 || *s.Rounds > maxRounds) {
+		return fmt.Sprintf("rounds must be from 1 to %d", maxRounds)
+	}
 	if s.Sentry != nil {
 		return s.Sentry.problem()
 	}

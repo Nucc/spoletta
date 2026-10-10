@@ -29,6 +29,12 @@ import (
 //     takes without a state exist. Several such links are alternatives, not
 //     all required.
 //
+// An agent deciding the state of an object starts a fresh pass from it, as
+// a human's decision does, so an agent reviewing what another generated can
+// send it back to be revised, round after round. Its rounds setting bounds
+// that: once it has run that many times, a decision sending the object back
+// to a process that ran already fails it instead, which ends its branch.
+//
 // A failure stops its branch, and every process runs at most once per pass,
 // so cycles end. An agent, script or Sentry step stopped while it goes
 // fails, so stops its branch the same way; the rest of the run goes on.
@@ -310,8 +316,10 @@ type walk struct {
 	stateObjects map[int64]int64
 	generated    map[int64]bool
 
-	mu         sync.Mutex
-	values     map[int64]value
+	mu     sync.Mutex
+	values map[int64]value
+	// How many times each process has run, over all passes.
+	ran        map[int64]int
 	failed     bool
 	terminated bool
 }
@@ -329,7 +337,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{},
-		generated: map[int64]bool{}, values: map[int64]value{},
+		generated: map[int64]bool{}, values: map[int64]value{}, ran: map[int64]int{},
 	}
 	w.reviews, w.terminate = context.WithCancel(ctx)
 	s := fr.board
@@ -530,6 +538,9 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 		return
 	}
 	human := w.kinds[id] == kindHuman
+	w.mu.Lock()
+	w.ran[id]++
+	w.mu.Unlock()
 
 	w.mu.Lock()
 	given := []runInput{}
@@ -585,10 +596,27 @@ func (w *walk) runProcess(id int64, p *pass, trigger int64) {
 		return
 	}
 	var next []func()
+	var fresh *pass
 	for _, o := range objects {
 		if st := out[o].state; st != 0 {
-			for _, t := range w.takersIn(o, st) {
-				next = append(next, func() { w.runProcess(t, p, o) })
+			takers := w.takersIn(o, st)
+			// A decision starts a fresh pass from the object, while rounds last.
+			from := p
+			if w.decides[id][o] {
+				if w.ran[id] >= w.settings[id].rounds() && slices.ContainsFunc(takers, func(t int64) bool { return w.ran[t] > 0 }) {
+					w.mu.Unlock()
+					w.note(id, stepError, fmt.Sprintf("It decided %s is %s again after %d rounds, the most it runs; it can no longer send it back.",
+						strconv.Quote(w.objects[o]), strconv.Quote(w.stateNames[st]), w.ran[id]))
+					w.fail()
+					return
+				}
+				if fresh == nil {
+					fresh = newPass()
+				}
+				from = fresh
+			}
+			for _, t := range takers {
+				next = append(next, func() { w.runProcess(t, from, o) })
 			}
 		}
 		for _, t := range w.takers[o] {

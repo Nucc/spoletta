@@ -307,3 +307,92 @@ func TestAgentDecisionPrompt(t *testing.T) {
 		}
 	}
 }
+
+// A writer and a critic reviewing what it wrote: the critic's decision
+// starts a fresh pass, so the post goes back to the writer, round after
+// round, until the critic is satisfied.
+type decisionsLoop struct {
+	flow                   flow
+	write, critic, publish process
+}
+
+func decisionsNewLoop(a *app, verdicts ...string) decisionsLoop {
+	a.t.Helper()
+	var l decisionsLoop
+	l.flow = a.newFlow("Loop")
+	l.write = a.agent(l.flow.ID, "Write", "Write the post.")
+	l.critic = a.agent(l.flow.ID, "Critic", "Critique the post.")
+	l.publish = a.agent(l.flow.ID, "Publish", "Publish the post.")
+	post := a.newObject(l.flow.ID, "Post")
+	good := a.newState(post.ID, "good")
+	weak := a.newState(post.ID, "weak")
+	a.output(l.write.ID, post.ID)
+	a.input(l.critic.ID, post.ID)
+	decisionsDecides(a, l.critic.ID, post.ID, good.ID, weak.ID)
+	humanTakesIn(a, l.write.ID, post.ID, weak.ID)
+	humanTakesIn(a, l.publish.ID, post.ID, good.ID)
+	a.startAt(l.flow.ID, l.write.ID)
+	a.worker.onAgent("Write", humanCounting("post"))
+	a.worker.onAgent("Publish", handsIn(data("published")))
+	var mu sync.Mutex
+	n := 0
+	a.worker.onAgent("Critic", func(context.Context, agentRun) runResult {
+		mu.Lock()
+		defer mu.Unlock()
+		v := verdicts[min(n, len(verdicts)-1)]
+		n++
+		return submitted(decisionsReply(nil, map[string]any{"Post": map[string]any{"state": v, "instructions": fmt.Sprintf("Round %d: %s.", n, v)}}))
+	})
+	return l
+}
+
+// It is satisfied on its last round by default, which still publishes.
+func TestAgentReviewLoopRepeatsUntilSatisfied(t *testing.T) {
+	a := newApp(t)
+	l := decisionsNewLoop(a, "weak", "weak", "good")
+	d := a.finish(a.startRun(l.flow.ID).ID)
+	if d.Status != runDone {
+		t.Fatalf("run %s with steps %s", d.Status, describeSteps(d))
+	}
+	if w, c, p := len(stepsOf(d, "Write")), len(stepsOf(d, "Critic")), len(stepsOf(d, "Publish")); w != 3 || c != 3 || p != 1 {
+		t.Fatalf("%d writes, %d critiques and %d publishes, want 3, 3 and 1; steps %s", w, c, p, describeSteps(d))
+	}
+	// Each rewrite got the critic's instructions, on the post it wrote last.
+	writes := stepsOf(d, "Write")
+	for i, s := range writes[1:] {
+		cr := s.ChangeRequest
+		want := fmt.Sprintf("Round %d: weak.", i+1)
+		if cr == nil || cr.Reviewer != "Critic" || cr.Instructions != want || !strings.Contains(cr.Reviewed[0].Content, fmt.Sprintf("post v%d", i+1)) {
+			t.Errorf("write %d's change request = %+v, want %q on post v%d", i+2, cr, want, i+1)
+		}
+	}
+	if in := onlyStep(t, d, "Publish"); in.ChangeRequest == nil || !strings.Contains(in.ChangeRequest.Reviewed[0].Content, "post v3") {
+		t.Errorf("publish took %+v", in.ChangeRequest)
+	}
+}
+
+// Once the critic has run as many rounds as it may, sending the post back
+// once more fails it, which fails the run.
+func TestAgentReviewLoopEndsAfterItsRounds(t *testing.T) {
+	a := newApp(t)
+	l := decisionsNewLoop(a, "weak")
+	rounds := 2
+	a.call("PATCH", fmt.Sprintf("/api/processes/%d", l.critic.ID), map[string]any{"settings": processSettings{Rounds: &rounds}}, http.StatusOK, nil)
+	d := a.finish(a.startRun(l.flow.ID).ID)
+	if d.Status != runFailed {
+		t.Fatalf("run %s with steps %s, want it failed", d.Status, describeSteps(d))
+	}
+	if w, p := len(stepsOf(d, "Write")), len(stepsOf(d, "Publish")); w != 2 || p != 0 {
+		t.Errorf("%d writes and %d publishes, want 2 and none; steps %s", w, p, describeSteps(d))
+	}
+	critiques := stepsOf(d, "Critic")
+	last := critiques[len(critiques)-1]
+	if len(critiques) != 3 || last.Status != stepError || !strings.Contains(last.Error, "after 2 rounds") {
+		t.Errorf("critic steps %s, want two critiques and a failure for the third round", describeSteps(d))
+	}
+
+	// The default lets it run three rounds; rounds are bounded.
+	for _, bad := range []int{0, maxRounds + 1} {
+		a.refused("PATCH", fmt.Sprintf("/api/processes/%d", l.critic.ID), map[string]any{"settings": processSettings{Rounds: &bad}}, http.StatusBadRequest, "rounds must be from 1")
+	}
+}

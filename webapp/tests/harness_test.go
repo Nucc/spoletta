@@ -218,6 +218,8 @@ func startWebapp(workerURL string, wait time.Duration) (*webapp, error) {
 		"WORKER_URL=" + workerURL,
 		"MCP_PROXY_URL=" + w.url,
 		"PARALLEL_STEPS=3",
+		// Lets schedules come round every second; see schedules_e2e_test.go.
+		"SCHEDULE_SECONDS=1",
 		"STATIC_DIR=" + static,
 	}
 	w.cmd.Stdout, w.cmd.Stderr = w.log, w.log

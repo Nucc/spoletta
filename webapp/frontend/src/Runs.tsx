@@ -16,6 +16,7 @@ import {
   type StepMessage,
   type StepStatus,
 } from './api'
+import { ClockIcon } from './icons'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
@@ -85,6 +86,11 @@ export function RunList({
         <span className="run-item-title">
           <span className={`status-dot ${r.status}`} aria-hidden="true" />
           Run #{r.id}
+          {r.schedule !== null && (
+            <span className="run-item-scheduled" title="Started by a schedule">
+              <ClockIcon />
+            </span>
+          )}
           <span className="run-item-status">{RUN_LABELS[r.status]}</span>
         </span>
         {r.itemKey && (

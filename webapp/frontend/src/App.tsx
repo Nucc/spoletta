@@ -3,13 +3,15 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { getFlow, updateFlow, type Flow } from './api'
 import Board from './Board'
 import FlowList from './FlowList'
+import Schedules from './Schedules'
 
 // The page the URL's hash names: #/flows/<id> for a flow's board,
-// #/flows/<id>/runs/<run> for it with one of its runs open, anything else
-// for the list of flows.
-type Page = { flow: number; run: number | null } | null
+// #/flows/<id>/runs/<run> for it with one of its runs open, #/schedules for
+// the schedules, anything else for the list of flows.
+type Page = { flow: number; run: number | null } | 'schedules' | null
 
 const pageInHash = (): Page => {
+  if (window.location.hash === '#/schedules') return 'schedules'
   const m = /^#\/flows\/(\d+)(?:\/runs\/(\d+))?$/.exec(window.location.hash)
   return m ? { flow: Number(m[1]), run: m[2] ? Number(m[2]) : null } : null
 }
@@ -24,6 +26,7 @@ export default function App() {
   }, [])
 
   if (page === null) return <FlowList onOpen={(id) => (window.location.hash = `#/flows/${id}`)} />
+  if (page === 'schedules') return <Schedules />
   // A new board for each flow, so nothing of one shows on another.
   return <FlowPage key={page.flow} id={page.flow} run={page.run} />
 }

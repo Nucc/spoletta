@@ -29,15 +29,17 @@ type run struct {
 	ProcessName string `json:"processName"`
 	// For a run of a flow process for one item of a list: what tells the
 	// item apart, its first unique attribute's value or its place in the list.
-	ItemKey    string     `json:"itemKey"`
+	ItemKey string `json:"itemKey"`
+	// The schedule that started it, if one did; see schedules.go.
+	Schedule   *int64     `json:"schedule"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
 
-const runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, started_at, finished_at"
+const runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, schedule_id, started_at, finished_at"
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.Schedule, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -193,6 +195,7 @@ func migrateRuns(db *sql.DB) error {
 		{"runs", "process_name", "VARCHAR(255) NOT NULL DEFAULT '' AFTER process_ref"},
 		{"runs", "item_key", "VARCHAR(255) NOT NULL DEFAULT '' AFTER process_name"},
 		{"run_steps", "child_run_id", "BIGINT NULL AFTER instructions"},
+		{"runs", "schedule_id", "BIGINT NULL AFTER item_key"},
 	} {
 		if err := addColumn(db, c.table, c.name, c.def); err != nil {
 			return err
@@ -398,6 +401,44 @@ func endRun(ctx context.Context, db *sql.DB, id int64, status string) (run, erro
 	return rn, err
 }
 
+// Starts a run of the whole flow on its board as it is, for schedule if one
+// started it: a board changed since its version is saved as a new one first,
+// so the run's version shows what it ran. The run goes on in the server;
+// this returns its id once it started, or sql.ErrNoRows without the flow.
+func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule *int64) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var name string
+	var settings flowSettings
+	if err := tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ?", flow).Scan(&name, &settings); err != nil {
+		return 0, err
+	}
+	version, err := saveVersion(ctx, tx, flow, true)
+	if err != nil {
+		return 0, err
+	}
+	board, err := takeSnapshot(ctx, tx, flow)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id) VALUES (?, ?, ?, ?)", flow, runRunning, version, schedule)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	eng.start(id, flow, version, board, settings.Repositories, settings.prefix(name))
+	return id, nil
+}
+
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
@@ -427,24 +468,13 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		writeJSON(w, http.StatusOK, rs)
 	})
 
-	// Starts a run on the board as it is: a board changed since its version
-	// is saved as a new one first, so the run's version shows what it ran.
-	// The run goes on in the server; this returns once it started.
+	// Starts a run on the board as it is; see startRun.
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
 		if !ok || refuseInStruct(w, r, db, f) {
 			return
 		}
-		ctx := r.Context()
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		defer tx.Rollback()
-		var name string
-		var settings flowSettings
-		err = tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ?", f).Scan(&name, &settings)
+		id, err := startRun(r.Context(), db, eng, f, nil)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return
@@ -453,36 +483,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
-		version, err := saveVersion(ctx, tx, f, true)
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "flow not found", http.StatusNotFound)
-			return
-		}
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		board, err := takeSnapshot(ctx, tx, f)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id) VALUES (?, ?, ?)", f, runRunning, version)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		id, err := res.LastInsertId()
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		if err := tx.Commit(); err != nil {
-			serverError(w, err)
-			return
-		}
-		eng.start(id, f, version, board, settings.Repositories, settings.prefix(name))
-		rn, err := getRun(ctx, db, id)
+		rn, err := getRun(r.Context(), db, id)
 		if err != nil {
 			serverError(w, err)
 			return

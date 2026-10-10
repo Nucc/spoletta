@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { createFlow, deleteFlow, listFlows, type Flow } from './api'
-import { FlowBuilderIcon, ObjectIcon, PlusIcon, SubflowIcon, TrashIcon } from './icons'
+import { ClockIcon, FlowBuilderIcon, ObjectIcon, PlusIcon, SubflowIcon, TrashIcon } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
 
 // The main page: the flows that run, each a job of its own, such as fixing
@@ -47,6 +47,9 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         <h1>
           <FlowBuilderIcon /> Flows
         </h1>
+        <a className="toolbar-link" href="#/schedules">
+          <ClockIcon /> Schedules
+        </a>
       </header>
       {error && (
         <div className="error-banner" role="alert" onClick={() => setError(null)}>

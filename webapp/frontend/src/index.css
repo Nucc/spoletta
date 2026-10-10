@@ -2479,3 +2479,214 @@ body {
   border-radius: 8px;
   background: #f6f8fa;
 }
+
+/* The schedules page: each schedule a card like a flow's, with a switch
+   that enables it, and the form that picks the flow and when it runs. */
+.toolbar-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 6px 12px;
+  font-size: 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  text-decoration: none;
+}
+
+.toolbar-link:hover {
+  background: #f6f8fa;
+}
+
+.schedule-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 24px;
+  padding: 12px 16px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 10px;
+}
+
+.schedule-list .schedule-form {
+  flex: 1;
+  margin: 0;
+  border: none;
+}
+
+.schedule-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 12px;
+}
+
+.schedule-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #656d76;
+}
+
+.schedule-fields select,
+.schedule-fields input {
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.schedule-fields .schedule-cron {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.schedule-fields select:focus,
+.schedule-fields input:focus {
+  outline: none;
+  border-color: #54aeff;
+  box-shadow: 0 0 0 3px rgba(84, 174, 255, 0.25);
+}
+
+.schedule-form-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.schedule-preview {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: #656d76;
+  font-size: 13px;
+}
+
+.schedule-preview.problem {
+  color: #cf222e;
+}
+
+.schedule-form-footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #1f883d;
+  border-radius: 8px;
+  background: #1f883d;
+  color: #fff;
+  cursor: pointer;
+}
+
+.schedule-form-footer button.secondary {
+  border-color: #d0d7de;
+  background: #fff;
+  color: #1f2328;
+}
+
+.schedule-form-footer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.schedule-list li.disabled .flow-card {
+  opacity: 0.6;
+}
+
+.schedule-list .flow-card-name a,
+.schedule-last-run {
+  color: inherit;
+  text-decoration: none;
+}
+
+.schedule-list .flow-card-name a:hover,
+.schedule-last-run:hover {
+  color: #0969da;
+}
+
+.schedule-last-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-when {
+  color: #1f2328;
+  font-size: 13px;
+}
+
+.schedule-when code {
+  font-size: 12px;
+}
+
+.schedule-skipping {
+  color: #9a6700;
+  font-size: 12px;
+}
+
+/* A switch: the box is hidden, its span drawn as the track and knob. */
+.schedule-toggle {
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 18px;
+  margin-right: 4px;
+  cursor: pointer;
+}
+
+.schedule-toggle input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.schedule-toggle span {
+  position: absolute;
+  inset: 0;
+  border-radius: 9px;
+  background: #d0d7de;
+  pointer-events: none;
+  transition: background 0.15s;
+}
+
+.schedule-toggle span::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.schedule-toggle input:checked + span {
+  background: #1f883d;
+}
+
+.schedule-toggle input:checked + span::after {
+  transform: translateX(14px);
+}
+
+.schedule-toggle input:focus-visible + span {
+  box-shadow: 0 0 0 3px rgba(84, 174, 255, 0.4);
+}
+
+/* A run a schedule started, in the runs list. */
+.run-item-scheduled {
+  display: inline-flex;
+  color: #656d76;
+}

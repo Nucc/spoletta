@@ -129,6 +129,13 @@ export const GearIcon = () => (
   </Icon>
 )
 
+export const ClockIcon = () => (
+  <Icon>
+    <circle cx="8" cy="8" r="6" />
+    <path d="M8 4.75V8l2.25 1.5" />
+  </Icon>
+)
+
 export const TrashIcon = () => (
   <Icon>
     <path d="M2.5 4.25h11M6.25 4.25v-1.5h3.5v1.5M4 4.25l.6 9h6.8l.6-9M6.75 7v4M9.25 7v4" />

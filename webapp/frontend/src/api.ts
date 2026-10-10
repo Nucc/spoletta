@@ -543,6 +543,8 @@ export type FlowRun = {
   processName: string
   // For the run of one item of a list: what tells the item apart.
   itemKey: string
+  // The schedule that started it, if one did.
+  schedule: number | null
   startedAt: string
   finishedAt: string | null
 }
@@ -627,6 +629,53 @@ export type RunObject = {
 export const fileUrl = (path: string) => `/api/files?path=${encodeURIComponent(path)}`
 
 export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[] }
+
+// Runs a flow on its own whenever its cron expression comes round, on the
+// board as it is, as the Run button does. A time that comes round while its
+// last run is still going is skipped.
+export type Schedule = {
+  id: number
+  flow: number
+  flowName: string
+  // Five fields, minute to day of the week, or a descriptor such as @hourly
+  // or @every 90m; a minute apart at the least.
+  cron: string
+  // The IANA zone its times are in, such as Europe/London.
+  timezone: string
+  enabled: boolean
+  // Null while disabled.
+  nextRunAt: string | null
+  lastRun: FlowRun | null
+  createdAt: string
+}
+
+export type ScheduleFields = Pick<Schedule, 'flow' | 'cron' | 'timezone'>
+
+export function listSchedules(): Promise<Schedule[]> {
+  return request('/api/schedules')
+}
+
+export function createSchedule(s: ScheduleFields): Promise<Schedule> {
+  return request('/api/schedules', { method: 'POST', body: JSON.stringify(s) })
+}
+
+// Changing when it runs, or enabling it, counts its next time from now.
+export function updateSchedule(id: number, patch: Partial<ScheduleFields & Pick<Schedule, 'enabled'>>): Promise<Schedule> {
+  return request(`/api/schedules/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+// Its runs stay.
+export function deleteSchedule(id: number): Promise<void> {
+  return request(`/api/schedules/${id}`, { method: 'DELETE' })
+}
+
+// The next times a cron expression gives in a time zone, or why it gives none.
+export async function previewSchedule(cron: string, timezone: string): Promise<{ upcoming: string[] } | { problem: string }> {
+  const res = await fetch(`/api/schedules/preview?${new URLSearchParams({ cron, timezone })}`)
+  if (res.status === 400) return { problem: (await res.text()).trim() }
+  if (!res.ok) throw new Error(`preview schedule: ${res.status} ${await res.text()}`)
+  return res.json()
+}
 
 export function listRuns(flow: number): Promise<FlowRun[]> {
   return request(`/api/runs?flow=${flow}`)

@@ -339,9 +339,29 @@ type run struct {
 	ProcessName string `json:"processName"`
 	// For a run of a flow process for one item of a list: what tells the
 	// item apart, its first unique attribute's value or its place in the list.
-	ItemKey    string     `json:"itemKey"`
+	ItemKey string `json:"itemKey"`
+	// The schedule that started it, if one did; see schedules.go.
+	Schedule   *int64     `json:"schedule"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
+}
+
+type schedule struct {
+	ID       int64  `json:"id"`
+	Flow     int64  `json:"flow"`
+	FlowName string `json:"flowName"`
+	// Five fields, minute to day of the week, or a descriptor such as
+	// @hourly or @every 90m; a minute apart at the least.
+	Cron string `json:"cron"`
+	// The IANA zone the cron expression's times are in, such as Europe/London.
+	Timezone string `json:"timezone"`
+	Enabled  bool   `json:"enabled"`
+	// When it runs next; null while disabled.
+	NextRunAt *time.Time `json:"nextRunAt"`
+	// The latest run it started, if any; while it is running, the times due
+	// are skipped.
+	LastRun   *run      `json:"lastRun"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // An object a process takes as input, with the output of the process that

@@ -207,13 +207,50 @@ export type Link = {
   at: { x: number; y: number } | null
 }
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+// Requests changing what isn't a board, which leave boards' histories be.
+const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/mcp-servers']
+
+// What is told of each change the server took that may change a board.
+const changeListeners = new Set<() => void>()
+// The changes sent and not answered yet.
+const changing = new Set<Promise<unknown>>()
+
+// Calls back after each change the server took that may change a board.
+export function onChanged(callback: () => void): () => void {
+  changeListeners.add(callback)
+  return () => changeListeners.delete(callback)
+}
+
+// Resolves once every change sent has been answered.
+export async function changesSettled(): Promise<void> {
+  while (changing.size > 0) await Promise.allSettled([...changing])
+}
+
+async function send(url: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(url, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   if (!res.ok) {
     throw new Error(`${init?.method ?? 'GET'} ${url}: ${res.status} ${await res.text()}`)
+  }
+  return res
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const method = init?.method ?? 'GET'
+  let res: Response
+  if (method === 'GET' || NOT_BOARDS.some((p) => url.startsWith(p))) {
+    res = await send(url, init)
+  } else {
+    const sent = send(url, init)
+    changing.add(sent)
+    try {
+      res = await sent
+    } finally {
+      changing.delete(sent)
+    }
+    changeListeners.forEach((l) => l())
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
@@ -860,6 +897,25 @@ export function saveVersion(flow: number): Promise<Version> {
 // Rewrites the board as the version has it.
 export function restoreVersion(id: number): Promise<void> {
   return request(`/api/versions/${id}/restore`, { method: 'POST' })
+}
+
+// Whether a flow's board has a change to undo, and one to redo, and whether
+// the board changed just now.
+export type History = { undo: boolean; redo: boolean; changed: boolean }
+
+// Keeps the board as it is as a step of its history, unless it is the step
+// the board is on.
+export function recordHistory(flow: number): Promise<History> {
+  return request(`/api/history?flow=${flow}`, { method: 'POST' })
+}
+
+// Brings the board back a step, or forward again to the one undone last.
+export function undoHistory(flow: number): Promise<History> {
+  return request(`/api/history/undo?flow=${flow}`, { method: 'POST' })
+}
+
+export function redoHistory(flow: number): Promise<History> {
+  return request(`/api/history/redo?flow=${flow}`, { method: 'POST' })
 }
 
 // The whole flow, every board of it, as the board's endpoints give it or a

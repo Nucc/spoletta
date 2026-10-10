@@ -280,6 +280,7 @@ func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
 		"DELETE FROM processes WHERE flow_id = ?",
 		"DELETE FROM objects WHERE flow_id = ?",
 		"DELETE FROM flow_versions WHERE flow_id = ?",
+		"DELETE FROM flow_history WHERE flow_id = ?",
 		"DELETE FROM flows WHERE id = ?",
 	}
 	for _, s := range stmts {

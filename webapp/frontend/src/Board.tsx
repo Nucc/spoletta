@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, DragEvent, MouseEvent } from 'react'
+import { flushSync } from 'react-dom'
 import {
   Background,
   BackgroundVariant,
@@ -102,9 +103,14 @@ import {
   listProcesses,
   listRuns,
   listVersions,
+  changesSettled,
+  onChanged,
   pasteCopied,
+  recordHistory,
+  redoHistory,
   renameState,
   restoreVersion,
+  undoHistory,
   saveVersion,
   setLinkAt,
   setLinkRoute,
@@ -203,6 +209,9 @@ const RUN_LIST_REFRESH_MS = 5000
 
 // How long a board just shown gets to measure its nodes before it is fitted into view.
 const BOARD_FIT_DELAY_MS = 100
+// How long after a change the board waits for more before keeping it as a
+// step of its history, so an action sending several changes is one step.
+const HISTORY_DELAY_MS = 300
 
 // Fitting the board into view; a board of a few nodes is not blown up past
 // its natural size.
@@ -1828,17 +1837,75 @@ export default function Board({
     }
   }
 
+  // The board's history calls go one after another.
+  const historyQueue = useRef<Promise<unknown>>(Promise.resolve())
+  const queueHistory = useCallback(<T,>(call: () => Promise<T>): Promise<T> => {
+    const next = historyQueue.current.then(call)
+    historyQueue.current = next.catch(() => {})
+    return next
+  }, [])
+  const recordTimer = useRef<number | undefined>(undefined)
+  // The board as loaded is the step its history comes back to, and each
+  // change after is a step of its own.
+  useEffect(() => {
+    let pending = false
+    const record = () => {
+      pending = false
+      queueHistory(() => recordHistory(flowId)).catch(report)
+    }
+    record()
+    const off = onChanged(() => {
+      pending = true
+      window.clearTimeout(recordTimer.current)
+      recordTimer.current = window.setTimeout(record, HISTORY_DELAY_MS)
+    })
+    return () => {
+      off()
+      window.clearTimeout(recordTimer.current)
+      if (pending) record()
+    }
+  }, [flowId, queueHistory, report])
+
+  // Brings the board back a step of its history, or forward again, once the
+  // changes sent are done; the server keeps a change not kept yet as the
+  // step undone. Panels would save what they show over it, so they close
+  // first, saving what they hold yet.
+  const stepHistory = async (undo: boolean) => {
+    if (reviewing) return
+    flushSync(() => {
+      setPanelId(null)
+      setMenu(null)
+    })
+    window.clearTimeout(recordTimer.current)
+    try {
+      const h = await queueHistory(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve))
+        await changesSettled()
+        return undo ? undoHistory(flowId) : redoHistory(flowId)
+      })
+      if (h.changed) await loadBoard()
+    } catch (err) {
+      report(err)
+    }
+  }
+
   // Cmd or Ctrl and C copies the selection, and with V pastes it, but not
   // while typing or with text selected, which they copy and paste as ever.
-  const clipboard = useRef({ copySelection, pasteAt })
-  clipboard.current = { copySelection, pasteAt }
+  // With Z it undoes the latest change to the board, and with Shift and Z
+  // redoes it, but not while typing, which they undo and redo as ever.
+  const clipboard = useRef({ copySelection, pasteAt, stepHistory })
+  clipboard.current = { copySelection, pasteAt, stepHistory }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
       const target = e.target as HTMLElement | null
       if (target?.isContentEditable || target?.closest('input, textarea, select')) return
       const key = e.key.toLowerCase()
-      if (key === 'c' && !window.getSelection()?.toString()) clipboard.current.copySelection()
+      if (key === 'z') {
+        e.preventDefault()
+        clipboard.current.stepHistory(!e.shiftKey)
+      } else if (e.shiftKey) return
+      else if (key === 'c' && !window.getSelection()?.toString()) clipboard.current.copySelection()
       else if (key === 'v') clipboard.current.pasteAt()
     }
     window.addEventListener('keydown', onKey)

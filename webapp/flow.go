@@ -96,6 +96,9 @@ func migrateFlow(db *sql.DB) error {
 	if err := migrateStructs(db); err != nil {
 		return err
 	}
+	if err := migrateHistory(db); err != nil {
+		return err
+	}
 	return migrateAgent(db)
 }
 

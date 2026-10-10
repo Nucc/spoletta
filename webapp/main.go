@@ -94,6 +94,7 @@ func main() {
 	registerMessageRoutes(mux, db)
 	registerFollowUpRoutes(mux, db, workerURL, mcp)
 	registerVersionRoutes(mux, db)
+	registerHistoryRoutes(mux, db)
 	registerOPLRoutes(mux, db)
 	registerAgentRoutes(mux, workerURL)
 	registerFileRoutes(mux)

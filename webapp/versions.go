@@ -438,6 +438,28 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 	return err
 }
 
+// Locks the flow, against a run starting on it or another rewrite of its
+// board meanwhile, and says whether a run is going. A run follows the board
+// as it goes; rewriting it underneath would derail the run.
+func lockBoard(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
+	if err := tx.QueryRowContext(ctx, "SELECT id FROM flows WHERE id = ? FOR UPDATE", flow).Scan(&flow); err != nil {
+		return false, err
+	}
+	var running int
+	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE flow_id = ? AND status = 'running'", flow).Scan(&running)
+	return running > 0, err
+}
+
+// Rewrites the flow's board as s has it, locked by lockBoard. Its copies of
+// modules' objects follow them as they are now, and the copies of its own
+// objects follow them as they were.
+func rewriteBoard(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) error {
+	if err := restoreSnapshot(ctx, tx, flow, s); err != nil {
+		return err
+	}
+	return syncCopies(ctx, tx, flow, true)
+}
+
 // Whether two snapshots hold the same board. Compared as decoded JSON, since
 // the database rewrites stored JSON's spacing, key order and numbers.
 func sameSnapshot(a, b []byte) (bool, error) {
@@ -613,19 +635,10 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		// Locks the flow, against a run starting on it meanwhile.
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM flows WHERE id = ? FOR UPDATE", f).Scan(&f); err != nil {
+		if running, err := lockBoard(ctx, tx, f); err != nil {
 			serverError(w, err)
 			return
-		}
-
-		// A run follows the board as it goes; rewriting it underneath would derail the run.
-		var running int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE flow_id = ? AND status = 'running'", f).Scan(&running); err != nil {
-			serverError(w, err)
-			return
-		}
-		if running > 0 {
+		} else if running {
 			http.Error(w, "can't switch versions while the flow is running", http.StatusConflict)
 			return
 		}
@@ -635,13 +648,7 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		if err := restoreSnapshot(ctx, tx, f, s); err != nil {
-			serverError(w, err)
-			return
-		}
-		// Its copies of modules' objects follow them as they are now, and
-		// the copies of its own objects follow them as they were.
-		if err := syncCopies(ctx, tx, f, true); err != nil {
+		if err := rewriteBoard(ctx, tx, f, s); err != nil {
 			serverError(w, err)
 			return
 		}

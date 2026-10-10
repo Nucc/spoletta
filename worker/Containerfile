@@ -1,8 +1,8 @@
 FROM docker.io/library/golang:1.25-alpine AS build
 
 WORKDIR /src
-COPY go.mod ./
-COPY *.go ./
+COPY worker/go.mod ./
+COPY worker/*.go ./
 RUN CGO_ENABLED=0 go build -o /out/worker .
 
 # pi is an npm package, so the worker runs on a Node image.
@@ -14,9 +14,11 @@ RUN apk add --no-cache bash curl git jq
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 
 COPY --from=build /out/worker /usr/local/bin/worker
-COPY submit-output.ts /opt/flow/submit-output.ts
-COPY mcp-servers.ts /opt/flow/mcp-servers.ts
-COPY --chmod=755 git-credential.sh /opt/flow/git-credential.sh
+COPY worker/submit-output.ts /opt/flow/submit-output.ts
+COPY worker/mcp-servers.ts /opt/flow/mcp-servers.ts
+COPY --chmod=755 worker/git-credential.sh /opt/flow/git-credential.sh
+# The guide to authoring flows, which flows' assistants read.
+COPY docs/FLOWS.md /opt/flow/docs/FLOWS.md
 # Agents commit to their run's branch as this, unless GIT_AUTHOR_NAME and
 # the like say otherwise.
 RUN git config --system credential.helper /opt/flow/git-credential.sh \

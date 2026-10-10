@@ -874,6 +874,40 @@ export function stopFollowUp(run: number, step: number, id: number): Promise<voi
   return request(`/api/runs/${run}/steps/${step}/followups/${id}/stop`, { method: 'POST' })
 }
 
+// A message of a flow's conversation with its assistant, the agent beside the
+// board that sets the flow up as the person asks it to.
+export type AssistantMessage = {
+  id: number
+  role: 'person' | 'assistant'
+  content: string
+  // A reply is active while the agent works on it, then done or error.
+  status: 'active' | 'done' | 'error'
+  error: string
+  // Whether the reply changed the flow; the board before is saved as a version.
+  applied: boolean
+  createdAt: string
+  finishedAt: string | null
+}
+
+export function getAssistant(flow: number): Promise<AssistantMessage[]> {
+  return request(`/api/flows/${flow}/assistant`)
+}
+
+// Sends the assistant a message, and returns the conversation with its reply
+// going. Sent around request: the board changes only once the reply is in.
+export async function askAssistant(flow: number, message: string): Promise<AssistantMessage[]> {
+  return (await send(`/api/flows/${flow}/assistant`, { method: 'POST', body: JSON.stringify({ message }) })).json()
+}
+
+export async function stopAssistant(flow: number): Promise<void> {
+  await send(`/api/flows/${flow}/assistant/stop`, { method: 'POST' })
+}
+
+// Starts the conversation over.
+export async function clearAssistant(flow: number): Promise<void> {
+  await send(`/api/flows/${flow}/assistant`, { method: 'DELETE' })
+}
+
 // Decides a human step waiting for its review, and lets the run go on: the
 // state the human set, if they had any to choose from, their instructions,
 // and what they entered of the objects the step fills in, by object id: for

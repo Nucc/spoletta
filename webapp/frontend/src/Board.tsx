@@ -69,6 +69,7 @@ import {
 } from './Palette'
 import { decisionText, RunList, RunPanel } from './Runs'
 import OPLPanel from './OPLPanel'
+import Assistant from './Assistant'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
 import type { Quantity } from './quantity'
@@ -347,10 +348,13 @@ export default function Board({
   flow,
   initialRun,
   onUpdate,
+  onReload,
 }: {
   flow: Flow
   initialRun: number | null
   onUpdate: (patch: Partial<Pick<Flow, 'name' | 'module' | 'settings'>>) => Promise<void>
+  // Reads the flow again, after the server changed it.
+  onReload: () => Promise<void>
 }) {
   const flowId = flow.id
   // A struct's board holds its one object alone: no start, no end, no
@@ -1894,6 +1898,29 @@ export default function Board({
     }
   }
 
+  // Before the assistant is asked, panels close, saving what they hold yet,
+  // and the changes sent are done, so it sees the board as it is. Once it
+  // changed the flow, the board is loaded as the import left it, with the
+  // version saved before; panels opened meanwhile close first.
+  const closePanels = useCallback(
+    () =>
+      flushSync(() => {
+        setPanelId(null)
+        setMenu(null)
+      }),
+    [],
+  )
+  const beforeAssistant = useCallback(async () => {
+    closePanels()
+    await new Promise((resolve) => window.setTimeout(resolve))
+    await changesSettled()
+  }, [closePanels])
+  const assistantApplied = useCallback(async () => {
+    closePanels()
+    window.clearTimeout(recordTimer.current)
+    await Promise.all([loadBoard(), refreshVersions(), onReload()])
+  }, [closePanels, loadBoard, refreshVersions, onReload])
+
   // Cmd or Ctrl and C copies the selection, and with V pastes it, but not
   // while typing or with text selected, which they copy and paste as ever.
   // With Z it undoes the latest change to the board, and with Shift and Z
@@ -2275,6 +2302,13 @@ export default function Board({
               <button onClick={() => setRunId(null)}>Back to the board</button>
             </div>
           )}
+          <Assistant
+            flowId={flowId}
+            disabled={reviewing}
+            beforeSend={beforeAssistant}
+            onApplied={assistantApplied}
+            onError={report}
+          />
           {menu && (
             <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
           )}

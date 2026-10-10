@@ -66,6 +66,9 @@ func main() {
 	if err := migrateSchedules(db); err != nil {
 		log.Fatal(err)
 	}
+	if err := migrateAssistant(db); err != nil {
+		log.Fatal(err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
@@ -97,6 +100,7 @@ func main() {
 	registerHistoryRoutes(mux, db)
 	registerOPLRoutes(mux, db)
 	registerSetupRoutes(mux, db)
+	registerAssistantRoutes(mux, db, workerURL)
 	registerAgentRoutes(mux, workerURL)
 	registerFileRoutes(mux)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

@@ -307,7 +307,7 @@ func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		f, err := exportSetup(ctx, tx)
+		f, err := exportSetup(ctx, tx, 0)
 		var p setupProblem
 		if errors.As(err, &p) {
 			http.Error(w, p.msg, http.StatusConflict)

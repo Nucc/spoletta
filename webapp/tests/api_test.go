@@ -75,6 +75,8 @@ type agentRun struct {
 	// How long the run may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
+	NoTools   bool  `json:"noTools,omitempty"`
+	Guide     bool  `json:"guide,omitempty"`
 }
 
 // An attribute is something an OPM object exhibits, such as a ticket's

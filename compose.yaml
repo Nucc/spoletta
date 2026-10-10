@@ -22,7 +22,10 @@ services:
   # ~/.pi/agent by default) and credentials from the environment `podman
   # compose up` runs in; restart it after changing either.
   worker:
-    build: ./worker
+    # Built from the top, since the image takes the guide in docs/ too.
+    build:
+      context: .
+      dockerfile: worker/Containerfile
     environment:
       - PORT=8090
       - PI_SKIP_VERSION_CHECK=1

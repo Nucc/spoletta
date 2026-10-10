@@ -2881,3 +2881,178 @@ button.toolbar-link {
 .review-dialog::backdrop {
   background: rgba(31, 35, 40, 0.45);
 }
+
+/* The flow's assistant: a round button at the bottom right of the board,
+   above React Flow's attribution, which opens a chat beside it. */
+.assistant-button {
+  position: absolute;
+  right: 16px;
+  bottom: 32px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  color: #fff;
+  background: #1b7c83;
+  border: none;
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(31, 35, 40, 0.2);
+  cursor: pointer;
+}
+
+.assistant-button:hover {
+  background: #166a70;
+}
+
+.assistant-button.replying::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 10px;
+  height: 10px;
+  background: #d4a72c;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  animation: assistant-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes assistant-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.assistant {
+  position: absolute;
+  right: 16px;
+  bottom: 32px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  width: min(400px, calc(100% - 32px));
+  height: min(560px, calc(100% - 64px));
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.18);
+}
+
+.assistant-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: #1b7c83;
+  border-bottom: 1px solid #d8dee4;
+}
+
+.assistant-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  color: #1f2328;
+}
+
+.assistant-header .icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.assistant-messages {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.assistant-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #656d76;
+}
+
+.assistant-message {
+  flex-shrink: 0;
+  max-width: 90%;
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  border-radius: 10px;
+}
+
+.assistant-message.from-person {
+  align-self: flex-end;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #fff;
+  background: #1b7c83;
+}
+
+.assistant-message.from-assistant {
+  align-self: flex-start;
+  background: #f6f8fa;
+  border: 1px solid #eaeef2;
+}
+
+.assistant-message.working {
+  color: #656d76;
+  font-style: italic;
+}
+
+.assistant-message .data-markdown pre {
+  padding: 8px;
+  overflow: auto;
+  background: #eaeef2;
+  border-radius: 6px;
+}
+
+.assistant-applied,
+.assistant-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.assistant-applied {
+  color: #1a7f37;
+}
+
+.assistant-error {
+  color: #cf222e;
+}
+
+.assistant-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid #d8dee4;
+}
+
+.assistant-form textarea {
+  flex: 1;
+  padding: 8px;
+  font: inherit;
+  font-size: 14px;
+  resize: none;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.assistant-form .panel-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 0;
+}
+
+.assistant-form .panel-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

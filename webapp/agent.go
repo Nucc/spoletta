@@ -82,6 +82,11 @@ type agentRun struct {
 	// How long the run may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
+	// The agent only writes a reply: the worker runs it without tools, so
+	// it can't read the worker's files or secrets, or run anything.
+	NoTools bool `json:"noTools,omitempty"`
+	// Has the worker put the guide to authoring flows before the prompt.
+	Guide bool `json:"guide,omitempty"`
 }
 
 // The pi session of a step that worked in a workspace, which follow-ups carry on.
@@ -276,6 +281,16 @@ func recordDecisions(ctx context.Context, db *sql.DB, stepID int64, decisions ma
 // as the step's as it comes in, so what the agent does can be followed while
 // it goes. attempt counts the tries of the step, from 1.
 func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, stepID int64, attempt int) runResult {
+	return streamAgent(ctx, workerURL, run, func(m json.RawMessage) {
+		if err := recordMessage(ctx, db, stepID, attempt, m); err != nil && ctx.Err() == nil {
+			log.Printf("record message of step %d: %v", stepID, err)
+		}
+	})
+}
+
+// Runs the agent in the worker and waits for the result, handing each
+// message of its conversation to onMessage as it comes in.
+func streamAgent(ctx context.Context, workerURL string, run agentRun, onMessage func(json.RawMessage)) runResult {
 	failed := func(err error) runResult {
 		if ctx.Err() != nil {
 			return runResult{Error: stopReason(ctx)}
@@ -304,9 +319,7 @@ func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, s
 			return *rec.Result
 		}
 		if rec.Message != nil {
-			if err := recordMessage(ctx, db, stepID, attempt, rec.Message); err != nil && ctx.Err() == nil {
-				log.Printf("record message of step %d: %v", stepID, err)
-			}
+			onMessage(rec.Message)
 		}
 	}
 }

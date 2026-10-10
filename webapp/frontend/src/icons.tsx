@@ -252,3 +252,11 @@ export const PlugIcon = () => (
     <path d="M8 11.25v3" />
   </Icon>
 )
+
+// A speech bubble with a spark: the assistant to talk to.
+export const AssistantIcon = ({ size = 16 }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="M2.5 3.5a1.5 1.5 0 0 1 1.5-1.5h8a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H7l-3 2.5V11H4a1.5 1.5 0 0 1-1.5-1.5z" />
+    <path d="M8 4.25l.6 1.65 1.65.6-1.65.6L8 8.75l-.6-1.65-1.65-.6 1.65-.6z" />
+  </Icon>
+)

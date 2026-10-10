@@ -15,6 +15,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 - `engine.go`: executes runs; header comment documents the scheduling semantics. `runs.go` stores runs/steps.
 - `versions.go`: full-board snapshots; `history.go` undo/redo reuses them. Adding board data means updating `snapshot` and `restoreSnapshot`, and usually `paste.go` and `opl.go`.
 - `opl.go`: renders the board as OPL sentences, shown in the UI and given to agents.
+- `assistant.go`: each flow's assistant, a chat at the bottom right of the board (`Assistant.tsx`). pi in the worker, run without tools and kept to the flow by its prompt, replies with the flow as a setup file, which is imported through `setup_import.go` (saving a version first); it may change only that flow.
 - `mcp.go`: MCP servers via OAuth, proxied per agent step at `/mcp/{id}`.
 - `docs/FLOWS.md`: how to author flows for a user (OPM, run semantics, step contracts, worked setup-file examples). Read it before generating a flow.
 

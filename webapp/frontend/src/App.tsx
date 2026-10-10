@@ -50,6 +50,9 @@ function FlowPage({ id, run }: { id: number; run: number | null }) {
     [id],
   )
 
+  // The assistant may change the flow's settings along with its board.
+  const onReload = useCallback(async () => setFlow(await getFlow(id)), [id])
+
   if (error) {
     return (
       <div className="flows-page">
@@ -65,7 +68,7 @@ function FlowPage({ id, run }: { id: number; run: number | null }) {
   if (!flow) return null
   return (
     <ReactFlowProvider>
-      <Board flow={flow} initialRun={run} onUpdate={onUpdate} />
+      <Board flow={flow} initialRun={run} onUpdate={onUpdate} onReload={onReload} />
     </ReactFlowProvider>
   )
 }

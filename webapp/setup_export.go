@@ -1,8 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
+	"slices"
+	"strings"
 )
 
 // A flow as exporting it needs it: its board, and the identifiers the file
@@ -20,10 +23,12 @@ type exportedFlow struct {
 	schedules        []setupSchedule
 }
 
-// The setup as it is: every MCP server, struct, procedure and flow, by name.
-// Two flows can't share a name in the file, since it names them to refer to
-// them; with two that do, it says so instead.
-func exportSetup(ctx context.Context, tx *sql.Tx) (setupFile, error) {
+// The setup as it is: every MCP server, struct, procedure and flow, by name,
+// or with only set, that flow and what it refers to: the procedures it runs,
+// the structs and procedures its copies follow, on down, and the MCP servers
+// its processes use. Two flows can't share a name in the file, since it names
+// them to refer to them; with two that do, it says so instead.
+func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error) {
 	f := setupFile{Genie: setupVersion}
 	var flows []*exportedFlow
 	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, settings FROM flows ORDER BY name, id", func(rows *sql.Rows) error {
@@ -35,6 +40,26 @@ func exportSetup(ctx context.Context, tx *sql.Tx) (setupFile, error) {
 	if err != nil {
 		return f, err
 	}
+
+	// Which flow each object is in, for copies to name their sources by.
+	objectFlow := map[int64]*exportedFlow{}
+	byID := map[int64]*exportedFlow{}
+	for _, e := range flows {
+		if e.s, err = takeSnapshot(ctx, tx, e.id); err != nil {
+			return f, err
+		}
+		e.identify()
+		byID[e.id] = e
+		for _, o := range e.s.Objects {
+			objectFlow[o.ID] = e
+		}
+	}
+	if only != 0 {
+		if byID[only] == nil {
+			return f, errNotFound
+		}
+		flows = referredFrom(byID[only], byID, objectFlow)
+	}
 	var same []string
 	for i := 1; i < len(flows); i++ {
 		if flows[i].name == flows[i-1].name && (len(same) == 0 || same[len(same)-1] != quote(flows[i].name)) {
@@ -44,16 +69,12 @@ func exportSetup(ctx context.Context, tx *sql.Tx) (setupFile, error) {
 	if len(same) > 0 {
 		return f, problemf("more than one flow is named %s; rename them apart to export, since the file refers to flows by name", list(same, "and"))
 	}
-
-	// Which flow each object is in, for copies to name their sources by.
-	objectFlow := map[int64]*exportedFlow{}
+	used := map[int64]bool{}
 	for _, e := range flows {
-		if e.s, err = takeSnapshot(ctx, tx, e.id); err != nil {
-			return f, err
-		}
-		e.identify()
-		for _, o := range e.s.Objects {
-			objectFlow[o.ID] = e
+		for _, p := range e.s.Processes {
+			for _, m := range p.Settings.MCPServers {
+				used[m] = true
+			}
 		}
 		err := scanAll(ctx, tx, "SELECT cron, timezone, enabled FROM schedules WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 			var s setupSchedule
@@ -76,7 +97,9 @@ func exportSetup(ctx context.Context, tx *sql.Tx) (setupFile, error) {
 		var s setupMCPServer
 		err := rows.Scan(&id, &s.Name, &s.URL, &s.Description)
 		mcpNames[id] = s.Name
-		f.MCPServers = append(f.MCPServers, s)
+		if only == 0 || used[id] {
+			f.MCPServers = append(f.MCPServers, s)
+		}
 		return err
 	})
 	if err != nil {
@@ -109,6 +132,39 @@ func exportSetup(ctx context.Context, tx *sql.Tx) (setupFile, error) {
 		}
 	}
 	return f, nil
+}
+
+// The flow e and the flows it refers to, on down, in the order of flows.
+func referredFrom(e *exportedFlow, byID map[int64]*exportedFlow, objectFlow map[int64]*exportedFlow) []*exportedFlow {
+	keep := map[int64]bool{}
+	var visit func(e *exportedFlow)
+	visit = func(e *exportedFlow) {
+		if e == nil || keep[e.id] {
+			return
+		}
+		keep[e.id] = true
+		for _, p := range e.s.Processes {
+			if p.Settings.Flow != nil {
+				visit(byID[*p.Settings.Flow])
+			}
+		}
+		for _, o := range e.s.Objects {
+			if o.Source != nil {
+				visit(objectFlow[*o.Source])
+			}
+		}
+	}
+	visit(e)
+	var flows []*exportedFlow
+	for _, f := range byID {
+		if keep[f.id] {
+			flows = append(flows, f)
+		}
+	}
+	slices.SortFunc(flows, func(a, b *exportedFlow) int {
+		return cmp.Or(strings.Compare(a.name, b.name), cmp.Compare(a.id, b.id))
+	})
+	return flows
 }
 
 // Gives what is on the flow's boards the identifiers the file refers to

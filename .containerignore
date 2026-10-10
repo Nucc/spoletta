@@ -1,0 +1,4 @@
+# The worker's image is built from the top; only worker/ and docs/ go in.
+*
+!worker/
+!docs/

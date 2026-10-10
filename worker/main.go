@@ -73,7 +73,17 @@ type runRequest struct {
 	Resume    bool   `json:"resume"`
 	// How long the run may take, if not the worker's own limit.
 	TimeoutMS int64 `json:"timeoutMs"`
+	// The agent only writes a reply: pi runs without tools, and without the
+	// extensions, skills and context files that could bring some back, so
+	// it can't read the worker's files or secrets, or run anything.
+	NoTools bool `json:"noTools"`
+	// Put the guide to authoring flows before the prompt, for an agent that
+	// can't read it itself.
+	Guide bool `json:"guide"`
 }
+
+// The guide to authoring flows, docs/FLOWS.md, where the image keeps it.
+const flowsGuide = "/opt/flow/docs/FLOWS.md"
 
 type mcpServer struct {
 	Name        string `json:"name"`
@@ -441,6 +451,17 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 	if len(run.MCPServers) == 0 {
 		args = append(args, "--no-mcp")
 	}
+	if run.NoTools {
+		args = append(args, "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates")
+	}
+	prompt := run.Prompt
+	if run.Guide {
+		guide, err := os.ReadFile(flowsGuide)
+		if err != nil {
+			return runResult{Error: "read the guide to authoring flows: " + err.Error()}
+		}
+		prompt = "<flows_guide>\n" + string(guide) + "\n</flows_guide>\n\n" + prompt
+	}
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 
@@ -456,7 +477,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 	// The prompt goes in on stdin: as an argument, a leading @ or - would be
 	// parsed as a file reference or an option. pi may exit before reading it,
 	// e.g. on a bad model; that's reported by its exit status.
-	cmd.Stdin = strings.NewReader(run.Prompt)
+	cmd.Stdin = strings.NewReader(prompt)
 	events := &eventStream{emit: emit}
 	var stderr bytes.Buffer
 	cmd.Stdout = events

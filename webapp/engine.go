@@ -586,7 +586,10 @@ func (w *walk) inputOf(p, o int64) runInput {
 	case roleConsumption:
 		in.Role = inputConsumed
 	default:
-		if slices.ContainsFunc(w.outputs[p], func(e linkEnd) bool { return e.object == o }) {
+		// What an agent or a person reviews, deciding its state, keeps what
+		// it holds; only one generated anew is affected.
+		reviews := w.decides[p][o] || w.kinds[p] == kindHuman
+		if !reviews && slices.ContainsFunc(w.outputs[p], func(e linkEnd) bool { return e.object == o }) {
 			in.Role = inputAffected
 		}
 	}

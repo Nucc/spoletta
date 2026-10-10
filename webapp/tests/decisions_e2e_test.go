@@ -158,7 +158,8 @@ func TestAgentReviewsWhatItTakes(t *testing.T) {
 		len(run.Output.Decisions) != 1 || !run.Output.Decisions[0].Review {
 		t.Errorf("critic's output spec = %+v, want only its review", run.Output)
 	}
-	if !strings.Contains(run.Prompt, "Its argument is exactly decisions.") || !strings.Contains(run.Prompt, "keeps what it holds") {
+	if !strings.Contains(run.Prompt, "Its argument is exactly decisions.") || !strings.Contains(run.Prompt, "keeps what it holds") ||
+		strings.Contains(run.Prompt, `role="affected"`) {
 		t.Errorf("critic's prompt:\n%s", run.Prompt)
 	}
 }

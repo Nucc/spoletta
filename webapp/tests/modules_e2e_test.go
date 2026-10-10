@@ -20,6 +20,7 @@ type modFlow struct {
 type modState struct {
 	ID     int64  `json:"id"`
 	Name   string `json:"name"`
+	Rule   string `json:"rule"`
 	Source *int64 `json:"source"`
 }
 

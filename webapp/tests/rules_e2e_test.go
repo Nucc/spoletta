@@ -141,3 +141,29 @@ func TestAgentStepUsage(t *testing.T) {
 		t.Errorf("Tool's usage = %+v, want none reported", u)
 	}
 }
+
+// A copy of a struct's object has its states' rules, and follows them.
+func TestRulesFollowStructCopies(t *testing.T) {
+	a := newApp(t)
+	var s structFlow
+	a.call("POST", "/api/flows", map[string]any{"name": "Score", "struct": true}, http.StatusCreated, &s)
+	score := modObjects(a, s.ID)[0]
+	high := rulesState(a, score.ID, "high", "data > 5")
+	job := a.newFlow("Job")
+	var cp modObject
+	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", s.ID), map[string]any{"flow": job.ID}, http.StatusCreated, &cp)
+	rule := func() string {
+		c := modNamed(t, modObjects(a, job.ID), "Score")
+		if len(c.States) != 1 {
+			t.Fatalf("the copy's states = %+v", c.States)
+		}
+		return c.States[0].Rule
+	}
+	if got := rule(); got != "data > 5" {
+		t.Errorf("the copy's rule = %q", got)
+	}
+	a.call("PATCH", fmt.Sprintf("/api/states/%d", high.ID), map[string]any{"rule": "data > 9"}, http.StatusOK, nil)
+	if got := rule(); got != "data > 9" {
+		t.Errorf("after the struct's rule changed, the copy's = %q", got)
+	}
+}

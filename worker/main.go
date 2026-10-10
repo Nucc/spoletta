@@ -83,6 +83,8 @@ type mcpServer struct {
 type outputSpec struct {
 	Shape   string          `json:"shape"`
 	Objects json.RawMessage `json:"objects"`
+	// The objects the agent decides the state of, if any.
+	Decisions json.RawMessage `json:"decisions,omitempty"`
 	// Set by the worker.
 	FilesDir   string `json:"filesDir"`
 	ResultFile string `json:"resultFile"`

@@ -12,7 +12,9 @@ import (
 	"html"
 	"io"
 	"log"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -97,6 +99,9 @@ type runResult struct {
 	// Set by the worker when the agent handed in its output through
 	// submit_output, which checked it against the output's interface.
 	Submitted bool `json:"submitted,omitempty"`
+	// What an agent deciding states decided, by object id; the worker
+	// leaves it out.
+	Decisions map[int64]decided `json:"-"`
 	// Set when what the step generated holds a unique value another run
 	// stored; its run is terminated.
 	Duplicate *duplicate `json:"-"`
@@ -206,9 +211,50 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	if res.OK {
 		status = stepDone
 	}
+	// An object it reviewed keeps what it was given.
+	if contract != nil && res.OK {
+		for _, d := range contract.decisions {
+			if !d.review {
+				continue
+			}
+			for _, in := range inputs {
+				if in.Name == d.name {
+					res.Objects[d.id] = in.Content
+				}
+			}
+		}
+	}
 	// The run may have been stopped, but the step still has to end.
-	res.Duplicate, err = finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects)
-	return res, err
+	if res.Duplicate, err = finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects); err != nil {
+		return res, err
+	}
+	return res, recordDecisions(context.Background(), db, stepID, res.Decisions)
+}
+
+// Records the state each object an agent decided on came out in, and as
+// the step's outcome what it decided, as a human step's is.
+func recordDecisions(ctx context.Context, db *sql.DB, stepID int64, decisions map[int64]decided) error {
+	var outcomes, instructions []string
+	for _, object := range slices.Sorted(maps.Keys(decisions)) {
+		d := decisions[object]
+		var name string
+		if err := db.QueryRowContext(ctx, "SELECT name FROM object_states WHERE id = ?", d.state).Scan(&name); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE run_objects SET state = ? WHERE step_id = ? AND object_id = ?", name, stepID, object); err != nil {
+			return err
+		}
+		outcomes = append(outcomes, name)
+		if d.instructions != "" {
+			instructions = append(instructions, d.instructions)
+		}
+	}
+	if len(outcomes) == 0 {
+		return nil
+	}
+	_, err := db.ExecContext(ctx, "UPDATE run_steps SET outcome = ?, instructions = ? WHERE id = ?",
+		strings.Join(outcomes, ", "), strings.Join(instructions, "\n\n"), stepID)
+	return err
 }
 
 // Runs the agent in the worker, recording each message of its conversation
@@ -257,7 +303,7 @@ func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, s
 // rejected reply. An agent with a session carries it on, which holds the
 // prompt and the reply already, so it is only told what went wrong.
 func followContract(ctx context.Context, db *sql.DB, workerURL string, run agentRun, c *outputContract, res runResult, stepID int64) runResult {
-	out, objects, err := c.handedIn(res)
+	out, objects, decisions, err := c.handedIn(res)
 	if err != nil {
 		switch {
 		case run.SessionID != "":
@@ -277,19 +323,19 @@ func followContract(ctx context.Context, db *sql.DB, workerURL string, run agent
 		if !res.OK {
 			return res
 		}
-		if out, objects, err = c.handedIn(res); err != nil {
+		if out, objects, decisions, err = c.handedIn(res); err != nil {
 			return runResult{Output: res.Output, Error: "The output didn't follow the interface of what the process generates twice. The last time " + err.Error() + ".", Commits: res.Commits}
 		}
 	}
-	return runResult{OK: true, Output: out, Objects: objects, Commits: res.Commits}
+	return runResult{OK: true, Output: out, Objects: objects, Decisions: decisions, Commits: res.Commits}
 }
 
-// What an agent handed in, checked against the contract.
-func (c *outputContract) handedIn(res runResult) (string, map[int64]string, error) {
+// What an agent handed in, checked against the contract, and what it decided.
+func (c *outputContract) handedIn(res runResult) (string, map[int64]string, map[int64]decided, error) {
 	if !res.Submitted {
-		return "", nil, errors.New("it wasn't handed in by calling submit_output")
+		return "", nil, nil, errors.New("it wasn't handed in by calling submit_output")
 	}
-	return c.parse(res.Output)
+	return c.parseDecisions(res.Output)
 }
 
 // Appends each input object to the prompt, tagged with its name so the agent

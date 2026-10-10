@@ -407,6 +407,15 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 				serverError(w, err)
 				return
 			}
+		} else if patch.Kind != nil && oldKind == kindAgent && *patch.Kind != kindAgent {
+			// Only an agent decides between states; the others generate the
+			// object as it is.
+			if _, err := db.ExecContext(r.Context(),
+				`DELETE ls FROM link_states ls JOIN object_links l ON l.id = ls.link_id
+				WHERE l.process_id = ? AND l.direction = 'output'`, id); err != nil {
+				serverError(w, err)
+				return
+			}
 		}
 		// Picking the flow a subflow process runs brings its outcomes in.
 		if (patch.Kind != nil && *patch.Kind != oldKind) || (patch.Settings != nil && !sameFlow(patch.Settings.Flow, oldSettings.Flow)) {

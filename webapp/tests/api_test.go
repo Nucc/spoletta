@@ -14,6 +14,7 @@ import (
 
 const agentLinkMessage = "a person carries out only a human process; link them to one"
 const dataAttribute = "data"
+const decisionLinkMessage = "only a human's or an agent's output link lists states"
 const directionInput = "input"
 const directionOutput = "output"
 const kindAgent = "agent"
@@ -255,6 +256,16 @@ type objectState struct {
 type outputSpec struct {
 	Shape   string       `json:"shape"`
 	Objects []specObject `json:"objects"`
+	// The objects the process decides the state of; with any, the output
+	// goes under output, next to the decisions.
+	Decisions []specDecision `json:"decisions,omitempty"`
+}
+
+// An object the agent decides the state of, as one of states.
+type specDecision struct {
+	Name   string   `json:"name"`
+	States []string `json:"states"`
+	Review bool     `json:"review"`
 }
 
 type point struct {

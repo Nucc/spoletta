@@ -60,7 +60,8 @@ type object struct {
 // takes it as input. A link naming one of the object's states generates the
 // object in that state, or takes it once it enters that state. A human
 // process's output link names no state; it lists the states the human
-// decides between instead.
+// decides between instead. An agent's output link can list states too, for
+// the agent to decide between.
 type link struct {
 	ID        int64   `json:"id"`
 	Process   int64   `json:"process"`
@@ -731,7 +732,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// Replaces the states a human's output link decides between.
+	// Replaces the states a human's or an agent's output link decides between.
 	mux.HandleFunc("PUT /api/links/{id}/states", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
@@ -749,9 +750,9 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		var object int64
 		err = db.QueryRowContext(r.Context(),
 			`SELECT l.object_id FROM object_links l JOIN processes p ON p.id = l.process_id
-			WHERE l.id = ? AND l.direction = 'output' AND p.kind = 'human'`, id).Scan(&object)
+			WHERE l.id = ? AND l.direction = 'output' AND p.kind IN (?, ?) AND l.state_id = 0`, id, kindHuman, kindAgent).Scan(&object)
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "no human output link with that id", http.StatusNotFound)
+			http.Error(w, "no human or agent output link naming no state with that id", http.StatusNotFound)
 			return
 		}
 		if err != nil {
@@ -847,10 +848,14 @@ func checkOwned(ctx context.Context, db *sql.DB, o *object) (string, error) {
 
 const agentLinkMessage = "a person carries out only a human process; link them to one"
 
+const decisionLinkMessage = "only a human's or an agent's output link lists states"
+
 // Says what is wrong with a new link, if anything. A named state must be one
 // of the object's. A human process decides by setting its object to one of
-// the states its output link lists, and only it lists states; any other
-// process generates an object once, so it has at most one output link to it.
+// the states its output link lists, and an agent can decide between the
+// states its output link lists; only they list states. Any process other
+// than a human generates an object once, so it has at most one output link
+// to it.
 // A human object's input link is an agent link, so it goes into a human
 // process.
 func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
@@ -886,7 +891,7 @@ func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
 	}
 	if l.Direction != directionOutput {
 		if len(l.States) > 0 {
-			return "only a human's output link lists states", nil
+			return decisionLinkMessage, nil
 		}
 		return "", nil
 	}
@@ -897,8 +902,11 @@ func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
 		}
 		return "", nil
 	}
-	if len(l.States) > 0 {
-		return "only a human's output link lists states", nil
+	switch {
+	case len(l.States) > 0 && kind != kindAgent:
+		return decisionLinkMessage, nil
+	case len(l.States) > 0 && l.State != nil:
+		return "an agent's link to an object either names the state it generates it in or lists the states it decides between", nil
 	}
 	var n int
 	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM object_links WHERE process_id = ? AND object_id = ? AND direction = 'output'",

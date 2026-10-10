@@ -6,6 +6,7 @@ import type { Link } from './api'
 import { PlusIcon } from './icons'
 import QuantityLabel from './QuantityLabel'
 import type { ObjectNodeType } from './ObjectNode'
+import type { ProcessNodeType } from './ProcessNode'
 import { lanesOf, moveSegment, roundedPath, routePoints, segments, type End, type Lanes } from './route'
 
 export type LinkEdgeData = {
@@ -69,7 +70,19 @@ export default function LinkEdge({
     path,
     label: { x: labelX, y: labelY },
   } = roundedPath(points)
-  const insertable = data?.insertable && actions.editable
+  // An agent's link to an object, not one of its states, can list states
+  // for the agent to decide between: shown once it lists any, or the link is
+  // selected to choose them, if the object has states.
+  const process = useNodesData<ProcessNodeType>(data?.link ? String(data.link.process) : '')
+  const agentDecision =
+    data?.link?.direction === 'output' &&
+    data.link.state === null &&
+    process?.type === 'process' &&
+    process.data.kind === 'agent' &&
+    object?.type === 'object' &&
+    object.data.states.length > 0 &&
+    (data.link.states.length > 0 || (selected && actions.editable))
+  const insertable = data?.insertable && actions.editable && !agentDecision
   // Grips come and go as segments are added during a drag, so the drag
   // follows the pointer on the window, from the lanes it started with.
   const onGripDown = (e: ReactPointerEvent<HTMLDivElement>, index: number, vertical: boolean) => {
@@ -122,12 +135,13 @@ export default function LinkEdge({
           side={objectAtSource ? sourcePosition : targetPosition}
         />
       )}
-      {data?.decision && data.link && (
+      {(data?.decision || agentDecision) && data?.link && (
         <EdgeLabelRenderer>
           <DecisionStates
             edgeId={id}
             processId={sourceId}
             objectId={target}
+            agent={!data.decision}
             chosen={data.link.states}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           />
@@ -166,19 +180,23 @@ function dotCenter(x: number, y: number, side: Position): { cx: number; cy: numb
 
 // The states a human decides between, as a pill on its link; with none, the
 // person fills the object in instead, unless the process takes it too; clicking it
-// opens a checklist of the object's states. Edge labels sit below nodes, so
+// opens a checklist of the object's states. An agent's link lists the states
+// it decides between the same way; with none, it generates the object as it
+// is. Edge labels sit below nodes, so
 // the checklist goes on the page itself, under the pill, and closes when the
 // board moves.
 function DecisionStates({
   edgeId,
   processId,
   objectId,
+  agent,
   chosen,
   style,
 }: {
   edgeId: string
   processId: string
   objectId: string
+  agent: boolean
   chosen: number[]
   style: CSSProperties
 }) {
@@ -191,7 +209,7 @@ function DecisionStates({
   const states = object?.data.states ?? []
   const names = states.filter((s) => chosen.includes(s.id)).map((s) => s.name)
   const reviewed = useEdges<LinkEdgeType>().some((e) => e.source === objectId && e.target === processId)
-  const filledIn = names.length === 0 && !reviewed
+  const filledIn = names.length === 0 && !reviewed && !agent
 
   useEffect(() => {
     if (!at) return
@@ -225,13 +243,17 @@ function DecisionStates({
       <button
         className={`decision-pill${names.length === 0 ? ' empty' : ''}`}
         title={
-          filledIn
-            ? 'The person fills this object in. Choose states to decide between them instead.'
-            : 'States this review decides between'
+          agent
+            ? reviewed
+              ? 'States the agent decides between as it reviews this object, which keeps what it holds'
+              : 'States the agent decides this object comes out in. With none, it generates it as it is.'
+            : filledIn
+              ? 'The person fills this object in. Choose states to decide between them instead.'
+              : 'States this review decides between'
         }
         onClick={onPill}
       >
-        {names.length > 0 ? names.join(' · ') : filledIn ? 'Filled in' : 'Choose states'}
+        {names.length > 0 ? names.join(' · ') : filledIn ? 'Filled in' : agent ? 'Decide a state' : 'Choose states'}
       </button>
       {at &&
         createPortal(

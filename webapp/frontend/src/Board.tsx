@@ -1874,6 +1874,17 @@ export default function Board({
   // human its direct connections, and ceasing to be human its people's agent
   // links; the server deletes the same links when it saves the new kind.
   const dropMismatchedEdges = (id: string, from: ProcessKind, to: ProcessKind) => {
+    // Only an agent decides between states; the others generate the object as it is.
+    if (from === 'agent' && to !== 'agent' && to !== 'human') {
+      setEdges((es) =>
+        es.map((e) => {
+          const l = e.data?.link
+          if (!l || l.direction !== 'output' || String(l.process) !== id || l.states.length === 0) return e
+          return { ...e, data: { ...e.data, link: { ...l, states: [] } } }
+        }),
+      )
+      return
+    }
     if ((from === 'human') === (to === 'human')) return
     const person = (object: number) => {
       const node = getNode(objectNodeId(object))
@@ -1928,7 +1939,7 @@ export default function Board({
         ) : (
           <span
             className="hint"
-            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
+            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, reviewing the object if it takes it too, and link a state to the processes that take the object in it. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
           >
             Processes connect through the objects they generate and take. Right-click a node for more.
           </span>

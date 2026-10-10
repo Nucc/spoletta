@@ -10,6 +10,11 @@
 // own, or a part, holds a JSON object with its attributes in turn, or for a
 // list an array of them. A file attribute holds the path of a file the agent
 // wrote in the run's files directory.
+//
+// An agent deciding the state of objects hands in its output under output,
+// next to decisions: for each object it decides on, the state, one of those
+// listed, and maybe instructions for the process taking it in that state.
+// Deciding only on objects it reviews, it hands in only decisions.
 
 import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -24,12 +29,16 @@ type Bounds = { minItems?: number; maxItems?: number };
 type Attribute = Bounds & { name: string; description: string; file: boolean; many?: boolean; attributes?: Attribute[] };
 type OutputObject = Bounds & { name: string; many: boolean; attributes: Attribute[] };
 
+// An object whose state the agent decides; one it reviews keeps what it holds.
+type Decision = { name: string; states: string[]; review: boolean };
+
 type Spec = {
 	// "object": one object, the arguments are its attributes. "items": one
 	// list, under "items" since tool arguments must be an object. "objects":
-	// several, each under its name.
-	shape: "object" | "items" | "objects";
+	// several, each under its name. "decisions": none, only decisions.
+	shape: "object" | "items" | "objects" | "decisions";
 	objects: OutputObject[];
+	decisions?: Decision[];
 	// Where the agent writes files; file attributes must point inside it.
 	filesDir: string;
 	// Where the output goes once a call passes.
@@ -64,6 +73,37 @@ const listSchema = (o: OutputObject) => Type.Array(objectSchema(o), bounds(o));
 
 const partSchema = (o: OutputObject): TSchema => (o.many ? listSchema(o) : objectSchema(o));
 
+const decisionSchema = (d: Decision): TSchema =>
+	Type.Object(
+		{
+			state: Type.Union(
+				d.states.map((s) => Type.Literal(s)),
+				{ description: `The state you decide ${JSON.stringify(d.name)} is in` },
+			),
+			instructions: Type.Optional(
+				Type.String({ description: "What the process taking it in that state is to do, such as what to change" }),
+			),
+		},
+		{ additionalProperties: false },
+	);
+
+const decisionsSchema = (ds: Decision[]): TSchema =>
+	Type.Object(Object.fromEntries(ds.map((d) => [d.name, decisionSchema(d)])), { additionalProperties: false });
+
+// The output alone, as the webapp reads it: under output it needn't be an
+// object, so a single list is the array itself.
+function outputSchema(spec: Spec): TSchema {
+	return spec.shape === "items" ? listSchema(spec.objects[0]) : parameters(spec);
+}
+
+function toolParameters(spec: Spec): TSchema {
+	if (!spec.decisions?.length) return parameters(spec);
+	if (spec.shape === "decisions") {
+		return Type.Object({ decisions: decisionsSchema(spec.decisions) }, { additionalProperties: false });
+	}
+	return Type.Object({ output: outputSchema(spec), decisions: decisionsSchema(spec.decisions) }, { additionalProperties: false });
+}
+
 function parameters(spec: Spec): TSchema {
 	const [first] = spec.objects;
 	switch (spec.shape) {
@@ -78,13 +118,21 @@ function parameters(spec: Spec): TSchema {
 	}
 }
 
-// The output as the webapp reads it: the object, the list, or the objects by name.
+// The output as the webapp reads it: the object, the list, or the objects by
+// name; with decisions, a JSON object of the output and the decisions.
 function output(spec: Spec, params: Record<string, unknown>): unknown {
+	if (spec.decisions?.length) return params;
 	return spec.shape === "items" ? params.items : params;
 }
 
 // What the call says each object holds, by object, as a list of items.
-function parts(spec: Spec, params: Record<string, unknown>): [OutputObject, unknown[]][] {
+function parts(spec: Spec, args: Record<string, unknown>): [OutputObject, unknown[]][] {
+	if (spec.shape === "decisions") return [];
+	let params = args;
+	if (spec.decisions?.length) {
+		if (spec.shape === "items") return [[spec.objects[0], args.output as unknown[]]];
+		params = args.output as Record<string, unknown>;
+	}
 	if (spec.shape === "object") return [[spec.objects[0], [params]]];
 	if (spec.shape === "items") return [[spec.objects[0], params.items as unknown[]]];
 	return spec.objects.map((o) => [o, o.many ? (params[o.name] as unknown[]) : [params[o.name]]]);
@@ -149,7 +197,7 @@ export default function (pi: ExtensionAPI) {
 			"Give your result only by calling submit_output; text you write as a reply is not your result.",
 			"If submit_output reports a problem, fix it and call submit_output again.",
 		],
-		parameters: parameters(spec),
+		parameters: toolParameters(spec),
 		async execute(_toolCallId, params) {
 			const args = params as Record<string, unknown>;
 			const problems = fileProblems(spec, args);

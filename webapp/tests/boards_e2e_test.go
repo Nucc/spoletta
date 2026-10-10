@@ -73,7 +73,7 @@ func TestBoardRefusesWhatCantBe(t *testing.T) {
 	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": ticket.ID, "direction": directionOutput, "state": open.ID}, http.StatusBadRequest, "state not found on that object")
 	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": person.ID, "direction": directionInput}, http.StatusBadRequest, agentLinkMessage)
 	a.refused("POST", "/api/links", map[string]any{"process": elsewhere.ID, "object": ticket.ID, "direction": directionInput}, http.StatusBadRequest, "isn't on the process's board")
-	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": ticket.ID, "direction": directionInput, "states": []int64{open.ID}}, http.StatusBadRequest, "only a human's output link lists states")
+	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": ticket.ID, "direction": directionInput, "states": []int64{open.ID}}, http.StatusBadRequest, decisionLinkMessage)
 	// A person carries out a human process.
 	a.input(review.ID, person.ID)
 

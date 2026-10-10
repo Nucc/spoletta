@@ -297,6 +297,9 @@ type walk struct {
 	settings     map[int64]processSettings
 	// Process to the objects it generates, or the states a human decides on.
 	outputs map[int64][]linkEnd
+	// Agent to the objects it decides the state of; those it takes too it
+	// reviews, rather than generates.
+	decides map[int64]map[int64]bool
 	// Process to the objects it takes, and object to the processes taking it.
 	inputs     map[int64][]linkEnd
 	takers     map[int64][]taker
@@ -323,7 +326,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 	w := &walk{
 		e: e, ctx: ctx, run: run, lr: lr, fr: fr, board: board, ws: ws,
 		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{}, settings: map[int64]processSettings{},
-		outputs: map[int64][]linkEnd{}, inputs: map[int64][]linkEnd{},
+		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{},
 		generated: map[int64]bool{}, values: map[int64]value{},
@@ -358,8 +361,15 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 			continue
 		}
 		if l.Direction == directionOutput {
-			// A human's link stands for each state it can set.
-			if states := linkStates[l.ID]; len(states) > 0 {
+			// A human's link stands for each state it can set; an agent's
+			// generates its object in the state it decides.
+			if states := linkStates[l.ID]; len(states) > 0 && w.kinds[l.Process] != kindHuman {
+				if w.decides[l.Process] == nil {
+					w.decides[l.Process] = map[int64]bool{}
+				}
+				w.decides[l.Process][l.Object] = true
+				w.outputs[l.Process] = append(w.outputs[l.Process], linkEnd{l.Object, 0})
+			} else if len(states) > 0 {
 				for _, st := range states {
 					w.outputs[l.Process] = append(w.outputs[l.Process], linkEnd{l.Object, st})
 				}
@@ -377,10 +387,15 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		}
 	}
 	// A human generates only what they fill in, not the objects they decide
-	// on, nor those they review without states to decide between.
+	// on, nor those they review without states to decide between. Nor does
+	// an agent generate what it reviews.
 	for p, ends := range w.outputs {
 		for _, end := range ends {
-			if w.kinds[p] != kindHuman || (end.state == 0 && !slices.ContainsFunc(w.inputs[p], func(i linkEnd) bool { return i.object == end.object })) {
+			takes := slices.ContainsFunc(w.inputs[p], func(i linkEnd) bool { return i.object == end.object })
+			switch {
+			case w.kinds[p] == kindHuman && (end.state != 0 || takes):
+			case w.decides[p][end.object] && takes:
+			default:
 				w.generated[end.object] = true
 			}
 		}
@@ -606,7 +621,14 @@ func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64
 		if !ok {
 			content = res.Output
 		}
-		out[end.object] = value{content: content, state: end.state}
+		v := value{content: content, state: end.state}
+		if d, ok := res.Decisions[end.object]; ok {
+			v.state = d.state
+			if d.instructions != "" {
+				v.review = &review{reviewer: w.names[id], instructions: d.instructions}
+			}
+		}
+		out[end.object] = v
 	}
 	if res.Duplicate != nil {
 		w.mu.Lock()

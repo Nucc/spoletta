@@ -766,13 +766,13 @@ func TestEditLinks(t *testing.T) {
 	// Taking an object in each of its states, and whatever state it is in, are different links.
 	a.link(map[string]any{"process": draft.ID, "object": notes.ID, "direction": directionInput, "state": changes.ID})
 	a.link(map[string]any{"process": draft.ID, "object": notes.ID, "direction": directionInput, "state": approved.ID})
-	a.input(draft.ID, notes.ID)
+	in := a.input(draft.ID, notes.ID)
 	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": notes.ID, "direction": directionInput}, http.StatusConflict, "link already exists")
 	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": notes.ID, "direction": directionInput, "state": foreign.ID}, http.StatusBadRequest, "state not found on that object")
 	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": notes.ID, "direction": directionInput, "state": 1 << 40}, http.StatusBadRequest, "state not found")
 	a.refused("POST", "/api/links", map[string]any{"process": 1 << 40, "object": notes.ID, "direction": directionInput}, http.StatusBadRequest, "")
 	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": 1 << 40, "direction": directionInput}, http.StatusBadRequest, "")
-	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": other.ID, "direction": directionOutput, "states": []int64{foreign.ID}}, http.StatusBadRequest, "only a human's output link lists states")
+	a.refused("POST", "/api/links", map[string]any{"process": draft.ID, "object": other.ID, "direction": directionOutput, "states": []int64{approved.ID}}, http.StatusBadRequest, "state not found on that object")
 
 	// A human decides by listing states, not by naming one.
 	a.refused("POST", "/api/links", map[string]any{"process": review.ID, "object": notes.ID, "direction": directionOutput, "state": approved.ID}, http.StatusBadRequest, "lists the states it decides between")
@@ -802,7 +802,7 @@ func TestEditLinks(t *testing.T) {
 	if got := states(); len(got) != 2 {
 		t.Errorf("a refused replacement changed the decision to %v", got)
 	}
-	a.refused("PUT", fmt.Sprintf("/api/links/%d/states", out.ID), map[string]any{"states": []int64{approved.ID}}, http.StatusNotFound, "no human output link")
+	a.refused("PUT", fmt.Sprintf("/api/links/%d/states", in.ID), map[string]any{"states": []int64{approved.ID}}, http.StatusNotFound, "no human or agent output link")
 	a.call("PUT", fmt.Sprintf("/api/links/%d/states", decision.ID), map[string]any{"states": []int64{}}, http.StatusNoContent, nil)
 	if got := states(); len(got) != 0 {
 		t.Errorf("decision lists %v, want none", got)

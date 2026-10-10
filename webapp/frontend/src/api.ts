@@ -173,6 +173,9 @@ export type ObjectState = {
   id: number
   object: number
   name: string
+  // When an object generated in no state is in this one, such as
+  // confidence >= 0.8; absent for none.
+  rule?: string
 }
 
 // 'output': the process generates the object. 'input': the process takes it as input.
@@ -479,6 +482,11 @@ export function renameState(id: number, name: string): Promise<ObjectState> {
   return request(`/api/states/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
 }
 
+// An empty rule is none.
+export function setStateRule(id: number, rule: string): Promise<ObjectState> {
+  return request(`/api/states/${id}`, { method: 'PATCH', body: JSON.stringify({ rule }) })
+}
+
 // The links naming the state go with it.
 export function deleteState(id: number): Promise<void> {
   return request(`/api/states/${id}`, { method: 'DELETE' })
@@ -606,6 +614,10 @@ export type RepoCommits = {
 export type StepStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate' | 'skipped'
 
 // One execution of a process in a run, with the process as it was then.
+// The tokens a step's model calls took in and gave out, and what they cost
+// at the models' catalog prices, in dollars.
+export type StepUsage = { input: number; output: number; cost: number }
+
 export type RunStep = {
   id: number
   // Kept once the process is deleted; null only for steps whose process was
@@ -637,6 +649,9 @@ export type RunStep = {
   session: string
   canFollowUp: boolean
   followUps: FollowUp[]
+  // What an agent step's model calls used, as pi reports it; absent for
+  // other steps.
+  usage?: StepUsage
   startedAt: string
   finishedAt: string | null
 }

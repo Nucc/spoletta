@@ -108,6 +108,7 @@ import {
   setLinkAt,
   setLinkRoute,
   setLinkCondition,
+  setStateRule,
   setLinkRole,
   setLinkStates,
   startRun,
@@ -1411,6 +1412,17 @@ export default function Board({
     }
   }
 
+  const changeStateRule = async (objectId: string, stateId: number, rule: string) => {
+    try {
+      const state = await setStateRule(stateId, rule)
+      setStates(objectId, (ss) => ss.map((s) => (s.id === stateId ? state : s)))
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
   // The links naming the state go with it.
   const removeState = async (objectId: string, stateId: number) => {
     const node = getNode(objectId)
@@ -2228,6 +2240,8 @@ export default function Board({
             objects={contents?.objects ?? []}
             name={objectPanelNode.data.name}
             attributes={objectPanelNode.data.attributes}
+            states={objectPanelNode.data.states}
+            onStateRule={(id, rule) => changeStateRule(objectPanelNode.id, id, rule)}
             onRelationChange={(relation) => setRelation(objectPanelNode.id, relation)}
             generals={possibleGenerals(contents?.objects ?? [], objectIdOf(objectPanelNode.id))}
             onGeneralChange={(general) => setGeneral(objectPanelNode.id, general)}

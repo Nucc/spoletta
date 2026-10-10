@@ -229,7 +229,9 @@ function StatePill({
           />
         ) : (
           <>
-            <span className="state-name">{state.name}</span>
+            <span className="state-name" title={state.rule ? `When ${state.rule}` : undefined}>
+              {state.name}
+            </span>
             {editable && (
               <button
                 className="state-remove nodrag"

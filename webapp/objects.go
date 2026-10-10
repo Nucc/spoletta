@@ -217,14 +217,14 @@ func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	if err != nil {
 		return o, err
 	}
-	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name, source_id FROM object_states WHERE object_id = ? ORDER BY id", id)
+	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name, COALESCE(rule, ''), source_id FROM object_states WHERE object_id = ? ORDER BY id", id)
 	if err != nil {
 		return o, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var s objectState
-		if err := rows.Scan(&s.ID, &s.Object, &s.Name, &s.Source); err != nil {
+		if err := rows.Scan(&s.ID, &s.Object, &s.Name, &s.Rule, &s.Source); err != nil {
 			return o, err
 		}
 		o.States = append(o.States, s)

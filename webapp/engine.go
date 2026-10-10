@@ -31,6 +31,10 @@ import (
 //     takes without a state exist. Several such links are alternatives, not
 //     all required.
 //
+// An object an agent, script or Sentry step, or a person, generates in no
+// state comes out in the first of its states whose rule holds of it, if
+// any; see rules.go. That state goes on as any other, in the same pass.
+//
 // A condition link takes an object, as one without a state does, but lets
 // its process run only if the object is in the state it names, or one of
 // those its process's condition links to it name; otherwise the process is
@@ -343,6 +347,8 @@ type walk struct {
 	stateNames map[int64]string
 	// State to the object it belongs to.
 	stateObjects map[int64]int64
+	// Object to the states with rules, in order, and their rules.
+	rules map[int64][]ruledState
 	generated    map[int64]bool
 
 	mu     sync.Mutex
@@ -359,6 +365,41 @@ type taker struct {
 	process, state int64
 }
 
+type ruledState struct {
+	state int64
+	rule  rule
+}
+
+// The state an object holding content is in by its states' rules, 0 for
+// none.
+func (w *walk) ruled(o int64, content string) int64 {
+	for _, r := range w.rules[o] {
+		if r.rule.holds(content) {
+			return r.state
+		}
+	}
+	return 0
+}
+
+// Puts objects a step generated in no state in the state their rules say,
+// and records it as the step's.
+func (w *walk) applyRules(stepID int64, out map[int64]value) {
+	for _, o := range slices.Sorted(maps.Keys(out)) {
+		v := out[o]
+		if v.state != 0 {
+			continue
+		}
+		if v.state = w.ruled(o, v.content); v.state == 0 {
+			continue
+		}
+		out[o] = v
+		if _, err := w.e.db.ExecContext(context.Background(), "UPDATE run_objects SET state = ? WHERE step_id = ? AND object_id = ?",
+			w.stateNames[v.state], stepID, o); err != nil {
+			log.Printf("record state of object %d in step %d: %v", o, stepID, err)
+		}
+	}
+}
+
 // A walk of board, nil for the top one, with the objects given from outside,
 // working in ws.
 func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun, board *int64, given map[int64]value, ws *runWorkspace) *walk {
@@ -367,7 +408,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{}, settings: map[int64]processSettings{},
 		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{}, roles: map[int64]map[int64]string{}, conditions: map[int64]map[int64][]int64{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
-		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{},
+		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{}, rules: map[int64][]ruledState{},
 		generated: map[int64]bool{}, values: map[int64]value{}, skipped: map[int64]bool{}, ran: map[int64]int{},
 	}
 	w.reviews, w.terminate = context.WithCancel(ctx)
@@ -390,6 +431,10 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 	for _, st := range s.States {
 		w.stateNames[st.ID] = st.Name
 		w.stateObjects[st.ID] = st.Object
+		// A rule that no longer parses holds of nothing.
+		if r, err := parseRule(st.Rule); err == nil && len(r) > 0 {
+			w.rules[st.Object] = append(w.rules[st.Object], ruledState{st.ID, r})
+		}
 	}
 	linkStates := map[int64][]int64{}
 	for _, ls := range s.LinkStates {
@@ -842,8 +887,9 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64]value, bool) {
 	var res runResult
 	var ok, stopped bool
+	var stepID int64
 	for try := 0; ; try++ {
-		res, ok, stopped = w.execute(id, given, cr)
+		res, ok, stopped, stepID = w.execute(id, given, cr)
 		if ok || stopped || w.stopped() || try >= w.settings[id].retries() {
 			break
 		}
@@ -871,6 +917,7 @@ func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64
 		}
 		out[end.object] = v
 	}
+	w.applyRules(stepID, out)
 	if res.Duplicate != nil {
 		w.mu.Lock()
 		w.terminated = true
@@ -1305,12 +1352,22 @@ func (w *walk) enterValues(stepID int64, p *pass, d decision) []func() {
 		return nil
 	}
 	objects := slices.Sorted(maps.Keys(d.entries))
+	entered := map[int64]value{}
+	for _, o := range objects {
+		entered[o] = value{content: d.entries[o]}
+	}
+	w.applyRules(stepID, entered)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, o := range objects {
-		w.set(o, value{content: d.entries[o]})
-	}
 	var next []func()
+	for _, o := range objects {
+		w.set(o, entered[o])
+		if st := entered[o].state; st != 0 {
+			for _, t := range w.takersIn(o, st) {
+				next = append(next, func() { w.runProcess(t, p, o) })
+			}
+		}
+	}
 	for _, o := range objects {
 		next = append(next, w.follow(o, p)...)
 	}
@@ -1354,11 +1411,11 @@ func (w *walk) setState(id, stepID int64, d decision) []func() {
 // its run, rather than failed; a duplicate is a result, and terminates the
 // run. A step with a timeout fails once it runs out: the worker ends agents
 // and scripts then, and the engine a little later if the worker doesn't.
-func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool, bool) {
+func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool, bool, int64) {
 	select {
 	case w.e.slots <- struct{}{}:
 	case <-w.ctx.Done():
-		return runResult{}, false, true
+		return runResult{}, false, true, 0
 	}
 	stop, cancel := context.WithCancel(w.ctx)
 	defer cancel()
@@ -1398,9 +1455,9 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 		if ctx.Err() == nil {
 			log.Printf("run process %d in run %d: %v", id, w.run, err)
 		}
-		return res, false, stop.Err() != nil
+		return res, false, stop.Err() != nil, stepID
 	}
-	return res, res.OK || res.Duplicate != nil, stop.Err() != nil
+	return res, res.OK || res.Duplicate != nil, stop.Err() != nil, stepID
 }
 
 // How long after its timeout the engine ends a step the worker didn't.

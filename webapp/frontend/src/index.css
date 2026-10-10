@@ -500,6 +500,10 @@ body {
   background: #cf222e;
 }
 
+.status-dot.skipped {
+  background: #d0d7de;
+}
+
 .status-dot.terminated,
 .status-dot.duplicate {
   background: #8250df;

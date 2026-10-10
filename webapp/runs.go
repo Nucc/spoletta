@@ -38,6 +38,38 @@ type run struct {
 
 const runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, schedule_id, started_at, finished_at"
 
+// The tokens a step's model calls took in and gave out, and what they cost
+// at the models' catalog prices, in dollars.
+type stepUsage struct {
+	Input  int64   `json:"input"`
+	Output int64   `json:"output"`
+	Cost   float64 `json:"cost"`
+}
+
+// The usage of each agent step of a run, by step id, summed over the
+// replies of its model.
+func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage, error) {
+	usage := map[int64]*stepUsage{}
+	err := scanAll(ctx, db, `SELECT m.step_id,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.message, '$.usage.input') AS DOUBLE)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.message, '$.usage.output') AS DOUBLE)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.message, '$.usage.cost.total') AS DOUBLE)), 0)
+		FROM run_step_messages m JOIN run_steps s ON s.id = m.step_id
+		WHERE s.run_id = ? AND JSON_EXTRACT(m.message, '$.usage') IS NOT NULL
+		GROUP BY m.step_id`, func(rows *sql.Rows) error {
+		var id int64
+		var in, out float64
+		u := &stepUsage{}
+		if err := rows.Scan(&id, &in, &out, &u.Cost); err != nil {
+			return err
+		}
+		u.Input, u.Output = int64(in), int64(out)
+		usage[id] = u
+		return nil
+	}, run)
+	return usage, err
+}
+
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
 	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.Schedule, &rn.StartedAt, &rn.FinishedAt)
 }
@@ -78,6 +110,9 @@ type step struct {
 	Session     string     `json:"session"`
 	CanFollowUp bool       `json:"canFollowUp"`
 	FollowUps   []followUp `json:"followUps"`
+	// What an agent step's model calls used, follow-ups included, as pi
+	// reports it; absent for other steps.
+	Usage *stepUsage `json:"usage,omitempty"`
 	StartedAt   time.Time  `json:"startedAt"`
 	FinishedAt  *time.Time `json:"finishedAt"`
 }
@@ -530,6 +565,11 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
+		usage, err := runUsage(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		for rows.Next() {
 			var s step
 			var inputs []byte
@@ -540,6 +580,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 				return
 			}
 			s.CanFollowUp = s.Session != ""
+			s.Usage = usage[s.ID]
 			if s.FollowUps = followUps[s.ID]; s.FollowUps == nil {
 				s.FollowUps = []followUp{}
 			}

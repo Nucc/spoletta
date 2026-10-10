@@ -20,6 +20,8 @@ type objectState struct {
 	ID     int64  `json:"id"`
 	Object int64  `json:"object"`
 	Name   string `json:"name"`
+	// When an object generated in no state is in this one; see rules.go.
+	Rule string `json:"rule,omitempty"`
 	// The state of a module's object it is a copy of; see modules.go.
 	Source *int64 `json:"source,omitempty"`
 }
@@ -36,7 +38,10 @@ func migrateStates(db *sql.DB) error {
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE CASCADE
 	)`)
-	return err
+	if err != nil {
+		return err
+	}
+	return addColumn(db, "object_states", "rule", "TEXT NULL")
 }
 
 // Older versions sent a human process's decision along a route per outcome,
@@ -185,6 +190,11 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
+		s.Rule = strings.TrimSpace(s.Rule)
+		if _, err := parseRule(s.Rule); err != nil {
+			http.Error(w, "rule: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		// Processes set an object's states, and only objects on a board meet them.
 		var owned bool
@@ -195,7 +205,7 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !ownObject(w, r, db, s.Object) {
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO object_states (object_id, name) VALUES (?, ?)", s.Object, s.Name)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO object_states (object_id, name, rule) VALUES (?, ?, ?)", s.Object, s.Name, s.Rule)
 		if mysqlErrorIs(err, mysqlErrForeignKey) {
 			http.Error(w, "object not found", http.StatusBadRequest)
 			return
@@ -220,16 +230,27 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
+		// Either or both; a rule left empty is none.
 		var patch struct {
-			Name string `json:"name"`
+			Name *string `json:"name"`
+			Rule *string `json:"rule"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if patch.Name = strings.TrimSpace(patch.Name); patch.Name == "" {
-			http.Error(w, "name must not be empty", http.StatusBadRequest)
-			return
+		if patch.Name != nil {
+			if *patch.Name = strings.TrimSpace(*patch.Name); *patch.Name == "" {
+				http.Error(w, "name must not be empty", http.StatusBadRequest)
+				return
+			}
+		}
+		if patch.Rule != nil {
+			*patch.Rule = strings.TrimSpace(*patch.Rule)
+			if _, err := parseRule(*patch.Rule); err != nil {
+				http.Error(w, "rule: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		object, err := objectOfState(r.Context(), db, id)
 		if err != nil {
@@ -239,7 +260,7 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !ownObject(w, r, db, object) {
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "UPDATE object_states SET name = ? WHERE id = ?", patch.Name, id); err != nil {
+		if _, err := db.ExecContext(r.Context(), "UPDATE object_states SET name = COALESCE(?, name), rule = COALESCE(?, rule) WHERE id = ?", patch.Name, patch.Rule, id); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -248,7 +269,7 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var s objectState
-		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name FROM object_states WHERE id = ?", id).Scan(&s.ID, &s.Object, &s.Name)
+		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name, COALESCE(rule, '') FROM object_states WHERE id = ?", id).Scan(&s.ID, &s.Object, &s.Name, &s.Rule)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "state not found", http.StatusNotFound)
 			return
@@ -305,7 +326,7 @@ func deleteState(ctx context.Context, db *sql.DB, id int64) error {
 
 // The states of every object, by object id.
 func listStates(ctx context.Context, db *sql.DB) (map[int64][]objectState, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name, source_id FROM object_states ORDER BY id")
+	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name, COALESCE(rule, ''), source_id FROM object_states ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +334,7 @@ func listStates(ctx context.Context, db *sql.DB) (map[int64][]objectState, error
 	states := map[int64][]objectState{}
 	for rows.Next() {
 		var s objectState
-		if err := rows.Scan(&s.ID, &s.Object, &s.Name, &s.Source); err != nil {
+		if err := rows.Scan(&s.ID, &s.Object, &s.Name, &s.Rule, &s.Source); err != nil {
 			return nil, err
 		}
 		states[s.Object] = append(states[s.Object], s)

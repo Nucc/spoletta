@@ -106,7 +106,7 @@ func migrateVersions(db *sql.DB) error {
 }
 
 // Scans every row of query with scan, which reads the current row.
-func scanAll(ctx context.Context, tx *sql.Tx, query string, scan func(*sql.Rows) error, args ...any) error {
+func scanAll(ctx context.Context, tx rowsQuerier, query string, scan func(*sql.Rows) error, args ...any) error {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -162,10 +162,10 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT st.id, st.object_id, st.name, st.source_id FROM object_states st
+	err = scanAll(ctx, tx, `SELECT st.id, st.object_id, st.name, COALESCE(st.rule, ''), st.source_id FROM object_states st
 		JOIN objects o ON o.id = st.object_id WHERE o.flow_id = ? ORDER BY st.id`, func(rows *sql.Rows) error {
 		var st objectState
-		err := rows.Scan(&st.ID, &st.Object, &st.Name, &st.Source)
+		err := rows.Scan(&st.ID, &st.Object, &st.Name, &st.Rule, &st.Source)
 		s.States = append(s.States, st)
 		return err
 	}, flow)
@@ -382,7 +382,7 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		}
 	}
 	for _, st := range s.States {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO object_states (id, object_id, name, source_id) VALUES (?, ?, ?, ?)", st.ID, st.Object, st.Name, st.Source); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO object_states (id, object_id, name, rule, source_id) VALUES (?, ?, ?, ?, ?)", st.ID, st.Object, st.Name, st.Rule, st.Source); err != nil {
 			return err
 		}
 	}

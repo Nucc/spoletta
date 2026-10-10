@@ -15,6 +15,7 @@ import {
   type RunStep,
   type StepMessage,
   type StepStatus,
+  type StepUsage,
 } from './api'
 import { ClockIcon } from './icons'
 
@@ -37,6 +38,20 @@ const STEP_LABELS: Record<StepStatus, string> = {
   duplicate: 'Already processed',
   skipped: 'Skipped',
 }
+
+// Tokens, in thousands once there are many.
+const formatTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n))
+
+// What model calls used, as tokens in and out and their cost.
+export const formatUsage = (u: StepUsage) =>
+  `${formatTokens(u.input)} in · ${formatTokens(u.output)} out${u.cost > 0 ? ` · $${u.cost.toFixed(u.cost < 0.1 ? 4 : 2)}` : ''}`
+
+// The usage of every step that has one, added up; undefined if none has.
+const totalUsage = (steps: RunStep[]): StepUsage | undefined =>
+  steps.reduce<StepUsage | undefined>(
+    (t, s) => (s.usage ? { input: (t?.input ?? 0) + s.usage.input, output: (t?.output ?? 0) + s.usage.output, cost: (t?.cost ?? 0) + s.usage.cost } : t),
+    undefined,
+  )
 
 export const formatTime = (s: string) =>
   new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
@@ -164,6 +179,7 @@ export function RunPanel({
       <p className="panel-note">
         Started {formatTime(run.startedAt)}
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
+        {totalUsage(run.steps) && `; its agents used ${formatUsage(totalUsage(run.steps)!)}`}
       </p>
       {run.status === 'running' && (
         <button className="run-stop" onClick={onStop} title="End the run where it is; steps still going are cancelled">
@@ -233,6 +249,7 @@ function Step({
         <p className="panel-note">
           {STEP_LABELS[s.status]} · started {formatTime(s.startedAt)}
           {s.process === null && ' · process since deleted'}
+          {s.usage && ` · ${formatUsage(s.usage)}`}
         </p>
         {onStop && (
           <button className="run-stop" onClick={onStop} title="Stop this step; its branch ends, the rest of the run goes on">

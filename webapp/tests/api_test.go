@@ -258,10 +258,19 @@ type object struct {
 // condition link that runs its process when the object enters the state. A
 // human process decides by setting its object to one of the states its
 // output link lists.
+// The tokens a step's model calls took in and gave out, and what they cost.
+type stepUsage struct {
+	Input  int64   `json:"input"`
+	Output int64   `json:"output"`
+	Cost   float64 `json:"cost"`
+}
+
 type objectState struct {
 	ID     int64  `json:"id"`
 	Object int64  `json:"object"`
 	Name   string `json:"name"`
+	// When an object generated in no state is in this one; see rules.go.
+	Rule string `json:"rule,omitempty"`
 	// The state of a module's object it is a copy of; see modules.go.
 	Source *int64 `json:"source,omitempty"`
 }
@@ -619,8 +628,10 @@ type step struct {
 	Session     string     `json:"session"`
 	CanFollowUp bool       `json:"canFollowUp"`
 	FollowUps   []followUp `json:"followUps"`
-	StartedAt   time.Time  `json:"startedAt"`
-	FinishedAt  *time.Time `json:"finishedAt"`
+	// What an agent step's model calls used, as pi reports it.
+	Usage      *stepUsage `json:"usage,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
 }
 
 // An agent step records its conversation as pi has it, a message at a time

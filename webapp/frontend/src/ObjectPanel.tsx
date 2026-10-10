@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FlowObject, ObjectAttribute, Relation } from './api'
+import type { FlowObject, ObjectAttribute, ObjectState, Relation } from './api'
 import { Data } from './Data'
 import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TrashIcon, ZoomInIcon } from './icons'
 import { quantityText, type Quantity } from './quantity'
@@ -18,6 +18,7 @@ export default function ObjectPanel({
   objects,
   name,
   attributes,
+  states,
   persistent,
   quantity,
   human,
@@ -37,6 +38,7 @@ export default function ObjectPanel({
   onAdd,
   onUpdate,
   onRemove,
+  onStateRule,
   onClose,
 }: {
   id: number
@@ -44,6 +46,7 @@ export default function ObjectPanel({
   objects: FlowObject[]
   name: string
   attributes: ObjectAttribute[]
+  states: ObjectState[]
   persistent: boolean
   quantity: Quantity
   human: boolean
@@ -72,6 +75,8 @@ export default function ObjectPanel({
   onAdd: (name: string) => Promise<boolean>
   onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean; file?: boolean }) => Promise<boolean>
   onRemove: (id: number) => Promise<boolean>
+  // Sets a state's rule; resolves to whether the server took it.
+  onStateRule: (id: number, rule: string) => Promise<boolean>
   onClose: () => void
 }) {
   // Where it goes, and whether this flow stores it, are a copy's own.
@@ -317,6 +322,22 @@ export default function ObjectPanel({
           <small className="panel-note">Unfold it to add the objects it is made of: attributes with fields of their own, or parts.</small>
         )}
       </section>
+      {states.length > 0 && (
+        <section className="attributes" aria-label="State rules">
+          <div className="attributes-title">
+            <span>State rules</span>
+          </div>
+          <p className="panel-note">
+            Generated in no state, the object comes out in the first state whose rule holds of what it holds, such as{' '}
+            <code>confidence &gt;= 0.8</code> or <code>kind == "bug" and labels contains "p1"</code>: comparisons of its
+            fields, by name, with ==, !=, &lt;, &lt;=, &gt;, &gt;= or contains, joined by and. An object without attributes
+            holds its value in <code>data</code>.
+          </p>
+          {states.map((s) => (
+            <StateRuleRow key={s.id} state={s} editable={own} onSave={(rule) => onStateRule(s.id, rule)} />
+          ))}
+        </section>
+      )}
       <div className="panel-run">
         <span>{owner ? `Its field in ${owner.name}` : 'Processes hand in'}</span>
         <pre>{example(fields, quantity.many)}</pre>
@@ -328,6 +349,33 @@ export default function ObjectPanel({
         </div>
       )}
     </aside>
+  )
+}
+
+// A state's rule, saved when the field is left or Enter is pressed; one the
+// server refuses goes back to what it was.
+function StateRuleRow({ state, editable, onSave }: { state: ObjectState; editable: boolean; onSave: (rule: string) => Promise<boolean> }) {
+  const [rule, setRule] = useState(state.rule ?? '')
+  const saved = useRef(state.rule ?? '')
+  const save = async () => {
+    const trimmed = rule.trim()
+    if (trimmed === saved.current) return
+    if (await onSave(trimmed)) saved.current = trimmed
+    else setRule(saved.current)
+  }
+  return (
+    <label className="panel-field">
+      <span>{state.name}</span>
+      <input
+        value={rule}
+        readOnly={!editable}
+        placeholder="No rule; set by a process"
+        spellCheck={false}
+        onChange={(e) => setRule(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => e.key === 'Enter' && save()}
+      />
+    </label>
   )
 }
 

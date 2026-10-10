@@ -463,6 +463,11 @@ func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) e
 			return err
 		}
 	}
+	// A copy's states keep the rules of theirs.
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE object_states d JOIN object_states s ON s.id = d.source_id SET d.rule = s.rule WHERE d.object_id = ?", dup); err != nil {
+		return err
+	}
 
 	attrs := s.attributes(source)
 	want = want[:0]

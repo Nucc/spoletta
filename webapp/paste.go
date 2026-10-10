@@ -487,7 +487,7 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 	}
 
 	for _, st := range p.states[o.ID] {
-		r, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_states (object_id, name, source_id) VALUES (?, ?, ?)", id, st.Name, sourceOf(st.Source))
+		r, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_states (object_id, name, rule, source_id) VALUES (?, ?, ?, ?)", id, st.Name, st.Rule, sourceOf(st.Source))
 		if err != nil {
 			return 0, err
 		}

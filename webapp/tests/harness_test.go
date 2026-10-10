@@ -525,13 +525,16 @@ type fakeWorker struct {
 	mu      sync.Mutex
 	agents  map[string]func(context.Context, agentRun) runResult
 	scripts map[string]func(context.Context, scriptRun) runResult
+	// The messages an agent's conversation records, by process name,
+	// instead of the one every agent sends.
+	messages map[string][]map[string]any
 	// Every run asked for, in the order asked.
 	agentRuns  []agentRun
 	scriptRuns []scriptRun
 }
 
 func newFakeWorker(t *testing.T) *fakeWorker {
-	fw := &fakeWorker{t: t, agents: map[string]func(context.Context, agentRun) runResult{}, scripts: map[string]func(context.Context, scriptRun) runResult{}}
+	fw := &fakeWorker{t: t, agents: map[string]func(context.Context, agentRun) runResult{}, scripts: map[string]func(context.Context, scriptRun) runResult{}, messages: map[string][]map[string]any{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, agentModels{Default: "fake/model", Models: []string{"fake/model"}})
@@ -550,6 +553,7 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 		fw.mu.Lock()
 		fw.agentRuns = append(fw.agentRuns, run)
 		reply := fw.agents[run.ProcessName]
+		messages := fw.messages[run.ProcessName]
 		fw.mu.Unlock()
 		res := runResult{Error: "the fake worker has no agent for " + run.ProcessName}
 		if reply != nil {
@@ -558,7 +562,12 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			t.Errorf("fake worker: no agent for %q", run.ProcessName)
 		}
 		enc := json.NewEncoder(w)
-		enc.Encode(map[string]any{"message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "working on " + run.ProcessName}}}})
+		if messages == nil {
+			messages = []map[string]any{{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "working on " + run.ProcessName}}}}
+		}
+		for _, m := range messages {
+			enc.Encode(map[string]any{"message": m})
+		}
 		enc.Encode(map[string]any{"result": res})
 	})
 	mux.HandleFunc("POST /script", func(w http.ResponseWriter, r *http.Request) {
@@ -589,6 +598,13 @@ func (fw *fakeWorker) onAgent(process string, reply func(context.Context, agentR
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	fw.agents[process] = reply
+}
+
+// Has the named agent's conversation record these messages.
+func (fw *fakeWorker) onMessages(process string, messages ...map[string]any) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	fw.messages[process] = messages
 }
 
 func (fw *fakeWorker) onScript(process string, reply func(context.Context, scriptRun) runResult) {

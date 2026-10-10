@@ -49,7 +49,8 @@ import ObjectNode, {
 } from './ObjectNode'
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
 import ObjectPanel from './ObjectPanel'
-import ProcessPanel, { type EntryObject } from './ProcessPanel'
+import ProcessPanel, { type EntryObject, type Review } from './ProcessPanel'
+import ReviewDialog from './ReviewDialog'
 import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
 import StructureEdge, { type StructureKind } from './StructureEdge'
@@ -361,6 +362,8 @@ export default function Board({
   // Set while a run is being started.
   const [starting, setStarting] = useState(false)
   const [panelId, setPanelId] = useState<string | null>(null)
+  // The process whose waiting review shows in the middle of the screen.
+  const [reviewId, setReviewId] = useState<string | null>(null)
   const [models, setModels] = useState<Models | null>(null)
   const [mcpServers, setMCPServers] = useState<MCPServer[] | null>(null)
   const [mcpOpen, setMCPOpen] = useState(false)
@@ -852,8 +855,8 @@ export default function Board({
 
   // Shows the open run on the board: each process as its last step in the
   // run left it, each object with the content and state it last got. A
-  // review waiting for a decision opens its process's panel, unless another
-  // panel is open.
+  // review waiting for a decision shows in the middle of the screen, unless
+  // another does, and opens its process's panel, unless another panel is open.
   useEffect(() => {
     if (!shownRun || shownVersion !== runVersion) return
     const steps = new Map(shownRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
@@ -862,6 +865,7 @@ export default function Board({
     for (const [process, s] of steps) {
       if (s.status !== 'waiting' || shownReviews.current.has(s.id) || !getNode(process)) continue
       shownReviews.current.add(s.id)
+      setReviewId((open) => open ?? process)
       setPanelId((open) => open ?? process)
     }
     setNodes((ns) =>
@@ -1043,6 +1047,7 @@ export default function Board({
   }
 
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
+  const reviewNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === reviewId && Boolean(n.data.review))
   const objectPanelNode = nodes.find((n): n is ObjectNodeType => n.type === 'object' && n.id === panelId)
   const panelOpen = Boolean(panelNode || objectPanelNode || mcpOpen || settingsOpen || oplOpen || versionsOpen || runDetail)
 
@@ -1899,7 +1904,7 @@ export default function Board({
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return
       const target = e.target as HTMLElement | null
-      if (target?.isContentEditable || target?.closest('input, textarea, select')) return
+      if (target?.isContentEditable || target?.closest('input, textarea, select, dialog')) return
       const key = e.key.toLowerCase()
       if (key === 'z') {
         e.preventDefault()
@@ -2008,6 +2013,15 @@ export default function Board({
     if (entries) done()
     return true
   }
+
+  // What a human process waiting in the open run shows to decide on.
+  const reviewOf = (n: ProcessNodeType): Review | undefined =>
+    n.data.review && {
+      inputs: n.data.review,
+      options: decisionOptions(n.id),
+      entries: entryObjects(n.id),
+      onDecide: (state, instructions, entries) => onDecide(n.id, state, instructions, entries),
+    }
 
   // Becoming or ceasing to be human drops the process's outputs, becoming
   // human its direct connections, and ceasing to be human its people's agent
@@ -2294,14 +2308,8 @@ export default function Board({
             mcpServers={mcpServers}
             readOnly={reviewing}
             run={{ status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
-            review={
-              panelNode.data.review && {
-                inputs: panelNode.data.review,
-                options: decisionOptions(panelNode.id),
-                entries: entryObjects(panelNode.id),
-                onDecide: (state, instructions, entries) => onDecide(panelNode.id, state, instructions, entries),
-              }
-            }
+            // The form shows in one place at a time.
+            review={reviewNode?.id === panelNode.id ? undefined : reviewOf(panelNode)}
             onChange={(fields) => {
               dropMismatchedEdges(panelNode.id, panelNode.data.kind, fields.kind)
               updateData(panelNode.id, fields)
@@ -2399,6 +2407,14 @@ export default function Board({
           />
         )}
       </div>
+      {reviewNode && (
+        <ReviewDialog
+          key={reviewNode.id}
+          name={reviewNode.data.name}
+          review={reviewOf(reviewNode)!}
+          onClose={() => setReviewId(null)}
+        />
+      )}
     </div>
   )
 }

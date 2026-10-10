@@ -824,6 +824,26 @@ body {
   color: #953800;
 }
 
+/* What is under review, then the form; the review scrolls as a whole, so
+   neither is squeezed. */
+.review-body,
+.review-inputs,
+.review-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.review-body > *,
+.review-inputs > *,
+.review-form > * {
+  flex-shrink: 0;
+}
+
+.review .panel-run {
+  max-height: none;
+}
+
 .review-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2771,4 +2791,74 @@ body {
 .run-item-scheduled {
   display: inline-flex;
   color: #656d76;
+}
+
+/* A review a human process waits for, over the board in the middle of the screen. */
+.review-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  padding: 16px;
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(31, 35, 40, 0.3);
+}
+
+.review-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* With something to read, it sits beside the form, each scrolling on its own. */
+.review-dialog.reading {
+  width: min(1200px, calc(100vw - 32px));
+  height: calc(100vh - 64px);
+}
+
+.review-dialog .review {
+  overflow: hidden;
+}
+
+.review-dialog.reading .review-body {
+  flex: 1;
+  flex-direction: row;
+  min-height: 0;
+}
+
+.review-dialog.reading .review-inputs {
+  flex: 3 1 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+.review-dialog.reading .review-form {
+  flex: 2 1 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+.review-dialog .review-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.review-dialog:not(.reading) .review-body {
+  overflow: auto;
+}
+
+@media (max-width: 760px) {
+  .review-dialog.reading .review-body {
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .review-dialog.reading .review-inputs,
+  .review-dialog.reading .review-form {
+    flex: none;
+    overflow: visible;
+  }
+}
+
+.review-dialog::backdrop {
+  background: rgba(31, 35, 40, 0.45);
 }

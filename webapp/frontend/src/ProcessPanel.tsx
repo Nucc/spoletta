@@ -587,7 +587,7 @@ const emptyDraft = (o: EntryObject): Draft => (o.fields.length === 0 ? '' : empt
 const filled = (d: Draft): boolean =>
   typeof d === 'string' ? d.trim() !== '' : Array.isArray(d) ? d.every(filled) : Object.values(d).every(filled)
 
-function ReviewForm({ review }: { review: Review }) {
+export function ReviewForm({ review }: { review: Review }) {
   const [instructions, setInstructions] = useState('')
   const [drafts, setDrafts] = useState<Record<number, Draft>>(() =>
     Object.fromEntries(review.entries.map((o) => [o.id, emptyDraft(o)])),
@@ -614,63 +614,73 @@ function ReviewForm({ review }: { review: Review }) {
   return (
     <section className="review" aria-label={entering ? 'Input' : 'Review'}>
       <span className="review-title">{entering ? 'Waiting for your input' : 'Waiting for your review'}</span>
-      {review.inputs.length === 0
-        ? !entering && <p className="panel-note">This process has no generated inputs to review.</p>
-        : review.inputs.map((input, i) => (
-            <div key={i} className="panel-run">
-              <span>
-                {input.name}
-                {input.state && ` (${input.state})`}
-              </span>
-              <Data text={input.content} />
-            </div>
-          ))}
-      {review.entries.map((o) => (
-        <EntryFields
-          key={o.id}
-          object={o}
-          draft={drafts[o.id] ?? emptyDraft(o)}
-          onChange={(d) => setDrafts((ds) => ({ ...ds, [o.id]: d }))}
-        />
-      ))}
-      {files.length > 0 && (
-        <small className="panel-note">
-          Files can't be filled in by hand, so this can't be sent: {files.join(', ')}. Turn those attributes into text.
-        </small>
-      )}
-      {(!entering || review.options.length > 0) && (
-        <label className="panel-field">
-          <span>Instructions</span>
-          <textarea
-            rows={3}
-            value={instructions}
-            placeholder="Optional. Passed with the object to the processes that take it in the state you set."
-            onChange={(e) => setInstructions(e.target.value)}
-          />
-        </label>
-      )}
-      {review.options.length === 0 ? (
-        !entering && (
-          <small className="panel-note">
-            Link this process to an object and pick, on the link, the states it decides between. Without any, the branch
-            ends here.
-          </small>
-        )
-      ) : (
-        <span className="panel-note">Set to:</span>
-      )}
-      <div className="review-actions">
-        {review.options.length === 0 && (
-          <button disabled={entering && !ready} onClick={() => decide(null)}>
-            {entering ? 'Submit' : 'Done'}
-          </button>
+      {/* What the process takes, to read before deciding, beside the form when there's room. */}
+      <div className="review-body">
+        {review.inputs.length > 0 && (
+          <div className="review-inputs">
+            {review.inputs.map((input, i) => (
+              <div key={i} className="panel-run">
+                <span>
+                  {input.name}
+                  {input.state && ` (${input.state})`}
+                </span>
+                <Data text={input.content} />
+              </div>
+            ))}
+          </div>
         )}
-        {review.options.map((o) => (
-          <button key={o.state} disabled={entering && !ready} onClick={() => decide(o.state)}>
-            {objects.size > 1 && `${o.object}: `}
-            {o.name}
-          </button>
-        ))}
+        <div className="review-form">
+          {review.inputs.length === 0 && !entering && (
+            <p className="panel-note">This process has no generated inputs to review.</p>
+          )}
+          {review.entries.map((o) => (
+            <EntryFields
+              key={o.id}
+              object={o}
+              draft={drafts[o.id] ?? emptyDraft(o)}
+              onChange={(d) => setDrafts((ds) => ({ ...ds, [o.id]: d }))}
+            />
+          ))}
+          {files.length > 0 && (
+            <small className="panel-note">
+              Files can't be filled in by hand, so this can't be sent: {files.join(', ')}. Turn those attributes into text.
+            </small>
+          )}
+          {(!entering || review.options.length > 0) && (
+            <label className="panel-field">
+              <span>Instructions</span>
+              <textarea
+                rows={3}
+                value={instructions}
+                placeholder="Optional. Passed with the object to the processes that take it in the state you set."
+                onChange={(e) => setInstructions(e.target.value)}
+              />
+            </label>
+          )}
+          {review.options.length === 0 ? (
+            !entering && (
+              <small className="panel-note">
+                Link this process to an object and pick, on the link, the states it decides between. Without any, the branch
+                ends here.
+              </small>
+            )
+          ) : (
+            <span className="panel-note">Set to:</span>
+          )}
+          <div className="review-actions">
+            {review.options.length === 0 && (
+              <button disabled={entering && !ready} onClick={() => decide(null)}>
+                {entering ? 'Submit' : 'Done'}
+              </button>
+            )}
+            {review.options.map((o) => (
+              <button key={o.state} disabled={entering && !ready} onClick={() => decide(o.state)}>
+                {objects.size > 1 && `${o.object}: `}
+                {o.name}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   )

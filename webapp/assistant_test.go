@@ -8,10 +8,10 @@ func TestSplitSetup(t *testing.T) {
 		found             bool
 	}{
 		{"Just an answer.", "Just an answer.", "", false},
-		{"Done.\n\n```json\n{\"genie\": 1}\n```\n", "Done.", "{\"genie\": 1}", true},
-		{"Done.\n```yaml\ngenie: 1\n```\nSign in to jira.", "Done.\n\nSign in to jira.", "genie: 1", true},
+		{"Done.\n\n```json\n{\"spoletta\": 1}\n```\n", "Done.", "{\"spoletta\": 1}", true},
+		{"Done.\n```yaml\nspoletta: 1\n```\nSign in to jira.", "Done.\n\nSign in to jira.", "spoletta: 1", true},
 		// The file is the last block; an example before it stays in the text.
-		{"Like ```json\n{}\n``` but\n```json\n{\"genie\": 1}\n```", "Like ```json\n{}\n``` but", "{\"genie\": 1}", true},
+		{"Like ```json\n{}\n``` but\n```json\n{\"spoletta\": 1}\n```", "Like ```json\n{}\n``` but", "{\"spoletta\": 1}", true},
 		{"A script:\n```bash\necho hi\n```", "A script:\n```bash\necho hi\n```", "", false},
 	} {
 		text, file, found := splitSetup(c.reply)

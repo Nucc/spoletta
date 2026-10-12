@@ -37,7 +37,7 @@ import (
 const setupVersion = 1
 
 type setupFile struct {
-	Genie      int              `yaml:"genie"`
+	Spoletta   int              `yaml:"spoletta"`
 	MCPServers []setupMCPServer `yaml:"mcpServers,omitempty"`
 	// Each struct is its object, which is named as the struct is.
 	Structs    []setupObject `yaml:"structs,omitempty"`
@@ -323,7 +323,7 @@ func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="genie-setup.yaml"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="spoletta-setup.yaml"`)
 		w.Write(body)
 	})
 
@@ -377,8 +377,8 @@ func parseSetup(body []byte) (setupFile, error) {
 		}
 		return f, fmt.Errorf("invalid setup file: %v", err)
 	}
-	if f.Genie != setupVersion {
-		return f, fmt.Errorf("a setup file starts with genie: %d, the version of its format", setupVersion)
+	if f.Spoletta != setupVersion {
+		return f, fmt.Errorf("a setup file starts with spoletta: %d, the version of its format", setupVersion)
 	}
 	return f, nil
 }

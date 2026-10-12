@@ -126,7 +126,7 @@ func setupImportOK(a *app, file string) setupImported {
 }
 
 // A setup as an LLM might write it: no places, every kind of thing.
-const setupWritten = `genie: 1
+const setupWritten = `spoletta: 1
 mcpServers:
   - name: PFX_jira
     url: https://jira.example.com/mcp
@@ -332,13 +332,13 @@ func TestSetupImportRefusesWhatIsWrong(t *testing.T) {
 	a := setupApp(t)
 	prefix := fmt.Sprintf("bad%d", time.Now().UnixNano())
 	for _, c := range []struct{ file, msg string }{
-		{"genie: 2\n", "genie: 1"},
-		{"genie: 1\nflows:\n  - name: X\n    procesess: []\n", "procesess"},
-		{"genie: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        takes: [Nothing]\n", "there is no such object"},
-		{"genie: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n      - name: P\n", "give one a key"},
-		{"genie: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: subflow\n        runs: PFX B\n  - name: PFX B\n", "belongs under procedures"},
-		{"genie: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: script\n        yields: [{object: O, states: [s]}]\n    objects:\n      - name: O\n        states: [s]\n", "only a human's or an agent's output link lists states"},
-		{"genie: 1\nprocedures:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: subflow\n        runs: PFX B\n  - name: PFX B\n    processes:\n      - name: Q\n        kind: subflow\n        runs: PFX A\n", "in a circle"},
+		{"spoletta: 2\n", "spoletta: 1"},
+		{"spoletta: 1\nflows:\n  - name: X\n    procesess: []\n", "procesess"},
+		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        takes: [Nothing]\n", "there is no such object"},
+		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n      - name: P\n", "give one a key"},
+		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: subflow\n        runs: PFX B\n  - name: PFX B\n", "belongs under procedures"},
+		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: script\n        yields: [{object: O, states: [s]}]\n    objects:\n      - name: O\n        states: [s]\n", "only a human's or an agent's output link lists states"},
+		{"spoletta: 1\nprocedures:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: subflow\n        runs: PFX B\n  - name: PFX B\n    processes:\n      - name: Q\n        kind: subflow\n        runs: PFX A\n", "in a circle"},
 	} {
 		file := strings.ReplaceAll(c.file, "PFX", prefix)
 		status, body := setupImport(a, file)

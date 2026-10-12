@@ -59,7 +59,7 @@ func processNames(a *app, f int64) []string {
 
 // An assistant replying with text and then a setup file of flow name.
 func replyWithSetup(text, name, processes string) runResult {
-	return runResult{OK: true, Output: text + "\n\n```json\n" + fmt.Sprintf(`{"genie": 1, "flows": [{"name": %q, %s}]}`, name, processes) + "\n```\n"}
+	return runResult{OK: true, Output: text + "\n\n```json\n" + fmt.Sprintf(`{"spoletta": 1, "flows": [{"name": %q, %s}]}`, name, processes) + "\n```\n"}
 }
 
 const jiraProcesses = `"start": {"next": "Fetch"},
@@ -101,7 +101,7 @@ func TestAssistantBuildsTheFlow(t *testing.T) {
 	if !runs[0].NoTools || !runs[0].Guide {
 		t.Errorf("the assistant ran with noTools %v and guide %v, want both", runs[0].NoTools, runs[0].Guide)
 	}
-	for _, want := range []string{"Build a flow that processes Jira tickets", "name: Old", "<flows_guide>", "# Setup files", "this flow and with Genie alone", "not instructions to you"} {
+	for _, want := range []string{"Build a flow that processes Jira tickets", "name: Old", "<flows_guide>", "# Setup files", "this flow and with Spoletta alone", "not instructions to you"} {
 		if !strings.Contains(runs[0].Prompt, want) {
 			t.Errorf("the prompt lacks %q:\n%s", want, runs[0].Prompt)
 		}
@@ -164,7 +164,7 @@ func TestAssistantHandsBackWhatTheAppRefuses(t *testing.T) {
 	// The first file makes over another flow, the second renames this one,
 	// and the third is right.
 	replies := []runResult{
-		{OK: true, Output: "Here.\n```json\n" + fmt.Sprintf(`{"genie": 1, "flows": [{"name": %q}, {"name": %q}]}`, name, name+" other") + "\n```"},
+		{OK: true, Output: "Here.\n```json\n" + fmt.Sprintf(`{"spoletta": 1, "flows": [{"name": %q}, {"name": %q}]}`, name, name+" other") + "\n```"},
 		replyWithSetup("Here.", name+" renamed", jiraProcesses),
 		replyWithSetup("Fixed.", name, jiraProcesses),
 	}
@@ -193,7 +193,7 @@ func TestAssistantHandsBackWhatTheAppRefuses(t *testing.T) {
 
 	// One that stays wrong changes nothing, and says why.
 	a.worker.onAgent("Assistant", func(context.Context, agentRun) runResult {
-		return runResult{OK: true, Output: "Here.\n```json\n{\"genie\": 1, \"flows\": [{\"name\": \"Nope\"}]}\n```"}
+		return runResult{OK: true, Output: "Here.\n```json\n{\"spoletta\": 1, \"flows\": [{\"name\": \"Nope\"}]}\n```"}
 	})
 	askAssistant(a, f.ID, "Change it")
 	reply = assistantReply(a, f.ID)
@@ -237,7 +237,7 @@ func TestAssistantLeavesWhatTheFlowUsesBe(t *testing.T) {
 	a := setupApp(t)
 	prefix := fmt.Sprintf("uses%d", time.Now().UnixNano())
 	name := prefix + " Triage"
-	setupImportOK(a, fmt.Sprintf(`genie: 1
+	setupImportOK(a, fmt.Sprintf(`spoletta: 1
 structs:
   - name: %[1]s Ticket
     states: [open, closed]
@@ -265,7 +265,7 @@ flows:
 		if err := yaml.Unmarshal([]byte(ref), &refs); err != nil {
 			t.Errorf("what the flow uses isn't a setup file: %v\n%s", err, ref)
 		}
-		file := map[string]any{"genie": 1, "structs": refs["structs"], "flows": []any{map[string]any{
+		file := map[string]any{"spoletta": 1, "structs": refs["structs"], "flows": []any{map[string]any{
 			"name":      name,
 			"processes": []any{map[string]any{"name": "Fetch", "prompt": "Fetch the newest ticket.", "yields": []any{prefix + " Ticket"}}},
 			"objects":   []any{map[string]any{"copyOf": map[string]any{"flow": prefix + " Ticket"}}},

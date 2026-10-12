@@ -60,8 +60,8 @@ const (
 )
 
 const (
-	sessionCookie = "genie_session"
-	signInCookie  = "genie_sign_in"
+	sessionCookie = "spoletta_session"
+	signInCookie  = "spoletta_sign_in"
 )
 
 // The label of the user with the id in column col, as a column of a query;
@@ -524,7 +524,7 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 	})
 
 	mux.HandleFunc("GET /api/auth/signed-out", func(w http.ResponseWriter, r *http.Request) {
-		authPage(w, http.StatusOK, "Signed out", "You signed out of Genie.")
+		authPage(w, http.StatusOK, "Signed out", "You signed out of Spoletta.")
 	})
 
 	mux.HandleFunc("POST /api/auth/logout", func(w http.ResponseWriter, r *http.Request) {

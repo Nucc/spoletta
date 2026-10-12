@@ -51,7 +51,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
       const url = URL.createObjectURL(await exportSetup())
       const a = document.createElement('a')
       a.href = url
-      a.download = 'genie-setup.yaml'
+      a.download = 'spoletta-setup.yaml'
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {

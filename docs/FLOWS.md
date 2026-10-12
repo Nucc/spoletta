@@ -1,8 +1,8 @@
-# Authoring Genie flows
+# Authoring Spoletta flows
 
-This guide is for an agent that builds Genie flows for a user: it turns
-"I want X to happen" into a flow that Genie can run. It explains what Genie
-is, the parts of OPM (Object-Process Methodology) Genie uses, how a run
+This guide is for an agent that builds Spoletta flows for a user: it turns
+"I want X to happen" into a flow that Spoletta can run. It explains what Spoletta
+is, the parts of OPM (Object-Process Methodology) Spoletta uses, how a run
 actually executes, what each step sees and must hand back, and how to write a
 flow as a setup file. Worked examples come after that, and the guide ends
 with the rules the app enforces and a step-by-step procedure.
@@ -16,9 +16,9 @@ and why; SETUP.md says exactly what each one is.
 
 ---
 
-## 1. Genie in one page
+## 1. Spoletta in one page
 
-Genie is a visual builder and engine for agent workflows. A user draws a
+Spoletta is a visual builder and engine for agent workflows. A user draws a
 **flow** on a **board**: **processes** (things that happen) and **objects**
 (things that exist), joined by **links**. Pressing Run, or a schedule firing,
 starts a **run**. The server walks the board, and each process that runs is
@@ -30,8 +30,8 @@ A process is carried out by one of these:
 |---|---|---|
 | `agent` (the default) | an AI coding agent (pi) in the worker, optionally in git checkouts of the flow's repositories and with MCP servers | write, analyse, fix code, decide, review |
 | `script` | bash in the worker, with `curl` and `jq` | fetch from an API, run a build, transform JSON |
-| `human` | a person in the Genie UI | approve or send back work, fill in what a run starts from |
-| `sentry` | Genie itself, calling Sentry's issues API | fetch issues to process |
+| `human` | a person in the Spoletta UI | approve or send back work, fill in what a run starts from |
+| `sentry` | Spoletta itself, calling Sentry's issues API | fetch issues to process |
 | `flow` | its own board of processes, zoomed into | group steps, run steps once per item of a list |
 | `subflow` | another flow (a procedure), run as a run of its own | reuse a flow across jobs |
 
@@ -52,7 +52,7 @@ diagram (section 6). Agents can be given their flow's OPL in their prompt.
 
 ---
 
-## 2. OPM in brief, and how Genie maps it
+## 2. OPM in brief, and how Spoletta maps it
 
 OPM (Object-Process Methodology, ISO 19450) models any system with two kinds
 of thing:
@@ -62,12 +62,12 @@ of thing:
 - **Processes** transform objects. A process creates, consumes or changes
   objects, or changes their state.
 
-The things are joined by **links**. OPM has two families of link, and Genie
+The things are joined by **links**. OPM has two families of link, and Spoletta
 uses both.
 
 ### 2.1 Procedural links: what a process does to an object
 
-| OPM link | Meaning in OPM | In Genie | Setup file |
+| OPM link | Meaning in OPM | In Spoletta | Setup file |
 |---|---|---|---|
 | Result | the process creates the object | output link: the process **yields** (generates) the object | `yields: [X]` |
 | Result to a state | it creates the object in a given state | output link naming a state | `yields: [{object: X, state: s}]` |
@@ -79,14 +79,14 @@ uses both.
 | Condition | the process runs only if the object is in the state; otherwise it is skipped | input link naming a state, marked as a condition | `takes: [{object: X, state: s, condition: true}]` |
 | Exception | a process handles another's failure | failure connection between processes | `onFailure: [Handler]` |
 
-Genie adds two connections between processes that OPM doesn't draw as
+Spoletta adds two connections between processes that OPM doesn't draw as
 links. One is the **start**, the board's single initial node, which points at
 the process a run begins with. The other is a plain **next** connection (the
 target runs right after the source, whatever objects say).
 
 ### 2.2 Structural links: what an object is made of
 
-| OPM link | Meaning | In Genie |
+| OPM link | Meaning | In Spoletta |
 |---|---|---|
 | Exhibition (characterization) | the object exhibits an attribute, such as a ticket's `title` | `attributes:` with plain values. An attribute that is itself an object (an address with street and city) is a part with `relation: exhibition` (the default) |
 | Aggregation (consists of) | the object is made of parts, such as a car's wheels | `parts:` with `relation: aggregation` |
@@ -95,7 +95,7 @@ target runs right after the source, whatever objects say).
 ### 2.3 In-zooming
 
 OPM manages complexity by **zooming into** a process: inside it is a diagram
-of sub-processes. In Genie that is a `flow` process with a `board` of its own.
+of sub-processes. In Spoletta that is a `flow` process with a `board` of its own.
 The objects linked to the flow process from outside are its interface:
 zoomed in, the ones it takes show at the inner board's start and the ones it
 yields at its end. They are the **same objects**, so the processes inside
@@ -104,9 +104,9 @@ link to them directly. Nothing is declared twice.
 ### 2.4 OPL
 
 OPL, OPM's Object-Process Language, says the diagram in sentences, one fact
-per sentence. Genie writes the OPL of every board. People read it beside the
+per sentence. Spoletta writes the OPL of every board. People read it beside the
 board. An agent process with `describeFlow: true` gets it in its prompt so it
-knows the flow it works in. Section 6 lists every sentence Genie writes; use
+knows the flow it works in. Section 6 lists every sentence Spoletta writes; use
 it to check that a flow says what you meant.
 
 ---
@@ -155,7 +155,7 @@ Other object flags:
 ### 3.2 States and rules
 
 A state is one situation an object can be in: `draft`, `approved`,
-`changes requested`, `bug`, `feature`. States do the routing in Genie. A
+`changes requested`, `bug`, `feature`. States do the routing in Spoletta. A
 link naming a state either generates the object in it, or waits for the
 object to enter it.
 
@@ -525,7 +525,7 @@ server's environment.
 
 ## 6. OPL, sentence by sentence
 
-Genie writes exactly these sentences (names in double quotes). Read the OPL
+Spoletta writes exactly these sentences (names in double quotes). Read the OPL
 of a flow you built (`GET /api/flows/{id}/opl`, or beside the board) and
 check that each one is what you meant.
 
@@ -590,7 +590,7 @@ app's current setup to read or edit. [webapp/SETUP.md](../webapp/SETUP.md) is
 the full reference; the essentials are below.
 
 ```yaml
-genie: 1                 # the format's version, always first
+spoletta: 1              # the format's version, always first
 mcpServers: [...]        # name, url, description (sign-in happens in the app)
 structs: [...]           # objects, each its own struct named as the object
 procedures: [...]        # flows other flows run through subflow processes
@@ -657,7 +657,7 @@ Design:
 - `rejected` ends the run, since nothing takes it.
 
 ```yaml
-genie: 1
+spoletta: 1
 mcpServers:
   - name: Slack
     url: https://mcp.example.com/slack
@@ -759,7 +759,7 @@ Points to notice:
 > it until it's good, but don't loop forever."
 
 ```yaml
-genie: 1
+spoletta: 1
 flows:
   - name: Blog post
     start:
@@ -824,7 +824,7 @@ the run.
 > summary."
 
 ```yaml
-genie: 1
+spoletta: 1
 structs:
   - name: Ticket
     attributes:
@@ -950,7 +950,7 @@ Design:
   to Report (agent), which comments on the Sentry issue.
 
 ```yaml
-genie: 1
+spoletta: 1
 mcpServers:
   - name: Sentry
     url: https://mcp.sentry.dev/mcp
@@ -960,7 +960,7 @@ flows:
       - name: shop
         url: https://github.com/acme/shop.git
         base: main
-    branchPrefix: genie/sentry
+    branchPrefix: spoletta/sentry
     schedules:
       - cron: "0 7 * * 1-5"
         timezone: Europe/London
@@ -1063,7 +1063,7 @@ Things to notice:
 > on-call; if it's just slow, post to #ops."
 
 ```yaml
-genie: 1
+spoletta: 1
 flows:
   - name: Staging health
     schedules:
@@ -1116,7 +1116,7 @@ has `status: 0`, which is `down` even though `ms` may also exceed 2000.
 > reusable piece."
 
 ```yaml
-genie: 1
+spoletta: 1
 mcpServers:
   - name: Slack
     url: https://mcp.example.com/slack
@@ -1193,7 +1193,7 @@ repositories itself, and works on a fresh branch of its own.
 > at least two say yes."
 
 ```yaml
-genie: 1
+spoletta: 1
 flows:
   - name: Migration check
     repositories:
@@ -1365,7 +1365,7 @@ missing sentences.
 
 ### 10.3 Write the setup file
 
-- Start with `genie: 1`. Include only the flows you create or change (the
+- Start with `spoletta: 1`. Include only the flows you create or change (the
   import leaves others alone), plus any structs, procedures and MCP servers
   they name that don't exist yet.
 - Give every board a `start`.

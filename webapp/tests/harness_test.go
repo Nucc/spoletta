@@ -37,7 +37,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-const testDBPrefix = "genie_test_"
+const testDBPrefix = "spoletta_test_"
 
 // Set by race_test.go when the tests run with -race.
 var raceEnabled bool

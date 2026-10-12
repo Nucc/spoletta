@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const usersClientID, usersClientSecret = "genie", "secret"
+const usersClientID, usersClientSecret = "spoletta", "secret"
 
 // Someone the fake provider signs in.
 type usersPerson struct {
@@ -178,7 +178,7 @@ func TestUsersSignInNeeded(t *testing.T) {
 	// A session cookie the webapp didn't make is none.
 	jar, _ := cookiejar.New(nil)
 	u, _ := url.Parse(a.url)
-	jar.SetCookies(u, []*http.Cookie{{Name: "genie_session", Value: "made-up"}})
+	jar.SetCookies(u, []*http.Cookie{{Name: "spoletta_session", Value: "made-up"}})
 	a.client = &http.Client{Jar: jar}
 	a.refused("GET", "/api/flows", nil, http.StatusUnauthorized, "sign in first")
 }

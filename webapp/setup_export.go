@@ -29,7 +29,7 @@ type exportedFlow struct {
 // its processes use. Two flows can't share a name in the file, since it names
 // them to refer to them; with two that do, it says so instead.
 func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error) {
-	f := setupFile{Genie: setupVersion}
+	f := setupFile{Spoletta: setupVersion}
 	var flows []*exportedFlow
 	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, settings FROM flows ORDER BY name, id", func(rows *sql.Rows) error {
 		e := &exportedFlow{}

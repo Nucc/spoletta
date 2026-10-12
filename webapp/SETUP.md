@@ -6,11 +6,11 @@ It leaves out what runs produce: runs, versions, undo history, and the values th
 
 ## Exporting and importing
 
-On the main page, **Export** downloads `genie-setup.yaml`, and **Import** reads a file back in. The API does the same:
+On the main page, **Export** downloads `spoletta-setup.yaml`, and **Import** reads a file back in. The API does the same:
 
 ```sh
-curl -o genie-setup.yaml http://localhost:8080/api/setup
-curl --data-binary @genie-setup.yaml -H 'Content-Type: application/yaml' http://localhost:8080/api/setup
+curl -o spoletta-setup.yaml http://localhost:8080/api/setup
+curl --data-binary @spoletta-setup.yaml -H 'Content-Type: application/yaml' http://localhost:8080/api/setup
 ```
 
 Import replies with the flows it created and the ones it updated. Since YAML takes JSON too, a JSON file works as well.
@@ -29,7 +29,7 @@ Exporting refuses while two flows share a name, since the file refers to flows b
 ## The format
 
 ```yaml
-genie: 1            # the format's version; required
+spoletta: 1         # the format's version; required
 mcpServers: [...]
 structs: [...]      # objects defined once and used by flows
 procedures: [...]   # flows other flows run
@@ -202,7 +202,7 @@ Use the board's Tidy button afterwards for a better layout.
 
 Give the LLM this file and, ideally, an export of your current setup as an example, then describe the flow you want. Things worth telling it:
 
-- Start the file with `genie: 1`. Leave out positions. Unknown fields are refused, so stick to the ones above.
+- Start the file with `spoletta: 1`. Leave out positions. Unknown fields are refused, so stick to the ones above.
 - Name a copy by `copyOf` alone, and refer to it by its source's name.
 - To change one flow, the file only needs that flow, plus the procedures, structs and MCP servers it refers to that the app doesn't already have.
 

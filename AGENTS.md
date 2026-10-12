@@ -1,4 +1,4 @@
-# Genie
+# Spoletta
 
 Visual builder and engine for agent workflows, modeled on OPM (Object-Process Methodology). Users draw flows of processes and objects on a board; runs execute them server-side with AI agents, bash scripts, people and Sentry fetches.
 

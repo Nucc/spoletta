@@ -190,8 +190,8 @@ func (b *syncBuffer) String() string {
 }
 
 // Starts the webapp on the test database with its worker at workerURL, and
-// waits for it to answer.
-func startWebapp(workerURL string, wait time.Duration) (*webapp, error) {
+// the environment variables in extra, and waits for it to answer.
+func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -222,6 +222,7 @@ func startWebapp(workerURL string, wait time.Duration) (*webapp, error) {
 		"SCHEDULE_SECONDS=1",
 		"STATIC_DIR=" + static,
 	}
+	w.cmd.Env = append(w.cmd.Env, extra...)
 	w.cmd.Stdout, w.cmd.Stderr = w.log, w.log
 	if err := w.cmd.Start(); err != nil {
 		return nil, err
@@ -269,6 +270,9 @@ type app struct {
 	t      *testing.T
 	url    string
 	worker *fakeWorker
+	// Sends its requests; one with a session when people sign in, see
+	// users_e2e_test.go.
+	client *http.Client
 }
 
 func newApp(t *testing.T) *app {
@@ -279,9 +283,10 @@ func newApp(t *testing.T) *app {
 	return a
 }
 
-// The webapp of a test, with its worker at workerURL. It ends with the test,
-// before the worker, so steps going end first.
-func startApp(t *testing.T, workerURL string) *app {
+// The webapp of a test, with its worker at workerURL and the environment
+// variables in extra. It ends with the test, before the worker, so steps
+// going end first.
+func startApp(t *testing.T, workerURL string, extra ...string) *app {
 	t.Helper()
 	switch {
 	case testDB.fail != "":
@@ -289,7 +294,7 @@ func startApp(t *testing.T, workerURL string) *app {
 	case testDB.skip != "":
 		t.Skip(testDB.skip)
 	}
-	w, err := startWebapp(workerURL, 30*time.Second)
+	w, err := startWebapp(workerURL, 30*time.Second, extra...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +307,7 @@ func startApp(t *testing.T, workerURL string) *app {
 			t.Logf("the webapp logged:\n%s", out)
 		}
 	})
-	return &app{t: t, url: w.url}
+	return &app{t: t, url: w.url, client: http.DefaultClient}
 }
 
 // Sends a request with body as JSON, if any, and returns the status and reply.
@@ -321,7 +326,7 @@ func (a *app) do(method, path string, body any) (int, []byte) {
 		a.t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.client.Do(req)
 	if err != nil {
 		a.t.Fatalf("%s %s: %v", method, path, err)
 	}

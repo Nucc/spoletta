@@ -69,10 +69,15 @@ func main() {
 	if err := migrateAssistant(db); err != nil {
 		log.Fatal(err)
 	}
+	if err := migrateUsers(db); err != nil {
+		log.Fatal(err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
 	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
+	auth := newAuth(db)
+	registerAuthRoutes(mux, auth)
 	registerFlowListRoutes(mux, db, workerURL)
 	registerProcessRoutes(mux, db)
 	registerFlowRoutes(mux, db)
@@ -114,5 +119,5 @@ func main() {
 
 	addr := ":" + env("PORT", "8080")
 	log.Printf("listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Fatal(http.ListenAndServe(addr, auth.protect(mux)))
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEv
 import { createFlow, deleteFlow, exportSetup, importSetup, listFlows, type Flow } from './api'
 import { ClockIcon, DownloadIcon, FlowBuilderIcon, ObjectIcon, PlusIcon, SubflowIcon, TrashIcon, UploadIcon } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
+import { Account } from './Account'
 
 // The main page: the flows that run, each a job of its own, such as fixing
 // exceptions or bumping dependencies, and apart from them the procedures,
@@ -95,6 +96,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           <UploadIcon /> Import
         </button>
         <input ref={picker} type="file" accept=".yaml,.yml,.json" hidden onChange={onImport} />
+        <Account />
       </header>
       {error && (
         <div className="error-banner" role="alert" onClick={() => setError(null)}>

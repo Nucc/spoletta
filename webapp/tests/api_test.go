@@ -400,6 +400,7 @@ type run struct {
 	ItemKey string `json:"itemKey"`
 	// The schedule that started it, if one did; see schedules.go.
 	Schedule   *int64     `json:"schedule"`
+	StartedBy  string     `json:"startedBy"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
@@ -620,6 +621,7 @@ type step struct {
 	// instructions. Steps from before states hold approved or changes.
 	Outcome      string `json:"outcome"`
 	Instructions string `json:"instructions"`
+	DecidedBy    string `json:"decidedBy"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,

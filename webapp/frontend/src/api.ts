@@ -226,11 +226,18 @@ export async function changesSettled(): Promise<void> {
   while (changing.size > 0) await Promise.allSettled([...changing])
 }
 
+// Sends the browser to sign in, coming back to the page it is on.
+export function signIn() {
+  window.location.href = `/api/auth/login?${new URLSearchParams({ next: window.location.pathname + window.location.hash })}`
+}
+
 async function send(url: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(url, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
+  // The session ended, or there was none.
+  if (res.status === 401) signIn()
   if (!res.ok) {
     throw new Error(`${init?.method ?? 'GET'} ${url}: ${res.status} ${await res.text()}`)
   }
@@ -663,6 +670,8 @@ export type FlowRun = {
   itemKey: string
   // The schedule that started it, if one did.
   schedule: number | null
+  // Who started it, when people sign in; empty otherwise.
+  startedBy: string
   startedAt: string
   finishedAt: string | null
 }
@@ -706,6 +715,8 @@ export type RunStep = {
   // states hold approved or changes.
   outcome: string
   instructions: string
+  // Who decided it, when people sign in; empty otherwise.
+  decidedBy: string
   // For a recording flow process: the run its board ran as.
   childRun: number | null
   // The branch it worked on in its run's workspace; empty if it worked in none.
@@ -1047,4 +1058,21 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       states: s.linkStates.filter((ls) => ls.link === l.id).map((ls) => ls.state),
     })),
   }
+}
+
+// Someone who signs in.
+export type User = { id: number; email: string; name: string; admin: boolean }
+
+// Whether people sign in, and who is.
+export type Me = { signIn: boolean; user: User | null }
+
+export function getMe(): Promise<Me> {
+  return request('/api/me')
+}
+
+// Signing in again right away could find the provider still signed in, and
+// come straight back; the page signing out ends on asks first.
+export async function signOut(): Promise<void> {
+  await send('/api/auth/logout', { method: 'POST' })
+  window.location.href = '/api/auth/signed-out'
 }

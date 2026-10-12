@@ -320,6 +320,11 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 // The callback on the address the browser reached the webapp by, which the
 // sign-in page sends it back to; through the dev server too, which proxies /api.
 func callbackURL(r *http.Request) string {
+	return requestOrigin(r) + "/api/mcp-oauth/callback"
+}
+
+// The scheme and host the browser reached the webapp by.
+func requestOrigin(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		scheme = "https"
@@ -328,7 +333,7 @@ func callbackURL(r *http.Request) string {
 	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
 		host = h
 	}
-	return scheme + "://" + host + "/api/mcp-oauth/callback"
+	return scheme + "://" + host
 }
 
 // The page the sign-in window ends on. It tells the window that opened it,

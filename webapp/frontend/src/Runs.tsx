@@ -178,6 +178,7 @@ export function RunPanel({
       )}
       <p className="panel-note">
         Started {formatTime(run.startedAt)}
+        {run.startedBy && ` by ${run.startedBy}`}
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
         {totalUsage(run.steps) && `; its agents used ${formatUsage(totalUsage(run.steps)!)}`}
       </p>
@@ -309,7 +310,10 @@ function Step({
         )}
         {s.kind === 'agent' && s.prompt && <Conversation run={run} step={s} />}
         {s.kind === 'human' && s.outcome && (
-          <Block label="Decision" text={decisionText(s.outcome, objects[0]?.name, s.instructions)} />
+          <Block
+            label={s.decidedBy ? `Decision · ${s.decidedBy}` : 'Decision'}
+            text={decisionText(s.outcome, objects[0]?.name, s.instructions)}
+          />
         )}
         {s.error && (
           <Block

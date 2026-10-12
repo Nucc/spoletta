@@ -77,6 +77,18 @@ services:
       # self-hosted Sentry if not sentry.io.
       SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
       SENTRY_URL: ${SENTRY_URL:-}
+      # Signing in with your identity provider over OpenID Connect; without
+      # OIDC_ISSUER nobody signs in and anyone reaching the webapp can do
+      # anything. Register http://localhost:8080/api/auth/callback, or
+      # PUBLIC_URL's, as the client's redirect URI. Only people in
+      # ADMIN_EMAILS, at a domain in OIDC_ALLOWED_DOMAINS, or added by an
+      # admin sign in; all comma-separated. See webapp/users.go.
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
     volumes:
       # Read-only: the webapp checks and serves files; the worker writes them.
       - files:/data/files:ro

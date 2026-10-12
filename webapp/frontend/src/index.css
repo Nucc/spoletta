@@ -2612,6 +2612,20 @@ button.toolbar-link {
   cursor: pointer;
 }
 
+/* Who is signed in, at the end of the toolbar. */
+.account {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+  font-size: 14px;
+  color: #57606a;
+}
+
+.account .toolbar-link {
+  margin-left: 0;
+}
+
 /* Says what an import did, as the error banner says what went wrong. */
 .notice-banner {
   padding: 8px 16px;

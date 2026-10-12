@@ -31,12 +31,14 @@ type run struct {
 	// item apart, its first unique attribute's value or its place in the list.
 	ItemKey string `json:"itemKey"`
 	// The schedule that started it, if one did; see schedules.go.
-	Schedule   *int64     `json:"schedule"`
+	Schedule *int64 `json:"schedule"`
+	// Who started it, when someone did with everyone signing in; see users.go.
+	StartedBy  string     `json:"startedBy"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
 
-const runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, schedule_id, started_at, finished_at"
+var runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", started_at, finished_at"
 
 // The tokens a step's model calls took in and gave out, and what they cost
 // at the models' catalog prices, in dollars.
@@ -71,7 +73,7 @@ func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage,
 }
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.Schedule, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -98,6 +100,8 @@ type step struct {
 	// instructions. Steps from before states hold approved or changes.
 	Outcome      string `json:"outcome"`
 	Instructions string `json:"instructions"`
+	// Who decided it, with everyone signing in; see users.go.
+	DecidedBy string `json:"decidedBy"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,
@@ -112,9 +116,9 @@ type step struct {
 	FollowUps   []followUp `json:"followUps"`
 	// What an agent step's model calls used, follow-ups included, as pi
 	// reports it; absent for other steps.
-	Usage *stepUsage `json:"usage,omitempty"`
-	StartedAt   time.Time  `json:"startedAt"`
-	FinishedAt  *time.Time `json:"finishedAt"`
+	Usage      *stepUsage `json:"usage,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
 }
 
 // The content and state an object got in a run from the step that generated
@@ -439,10 +443,10 @@ func endRun(ctx context.Context, db *sql.DB, id int64, status string) (run, erro
 }
 
 // Starts a run of the whole flow on its board as it is, for schedule if one
-// started it: a board changed since its version is saved as a new one first,
-// so the run's version shows what it ran. The run goes on in the server;
+// started it, or the user who did: a board changed since its version is saved
+// as a new one first, so the run's version shows what it ran. The run goes on in the server;
 // this returns its id once it started, or sql.ErrNoRows without the flow.
-func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule *int64) (int64, error) {
+func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule, startedBy *int64) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -461,7 +465,7 @@ func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule
 	if err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id) VALUES (?, ?, ?, ?)", flow, runRunning, version, schedule)
+	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by) VALUES (?, ?, ?, ?, ?)", flow, runRunning, version, schedule, startedBy)
 	if err != nil {
 		return 0, err
 	}
@@ -511,7 +515,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		if !ok || refuseInStruct(w, r, db, f) {
 			return
 		}
-		id, err := startRun(r.Context(), db, eng, f, nil)
+		id, err := startRun(r.Context(), db, eng, f, nil, requestUserID(r))
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return
@@ -553,7 +557,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
-				status, output, error, outcome, instructions, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''), started_at, finished_at
+				status, output, error, outcome, instructions, `+userLabelColumn("decided_by")+`, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''), started_at, finished_at
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
 			serverError(w, err)
@@ -575,7 +579,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			var inputs []byte
 			var cr, commits []byte
 			if err := rows.Scan(&s.ID, &s.Process, &s.ProcessName, &s.Kind, &s.Model, &s.Thinking, &s.Prompt, &inputs, &cr,
-				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.ChildRun, &s.Branch, &commits, &s.Session, &s.StartedAt, &s.FinishedAt); err != nil {
+				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.DecidedBy, &s.ChildRun, &s.Branch, &commits, &s.Session, &s.StartedAt, &s.FinishedAt); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -746,9 +750,9 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		// Only a review of this run still waiting; deciding one twice would
 		// let the run go on twice.
 		res, err := db.ExecContext(r.Context(),
-			`UPDATE run_steps SET status = ?, outcome = ?, instructions = ?, finished_at = CURRENT_TIMESTAMP(3)
+			`UPDATE run_steps SET status = ?, outcome = ?, instructions = ?, decided_by = ?, finished_at = CURRENT_TIMESTAMP(3)
 			WHERE id = ? AND run_id = ? AND kind = ? AND status = ?`,
-			stepDone, outcome, patch.Instructions, id, runID, kindHuman, stepWaiting)
+			stepDone, outcome, patch.Instructions, requestUserID(r), id, runID, kindHuman, stepWaiting)
 		if err != nil {
 			serverError(w, err)
 			return

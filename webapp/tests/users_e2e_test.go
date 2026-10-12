@@ -203,6 +203,14 @@ func TestUsersSignInAndOut(t *testing.T) {
 
 	a.call("POST", "/api/auth/logout", nil, http.StatusNoContent, nil)
 	a.refused("GET", "/api/me", nil, http.StatusUnauthorized, "sign in first")
+
+	// Someone else the provider gives Ada's email isn't Ada.
+	client, status, _ := usersTrySignIn(a, p, usersPerson{subject: "not-ada", email: "ada@example.com", name: "Impostor"})
+	if status != http.StatusForbidden {
+		t.Errorf("another subject with ada's email ended with %d, want 403", status)
+	}
+	a.client = client
+	a.refused("GET", "/api/me", nil, http.StatusUnauthorized, "sign in first")
 }
 
 // Only admins and people at an allowed domain sign in, with an email the

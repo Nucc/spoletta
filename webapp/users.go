@@ -127,6 +127,11 @@ func newAuth(db *sql.DB) *auth {
 		log.Printf("WARNING: OIDC_ISSUER isn't set, so nobody signs in: anyone who reaches the webapp can do anything in it")
 		return nil
 	}
+	// The ID token's signature isn't checked, as the connection to the
+	// provider vouches for it; one in the clear vouches for nothing.
+	if u, err := url.Parse(issuer); err != nil || (u.Scheme != "https" && !slices.Contains([]string{"localhost", "127.0.0.1", "::1"}, u.Hostname())) {
+		log.Fatalf("OIDC_ISSUER must be an https address, or one on this machine: %q", issuer)
+	}
 	a := &auth{
 		db:           db,
 		issuer:       issuer,
@@ -359,7 +364,10 @@ func (a *auth) admitted(email string) bool {
 	return slices.Contains(a.domains, domain)
 }
 
-var errNotAdmitted = errors.New("not admitted")
+var (
+	errNotAdmitted = errors.New("not admitted")
+	errEmailTaken  = errors.New("the email is another account's")
+)
 
 // The user who signed in, made or updated from what the provider says of
 // them; errNotAdmitted if they may not sign in.
@@ -372,12 +380,19 @@ func (a *auth) signedIn(ctx context.Context, c idClaims) (int64, error) {
 	admin := a.admins[email]
 	var id int64
 	err := inTx(ctx, a.db, func(tx *sql.Tx) error {
-		// Known by their subject; else by their email, as when an admin added
-		// them and they sign in the first time, or the provider changed: who
-		// may sign in goes by their email, so it says who they are.
+		// Known by the provider's subject, which is who they are to it.
+		// Else by their email: when an admin added them and they sign in the
+		// first time, or when the provider changed. Someone else the same
+		// provider gives a known email, such as whoever gets the mailbox of
+		// someone who left, isn't that user.
 		err := tx.QueryRowContext(ctx, "SELECT id FROM users WHERE issuer = ? AND subject = ? FOR UPDATE", a.issuer, c.Subject).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
-			err = tx.QueryRowContext(ctx, "SELECT id FROM users WHERE email = ? FOR UPDATE", email).Scan(&id)
+			var issuer string
+			var subject sql.NullString
+			err = tx.QueryRowContext(ctx, "SELECT id, issuer, subject FROM users WHERE email = ? FOR UPDATE", email).Scan(&id, &issuer, &subject)
+			if err == nil && subject.Valid && issuer == a.issuer {
+				return errEmailTaken
+			}
 		}
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -480,6 +495,10 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		id, err := a.finish(r, s, q.Get("code"))
 		if errors.Is(err, errNotAdmitted) {
 			authPage(w, http.StatusForbidden, "You can't sign in yet", "Ask an admin to add you, then sign in again.")
+			return
+		}
+		if errors.Is(err, errEmailTaken) {
+			authPage(w, http.StatusForbidden, "You can't sign in", "Your email belongs to another account here. Ask an admin.")
 			return
 		}
 		if err != nil {

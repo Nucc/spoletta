@@ -82,6 +82,10 @@ export type Review = {
   options: { state: number; object: string; name: string }[]
   // The objects the person fills in.
   entries: EntryObject[]
+  // The roles that decide it, none when anyone does, and whether the person
+  // looking may.
+  handledBy: string[]
+  canDecide: boolean
   // Null when there are no states to set, which ends the branch, unless
   // there are objects filled in. Resolves to whether the server took it.
   onDecide: (state: number | null, instructions: string, entries?: Entries) => Promise<boolean>
@@ -598,6 +602,7 @@ export function ReviewForm({ review }: { review: Review }) {
   const entering = review.entries.length > 0
   const files = review.entries.flatMap((o) => o.fields.filter(holdsFile).map((f) => `${o.name}: ${f.name}`))
   const ready = !sending && files.length === 0 && review.entries.every((o) => drafts[o.id] !== undefined && filled(drafts[o.id]))
+  const handlers = review.handledBy.join(' or ')
 
   const decide = async (state: number | null) => {
     if (!entering) {
@@ -613,7 +618,9 @@ export function ReviewForm({ review }: { review: Review }) {
 
   return (
     <section className="review" aria-label={entering ? 'Input' : 'Review'}>
-      <span className="review-title">{entering ? 'Waiting for your input' : 'Waiting for your review'}</span>
+      <span className="review-title">
+        {!review.canDecide ? `Waiting for ${handlers}` : entering ? 'Waiting for your input' : 'Waiting for your review'}
+      </span>
       {/* What the process takes, to read before deciding, beside the form when there's room. */}
       <div className="review-body">
         {review.inputs.length > 0 && (
@@ -667,14 +674,17 @@ export function ReviewForm({ review }: { review: Review }) {
           ) : (
             <span className="panel-note">Set to:</span>
           )}
+          {!review.canDecide && (
+            <small className="panel-note">Only {handlers} decides this. Ask an admin for the role to decide it yourself.</small>
+          )}
           <div className="review-actions">
             {review.options.length === 0 && (
-              <button disabled={entering && !ready} onClick={() => decide(null)}>
+              <button disabled={!review.canDecide || (entering && !ready)} onClick={() => decide(null)}>
                 {entering ? 'Submit' : 'Done'}
               </button>
             )}
             {review.options.map((o) => (
-              <button key={o.state} disabled={entering && !ready} onClick={() => decide(o.state)}>
+              <button key={o.state} disabled={!review.canDecide || (entering && !ready)} onClick={() => decide(o.state)}>
                 {objects.size > 1 && `${o.object}: `}
                 {o.name}
               </button>

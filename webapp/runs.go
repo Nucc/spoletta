@@ -100,8 +100,12 @@ type step struct {
 	// instructions. Steps from before states hold approved or changes.
 	Outcome      string `json:"outcome"`
 	Instructions string `json:"instructions"`
-	// Who decided it, with everyone signing in; see users.go.
-	DecidedBy string `json:"decidedBy"`
+	// Who decided it, with everyone signing in; see users.go. For human
+	// steps, the roles that decide them, none when anyone does, and whether
+	// the user asking may; see user_roles.go.
+	DecidedBy string   `json:"decidedBy"`
+	HandledBy []string `json:"handledBy,omitempty"`
+	CanDecide bool     `json:"canDecide"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,
@@ -574,6 +578,13 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
+		var roles []string
+		if u := requestUser(r); u != nil {
+			if roles, err = userRoles(r.Context(), db, u.ID); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
 		for rows.Next() {
 			var s step
 			var inputs []byte
@@ -610,6 +621,19 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		if err := rows.Err(); err != nil {
 			serverError(w, err)
 			return
+		}
+		rows.Close()
+		for i, s := range detail.Steps {
+			if s.Kind != kindHuman {
+				continue
+			}
+			if s.Process != nil {
+				if detail.Steps[i].HandledBy, err = handlers(r.Context(), db, *s.Process); err != nil {
+					serverError(w, err)
+					return
+				}
+			}
+			detail.Steps[i].CanDecide = mayDecide(requestUser(r), roles, detail.Steps[i].HandledBy)
 		}
 
 		orows, err := db.QueryContext(r.Context(),
@@ -728,6 +752,14 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		if err != nil {
 			serverError(w, err)
+			return
+		}
+		if msg, err := refuseDecider(r.Context(), db, r, process.Int64); err != nil || msg != "" {
+			if err != nil {
+				serverError(w, err)
+			} else {
+				http.Error(w, msg, http.StatusForbidden)
+			}
 			return
 		}
 		objects, msg, err := entryObjects(r.Context(), db, process.Int64)

@@ -72,12 +72,16 @@ func main() {
 	if err := migrateUsers(db); err != nil {
 		log.Fatal(err)
 	}
+	if err := migrateUserRoles(db); err != nil {
+		log.Fatal(err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
 	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
 	auth := newAuth(db)
-	registerAuthRoutes(mux, auth)
+	registerAuthRoutes(mux, db, auth)
+	registerUserRoleRoutes(mux, db, auth)
 	registerFlowListRoutes(mux, db, workerURL)
 	registerProcessRoutes(mux, db)
 	registerFlowRoutes(mux, db)

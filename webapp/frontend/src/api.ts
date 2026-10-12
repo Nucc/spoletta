@@ -208,7 +208,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/mcp-servers']
+const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/mcp-servers', '/api/users']
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<() => void>()
@@ -715,8 +715,12 @@ export type RunStep = {
   // states hold approved or changes.
   outcome: string
   instructions: string
-  // Who decided it, when people sign in; empty otherwise.
+  // Who decided it, when people sign in; empty otherwise. For human steps,
+  // the roles that decide them, absent when anyone does, and whether the
+  // person signed in may.
   decidedBy: string
+  handledBy?: string[]
+  canDecide: boolean
   // For a recording flow process: the run its board ran as.
   childRun: number | null
   // The branch it worked on in its run's workspace; empty if it worked in none.
@@ -1060,8 +1064,17 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
   }
 }
 
-// Someone who signs in.
-export type User = { id: number; email: string; name: string; admin: boolean }
+// Someone who signs in, with the roles that say which human processes they
+// carry out: those the human objects of the same names handle.
+export type User = {
+  id: number
+  email: string
+  name: string
+  admin: boolean
+  roles: string[]
+  // Null until they first sign in, when an admin added them.
+  signedInAt: string | null
+}
 
 // Whether people sign in, and who is.
 export type Me = { signIn: boolean; user: User | null }
@@ -1075,4 +1088,22 @@ export function getMe(): Promise<Me> {
 export async function signOut(): Promise<void> {
   await send('/api/auth/logout', { method: 'POST' })
   window.location.href = '/api/auth/signed-out'
+}
+
+// Everyone who signs in or an admin added; for admins.
+export function listUsers(): Promise<User[]> {
+  return request('/api/users')
+}
+
+export function addUser(user: { email: string; name?: string; admin?: boolean; roles?: string[] }): Promise<User> {
+  return request('/api/users', { method: 'POST', body: JSON.stringify(user) })
+}
+
+export function updateUser(id: number, patch: { admin?: boolean; roles?: string[] }): Promise<User> {
+  return request(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+// The roles boards name and people hold, to pick from.
+export function listRoles(): Promise<string[]> {
+  return request('/api/roles')
 }

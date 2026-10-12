@@ -404,10 +404,19 @@ func (a *auth) signedIn(ctx context.Context, c idClaims) (int64, error) {
 	return id, err
 }
 
-func registerAuthRoutes(mux *http.ServeMux, a *auth) {
-	// Who is signed in, and whether anyone signs in at all.
+func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
+	// Who is signed in, with their roles, and whether anyone signs in at all.
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"signIn": a != nil, "user": requestUser(r)})
+		me := map[string]any{"signIn": a != nil, "user": nil}
+		if u := requestUser(r); u != nil {
+			p, err := getPerson(r.Context(), db, u.ID)
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			me["user"] = p
+		}
+		writeJSON(w, http.StatusOK, me)
 	})
 	if a == nil {
 		return

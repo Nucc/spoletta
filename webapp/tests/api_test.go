@@ -619,9 +619,11 @@ type step struct {
 	Error         string         `json:"error"`
 	// For human steps: the name of the state the human set, and their
 	// instructions. Steps from before states hold approved or changes.
-	Outcome      string `json:"outcome"`
-	Instructions string `json:"instructions"`
-	DecidedBy    string `json:"decidedBy"`
+	Outcome      string   `json:"outcome"`
+	Instructions string   `json:"instructions"`
+	DecidedBy    string   `json:"decidedBy"`
+	HandledBy    []string `json:"handledBy"`
+	CanDecide    bool     `json:"canDecide"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,

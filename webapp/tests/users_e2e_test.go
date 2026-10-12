@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -284,11 +285,14 @@ func TestUsersRecordWhoStartedAndDecided(t *testing.T) {
 		t.Errorf("a waiting review decided by %q", review.DecidedBy)
 	}
 
-	// Someone else decides it.
-	usersSignIn(a, p, usersPerson{subject: "bob", email: "bob@example.org"})
+	// Someone else, an editor, decides it.
+	bob := usersNewPerson("Bob")
+	bob.name = ""
+	usersAdd(a, bob.email, "Editor")
+	usersSignIn(a, p, bob)
 	humanMustDecide(a, rn.ID, review.ID, map[string]any{"state": b.approved.ID})
 	d := a.finish(rn.ID)
-	if r := onlyStep(t, d, "Review"); r.DecidedBy != "bob@example.org" {
+	if r := onlyStep(t, d, "Review"); r.DecidedBy != bob.email {
 		t.Errorf("decided by %q, want bob's email, as he has no name", r.DecidedBy)
 	}
 	var runs []run
@@ -313,5 +317,181 @@ func TestUsersNoSignIn(t *testing.T) {
 	humanMustDecide(a, rn.ID, review.ID, map[string]any{"state": b.approved.ID})
 	if d := a.finish(rn.ID); d.StartedBy != "" || onlyStep(t, d, "Review").DecidedBy != "" {
 		t.Errorf("started by %q, decided by %q", d.StartedBy, onlyStep(t, d, "Review").DecidedBy)
+	}
+}
+
+// Someone at the allowed domain no other test has signed in.
+func usersNewPerson(name string) usersPerson {
+	id := fmt.Sprintf("%s%d", strings.ToLower(name), time.Now().UnixNano())
+	return usersPerson{subject: id, email: id + "@example.org", name: name}
+}
+
+type usersPersonRow struct {
+	ID    int64    `json:"id"`
+	Email string   `json:"email"`
+	Name  string   `json:"name"`
+	Admin bool     `json:"admin"`
+	Roles []string `json:"roles"`
+}
+
+// The admin adds someone, before they first sign in.
+func usersAdd(a *app, email string, roles ...string) usersPersonRow {
+	a.t.Helper()
+	var p usersPersonRow
+	a.call("POST", "/api/users", map[string]any{"email": email, "roles": roles}, http.StatusCreated, &p)
+	return p
+}
+
+// Only someone holding the role a human object names decides the reviews of
+// the process it handles; an admin decides any.
+func TestUsersRolesDecideReviews(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	b := humanNewReviewBoard(a)
+	bob := usersNewPerson("Bob")
+	row := usersAdd(a, bob.email)
+	rn := a.startRun(b.flow.ID)
+	review := a.waitStep(rn.ID, "Review", stepWaiting)
+	if !review.CanDecide || !slices.Equal(review.HandledBy, []string{"Editor"}) {
+		t.Errorf("the admin sees the review handled by %v, can decide %v", review.HandledBy, review.CanDecide)
+	}
+
+	usersSignIn(a, p, bob)
+	path := fmt.Sprintf("/api/runs/%d/steps/%d", rn.ID, review.ID)
+	if s := onlyStep(t, a.getRun(rn.ID), "Review"); s.CanDecide {
+		t.Errorf("bob, without the role, can decide")
+	}
+	a.refused("PATCH", path, map[string]any{"state": b.approved.ID}, http.StatusForbidden, "only Editor decides this review")
+	a.refused("PATCH", "/api/users/"+fmt.Sprint(row.ID), map[string]any{"roles": []string{"Editor"}}, http.StatusForbidden, "only an admin")
+
+	// The role matches ignoring case and spaces.
+	usersSignIn(a, p, usersAda)
+	a.call("PATCH", fmt.Sprintf("/api/users/%d", row.ID), map[string]any{"roles": []string{"  editor ", "", "EDITOR", "Finance"}}, http.StatusOK, &row)
+	if !slices.Equal(row.Roles, []string{"editor", "Finance"}) {
+		t.Errorf("roles = %v", row.Roles)
+	}
+	usersSignIn(a, p, bob)
+	if s := onlyStep(t, a.getRun(rn.ID), "Review"); !s.CanDecide {
+		t.Errorf("bob, with the role, can't decide")
+	}
+	humanMustDecide(a, rn.ID, review.ID, map[string]any{"state": b.approved.ID})
+	if r := onlyStep(t, a.finish(rn.ID), "Review"); r.DecidedBy != "Bob" {
+		t.Errorf("decided by %q", r.DecidedBy)
+	}
+
+	// The admin decides without the role.
+	usersSignIn(a, p, usersAda)
+	rn = a.startRun(b.flow.ID)
+	review = a.waitStep(rn.ID, "Review", stepWaiting)
+	humanMustDecide(a, rn.ID, review.ID, map[string]any{"state": b.approved.ID})
+	if r := onlyStep(t, a.finish(rn.ID), "Review"); r.DecidedBy != "Ada Lovelace" {
+		t.Errorf("decided by %q", r.DecidedBy)
+	}
+}
+
+// A review nobody handles is anyone's; one on a board inside a flow process
+// is its human object's.
+func TestUsersRolesWhereReviewsAre(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	f := a.newFlow("Nested review").ID
+	write := a.agent(f, "Write", "Write a ticket.")
+	ticket := a.newObject(f, "Ticket")
+	approved := a.newState(ticket.ID, "approved")
+	outer := nestedFlowProcess(a, f, "Outer", false)
+	result := a.newObject(f, "Result")
+	a.output(write.ID, ticket.ID)
+	a.input(outer.ID, ticket.ID)
+	a.output(outer.ID, result.ID)
+	a.startAt(f, write.ID)
+	approve := nestedProcess(a, f, outer.ID, "Approve", kindHuman)
+	a.input(approve.ID, ticket.ID)
+	finance := nestedObject(a, outer.ID, "Finance")
+	nestedPatchObject(a, finance.ID, map[string]any{"human": true})
+	a.input(approve.ID, finance.ID)
+	humanDecides(a, approve.ID, ticket.ID, approved.ID)
+	pay := nestedAgent(a, f, outer.ID, "Pay")
+	humanTakesIn(a, pay.ID, ticket.ID, approved.ID)
+	a.output(pay.ID, result.ID)
+	nestedStartAt(a, outer.ID, approve.ID)
+	a.worker.onAgent("Write", handsIn(data("the ticket")))
+	a.worker.onAgent("Pay", handsIn(data("paid")))
+
+	// A review no person handles, on its own flow.
+	free := humanHuman(a, a.newFlow("Free review").ID, "Look")
+	freeFlow := free.Flow
+	freeDoc := a.newObject(freeFlow, "Doc")
+	seen := a.newState(freeDoc.ID, "seen")
+	draft := a.agent(freeFlow, "Draft", "Draft it.")
+	a.output(draft.ID, freeDoc.ID)
+	a.input(free.ID, freeDoc.ID)
+	humanDecides(a, free.ID, freeDoc.ID, seen.ID)
+	a.startAt(freeFlow, draft.ID)
+	a.worker.onAgent("Draft", handsIn(data("a doc")))
+
+	rn := a.startRun(f)
+	freeRun := a.startRun(freeFlow)
+	nested := a.waitStep(rn.ID, "Approve", stepWaiting)
+	look := a.waitStep(freeRun.ID, "Look", stepWaiting)
+
+	usersSignIn(a, p, usersNewPerson("Carl"))
+	if !look.CanDecide || len(look.HandledBy) != 0 {
+		t.Errorf("the free review is handled by %v", look.HandledBy)
+	}
+	if s := onlyStep(t, a.getRun(rn.ID), "Approve"); s.CanDecide || !slices.Equal(s.HandledBy, []string{"Finance"}) {
+		t.Errorf("carl sees the nested review handled by %v, can decide %v", s.HandledBy, s.CanDecide)
+	}
+	a.refused("PATCH", fmt.Sprintf("/api/runs/%d/steps/%d", rn.ID, nested.ID), map[string]any{"state": approved.ID}, http.StatusForbidden, "only Finance")
+	humanMustDecide(a, freeRun.ID, look.ID, map[string]any{"state": seen.ID})
+	if d := a.finish(freeRun.ID); d.Status != runDone {
+		t.Errorf("the free run %s", d.Status)
+	}
+	a.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
+}
+
+// Admins add people, who then sign in from any domain, make others admins,
+// and see the roles boards name; nobody else does.
+func TestUsersAdminsManagePeople(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	f := a.newFlow("Roles")
+	humanPerson(a, f.ID, humanHuman(a, f.ID, "Sign off").ID, "  Legal ")
+
+	carl := usersPerson{subject: fmt.Sprint("carl", time.Now().UnixNano()), email: fmt.Sprintf("carl%d@elsewhere.com", time.Now().UnixNano()), name: "Carl"}
+	row := usersAdd(a, strings.ToUpper(carl.email), "Legal")
+	if row.Email != carl.email || row.Admin || !slices.Equal(row.Roles, []string{"Legal"}) {
+		t.Errorf("added %+v", row)
+	}
+	a.refused("POST", "/api/users", map[string]any{"email": carl.email}, http.StatusConflict, "already added")
+	a.refused("POST", "/api/users", map[string]any{"email": "not-an-email"}, http.StatusBadRequest, "email address")
+	a.refused("PATCH", "/api/users/1099511627776", map[string]any{"admin": true}, http.StatusNotFound, "no one")
+	var me usersMe
+	a.call("GET", "/api/me", nil, http.StatusOK, &me)
+	a.refused("PATCH", fmt.Sprintf("/api/users/%d", me.User.ID), map[string]any{"admin": false}, http.StatusBadRequest, "yourself")
+	var roles []string
+	a.call("GET", "/api/roles", nil, http.StatusOK, &roles)
+	if !slices.Contains(roles, "Legal") {
+		t.Errorf("roles = %v", roles)
+	}
+
+	// Carl, at a domain not allowed, signs in as the person added.
+	usersSignIn(a, p, carl)
+	a.call("GET", "/api/me", nil, http.StatusOK, &me)
+	if me.User.ID != row.ID || me.User.Name != "Carl" {
+		t.Errorf("carl signed in as %+v, want %d", me.User, row.ID)
+	}
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/users"}, {"POST", "/api/users"}, {"GET", "/api/roles"}, {"PATCH", fmt.Sprintf("/api/users/%d", row.ID)},
+	} {
+		a.refused(c.method, c.path, map[string]any{"email": "x@example.org", "admin": true}, http.StatusForbidden, "only an admin")
+	}
+
+	usersSignIn(a, p, usersAda)
+	a.call("PATCH", fmt.Sprintf("/api/users/%d", row.ID), map[string]any{"admin": true}, http.StatusOK, &row)
+	usersSignIn(a, p, carl)
+	var people []usersPersonRow
+	a.call("GET", "/api/users", nil, http.StatusOK, &people)
+	if !slices.ContainsFunc(people, func(p usersPersonRow) bool { return p.ID == row.ID && p.Admin }) {
+		t.Errorf("people = %+v", people)
 	}
 }

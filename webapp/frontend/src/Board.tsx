@@ -2042,13 +2042,18 @@ export default function Board({
   }
 
   // What a human process waiting in the open run shows to decide on.
-  const reviewOf = (n: ProcessNodeType): Review | undefined =>
-    n.data.review && {
+  const reviewOf = (n: ProcessNodeType): Review | undefined => {
+    if (!n.data.review) return undefined
+    const step = shownRun?.steps.filter((s) => String(s.process) === n.id && s.status === 'waiting').at(-1)
+    return {
       inputs: n.data.review,
       options: decisionOptions(n.id),
       entries: entryObjects(n.id),
+      handledBy: step?.handledBy ?? [],
+      canDecide: step?.canDecide ?? true,
       onDecide: (state, instructions, entries) => onDecide(n.id, state, instructions, entries),
     }
+  }
 
   // Becoming or ceasing to be human drops the process's outputs, becoming
   // human its direct connections, and ceasing to be human its people's agent

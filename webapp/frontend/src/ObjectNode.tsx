@@ -3,7 +3,7 @@ import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node
 import { StructFlowsContext, useBoardActions } from './actions'
 import type { ObjectAttribute, ObjectState, Relation } from './api'
 import { AggregationIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
-import { AppendButton, NameInput } from './ProcessNode'
+import { AppendButton, NameInput, Subtitle } from './ProcessNode'
 import { quantityText, type Quantity } from './quantity'
 import WidthResizer from './WidthResizer'
 
@@ -98,23 +98,22 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
           ) : (
             <>
               <span className="node-name">{data.name}</span>
-              <span className="node-subtitle">
-                {data.activeState
-                  ? `In state ${data.activeState}`
-                  : data.status === 'done'
-                    ? 'Generated'
-                    : data.human
-                      ? 'Person'
-                      : data.copied && !data.owned
-                        ? `${data.many && !data.boundary ? 'List · ' : ''}From a ${structs.has(data.sourceFlow ?? 0) ? 'struct' : 'procedure'}`
-                        : data.general
-                        ? `${data.many && !data.boundary ? 'List of ' : ''}${data.general}`
-                        : !data.many
-                        ? 'Object'
-                        : data.boundary
-                          ? 'One item of the list'
-                          : 'List of items'}
-              </span>
+              <Subtitle
+                status={data.activeState ? `In state ${data.activeState}` : data.status === 'done' ? 'Generated' : undefined}
+                text={
+                  data.human
+                    ? 'Person'
+                    : data.copied && !data.owned
+                      ? `${data.many && !data.boundary ? 'List · ' : ''}From a ${structs.has(data.sourceFlow ?? 0) ? 'struct' : 'procedure'}`
+                      : data.general
+                      ? `${data.many && !data.boundary ? 'List of ' : ''}${data.general}`
+                      : !data.many
+                      ? 'Object'
+                      : data.boundary
+                        ? 'One item of the list'
+                        : 'List of items'
+                }
+              />
             </>
           )}
         </div>

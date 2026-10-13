@@ -60,7 +60,6 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 
 // What the card says under the name: the kind, and an agent's model.
 function subtitle(data: ProcessNodeData): string {
-  if (data.status) return STATUS_LABELS[data.status]
   if (data.kind === 'flow') return data.recording ? 'Flow · recorded' : 'Flow'
   if (data.kind === 'sentry') {
     const s = data.settings.sentry
@@ -98,17 +97,12 @@ export default function ProcessNode({ id, data, selected, width }: NodeProps<Pro
         ) : (
           <>
             <span className="node-name">{data.name}</span>
-            <span className="node-subtitle">{subtitle(data)}</span>
+            <Subtitle text={subtitle(data)} status={data.status && STATUS_LABELS[data.status]} />
           </>
         )}
       </div>
       {!draft && (
         <span className="node-buttons nodrag">
-          {data.status && stoppable({ kind: data.kind, status: data.status }) && (
-            <button title="Stop" aria-label="Stop" onClick={() => actions.stopProcess(id)}>
-              <StopIcon />
-            </button>
-          )}
           {(data.kind === 'flow' || (data.kind === 'subflow' && data.settings.flow !== undefined)) && (
             <button
               title={data.kind === 'flow' ? 'Zoom in' : 'Open the flow it runs'}
@@ -121,20 +115,41 @@ export default function ProcessNode({ id, data, selected, width }: NodeProps<Pro
           <button title="Settings" aria-label="Settings" onClick={() => actions.openPanel(id)}>
             <GearIcon />
           </button>
-          <button
-            title="Delete"
-            aria-label="Delete"
-            disabled={!actions.editable}
-            onClick={() => actions.remove(id)}
-          >
-            <TrashIcon />
-          </button>
+          {/* Stop takes Delete's place, which a run's board doesn't allow, so the card keeps its width. */}
+          {data.status && stoppable({ kind: data.kind, status: data.status }) ? (
+            <button title="Stop" aria-label="Stop" onClick={() => actions.stopProcess(id)}>
+              <StopIcon />
+            </button>
+          ) : (
+            <button
+              title="Delete"
+              aria-label="Delete"
+              disabled={!actions.editable}
+              onClick={() => actions.remove(id)}
+            >
+              <TrashIcon />
+            </button>
+          )}
         </span>
       )}
       {leaf && !draft && actions.editable && (
         <AppendButton id={id} title={human ? 'Add an object the person fills in' : 'Add the object this process generates'} />
       )}
     </div>
+  )
+}
+
+// The line under a card's name. A run's status shows in place of the usual
+// text, but the card keeps the width the usual text gives it: a card that
+// widened or narrowed with each status would move its links, which sit at its
+// middle, out of line with the cards above and below.
+export function Subtitle({ text, status }: { text: string; status?: string }) {
+  if (!status) return <span className="node-subtitle">{text}</span>
+  return (
+    <span className="node-subtitle replaced">
+      <span aria-hidden="true">{text}</span>
+      <span>{status}</span>
+    </span>
   )
 }
 

@@ -1253,6 +1253,27 @@ body {
   white-space: nowrap;
 }
 
+/* A run's status over the usual subtitle: the usual text, hidden, sizes the
+   card; the status takes none of the width, only what the card has. */
+.node-subtitle.replaced {
+  display: grid;
+}
+
+.node-subtitle.replaced > span {
+  grid-area: 1 / 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-subtitle.replaced > span:first-child {
+  visibility: hidden;
+}
+
+.node-subtitle.replaced > span:last-child {
+  width: 0;
+  min-width: 100%;
+}
+
 .node-buttons {
   display: flex;
   flex-shrink: 0;

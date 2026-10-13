@@ -1008,8 +1008,10 @@ export type BoardContents = {
 // and lists holding any number of items no min or max.
 type Snapshot = {
   processes: (Omit<Process, 'flow' | 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
-  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general'> &
-    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general'>>)[]
+  // source is left out for an object that isn't a copy, and sourceFlow is
+  // never kept.
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'sourceFlow'> &
+    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source'>>)[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -1046,6 +1048,8 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       owner: o.owner ?? null,
       relation: o.relation ?? '',
       general: o.general ?? null,
+      source: o.source ?? null,
+      sourceFlow: null,
       states: s.states.filter((st) => st.object === o.id),
       attributes: s.attributes.filter((a) => a.object === o.id),
     })),

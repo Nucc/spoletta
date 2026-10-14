@@ -34,6 +34,7 @@ import {
   PencilIcon,
   PlayIcon,
   PlugIcon,
+  TableIcon,
   PlusIcon,
   SaveIcon,
   TrashIcon,
@@ -2163,6 +2164,9 @@ export default function Board({
                 title="The MCP servers agents can use"
               >
                 <PlugIcon /> MCP servers
+              </button>
+              <button onClick={() => (window.location.hash = `#/flows/${flowId}/data`)} title="What each run held of each object, a run per row">
+                <TableIcon /> Data
               </button>
               <button
                 className={`opl-toggle${oplOpen ? ' open' : ''}`}

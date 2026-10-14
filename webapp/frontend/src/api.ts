@@ -826,6 +826,33 @@ export function startRun(flow: number): Promise<FlowRun> {
   return request(`/api/runs?flow=${flow}`, { method: 'POST' })
 }
 
+// What a run held of an object: the latest content and state its steps gave
+// it, or for the run of a recording flow process what it was given, such as
+// the item of a list it ran for.
+export type DataCell = {
+  // Null for an object deleted before ids were kept, or a given object the
+  // flow has none named as.
+  object: number | null
+  name: string
+  state: string
+  content: string
+  given: boolean
+}
+
+// A run and what it held of each object.
+export type DataRow = FlowRun & { cells: DataCell[] }
+
+// An object on the flow's boards with its attributes, in the order its
+// content holds them.
+export type DataObject = { id: number; name: string; many: boolean; attributes: string[] }
+
+// The flow's objects and what its latest runs held of them, newest first.
+export type FlowData = { objects: DataObject[]; rows: DataRow[] }
+
+export function getFlowData(flow: number): Promise<FlowData> {
+  return request(`/api/data?flow=${flow}`)
+}
+
 export function getRun(id: number): Promise<FlowRunDetail> {
   return request(`/api/runs/${id}`)
 }

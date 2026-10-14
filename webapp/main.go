@@ -101,6 +101,7 @@ func main() {
 	registerMCPRoutes(mux, db, mcp)
 	eng := newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, mcp, parallelSteps)
 	registerRunRoutes(mux, db, eng)
+	registerDataRoutes(mux, db)
 	registerScheduleRoutes(mux, db)
 	go runSchedules(context.Background(), db, eng, time.Second)
 	registerMessageRoutes(mux, db)

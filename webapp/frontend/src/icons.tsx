@@ -260,3 +260,11 @@ export const AssistantIcon = ({ size = 16 }: { size?: number }) => (
     <path d="M8 4.25l.6 1.65 1.65.6-1.65.6L8 8.75l-.6-1.65-1.65-.6 1.65-.6z" />
   </Icon>
 )
+
+// A table of rows and columns: what a flow's runs held.
+export const TableIcon = () => (
+  <Icon>
+    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+    <path d="M1.5 6.5h13M1.5 10h13M6 6.5v7" />
+  </Icon>
+)

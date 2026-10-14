@@ -2,7 +2,7 @@ import { useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
+export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
 // How deep strings holding JSON are unwrapped, so odd content can't recurse forever.
 const maxDepth = 8
@@ -60,7 +60,7 @@ function Text({ text }: { text: string }) {
 }
 
 // The JSON object or array the text holds, inside a code fence or not.
-function parse(text: string): Json | undefined {
+export function parse(text: string): Json | undefined {
   let s = text.trim()
   if (s.startsWith('```') && s.endsWith('```') && s.length >= 6) {
     s = s.slice(3, -3)

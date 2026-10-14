@@ -3154,3 +3154,219 @@ button.toolbar-link {
   font-size: 14px;
   white-space: nowrap;
 }
+
+/* A flow's data: its runs as rows, a column per attribute of each object
+   they held, under the object's name. Cells are cut to a line; clicking one
+   shows all of it. */
+.data-page .toolbar h1 a:not(.home) {
+  color: inherit;
+  text-decoration: none;
+}
+
+.data-page .toolbar h1 a:not(.home):hover {
+  color: #0969da;
+}
+
+.data-main {
+  padding: 16px;
+  min-width: 0;
+}
+
+.data-table-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 140px);
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+}
+
+.data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.data-table th,
+.data-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #eaeef2;
+  border-right: 1px solid #eaeef2;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f6f8fa;
+  font-weight: 600;
+}
+
+/* The second header row sits under the first. */
+.data-table thead tr + tr th {
+  top: 29px;
+  font-weight: 500;
+  color: #656d76;
+}
+
+.data-table th.data-group {
+  text-align: center;
+  border-bottom-color: #d0d7de;
+}
+
+.data-table .data-run {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+}
+
+.data-table thead .data-run {
+  z-index: 3;
+  background: #f6f8fa;
+}
+
+.data-table tbody tr:hover td {
+  background: #f6f8fa;
+}
+
+.data-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-started,
+.data-parent {
+  color: #656d76;
+}
+
+.data-table td.data-cell {
+  padding: 0;
+}
+
+.data-table td.data-cell.empty::after {
+  content: '—';
+  display: block;
+  padding: 6px 10px;
+  color: #d0d7de;
+}
+
+.data-table td.data-cell:not(.empty):not(:has(button)) {
+  padding: 6px 10px;
+}
+
+.data-cell-open {
+  display: block;
+  width: 100%;
+  max-width: 260px;
+  padding: 6px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.data-cell-open:hover {
+  color: #0969da;
+}
+
+/* What a run was given, such as the item it ran for, rather than generated. */
+.data-cell.given {
+  font-style: italic;
+  color: #57606a;
+}
+
+.data-picker {
+  position: relative;
+  margin-left: auto;
+}
+
+.data-picker summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  list-style: none;
+}
+
+.data-picker summary::-webkit-details-marker {
+  display: none;
+}
+
+.data-picker-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.15);
+}
+
+.data-picker fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  font-size: 13px;
+}
+
+.data-picker legend {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.data-picker label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  padding: 16px;
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(31, 35, 40, 0.3);
+}
+
+.data-dialog header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.data-dialog h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+}
+
+.data-dialog pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}

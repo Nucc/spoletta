@@ -1550,6 +1550,17 @@ body {
   white-space: nowrap;
 }
 
+/* The dotted line from a state to its right-hand handle, shown while links
+   leave from that state. */
+.state-leader {
+  flex: 1;
+  align-self: center;
+  min-width: 8px;
+  margin-right: -10px;
+  border-top: 1.5px dotted #afb8c1;
+  pointer-events: none;
+}
+
 .state-row .react-flow__handle {
   width: 7px;
   height: 7px;

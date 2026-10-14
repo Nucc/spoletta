@@ -190,7 +190,9 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
 // OPM state: a rounded box inside its object, entered from the left and left
 // from the right, so links to and from states stand apart from the object's
 // own. Its handles sit on the object's edges, level with it, so its links
-// run clear of the object. Double-click to rename it.
+// run clear of the object. A light dotted line leads from a state to its
+// right-hand handle while links leave from it, so it is clear which state
+// they come from. Double-click to rename it.
 function StatePill({
   objectId,
   state,
@@ -204,6 +206,8 @@ function StatePill({
 }) {
   const actions = useBoardActions()
   const [editing, setEditing] = useState(false)
+  const linkedOut =
+    useNodeConnections({ handleType: 'source', handleId: stateSourceHandle(state.id) }).length > 0
 
   return (
     <div className="state-row" data-state={state.id}>
@@ -244,6 +248,7 @@ function StatePill({
           </>
         )}
       </span>
+      {linkedOut && <span className="state-leader" />}
     </div>
   )
 }

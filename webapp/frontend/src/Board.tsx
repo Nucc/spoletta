@@ -75,9 +75,14 @@ import { Sidebar, SidebarGroup } from './Sidebar'
 import { VersionPanel } from './Versions'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
+import { configures, useMe } from './Account'
+import { OwnerPicker } from './Owner'
 import { onCopiedElsewhere, readCopied, writeCopied } from './clipboard'
 import { FlowSettingsPanel } from './FlowSettings'
 import {
+  listTeams,
+  setFlowOwner,
+  type Team,
   createAttribute,
   createConnection,
   createLink,
@@ -370,6 +375,9 @@ export default function Board({
   // The process whose waiting review shows in the middle of the screen.
   const [reviewId, setReviewId] = useState<string | null>(null)
   const [models, setModels] = useState<Models | null>(null)
+  const me = useMe()
+  // The teams, to give the flow to one; see Owner.tsx.
+  const [teams, setTeams] = useState<Team[]>([])
   const [mcpServers, setMCPServers] = useState<MCPServer[] | null>(null)
   const [mcpOpen, setMCPOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -425,6 +433,10 @@ export default function Board({
     console.error(err)
     setError(err instanceof Error ? err.message : String(err))
   }, [])
+
+  useEffect(() => {
+    if (me?.user) listTeams().then(setTeams, report)
+  }, [me, report])
 
   const updateData = useCallback(
     (id: string, data: Partial<ProcessNodeData>) =>
@@ -837,6 +849,9 @@ export default function Board({
   const [shownBoard, setShownBoard] = useState<BoardId>(null)
   const [shownUnfolded, setShownUnfolded] = useState<number | null>(null)
   const reviewing = shownVersion !== null
+  // Someone who only decides the flow's reviews sees it, and changes nothing.
+  const viewOnly = flow.access === 'review'
+  const readOnly = reviewing || viewOnly
   useEffect(() => {
     if (runVersion === shownVersion && boardId === shownBoard && unfolded === shownUnfolded) return
     let stale = false
@@ -940,12 +955,12 @@ export default function Board({
 
   const addAtViewportCenter = (block: Block) => {
     const rect = wrapper.current?.getBoundingClientRect()
-    if (rect && !reviewing) addBlock(block, rect.left + rect.width / 2, rect.top + rect.height / 2)
+    if (rect && !readOnly) addBlock(block, rect.left + rect.width / 2, rect.top + rect.height / 2)
   }
 
   const onPaneDoubleClick = (e: MouseEvent<HTMLDivElement>) => {
     if (structBoard && !objectBoard) return
-    if (!reviewing && (e.target as HTMLElement).classList.contains('react-flow__pane')) {
+    if (!readOnly && (e.target as HTMLElement).classList.contains('react-flow__pane')) {
       addDraft(BUILDING_BLOCKS.find((b) => b.id === (e.shiftKey || objectBoard ? 'object' : 'process'))!, e.clientX, e.clientY)
     }
   }
@@ -953,7 +968,7 @@ export default function Board({
   // A block dragged from the sidebar lands where it is dropped. Its id can
   // only be read on the drop, so a drag is told apart by its type.
   const onCanvasDragOver = (e: DragEvent<HTMLDivElement>) => {
-    if (reviewing || !e.dataTransfer.types.includes(BLOCK_MIME)) return
+    if (readOnly || !e.dataTransfer.types.includes(BLOCK_MIME)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
   }
@@ -982,7 +997,7 @@ export default function Board({
   const onCanvasDrop = (e: DragEvent<HTMLDivElement>) => {
     const id = e.dataTransfer.getData(BLOCK_MIME)
     const block = findBlock(id) ?? [...flowBlocks, ...structBlocks].find((b) => b.id === id)
-    if (reviewing || !block || (structBoard && !objectBoard)) return
+    if (readOnly || !block || (structBoard && !objectBoard)) return
     e.preventDefault()
     addBlock(block, e.clientX, e.clientY)
   }
@@ -1289,7 +1304,7 @@ export default function Board({
   // node starts out being named.
   const append = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || node.type === 'end' || reviewing || objectBoard) return
+    if (!node || node.type === 'start' || node.type === 'end' || readOnly || objectBoard) return
     try {
       if (node.type === 'process') {
         const o = await createObject({ flow: flowId, name: NEW_OBJECT, parent: boardId, ...below(node, 'object') })
@@ -1316,7 +1331,7 @@ export default function Board({
     const edge = edges.find((e) => e.id === edgeId)
     const source = edge && getNode(edge.source)
     const target = edge && getNode(edge.target)
-    if (!edge || !source || !target || reviewing) return
+    if (!edge || !source || !target || readOnly) return
     const state = edge.data?.link?.state ?? null
     const processFirst = source.type !== 'process'
     const [firstType, secondType] = processFirst ? (['process', 'object'] as const) : (['object', 'process'] as const)
@@ -1365,7 +1380,7 @@ export default function Board({
   // belong to the board outside.
   const remove = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || node.type === 'end' || reviewing || isBoundary(id) || isFixed(id) || isStructRoot(id))
+    if (!node || node.type === 'start' || node.type === 'end' || readOnly || isBoundary(id) || isFixed(id) || isStructRoot(id))
       return
     const inside =
       node.type === 'process' && node.data.kind === 'flow'
@@ -1460,7 +1475,7 @@ export default function Board({
   const removeState = async (objectId: string, stateId: number) => {
     const node = getNode(objectId)
     const state = node?.type === 'object' ? node.data.states.find((s) => s.id === stateId) : undefined
-    if (!state || reviewing || !window.confirm(`Delete state “${state.name}” and its links?`)) return
+    if (!state || readOnly || !window.confirm(`Delete state “${state.name}” and its links?`)) return
     try {
       await deleteState(stateId)
     } catch (err) {
@@ -1482,7 +1497,7 @@ export default function Board({
   const setCondition = async (edgeId: string, condition: boolean) => {
     const edge = edges.find((e) => e.id === edgeId)
     const l = edge?.data?.link
-    if (!l || reviewing) return
+    if (!l || readOnly) return
     try {
       await setLinkCondition(l.id, condition)
     } catch (err) {
@@ -1495,7 +1510,7 @@ export default function Board({
   const setRole = async (edgeId: string, role: LinkRole) => {
     const edge = edges.find((e) => e.id === edgeId)
     const l = edge?.data?.link
-    if (!l || reviewing) return
+    if (!l || readOnly) return
     try {
       await setLinkRole(l.id, role)
     } catch (err) {
@@ -1508,7 +1523,7 @@ export default function Board({
   const setDecisionStates = async (edgeId: string, states: number[]) => {
     const edge = edges.find((e) => e.id === edgeId)
     const l = edge?.data?.link
-    if (!l || reviewing) return
+    if (!l || readOnly) return
     try {
       await setLinkStates(l.id, states)
     } catch (err) {
@@ -1530,7 +1545,7 @@ export default function Board({
   const restructured = () => reload.current().catch(report)
 
   const addAttribute = async (objectId: string, name: string) => {
-    if (reviewing) return false
+    if (readOnly) return false
     try {
       const attribute = await createAttribute(objectIdOf(objectId), { name, definition: '' })
       setAttributes(objectId, (as) => [...as, attribute])
@@ -1543,7 +1558,7 @@ export default function Board({
   }
 
   const setQuantity = async (objectId: string, quantity: Quantity) => {
-    if (reviewing) return false
+    if (readOnly) return false
     try {
       await updateObject(objectIdOf(objectId), quantity)
       updateObjectData(objectId, quantity)
@@ -1558,7 +1573,7 @@ export default function Board({
   // A person's links into processes become agent links, which the server
   // allows only into human processes.
   const setHuman = async (objectId: string, human: boolean) => {
-    if (reviewing) return false
+    if (readOnly) return false
     try {
       await updateObject(objectIdOf(objectId), { human })
       updateObjectData(objectId, { human })
@@ -1570,7 +1585,7 @@ export default function Board({
   }
 
   const setRelation = async (objectId: string, relation: Relation) => {
-    if (reviewing) return false
+    if (readOnly) return false
     try {
       await updateObject(objectIdOf(objectId), { relation })
       restructured()
@@ -1582,7 +1597,7 @@ export default function Board({
   }
 
   const setGeneral = async (objectId: string, general: number | null) => {
-    if (reviewing) return false
+    if (readOnly) return false
     try {
       await updateObject(objectIdOf(objectId), { general })
       restructured()
@@ -1594,7 +1609,7 @@ export default function Board({
   }
 
   const setPersistent = async (objectId: string, persistent: boolean) => {
-    if (reviewing) return false
+    if (readOnly) return false
     try {
       await updateObject(objectIdOf(objectId), { persistent })
       updateObjectData(objectId, { persistent })
@@ -1624,7 +1639,7 @@ export default function Board({
   const removeAttribute = async (objectId: string, id: number) => {
     const node = getNode(objectId)
     const attribute = node?.type === 'object' ? node.data.attributes.find((a) => a.id === id) : undefined
-    if (!attribute || reviewing || !window.confirm(`Delete attribute “${attribute.name}”?`)) return false
+    if (!attribute || readOnly || !window.confirm(`Delete attribute “${attribute.name}”?`)) return false
     try {
       await deleteAttribute(id)
     } catch (err) {
@@ -1640,14 +1655,14 @@ export default function Board({
     e.preventDefault()
     if (node.type === 'start' || node.type === 'end' || isDraft(node.id)) return
     // Viewing a run, a flow process, or the flow a subflow process runs, can still be opened.
-    if (!reviewing || zoomable(node.id)) setMenu({ id: node.id, x: e.clientX, y: e.clientY })
+    if (!readOnly || zoomable(node.id)) setMenu({ id: node.id, x: e.clientX, y: e.clientY })
   }
 
   const menuItems = (id: string): MenuItem[] => [
     ...(zoomable(id) ? [{ label: isObject(id) ? 'Unfold' : 'Zoom in', icon: <ZoomInIcon />, onSelect: () => zoomIn(id) }] : []),
     {
       label: 'Rename',
-      disabled: reviewing || isCopied(id),
+      disabled: readOnly || isCopied(id),
       icon: <PencilIcon />,
       onSelect: () => {
         // The panel holds its own copy of the name.
@@ -1660,19 +1675,19 @@ export default function Board({
           {
             label: 'Add state',
             icon: <PlusIcon size={16} />,
-            disabled: reviewing || isCopied(id),
+            disabled: readOnly || isCopied(id),
             onSelect: () => updateObjectData(id, { addingState: true }),
           },
         ]
       : []),
     // Two objects making up one can't share a name.
-    { label: 'Duplicate', icon: <CopyIcon />, disabled: reviewing || objectBoard || structBoard, onSelect: () => duplicate(id) },
-    { label: 'Copy', icon: <CopyIcon />, disabled: reviewing || objectBoard || isBoundary(id), onSelect: () => copySelection(id) },
+    { label: 'Duplicate', icon: <CopyIcon />, disabled: readOnly || objectBoard || structBoard, onSelect: () => duplicate(id) },
+    { label: 'Copy', icon: <CopyIcon />, disabled: readOnly || objectBoard || isBoundary(id), onSelect: () => copySelection(id) },
     {
       label: 'Delete',
       icon: <TrashIcon />,
       danger: true,
-      disabled: reviewing || isBoundary(id) || isFixed(id) || isStructRoot(id),
+      disabled: readOnly || isBoundary(id) || isFixed(id) || isStructRoot(id),
       onSelect: () => remove(id),
     },
   ]
@@ -1716,14 +1731,14 @@ export default function Board({
       setQuantity: (objectId, quantity) => latest.current.setQuantity(objectId, quantity),
       setRoute: (edgeId, route, save) => latest.current.setRoute(edgeId, route, save),
       resize: (id, x, width) => latest.current.resize(id, x, width),
-      editable: !reviewing,
+      editable: !readOnly,
     }),
-    [reviewing, updateObjectData],
+    [readOnly, updateObjectData],
   )
 
   const startTarget = edges.find((e) => e.id === START_EDGE_ID)?.target
   // A run always runs the whole flow, from the top board.
-  const canRun = (reviewing || boardId !== null || startTarget !== undefined) && !starting
+  const canRun = (reviewing || boardId !== null || startTarget !== undefined) && !starting && !viewOnly
 
   // Starts a run of the board, which the server executes, and opens it. The
   // board shows the run on its version, which is the board as it is.
@@ -1794,7 +1809,7 @@ export default function Board({
   // new flow process, which is then named.
   const selectedProcesses = nodes.filter((n) => n.selected && n.type === 'process' && !isDraft(n.id))
   const onWrap = async () => {
-    if (reviewing || selectedProcesses.length === 0) return
+    if (readOnly || selectedProcesses.length === 0) return
     try {
       const p = await wrapProcesses({
         name: 'New flow',
@@ -1813,7 +1828,7 @@ export default function Board({
   // of any flow; from a node's menu, the selection it is in, or else the
   // node. The objects outside a flow process belong to the board outside.
   const copySelection = (id?: string) => {
-    if (reviewing || objectBoard) return
+    if (readOnly || objectBoard) return
     const copyable = (n: FlowNode) => !isDraft(n.id) && (n.type === 'process' || (n.type === 'object' && n.data.boundary === undefined))
     const inSelection = id === undefined || getNode(id)?.selected
     const chosen = getNodes().filter((n) => copyable(n) && (inSelection ? n.selected : n.id === id))
@@ -1835,7 +1850,7 @@ export default function Board({
     const c = readCopied()
     const rect = wrapper.current?.getBoundingClientRect()
     const point = screen ?? pointer.current ?? (rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
-    if (!c || !point || reviewing || objectBoard || structBoard) return
+    if (!c || !point || readOnly || objectBoard || structBoard) return
     const at = screenToFlowPosition(point)
     try {
       const res = await pasteCopied(c, flowId, boardId, at.x - c.at.x, at.y - c.at.y)
@@ -1881,7 +1896,7 @@ export default function Board({
   // step undone. Panels would save what they show over it, so they close
   // first, saving what they hold yet.
   const stepHistory = async (undo: boolean) => {
-    if (reviewing) return
+    if (readOnly) return
     flushSync(() => {
       setPanelId(null)
       setMenu(null)
@@ -2108,13 +2123,13 @@ export default function Board({
         {!structBoard && (
           <button
             onClick={onWrap}
-            disabled={reviewing || objectBoard || selectedProcesses.length === 0}
+            disabled={readOnly || objectBoard || selectedProcesses.length === 0}
             title="Move the selected processes into a new flow process; shift-click or drag to select several"
           >
             <FlowIcon /> Group into flow
           </button>
         )}
-        <button onClick={onTidy} disabled={reviewing} title="Lay the board out from the top">
+        <button onClick={onTidy} disabled={readOnly} title="Lay the board out from the top">
           <LayoutIcon /> Tidy up
         </button>
         {structBoard ? (
@@ -2125,13 +2140,13 @@ export default function Board({
         ) : (
           <span
             className="hint"
-            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, reviewing the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or Sentry process onto another process to run that one when it fails. Select an object's link into a process to pick how the process takes it: just takes it, uses it as an instrument it doesn't change, or consumes it; for a link from a state, whether the process runs when the object enters it, or only if the object is in it once the process is ready, being skipped otherwise. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
+            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, readOnly the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or Sentry process onto another process to run that one when it fails. Select an object's link into a process to pick how the process takes it: just takes it, uses it as an instrument it doesn't change, or consumes it; for a link from a state, whether the process runs when the object enters it, or only if the object is in it once the process is ready, being skipped otherwise. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
           >
             Processes connect through the objects they generate and take. Right-click a node for more.
           </span>
         )}
         <div className="versioning">
-          <button onClick={onSave} disabled={versioning || reviewing} title="Save the board as a new version">
+          <button onClick={onSave} disabled={versioning || readOnly} title="Save the board as a new version">
             <SaveIcon /> Save
           </button>
           <button
@@ -2212,7 +2227,7 @@ export default function Board({
             {structBoard && !objectBoard ? null : (
               <BlockPalette
                 blocks={objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS}
-                disabled={reviewing}
+                disabled={readOnly}
                 onAdd={addAtViewportCenter}
               />
             )}
@@ -2220,13 +2235,13 @@ export default function Board({
           {!objectBoard && !structBoard && (
             <>
               <SidebarGroup id="connectors" title="Connectors">
-                <ConnectorPalette disabled={reviewing} onAdd={addAtViewportCenter} />
+                <ConnectorPalette disabled={readOnly} onAdd={addAtViewportCenter} />
               </SidebarGroup>
               <SidebarGroup id="flows" title="Procedures">
-                <FlowPalette blocks={flowBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
+                <FlowPalette blocks={flowBlocks} disabled={readOnly} onAdd={addAtViewportCenter} />
               </SidebarGroup>
               <SidebarGroup id="structs" title="Structs">
-                <StructPalette blocks={structBlocks} disabled={reviewing} onAdd={addAtViewportCenter} />
+                <StructPalette blocks={structBlocks} disabled={readOnly} onAdd={addAtViewportCenter} />
               </SidebarGroup>
             </>
           )}
@@ -2269,16 +2284,16 @@ export default function Board({
                 onNodeContextMenu={onNodeContextMenu}
                 onPaneContextMenu={(e) => {
                   e.preventDefault()
-                  if (!reviewing && !objectBoard && !structBoard) setPaneMenu({ x: e.clientX, y: e.clientY })
+                  if (!readOnly && !objectBoard && !structBoard) setPaneMenu({ x: e.clientX, y: e.clientY })
                 }}
-                onEdgeDoubleClick={(_, edge) => !reviewing && edge.data?.route && setRoute(edge.id, null, true)}
+                onEdgeDoubleClick={(_, edge) => !readOnly && edge.data?.route && setRoute(edge.id, null, true)}
                 onPaneClick={() => setPanelId(null)}
                 onNodeDragStop={onNodeDragStop}
                 onDoubleClick={onPaneDoubleClick}
                 zoomOnDoubleClick={false}
-                nodesDraggable={!reviewing}
-                nodesConnectable={!reviewing && !objectBoard}
-                deleteKeyCode={reviewing ? null : undefined}
+                nodesDraggable={!readOnly}
+                nodesConnectable={!readOnly && !objectBoard}
+                deleteKeyCode={readOnly ? null : undefined}
               >
                 <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
                 <Controls fitViewOptions={FIT_VIEW} />
@@ -2303,6 +2318,11 @@ export default function Board({
               )}
             </nav>
           )}
+          {viewOnly && !openRun && (
+            <div className="review-banner" role="status">
+              You decide this flow's reviews, so you see it, but only its owner{flow.owner.kind !== 'global' && `, ${flow.owner.name},`} changes it.
+            </div>
+          )}
           {reviewing && openRun && (
             <div className="review-banner" role="status">
               {openRun.status === 'running'
@@ -2313,7 +2333,7 @@ export default function Board({
           )}
           <Assistant
             flowId={flowId}
-            disabled={reviewing}
+            disabled={readOnly}
             beforeSend={beforeAssistant}
             onApplied={assistantApplied}
             onError={report}
@@ -2349,7 +2369,7 @@ export default function Board({
             }}
             models={models}
             mcpServers={mcpServers}
-            readOnly={reviewing}
+            readOnly={readOnly}
             run={{ status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
             // The form shows in one place at a time.
             review={reviewNode?.id === panelNode.id ? undefined : reviewOf(panelNode)}
@@ -2394,7 +2414,7 @@ export default function Board({
             onQuantityChange={(quantity) => setQuantity(objectPanelNode.id, quantity)}
             human={objectPanelNode.data.human}
             onHumanChange={(human) => setHuman(objectPanelNode.id, human)}
-            editable={!reviewing}
+            editable={!readOnly}
             module={moduleOf(objectIdOf(objectPanelNode.id))}
             structRoot={isStructRoot(objectPanelNode.id)}
             content={objectPanelNode.data.content}
@@ -2409,6 +2429,7 @@ export default function Board({
         {!panelNode && !objectPanelNode && mcpOpen && (
           <MCPSettingsPanel
             servers={mcpServers ?? []}
+            canConfigure={configures(me)}
             onChanged={refreshMCPServers}
             onClose={() => setMCPOpen(false)}
             onError={report}
@@ -2416,11 +2437,19 @@ export default function Board({
         )}
         {!panelNode && !objectPanelNode && !mcpOpen && settingsOpen && (
           <FlowSettingsPanel
+            owner={
+              <OwnerPicker
+                flow={flow}
+                me={me}
+                teams={teams}
+                onChange={(owner) => setFlowOwner(flowId, owner).then(onReload).catch(report)}
+              />
+            }
             settings={flow.settings}
             module={flow.module}
             usedBy={flow.usedBy}
             defaultPrefix={defaultBranchPrefix(flow.name)}
-            readOnly={reviewing}
+            readOnly={readOnly}
             onSave={(settings) => onUpdate({ settings })}
             onModuleChange={(module) => onUpdate({ module })}
             onClose={() => setSettingsOpen(false)}

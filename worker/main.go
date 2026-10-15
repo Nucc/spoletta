@@ -77,6 +77,9 @@ type runRequest struct {
 	// extensions, skills and context files that could bring some back, so
 	// it can't read the worker's files or secrets, or run anything.
 	NoTools bool `json:"noTools"`
+	// The model providers' keys of whoever the run is for, by the
+	// environment variable pi reads each from, over the worker's own.
+	Keys map[string]string `json:"keys"`
 	// Put the guide to authoring flows before the prompt, for an agent that
 	// can't read it itself.
 	Guide bool `json:"guide"`
@@ -422,7 +425,10 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 
 	// The specs and the result live outside the agent's working directory.
 	var resultFile string
-	env := os.Environ()
+	env, err := withKeys(os.Environ(), run.Keys)
+	if err != nil {
+		return runResult{Error: err.Error()}
+	}
 	if len(run.MCPServers) > 0 || run.Output != nil {
 		private, err := os.MkdirTemp("", "private-")
 		if err != nil {
@@ -766,4 +772,35 @@ func reply(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
+}
+
+// Names pi reads a provider's key from.
+var keyName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*_API_KEY$`)
+
+// The environment with the run's model keys in place of the worker's own. A
+// provider's OAuth token, which pi prefers to its key, goes, so the key given
+// is the one used.
+func withKeys(env []string, keys map[string]string) ([]string, error) {
+	if len(keys) == 0 {
+		return env, nil
+	}
+	drop := map[string]bool{}
+	for name, key := range keys {
+		if !keyName.MatchString(name) || strings.ContainsAny(key, "\x00\n") {
+			return nil, fmt.Errorf("invalid model key %s", name)
+		}
+		drop[name] = true
+		drop[strings.TrimSuffix(name, "_API_KEY")+"_OAUTH_TOKEN"] = true
+	}
+	out := make([]string, 0, len(env)+len(keys))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !drop[name] {
+			out = append(out, kv)
+		}
+	}
+	for name, key := range keys {
+		out = append(out, name+"="+key)
+	}
+	return out, nil
 }

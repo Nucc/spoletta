@@ -22,18 +22,49 @@ function nameFromURL(url: string): string {
   }
 }
 
-// The MCP servers agents can use. Each is connected by signing in through
-// the browser; an agent process then picks the ones it uses, in its panel.
+// The MCP servers agents can use, in the board's side panel. Each is
+// connected by signing in through the browser; an agent process then picks
+// the ones it uses, in its panel.
 export function MCPSettingsPanel({
   servers,
+  canConfigure,
   onChanged,
   onClose,
   onError,
 }: {
   servers: MCPServer[]
+  // Whether whoever is signed in adds, changes and removes servers: an
+  // admin, or anyone without sign-in.
+  canConfigure: boolean
   // Load the servers again.
   onChanged: () => void
   onClose: () => void
+  onError: (err: unknown) => void
+}) {
+  return (
+    <aside className="panel mcp-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
+      <header className="panel-header">
+        <h2>MCP servers</h2>
+        <button className="panel-close" onClick={onClose} aria-label="Close MCP servers">
+          ×
+        </button>
+      </header>
+      <MCPServers servers={servers} canConfigure={canConfigure} onChanged={onChanged} onError={onError} />
+    </aside>
+  )
+}
+
+// The servers, each to connect, and for those who configure them, to change,
+// remove or add.
+export function MCPServers({
+  servers,
+  canConfigure,
+  onChanged,
+  onError,
+}: {
+  servers: MCPServer[]
+  canConfigure: boolean
+  onChanged: () => void
   onError: (err: unknown) => void
 }) {
   const [name, setName] = useState('')
@@ -61,16 +92,10 @@ export function MCPSettingsPanel({
   const act = (f: () => Promise<void>) => f().then(onChanged, onError)
 
   return (
-    <aside className="panel mcp-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
-      <header className="panel-header">
-        <h2>MCP servers</h2>
-        <button className="panel-close" onClick={onClose} aria-label="Close MCP servers">
-          ×
-        </button>
-      </header>
+    <>
       <p className="panel-note">
         Servers agents can use. Connect each by signing in; then pick, in an agent process's panel, the ones it may use.
-        Agents use none unless picked.
+        Agents use none unless picked, and reach them as whoever their run is for, with that person's connection.
       </p>
       {servers.length === 0 ? (
         <p className="panel-note">No servers yet.</p>
@@ -80,6 +105,7 @@ export function MCPSettingsPanel({
             <MCPServerItem
               key={s.id}
               server={s}
+              canConfigure={canConfigure}
               onConnect={() => connectMCPServer(s.id)}
               onDisconnect={() => act(() => disconnectMCPServer(s.id))}
               onDescribe={(d) => act(() => updateMCPServer(s.id, { description: d }).then(() => undefined))}
@@ -88,59 +114,61 @@ export function MCPSettingsPanel({
           ))}
         </ul>
       )}
-      <form
-        className="mcp-add"
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (nameOk && urlOk && !adding) add()
-        }}
-      >
-        <h3>Add a server</h3>
-        <label className="panel-field">
-          <span>URL</span>
-          <input
-            value={url}
-            placeholder="https://example.com/mcp"
-            spellCheck={false}
-            onChange={(e) => {
-              const v = e.target.value
-              // Named after its URL, unless named by hand.
-              if (name === '' || name === nameFromURL(url)) setName(nameFromURL(v))
-              setUrl(v)
-            }}
-          />
-        </label>
-        <label className="panel-field">
-          <span>Name</span>
-          <input value={name} placeholder="slack" spellCheck={false} onChange={(e) => setName(e.target.value)} />
-          {name.trim() !== '' && !nameOk && (
-            <small className="panel-warning">Letters, digits, - and _ only.</small>
-          )}
-        </label>
-        <label className="panel-field">
-          <span>Description</span>
-          <input
-            value={description}
-            placeholder="Optional. What it offers, which tells agents when to use it."
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </label>
-        <button className="panel-button" type="submit" disabled={!nameOk || !urlOk || adding}>
-          Add
-        </button>
-      </form>
-    </aside>
+      {canConfigure && (
+        <form
+          className="mcp-add"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (nameOk && urlOk && !adding) add()
+          }}
+        >
+          <h3>Add a server</h3>
+          <label className="panel-field">
+            <span>URL</span>
+            <input
+              value={url}
+              placeholder="https://example.com/mcp"
+              spellCheck={false}
+              onChange={(e) => {
+                const v = e.target.value
+                // Named after its URL, unless named by hand.
+                if (name === '' || name === nameFromURL(url)) setName(nameFromURL(v))
+                setUrl(v)
+              }}
+            />
+          </label>
+          <label className="panel-field">
+            <span>Name</span>
+            <input value={name} placeholder="slack" spellCheck={false} onChange={(e) => setName(e.target.value)} />
+            {name.trim() !== '' && !nameOk && <small className="panel-warning">Letters, digits, - and _ only.</small>}
+          </label>
+          <label className="panel-field">
+            <span>Description</span>
+            <input
+              value={description}
+              placeholder="Optional. What it offers, which tells agents when to use it."
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </label>
+          <button className="panel-button" type="submit" disabled={!nameOk || !urlOk || adding}>
+            Add
+          </button>
+        </form>
+      )}
+    </>
   )
 }
 
 function MCPServerItem({
   server: s,
+  canConfigure,
   onConnect,
   onDisconnect,
   onDescribe,
   onRemove,
 }: {
   server: MCPServer
+  canConfigure: boolean
   onConnect: () => void
   onDisconnect: () => void
   onDescribe: (description: string) => void
@@ -152,26 +180,34 @@ function MCPServerItem({
     <li className="mcp-item">
       <div className="mcp-item-head">
         <span className="mcp-item-name">{s.name}</span>
-        <span className={`mcp-status${s.connected ? ' connected' : ''}`}>{s.connected ? 'Connected' : 'Not connected'}</span>
+        <span className={`mcp-status${s.connected ? ' connected' : ''}`}>
+          {s.connected ? 'Connected' : 'Not connected'}
+        </span>
       </div>
       <span className="mcp-item-url" title={s.url}>
         {s.url}
       </span>
-      <input
-        className="mcp-item-description"
-        value={description}
-        placeholder="Add a description…"
-        aria-label={`Description of ${s.name}`}
-        onChange={(e) => setDescription(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => e.key === 'Enter' && save()}
-      />
+      {canConfigure ? (
+        <input
+          className="mcp-item-description"
+          value={description}
+          placeholder="Add a description…"
+          aria-label={`Description of ${s.name}`}
+          onChange={(e) => setDescription(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+        />
+      ) : (
+        s.description && <span className="mcp-item-description">{s.description}</span>
+      )}
       <div className="mcp-item-actions">
         <button onClick={onConnect}>{s.connected ? 'Sign in again' : 'Connect'}</button>
         {s.connected && <button onClick={onDisconnect}>Disconnect</button>}
-        <button className="danger" onClick={onRemove}>
-          Remove
-        </button>
+        {canConfigure && (
+          <button className="danger" onClick={onRemove}>
+            Remove
+          </button>
+        )}
       </div>
     </li>
   )
@@ -213,7 +249,9 @@ export function MCPServerPicker({
                 type="checkbox"
                 checked={on}
                 disabled={readOnly}
-                onChange={(e) => onChange(e.target.checked ? [...selected, s.id] : selected.filter((id) => id !== s.id))}
+                onChange={(e) =>
+                  onChange(e.target.checked ? [...selected, s.id] : selected.filter((id) => id !== s.id))
+                }
               />
               <span>{s.name}</span>
             </label>

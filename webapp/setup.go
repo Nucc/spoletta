@@ -299,7 +299,12 @@ func storedSetupRoute(v any) (json.RawMessage, error) {
 const maxSetupBytes = 16 << 20
 
 func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
+	// The setup file is the whole setup, everyone's flows, so with sign-in
+	// only admins take it out and bring it in.
 	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
+		if requestUser(r) != nil && refuseNonAdmin(w, r) {
+			return
+		}
 		ctx := r.Context()
 		tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
@@ -330,6 +335,9 @@ func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
 	// Takes the file as the body, YAML or JSON, and says which flows it
 	// created and which it made over.
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) {
+		if requestUser(r) != nil && refuseNonAdmin(w, r) {
+			return
+		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSetupBytes))
 		if err != nil {
 			http.Error(w, "the file is too large", http.StatusRequestEntityTooLarge)

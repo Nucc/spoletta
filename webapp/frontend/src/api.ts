@@ -208,7 +208,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/mcp-servers', '/api/users']
+const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys']
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<() => void>()
@@ -278,8 +278,21 @@ export type Flow = {
   usedBy: number
   settings: FlowSettings
   createdAt: string
+  // Who sees it and may change it: someone, a team, or everyone.
+  owner: FlowOwner
+  // How far whoever asked may go with it: change it, or only see it to
+  // decide the reviews their roles let them.
+  access: 'edit' | 'review'
   // Its latest run of the whole flow, if any.
   lastRun: FlowRun | null
+}
+
+// Who owns a flow; id and name are the team's or the user's.
+export type FlowOwner = { kind: 'global' } | { kind: 'team' | 'user'; id: number; name: string }
+
+// Gives the flow to someone, a team, or everyone.
+export function setFlowOwner(id: number, owner: { kind: 'global' } | { kind: 'team' | 'user'; id: number }): Promise<Flow> {
+  return request(`/api/flows/${id}/owner`, { method: 'PUT', body: JSON.stringify(owner) })
 }
 
 // A repository the flow's agents and scripts work on, checked out in their
@@ -595,7 +608,8 @@ export function listModels(): Promise<Models> {
 }
 
 // An MCP server agents can use once it is connected, which signs in through
-// the browser; each agent process picks the ones it uses.
+// the browser; each agent process picks the ones it uses. With sign-in,
+// connected says whether whoever asked connected it for themselves.
 export type MCPServer = {
   id: number
   name: string
@@ -1102,7 +1116,10 @@ export type User = {
   email: string
   name: string
   admin: boolean
+  // Makes teams and says who is in them.
+  teamManager: boolean
   roles: string[]
+  teams: { id: number; name: string }[]
   // Null until they first sign in, when an admin added them.
   signedInAt: string | null
 }
@@ -1130,8 +1147,62 @@ export function addUser(user: { email: string; name?: string; admin?: boolean; r
   return request('/api/users', { method: 'POST', body: JSON.stringify(user) })
 }
 
-export function updateUser(id: number, patch: { admin?: boolean; roles?: string[] }): Promise<User> {
+export function updateUser(id: number, patch: { admin?: boolean; teamManager?: boolean; roles?: string[] }): Promise<User> {
   return request(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+// Signs them out for good, until an admin adds them back; their flows go to
+// the admin removing them.
+export function removeUser(id: number): Promise<void> {
+  return request(`/api/users/${id}`, { method: 'DELETE' })
+}
+
+// A group of people that owns flows together.
+export type Team = {
+  id: number
+  name: string
+  members: { id: number; email: string; name: string }[]
+}
+
+export function listTeams(): Promise<Team[]> {
+  return request('/api/teams')
+}
+
+export function createTeam(team: { name: string; members?: number[] }): Promise<Team> {
+  return request('/api/teams', { method: 'POST', body: JSON.stringify(team) })
+}
+
+export function updateTeam(id: number, patch: { name?: string; members?: number[] }): Promise<Team> {
+  return request(`/api/teams/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function deleteTeam(id: number): Promise<void> {
+  return request(`/api/teams/${id}`, { method: 'DELETE' })
+}
+
+// A provider agents reach their models at with a key.
+export type ModelProvider = { id: string; name: string; env: string }
+
+// A saved key, of which only the last four characters show.
+export type ModelKey = { provider: string; hint: string; updatedAt: string }
+
+// Whose keys: the instance's, which admins set for everyone, or one's own.
+export type KeyScope = 'instance' | 'me'
+
+export function listModelProviders(): Promise<ModelProvider[]> {
+  return request('/api/model-providers')
+}
+
+export function listModelKeys(scope: KeyScope): Promise<ModelKey[]> {
+  return request(`/api/model-keys/${scope}`)
+}
+
+export function setModelKey(scope: KeyScope, provider: string, key: string): Promise<ModelKey[]> {
+  return request(`/api/model-keys/${scope}/${provider}`, { method: 'PUT', body: JSON.stringify({ key }) })
+}
+
+export function deleteModelKey(scope: KeyScope, provider: string): Promise<void> {
+  return request(`/api/model-keys/${scope}/${provider}`, { method: 'DELETE' })
 }
 
 // The roles boards name and people hold, to pick from.

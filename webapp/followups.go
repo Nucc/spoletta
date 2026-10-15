@@ -147,6 +147,7 @@ func registerFollowUpRoutes(mux *http.ServeMux, db *sql.DB, workerURL string, mc
 			return
 		}
 
+		who := requestUserID(r)
 		ctx, cancel := context.WithCancel(context.Background())
 		fs.mu.Lock()
 		fs.going[f.ID] = cancel
@@ -158,7 +159,7 @@ func registerFollowUpRoutes(mux *http.ServeMux, db *sql.DB, workerURL string, mc
 				fs.mu.Unlock()
 				cancel()
 			}()
-			res := runFollowUp(ctx, db, workerURL, mcp, run, mcpServers, stepID, f.Attempt)
+			res := runFollowUp(ctx, db, workerURL, mcp, who, run, mcpServers, stepID, f.Attempt)
 			if err := finishFollowUp(db, f.ID, res); err != nil {
 				log.Printf("finish follow-up %d of step %d: %v", f.ID, stepID, err)
 			}
@@ -281,11 +282,15 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	return f, run, mcpServers, nil
 }
 
-// Runs a follow-up in the worker, recording its conversation as the step's.
-func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, run agentRun, mcpServers []int64, stepID int64, attempt int) runResult {
+// Runs a follow-up in the worker for whoever asked for it, with their model
+// keys and MCP connections, recording its conversation as the step's.
+func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, who *int64, run agentRun, mcpServers []int64, stepID int64, attempt int) runResult {
 	var msg string
 	var err error
-	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, mcpServers)
+	if run.Keys, err = modelKeys(ctx, db, who); err != nil {
+		return runResult{Error: err.Error()}
+	}
+	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, mcpServers)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}

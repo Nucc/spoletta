@@ -65,6 +65,8 @@ type agentRun struct {
 	// with the step's token; pi gets no MCP servers without them.
 	MCPServers []mcpRunServer `json:"mcpServers,omitempty"`
 	MCPToken   string         `json:"mcpToken,omitempty"`
+	// The model keys of whoever the run is for, by environment variable.
+	Keys map[string]string `json:"keys,omitempty"`
 	// The workspace it works in, if it works on repositories.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
 	// In a workspace, the pi session the worker keeps its conversation in, so
@@ -132,6 +134,13 @@ const failureSourceMessage = "only an agent, script or Sentry process fails, so 
 // objects, the boards of its flow processes, its versions and its runs. Each
 // flow does one job, such as fixing exceptions or bumping dependencies, or
 // is a module, a part of such jobs that other flows reuse; see modules.go.
+// Who owns a flow: kind is global, team or user.
+type flowOwner struct {
+	Kind string `json:"kind"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
 type flow struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
@@ -143,6 +152,10 @@ type flow struct {
 	// branches are named; see workspace.go.
 	Settings  flowSettings `json:"settings"`
 	CreatedAt time.Time    `json:"createdAt"`
+	// Who sees it and may change it; see owners.go.
+	Owner flowOwner `json:"owner"`
+	// How far whoever asked may go with it: edit or review.
+	Access string `json:"access"`
 	// Its latest run of the whole flow, if any.
 	LastRun *run `json:"lastRun"`
 }

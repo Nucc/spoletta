@@ -75,6 +75,15 @@ func main() {
 	if err := migrateUserRoles(db); err != nil {
 		log.Fatal(err)
 	}
+	if err := migrateTeams(db); err != nil {
+		log.Fatal(err)
+	}
+	if err := migrateOwners(db); err != nil {
+		log.Fatal(err)
+	}
+	if err := migrateModelKeys(db); err != nil {
+		log.Fatal(err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
@@ -82,6 +91,9 @@ func main() {
 	auth := newAuth(db)
 	registerAuthRoutes(mux, db, auth)
 	registerUserRoleRoutes(mux, db, auth)
+	registerTeamRoutes(mux, db, auth)
+	registerOwnerRoutes(mux, db)
+	registerModelKeyRoutes(mux, db)
 	registerFlowListRoutes(mux, db, workerURL)
 	registerProcessRoutes(mux, db)
 	registerFlowRoutes(mux, db)
@@ -97,7 +109,7 @@ func main() {
 		log.Fatalf("PARALLEL_STEPS must be a positive number")
 	}
 	// Where the worker reaches this webapp's MCP proxy.
-	mcp := newMCPBroker(db, env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")))
+	mcp := newMCPBroker(db, env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")), auth != nil)
 	registerMCPRoutes(mux, db, mcp)
 	eng := newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, mcp, parallelSteps)
 	registerRunRoutes(mux, db, eng)
@@ -124,5 +136,5 @@ func main() {
 
 	addr := ":" + env("PORT", "8080")
 	log.Printf("listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, auth.protect(mux)))
+	log.Fatal(http.ListenAndServe(addr, auth.protect(guardFlows(db, mux))))
 }

@@ -3370,3 +3370,227 @@ button.toolbar-link {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* The settings: a tab per part down the side, the part on the right. */
+.settings {
+  display: flex;
+  gap: 32px;
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 2px;
+  width: 180px;
+}
+
+.settings-tabs a {
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: #1f2328;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.settings-tabs a:hover {
+  background: #eaeef2;
+}
+
+.settings-tabs a.active {
+  background: #ddf4ff;
+  color: #0969da;
+  font-weight: 600;
+}
+
+.settings-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-main .flow-section h2 {
+  margin-top: 0;
+}
+
+.settings-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 24px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.settings-facts dt {
+  color: #656d76;
+}
+
+.settings-facts dd {
+  margin: 0;
+}
+
+.settings-mcp {
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 10px;
+}
+
+@media (max-width: 720px) {
+  .settings {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .settings-tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: auto;
+  }
+}
+
+/* A model key: its provider, whether it is set, and a field to set it. */
+.key-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 10px 16px;
+}
+
+.key-provider {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.key-item input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.key-item button {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.key-item button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.key-item button.danger {
+  color: #82071e;
+}
+
+/* Who sees a flow, on its card: a select to give it to another owner. */
+.flow-owner {
+  flex-shrink: 0;
+  max-width: 180px;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: #656d76;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 999px;
+}
+
+select.flow-owner {
+  cursor: pointer;
+}
+
+select.flow-owner:disabled {
+  cursor: default;
+}
+
+.flow-owner.team {
+  color: #8250df;
+  background: #fbefff;
+  border-color: #e8d5fa;
+}
+
+.flow-owner.global {
+  color: #1a7f37;
+  background: #dafbe1;
+  border-color: #aceebb;
+}
+
+.flow-owner.review {
+  color: #9a6700;
+  background: #fff8c5;
+  border-color: #f2e08c;
+}
+
+.flows-whose {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  color: #656d76;
+  font-size: 14px;
+}
+
+.flows-whose select {
+  padding: 4px 8px;
+  font: inherit;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+}
+
+/* A person's admin and team manager boxes, and removing them. */
+.person-flags {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.person-flags .icon-button {
+  margin-top: 16px;
+}
+
+.team-name {
+  padding: 2px 6px;
+  margin-left: -7px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 15px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.team-name:hover,
+.team-name:focus {
+  border-color: #d8dee4;
+}
+
+.person-roles select {
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.settings-mcp .mcp-list {
+  margin: 12px 0 20px;
+}

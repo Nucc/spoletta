@@ -51,6 +51,8 @@ type user struct {
 	Email string `json:"email"`
 	Name  string `json:"name"`
 	Admin bool   `json:"admin"`
+	// Makes teams and says who is in them; see teams.go.
+	TeamManager bool `json:"teamManager"`
 }
 
 // How long a session lasts, and a sign-in under way.
@@ -104,6 +106,8 @@ func migrateUsers(db *sql.DB) error {
 	for _, c := range []struct{ table, name, def string }{
 		{"runs", "started_by", "BIGINT NULL AFTER schedule_id"},
 		{"run_steps", "decided_by", "BIGINT NULL AFTER instructions"},
+		// Someone an admin removed; see user_roles.go.
+		{"users", "removed_at", "TIMESTAMP(3) NULL"},
 	} {
 		if err := addColumn(db, c.table, c.name, c.def); err != nil {
 			return err
@@ -209,9 +213,9 @@ func (a *auth) sessionUser(r *http.Request) (*user, error) {
 	}
 	var u user
 	err = a.db.QueryRowContext(r.Context(),
-		`SELECT u.id, u.email, u.name, u.admin FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP(3)`, hashToken(c.Value)).
-		Scan(&u.ID, &u.Email, &u.Name, &u.Admin)
+		`SELECT u.id, u.email, u.name, u.admin, u.team_manager FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP(3) AND u.removed_at IS NULL`, hashToken(c.Value)).
+		Scan(&u.ID, &u.Email, &u.Name, &u.Admin, &u.TeamManager)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -408,6 +412,15 @@ func (a *auth) signedIn(ctx context.Context, c idClaims) (int64, error) {
 			return err
 		case err != nil:
 			return err
+		}
+		// Someone an admin removed stays out, even if ADMIN_EMAILS or their
+		// domain would let them in, until an admin adds them back.
+		var removed bool
+		if err := tx.QueryRowContext(ctx, "SELECT removed_at IS NOT NULL FROM users WHERE id = ?", id).Scan(&removed); err != nil {
+			return err
+		}
+		if removed {
+			return errNotAdmitted
 		}
 		// ADMIN_EMAILS makes admins, but taking someone off it doesn't undo
 		// that: an admin can.
@@ -607,4 +620,14 @@ func authPage(w http.ResponseWriter, status int, title, message string) {
 <p>%[2]s</p>
 <p><a href="/api/auth/login">Sign in again</a></p>
 `, html.EscapeString(title), html.EscapeString(message))
+}
+
+// The name of the user, or their email without one; "someone" for a user
+// that can't be found.
+func userLabel(ctx context.Context, db querier, id int64) string {
+	var label string
+	if err := db.QueryRowContext(ctx, "SELECT "+userLabelColumn("?"), id).Scan(&label); err != nil || label == "" {
+		return "someone"
+	}
+	return label
 }

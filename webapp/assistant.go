@@ -166,6 +166,7 @@ func registerAssistantRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 
+		who := requestUserID(r)
 		ctx, cancel := context.WithCancel(context.Background())
 		as.mu.Lock()
 		as.going[id] = cancel
@@ -177,7 +178,7 @@ func registerAssistantRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 				as.mu.Unlock()
 				cancel()
 			}()
-			res := runAssistant(ctx, db, workerURL, id, reply)
+			res := runAssistant(ctx, db, workerURL, who, id, reply)
 			if err := finishAssistantReply(db, reply, res); err != nil {
 				log.Printf("finish assistant reply %d of flow %d: %v", reply, id, err)
 			}
@@ -384,9 +385,10 @@ func loadAssistantFlow(ctx context.Context, db *sql.DB, id int64) (assistantFlow
 	return af, err
 }
 
-// Has the agent reply to the person's latest message, and imports the setup
-// file it replies with, handing one the import refuses back to it to fix.
-func runAssistant(ctx context.Context, db *sql.DB, workerURL string, flow, reply int64) assistantResult {
+// Has the agent reply to the person's latest message, with their model keys,
+// and imports the setup file it replies with, handing one the import
+// refuses back to it to fix.
+func runAssistant(ctx context.Context, db *sql.DB, workerURL string, who *int64, flow, reply int64) assistantResult {
 	failed := func(err error) assistantResult {
 		if ctx.Err() != nil {
 			return assistantResult{err: "It was stopped."}
@@ -414,7 +416,11 @@ func runAssistant(ctx context.Context, db *sql.DB, workerURL string, flow, reply
 	}
 	prompt := assistantPrompt(af, history)
 
-	run := agentRun{ProcessName: "Assistant", Prompt: prompt, NoTools: true, Guide: true}
+	keys, err := modelKeys(ctx, db, who)
+	if err != nil {
+		return failed(err)
+	}
+	run := agentRun{ProcessName: "Assistant", Prompt: prompt, NoTools: true, Guide: true, Keys: keys}
 	for attempt := 0; ; attempt++ {
 		res := streamAgent(ctx, workerURL, run, func(json.RawMessage) {})
 		if ctx.Err() != nil {

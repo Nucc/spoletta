@@ -22,10 +22,12 @@ import (
 	"time"
 )
 
-// MCP servers agents can use, such as the company MCP gateway's. They are
-// configured once in the settings, where each is connected by signing in
-// through the browser (OAuth with PKCE); an agent process then uses only the
-// servers it selects, none by default.
+// MCP servers agents can use, such as the company MCP gateway's. An admin
+// configures them once in the settings, and then everyone connects each for
+// themselves there, by signing in through the browser (OAuth with PKCE), so
+// an agent acts on a server as whoever its run is for; see runUser. An agent
+// process uses only the servers it selects, none by default. Without
+// sign-in, anyone configures them, and a connection is everyone's.
 //
 // The agent never sees the servers' tokens: the webapp hands each agent step
 // a token of its own that reaches only the step's servers, through the proxy
@@ -37,12 +39,12 @@ type mcpServer struct {
 	Name        string `json:"name"`
 	URL         string `json:"url"`
 	Description string `json:"description"`
-	// Whether it is signed in, so agents can use it.
+	// Whether whoever asked connected it, so their agents can use it.
 	Connected bool `json:"connected"`
 }
 
 func migrateMCP(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS mcp_servers (
+	stmts := []string{`CREATE TABLE IF NOT EXISTS mcp_servers (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY,
 		name VARCHAR(64) NOT NULL UNIQUE,
 		url VARCHAR(2048) NOT NULL,
@@ -54,11 +56,48 @@ func migrateMCP(db *sql.DB) error {
 		refresh_token TEXT NULL,
 		expires_at DATETIME NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`)
-	return err
+	)`,
+		// Each person's connection to a server; the user 0, whom nobody is,
+		// holds the one everyone uses without sign-in.
+		`CREATE TABLE IF NOT EXISTS mcp_tokens (
+			server_id BIGINT NOT NULL,
+			user_id BIGINT NOT NULL,
+			access_token TEXT NULL,
+			refresh_token TEXT NULL,
+			expires_at DATETIME NULL,
+			PRIMARY KEY (server_id, user_id),
+			FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+		)`,
+		// Servers held their one connection themselves before people
+		// connected their own; it becomes the one without sign-in.
+		`INSERT IGNORE INTO mcp_tokens (server_id, user_id, access_token, refresh_token, expires_at)
+			SELECT id, 0, access_token, refresh_token, expires_at FROM mcp_servers WHERE access_token IS NOT NULL OR refresh_token IS NOT NULL`,
+		`UPDATE mcp_servers SET access_token = NULL, refresh_token = NULL, expires_at = NULL WHERE access_token IS NOT NULL OR refresh_token IS NOT NULL`,
+	}
+	for _, q := range stmts {
+		if _, err := db.Exec(q); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-const mcpServerColumns = "id, name, url, description, access_token IS NOT NULL OR refresh_token IS NOT NULL"
+// A server's columns, for scanMCPServer, with whether the user whose id is
+// the first argument connected it.
+const mcpServerColumns = "id, name, url, description, EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.server_id = mcp_servers.id AND t.user_id = ?)"
+
+// Whose connections a request is about: its user's, or without sign-in, everyone's.
+func tokenOwner(r *http.Request) int64 {
+	if u := requestUser(r); u != nil {
+		return u.ID
+	}
+	return 0
+}
+
+// Turns away a request to configure servers from someone not an admin, when people sign in.
+func refuseMCPConfig(w http.ResponseWriter, r *http.Request) bool {
+	return requestUser(r) != nil && refuseNonAdmin(w, r)
+}
 
 func scanMCPServer(row interface{ Scan(...any) error }, s *mcpServer) error {
 	return row.Scan(&s.ID, &s.Name, &s.URL, &s.Description, &s.Connected)
@@ -111,19 +150,33 @@ type mcpBroker struct {
 	db *sql.DB
 	// Where the worker reaches the proxy.
 	proxyURL string
+	// Whether people sign in, so connections are theirs.
+	signIn bool
 
 	mu sync.Mutex
 	// Sign-ins under way, by OAuth state.
 	pending map[string]mcpSignIn
-	// The servers each agent step's token reaches.
-	grants map[string]map[int64]bool
-	// Held while refreshing a server's token, so concurrent requests don't
-	// spend a refresh token the server rotates.
-	refreshing map[int64]*sync.Mutex
+	// The servers each agent step's token reaches, and whose connections it
+	// reaches them with.
+	grants map[string]mcpGrant
+	// Held while refreshing a connection's token, so concurrent requests
+	// don't spend a refresh token the server rotates.
+	refreshing map[mcpConnection]*sync.Mutex
+}
+
+// Someone's connection to a server.
+type mcpConnection struct {
+	server, user int64
+}
+
+type mcpGrant struct {
+	user    int64
+	servers map[int64]bool
 }
 
 type mcpSignIn struct {
 	server        int64
+	user          int64
 	verifier      string
 	redirect      string
 	clientID      string
@@ -132,13 +185,14 @@ type mcpSignIn struct {
 	expires       time.Time
 }
 
-func newMCPBroker(db *sql.DB, proxyURL string) *mcpBroker {
+func newMCPBroker(db *sql.DB, proxyURL string, signIn bool) *mcpBroker {
 	return &mcpBroker{
 		db:         db,
 		proxyURL:   strings.TrimRight(proxyURL, "/"),
+		signIn:     signIn,
 		pending:    map[string]mcpSignIn{},
-		grants:     map[string]map[int64]bool{},
-		refreshing: map[int64]*sync.Mutex{},
+		grants:     map[string]mcpGrant{},
+		refreshing: map[mcpConnection]*sync.Mutex{},
 	}
 }
 
@@ -150,7 +204,7 @@ var oauthClient = &http.Client{Timeout: 30 * time.Second}
 
 func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 	mux.HandleFunc("GET /api/mcp-servers", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT "+mcpServerColumns+" FROM mcp_servers ORDER BY name")
+		rows, err := db.QueryContext(r.Context(), "SELECT "+mcpServerColumns+" FROM mcp_servers ORDER BY name", tokenOwner(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -173,6 +227,9 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 	})
 
 	mux.HandleFunc("POST /api/mcp-servers", func(w http.ResponseWriter, r *http.Request) {
+		if refuseMCPConfig(w, r) {
+			return
+		}
 		var s mcpServer
 		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
@@ -200,15 +257,18 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		writeJSON(w, http.StatusCreated, s)
 	})
 
-	// Changing the URL signs out, since the sign-in was for the old one.
+	// Changing the URL signs everyone out, since their sign-ins were for the old one.
 	mux.HandleFunc("PATCH /api/mcp-servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if refuseMCPConfig(w, r) {
+			return
+		}
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
 		var s mcpServer
-		if err := scanMCPServer(db.QueryRowContext(r.Context(), "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ?", id), &s); errors.Is(err, sql.ErrNoRows) {
+		if err := scanMCPServer(db.QueryRowContext(r.Context(), "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ?", tokenOwner(r), id), &s); errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "server not found", http.StatusNotFound)
 			return
 		} else if err != nil {
@@ -245,12 +305,19 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			http.Error(w, "another server has that name", http.StatusConflict)
 			return
 		}
-		q := "UPDATE mcp_servers SET name = ?, url = ?, description = ? WHERE id = ?"
-		if s.URL != oldURL {
-			q = "UPDATE mcp_servers SET name = ?, url = ?, description = ?, client_id = '', redirect_uri = '', token_endpoint = '', access_token = NULL, refresh_token = NULL, expires_at = NULL WHERE id = ?"
-			s.Connected = false
-		}
-		if _, err := db.ExecContext(r.Context(), q, s.Name, s.URL, s.Description, id); err != nil {
+		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
+			q := "UPDATE mcp_servers SET name = ?, url = ?, description = ? WHERE id = ?"
+			if s.URL != oldURL {
+				q = "UPDATE mcp_servers SET name = ?, url = ?, description = ?, client_id = '', redirect_uri = '', token_endpoint = '' WHERE id = ?"
+				s.Connected = false
+				if _, err := tx.ExecContext(r.Context(), "DELETE FROM mcp_tokens WHERE server_id = ?", id); err != nil {
+					return err
+				}
+			}
+			_, err := tx.ExecContext(r.Context(), q, s.Name, s.URL, s.Description, id)
+			return err
+		})
+		if err != nil {
 			serverError(w, err)
 			return
 		}
@@ -259,6 +326,9 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 
 	// Processes that select it fail to run until it is removed from them.
 	mux.HandleFunc("DELETE /api/mcp-servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if refuseMCPConfig(w, r) {
+			return
+		}
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
 			http.Error(w, "invalid id", http.StatusBadRequest)
@@ -279,7 +349,7 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		to, err := b.startSignIn(r.Context(), id, callbackURL(r))
+		to, err := b.startSignIn(r.Context(), id, tokenOwner(r), callbackURL(r))
 		if err != nil {
 			log.Printf("mcp: sign in to server %d: %v", id, err)
 			signInPage(w, http.StatusBadGateway, "Couldn't start signing in", err.Error())
@@ -304,7 +374,7 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "UPDATE mcp_servers SET access_token = NULL, refresh_token = NULL, expires_at = NULL WHERE id = ?", id); err != nil {
+		if _, err := db.ExecContext(r.Context(), "DELETE FROM mcp_tokens WHERE server_id = ? AND user_id = ?", id, tokenOwner(r)); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -480,8 +550,9 @@ func getJSON(ctx context.Context, u string, out any) error {
 }
 
 // Registers the webapp as a client of the server's authorization server, if
-// it isn't for this redirect yet, and returns where to send the browser.
-func (b *mcpBroker) startSignIn(ctx context.Context, id int64, redirect string) (string, error) {
+// it isn't for this redirect yet, and returns where to send the browser to
+// connect the server for the user.
+func (b *mcpBroker) startSignIn(ctx context.Context, id, user int64, redirect string) (string, error) {
 	var serverURL, clientID, registeredRedirect string
 	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, redirect_uri FROM mcp_servers WHERE id = ?", id).
 		Scan(&serverURL, &clientID, &registeredRedirect)
@@ -519,7 +590,7 @@ func (b *mcpBroker) startSignIn(ctx context.Context, id int64, redirect string) 
 		}
 	}
 	b.pending[state] = mcpSignIn{
-		server: id, verifier: verifier, redirect: redirect, clientID: clientID,
+		server: id, user: user, verifier: verifier, redirect: redirect, clientID: clientID,
 		tokenEndpoint: c.tokenEndpoint, resource: c.resource, expires: now.Add(10 * time.Minute),
 	}
 	b.mu.Unlock()
@@ -649,8 +720,10 @@ func (b *mcpBroker) finishSignIn(ctx context.Context, q url.Values) (string, err
 	if t.RefreshToken != "" {
 		refresh = &t.RefreshToken
 	}
-	if _, err := b.db.ExecContext(ctx, "UPDATE mcp_servers SET access_token = ?, refresh_token = ?, expires_at = ? WHERE id = ?",
-		t.AccessToken, refresh, expiresAt(t), p.server); err != nil {
+	if _, err := b.db.ExecContext(ctx,
+		`INSERT INTO mcp_tokens (server_id, user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE access_token = VALUES(access_token), refresh_token = VALUES(refresh_token), expires_at = VALUES(expires_at)`,
+		p.server, p.user, t.AccessToken, refresh, expiresAt(t)); err != nil {
 		return "", err
 	}
 	var name string
@@ -658,14 +731,16 @@ func (b *mcpBroker) finishSignIn(ctx context.Context, q url.Values) (string, err
 	return name, err
 }
 
-// A server's access token, refreshed first when it has expired or, with
-// rejected set, when the server turned that token away.
-func (b *mcpBroker) accessToken(ctx context.Context, id int64, rejected string) (string, error) {
+// The access token of the user's connection to a server, refreshed first
+// when it has expired or, with rejected set, when the server turned that
+// token away.
+func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected string) (string, error) {
+	c := mcpConnection{id, user}
 	b.mu.Lock()
-	lock, ok := b.refreshing[id]
+	lock, ok := b.refreshing[c]
 	if !ok {
 		lock = &sync.Mutex{}
-		b.refreshing[id] = lock
+		b.refreshing[c] = lock
 	}
 	b.mu.Unlock()
 	lock.Lock()
@@ -674,10 +749,18 @@ func (b *mcpBroker) accessToken(ctx context.Context, id int64, rejected string) 
 	var access, refresh sql.NullString
 	var expires sql.NullTime
 	var serverURL, clientID, tokenEndpoint string
-	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, token_endpoint, access_token, refresh_token, expires_at FROM mcp_servers WHERE id = ?", id).
-		Scan(&serverURL, &clientID, &tokenEndpoint, &access, &refresh, &expires)
+	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, token_endpoint FROM mcp_servers WHERE id = ?", id).
+		Scan(&serverURL, &clientID, &tokenEndpoint)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errors.New("the server was removed")
+	}
+	if err != nil {
+		return "", err
+	}
+	err = b.db.QueryRowContext(ctx, "SELECT access_token, refresh_token, expires_at FROM mcp_tokens WHERE server_id = ? AND user_id = ?", id, user).
+		Scan(&access, &refresh, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errMCPNotConnected
 	}
 	if err != nil {
 		return "", err
@@ -699,9 +782,9 @@ func (b *mcpBroker) accessToken(ctx context.Context, id int64, rejected string) 
 	if err != nil {
 		// A refresh token the server no longer takes means signing in again.
 		if status == http.StatusBadRequest || status == http.StatusUnauthorized {
-			log.Printf("mcp: refresh for server %d: %v", id, err)
-			if _, err := b.db.ExecContext(context.Background(), "UPDATE mcp_servers SET access_token = NULL, refresh_token = NULL, expires_at = NULL WHERE id = ?", id); err != nil {
-				log.Printf("mcp: sign out server %d: %v", id, err)
+			log.Printf("mcp: refresh for server %d of user %d: %v", id, user, err)
+			if _, err := b.db.ExecContext(context.Background(), "DELETE FROM mcp_tokens WHERE server_id = ? AND user_id = ?", id, user); err != nil {
+				log.Printf("mcp: sign out server %d of user %d: %v", id, user, err)
 			}
 			return "", errMCPNotConnected
 		}
@@ -710,8 +793,8 @@ func (b *mcpBroker) accessToken(ctx context.Context, id int64, rejected string) 
 	if t.RefreshToken == "" {
 		t.RefreshToken = refresh.String
 	}
-	if _, err := b.db.ExecContext(ctx, "UPDATE mcp_servers SET access_token = ?, refresh_token = ?, expires_at = ? WHERE id = ?",
-		t.AccessToken, t.RefreshToken, expiresAt(t), id); err != nil {
+	if _, err := b.db.ExecContext(ctx, "UPDATE mcp_tokens SET access_token = ?, refresh_token = ?, expires_at = ? WHERE server_id = ? AND user_id = ?",
+		t.AccessToken, t.RefreshToken, expiresAt(t), id, user); err != nil {
 		return "", err
 	}
 	return t.AccessToken, nil
@@ -724,13 +807,22 @@ type mcpRunServer struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Grants an agent step the servers it selects: checks each is connected and
-// returns them with the token that reaches them through the proxy, which
-// revoke ends. A server that is missing or signed out fails the step with a
-// message saying what to do; that is msg, err is for anything else.
-func (b *mcpBroker) grant(ctx context.Context, ids []int64) (servers []mcpRunServer, token, msg string, err error) {
+// Grants an agent step the servers it selects, with the connections of the
+// user it works for: nil is nobody, with no connections when people sign
+// in, and everyone's without. Checks each is connected and returns them
+// with the token that reaches them through the proxy, which revoke ends. A
+// server that is missing or signed out fails the step with a message
+// saying what to do; that is msg, err is for anything else.
+func (b *mcpBroker) grant(ctx context.Context, who *int64, ids []int64) (servers []mcpRunServer, token, msg string, err error) {
 	if len(ids) == 0 {
 		return nil, "", "", nil
+	}
+	var user int64
+	switch {
+	case who != nil:
+		user = *who
+	case b.signIn:
+		return nil, "", "This run is for nobody, so it has no MCP connections: start it yourself, or have the schedule made again by someone who connected its MCP servers.", nil
 	}
 	allowed := map[int64]bool{}
 	for _, id := range ids {
@@ -738,15 +830,18 @@ func (b *mcpBroker) grant(ctx context.Context, ids []int64) (servers []mcpRunSer
 			continue
 		}
 		var s mcpServer
-		err := scanMCPServer(b.db.QueryRowContext(ctx, "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ?", id), &s)
+		err := scanMCPServer(b.db.QueryRowContext(ctx, "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ?", user, id), &s)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, "", "An MCP server the process uses was removed; pick its MCP servers again.", nil
 		}
 		if err != nil {
 			return nil, "", "", err
 		}
-		if _, err := b.accessToken(ctx, id, ""); errors.Is(err, errMCPNotConnected) {
-			return nil, "", fmt.Sprintf("The MCP server %s isn't connected. Connect it under MCP servers in the toolbar, then run again.", s.Name), nil
+		if _, err := b.accessToken(ctx, id, user, ""); errors.Is(err, errMCPNotConnected) {
+			if b.signIn {
+				return nil, "", fmt.Sprintf("The MCP server %s isn't connected for %s. Connect it in Settings, under MCP servers, then run again.", s.Name, userLabel(ctx, b.db, user)), nil
+			}
+			return nil, "", fmt.Sprintf("The MCP server %s isn't connected. Connect it in Settings, under MCP servers, then run again.", s.Name), nil
 		} else if err != nil {
 			return nil, "", fmt.Sprintf("Couldn't get a token for the MCP server %s: %v", s.Name, err), nil
 		}
@@ -759,7 +854,7 @@ func (b *mcpBroker) grant(ctx context.Context, ids []int64) (servers []mcpRunSer
 	}
 	token = randomToken()
 	b.mu.Lock()
-	b.grants[token] = allowed
+	b.grants[token] = mcpGrant{user: user, servers: allowed}
 	b.mu.Unlock()
 	return servers, token, "", nil
 }
@@ -792,7 +887,8 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	b.mu.Lock()
-	allowed := ok && b.grants[token][id]
+	g := b.grants[token]
+	allowed := ok && g.servers[id]
 	b.mu.Unlock()
 	if !allowed {
 		http.Error(w, "this MCP server isn't available to this step", http.StatusForbidden)
@@ -819,9 +915,9 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	var resp *http.Response
 	rejected := ""
 	for attempt := 0; attempt < 2; attempt++ {
-		access, err := b.accessToken(r.Context(), id, rejected)
+		access, err := b.accessToken(r.Context(), id, g.user, rejected)
 		if errors.Is(err, errMCPNotConnected) {
-			http.Error(w, fmt.Sprintf("the MCP server %s isn't connected; connect it under MCP servers in the toolbar", name), http.StatusBadGateway)
+			http.Error(w, fmt.Sprintf("the MCP server %s isn't connected; connect it in Settings, under MCP servers", name), http.StatusBadGateway)
 			return
 		}
 		if err != nil {

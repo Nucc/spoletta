@@ -1,18 +1,37 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { createFlow, deleteFlow, exportSetup, importSetup, listFlows, type Flow } from './api'
+import {
+  createFlow,
+  deleteFlow,
+  exportSetup,
+  importSetup,
+  listFlows,
+  listTeams,
+  setFlowOwner,
+  type Flow,
+  type Me,
+  type Team,
+} from './api'
 import { ClockIcon, DownloadIcon, FlowBuilderIcon, ObjectIcon, PlusIcon, SubflowIcon, TrashIcon, UploadIcon } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
-import { Account } from './Account'
+import { Account, configures, useMe } from './Account'
+import { OwnerPicker, ownerLabel } from './Owner'
 
 // The main page: the flows that run, each a job of its own, such as fixing
 // exceptions or bumping dependencies, and apart from them the procedures,
 // the flows made to be reused inside others, and the structs, the objects
-// they use. Opening one shows its board.
+// they use. Opening one shows its board. With sign-in, only those one sees
+// are listed: one's own, one's teams', everyone's, and those whose reviews
+// one decides; they can be narrowed to whose they are.
 export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
-  const [flows, setFlows] = useState<Flow[] | null>(null)
+  const me = useMe()
+  const [all, setFlows] = useState<Flow[] | null>(null)
+  const [whose, setWhose] = useState('')
+  const [teams, setTeams] = useState<Team[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const picker = useRef<HTMLInputElement>(null)
+
+  const flows = all && all.filter((f) => !whose || whoseKey(f) === whose)
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
   const refresh = useCallback(() => listFlows().then(setFlows).catch(report), [report])
@@ -21,6 +40,13 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
     document.title = 'Flows'
     refresh()
   }, [refresh])
+
+  useEffect(() => {
+    if (me?.user) listTeams().then(setTeams, report)
+  }, [me, report])
+
+  const onOwner = (f: Flow, owner: Parameters<typeof setFlowOwner>[1]) =>
+    setFlowOwner(f.id, owner).then(refresh, report)
 
   const onCreate = async (name: string, kind: FlowKind) => {
     const f = await createFlow(name, kind)
@@ -85,17 +111,25 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         <a className="toolbar-link" href="#/schedules">
           <ClockIcon /> Schedules
         </a>
-        <button className="toolbar-link" onClick={onExport} title="Download every flow, procedure, struct and MCP server as a YAML file">
-          <DownloadIcon /> Export
-        </button>
-        <button
-          className="toolbar-link"
-          onClick={() => picker.current?.click()}
-          title="Create or update flows, procedures, structs and MCP servers from a YAML file"
-        >
-          <UploadIcon /> Import
-        </button>
-        <input ref={picker} type="file" accept=".yaml,.yml,.json" hidden onChange={onImport} />
+        {configures(me) && (
+          <>
+            <button
+              className="toolbar-link"
+              onClick={onExport}
+              title="Download every flow, procedure, struct and MCP server as a YAML file"
+            >
+              <DownloadIcon /> Export
+            </button>
+            <button
+              className="toolbar-link"
+              onClick={() => picker.current?.click()}
+              title="Create or update flows, procedures, structs and MCP servers from a YAML file"
+            >
+              <UploadIcon /> Import
+            </button>
+            <input ref={picker} type="file" accept=".yaml,.yml,.json" hidden onChange={onImport} />
+          </>
+        )}
         <Account />
       </header>
       {error && (
@@ -109,6 +143,18 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         </div>
       )}
       <main className="flows">
+        {me?.user && all && (
+          <label className="flows-whose">
+            Show
+            <select value={whose} onChange={(e) => setWhose(e.target.value)}>
+              {whoseChoices(all, me).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <FlowSection
           title="Flows"
           note="The jobs that run, each doing one thing end to end."
@@ -117,6 +163,9 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           button="New flow"
           flows={flows?.filter((f) => kindOf(f) === 'flow') ?? null}
           onCreate={(name) => onCreate(name, 'flow')}
+          me={me}
+          teams={teams}
+          onOwner={onOwner}
           onDelete={onDelete}
           onError={report}
         />
@@ -129,6 +178,9 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           button="New procedure"
           flows={flows?.filter((f) => kindOf(f) === 'module') ?? null}
           onCreate={(name) => onCreate(name, 'module')}
+          me={me}
+          teams={teams}
+          onOwner={onOwner}
           onDelete={onDelete}
           onError={report}
         />
@@ -141,6 +193,9 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           button="New struct"
           flows={flows?.filter((f) => kindOf(f) === 'struct') ?? null}
           onCreate={(name) => onCreate(name, 'struct')}
+          me={me}
+          teams={teams}
+          onOwner={onOwner}
           onDelete={onDelete}
           onError={report}
         />
@@ -149,13 +204,37 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   )
 }
 
+// What flows are narrowed to by whose they are: an owner's key, or
+// "review" for those one only decides the reviews of.
+const whoseKey = (f: Flow) =>
+  f.access === 'review' ? 'review' : f.owner.kind === 'global' ? 'global' : `${f.owner.kind}:${f.owner.id}`
+
+// The choices of whose flows to show, the owners of those listed.
+function whoseChoices(flows: Flow[], me: Me): [string, string][] {
+  const choices = new Map<string, string>([['', 'Every flow I see']])
+  const mine = `user:${me.user?.id}`
+  if (flows.some((f) => whoseKey(f) === mine)) choices.set(mine, 'Mine')
+  for (const f of flows) {
+    const k = whoseKey(f)
+    if (k === 'review') choices.set(k, 'Those I review')
+    else if (k === 'global') choices.set(k, 'Everyone’s')
+    else if (!choices.has(k))
+      choices.set(k, f.owner.kind === 'team' ? `Team ${ownerLabel(f.owner, me)}` : `${ownerLabel(f.owner, me)}’s`)
+  }
+  return [...choices]
+}
+
 const usedByLabel = (n: number) => `Used in ${n} ${n === 1 ? 'flow' : 'flows'}`
 
 type FlowKind = 'flow' | 'module' | 'struct'
 
 const kindOf = (f: Flow): FlowKind => (f.struct ? 'struct' : f.module ? 'module' : 'flow')
 
-const DELETE_TITLES: Record<FlowKind, string> = { flow: 'Delete flow', module: 'Delete procedure', struct: 'Delete struct' }
+const DELETE_TITLES: Record<FlowKind, string> = {
+  flow: 'Delete flow',
+  module: 'Delete procedure',
+  struct: 'Delete struct',
+}
 
 // What a card says under its name: how many flows use it, and its latest
 // run; a struct never runs.
@@ -181,6 +260,9 @@ function cardStatus(f: Flow, kind: FlowKind) {
 
 function FlowSection({
   kind = 'flow',
+  me,
+  teams,
+  onOwner,
   title,
   note,
   empty,
@@ -198,6 +280,9 @@ function FlowSection({
   placeholder: string
   button: string
   flows: Flow[] | null
+  me: Me | null
+  teams: Team[]
+  onOwner: (f: Flow, owner: Parameters<typeof setFlowOwner>[1]) => void
   onCreate: (name: string) => Promise<void>
   onDelete: (f: Flow) => void
   onError: (err: unknown) => void
@@ -226,7 +311,12 @@ function FlowSection({
       </h2>
       <p className="flows-note">{note}</p>
       <form className="flow-new" onSubmit={submit}>
-        <input aria-label={placeholder} placeholder={placeholder} value={name} onChange={(e) => setName(e.target.value)} />
+        <input
+          aria-label={placeholder}
+          placeholder={placeholder}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
         <button type="submit" disabled={busy || !name.trim()}>
           <PlusIcon /> {button}
         </button>
@@ -243,14 +333,27 @@ function FlowSection({
                 <span className="flow-card-name">{f.name}</span>
                 <span className="flow-card-run">{cardStatus(f, kind)}</span>
               </a>
-              <button
-                className="icon-button flow-delete"
-                onClick={() => onDelete(f)}
-                aria-label={`Delete ${f.name}`}
-                title={DELETE_TITLES[kind]}
-              >
-                <TrashIcon />
-              </button>
+              {me?.user &&
+                (f.access === 'review' ? (
+                  <span
+                    className="flow-owner review"
+                    title="You decide its reviews, so you see it; only its owner changes it"
+                  >
+                    Reviewing · {ownerLabel(f.owner, me)}
+                  </span>
+                ) : (
+                  <OwnerPicker flow={f} me={me} teams={teams} compact onChange={(o) => onOwner(f, o)} />
+                ))}
+              {f.access === 'edit' && (
+                <button
+                  className="icon-button flow-delete"
+                  onClick={() => onDelete(f)}
+                  aria-label={`Delete ${f.name}`}
+                  title={DELETE_TITLES[kind]}
+                >
+                  <TrashIcon />
+                </button>
+              )}
             </li>
           ))}
         </ul>

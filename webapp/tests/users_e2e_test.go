@@ -342,6 +342,12 @@ type usersPersonRow struct {
 	Roles []string `json:"roles"`
 }
 
+// Makes the flow global, so everyone sees it, not only its maker.
+func usersShare(a *app, f int64) {
+	a.t.Helper()
+	a.call("PUT", fmt.Sprintf("/api/flows/%d/owner", f), map[string]any{"kind": "global"}, http.StatusOK, nil)
+}
+
 // The admin adds someone, before they first sign in.
 func usersAdd(a *app, email string, roles ...string) usersPersonRow {
 	a.t.Helper()
@@ -356,6 +362,7 @@ func TestUsersRolesDecideReviews(t *testing.T) {
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	b := humanNewReviewBoard(a)
+	usersShare(a, b.flow.ID)
 	bob := usersNewPerson("Bob")
 	row := usersAdd(a, bob.email)
 	rn := a.startRun(b.flow.ID)
@@ -436,6 +443,8 @@ func TestUsersRolesWhereReviewsAre(t *testing.T) {
 	humanDecides(a, free.ID, freeDoc.ID, seen.ID)
 	a.startAt(freeFlow, draft.ID)
 	a.worker.onAgent("Draft", handsIn(data("a doc")))
+	usersShare(a, f)
+	usersShare(a, freeFlow)
 
 	rn := a.startRun(f)
 	freeRun := a.startRun(freeFlow)

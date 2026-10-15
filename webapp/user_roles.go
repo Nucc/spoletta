@@ -107,17 +107,21 @@ func refuseDecider(ctx context.Context, db *sql.DB, r *http.Request, process int
 type person struct {
 	user
 	Roles      []string   `json:"roles"`
+	Teams      []teamRef  `json:"teams"`
 	SignedInAt *time.Time `json:"signedInAt"`
 }
 
 func getPerson(ctx context.Context, db *sql.DB, id int64) (person, error) {
 	var p person
-	err := db.QueryRowContext(ctx, "SELECT id, email, name, admin, signed_in_at FROM users WHERE id = ?", id).
-		Scan(&p.ID, &p.Email, &p.Name, &p.Admin, &p.SignedInAt)
+	err := db.QueryRowContext(ctx, "SELECT id, email, name, admin, team_manager, signed_in_at FROM users WHERE id = ?", id).
+		Scan(&p.ID, &p.Email, &p.Name, &p.Admin, &p.TeamManager, &p.SignedInAt)
 	if err != nil {
 		return p, err
 	}
-	p.Roles, err = userRoles(ctx, db, id)
+	if p.Roles, err = userRoles(ctx, db, id); err != nil {
+		return p, err
+	}
+	p.Teams, err = userTeams(ctx, db, id)
 	return p, err
 }
 
@@ -155,12 +159,13 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		return
 	}
 
+	// Team managers see everyone too, to pick teams' members from.
 	mux.HandleFunc("GET /api/users", func(w http.ResponseWriter, r *http.Request) {
-		if refuseNonAdmin(w, r) {
+		if refuseNonTeamManager(w, r) {
 			return
 		}
 		var ids []int64
-		if err := scanAll(r.Context(), db, "SELECT id FROM users ORDER BY email", func(rows *sql.Rows) error {
+		if err := scanAll(r.Context(), db, "SELECT id FROM users WHERE removed_at IS NULL ORDER BY email", func(rows *sql.Rows) error {
 			var id int64
 			err := rows.Scan(&id)
 			ids = append(ids, id)
@@ -188,10 +193,11 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			return
 		}
 		var body struct {
-			Email string   `json:"email"`
-			Name  string   `json:"name"`
-			Admin bool     `json:"admin"`
-			Roles []string `json:"roles"`
+			Email       string   `json:"email"`
+			Name        string   `json:"name"`
+			Admin       bool     `json:"admin"`
+			TeamManager bool     `json:"teamManager"`
+			Roles       []string `json:"roles"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -209,11 +215,22 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		}
 		var id int64
 		err := inTx(r.Context(), db, func(tx *sql.Tx) error {
-			res, err := tx.ExecContext(r.Context(), "INSERT INTO users (email, name, admin) VALUES (?, ?, ?)", email, strings.TrimSpace(body.Name), body.Admin)
-			if err != nil {
-				return err
+			// Someone removed comes back as they were, with their runs and
+			// decisions.
+			err := tx.QueryRowContext(r.Context(), "SELECT id FROM users WHERE email = ? AND removed_at IS NOT NULL FOR UPDATE", email).Scan(&id)
+			switch {
+			case err == nil:
+				_, err = tx.ExecContext(r.Context(), "UPDATE users SET removed_at = NULL, name = COALESCE(NULLIF(?, ''), name), admin = ?, team_manager = ? WHERE id = ?",
+					strings.TrimSpace(body.Name), body.Admin, body.TeamManager, id)
+			case errors.Is(err, sql.ErrNoRows):
+				var res sql.Result
+				res, err = tx.ExecContext(r.Context(), "INSERT INTO users (email, name, admin, team_manager) VALUES (?, ?, ?, ?)",
+					email, strings.TrimSpace(body.Name), body.Admin, body.TeamManager)
+				if err == nil {
+					id, err = res.LastInsertId()
+				}
 			}
-			if id, err = res.LastInsertId(); err != nil {
+			if err != nil {
 				return err
 			}
 			return setRoles(r.Context(), tx, id, roles)
@@ -234,7 +251,7 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		writeJSON(w, http.StatusCreated, p)
 	})
 
-	// Makes someone an admin or not, and replaces their roles.
+	// Makes someone an admin or a team manager or not, and replaces their roles.
 	mux.HandleFunc("PATCH /api/users/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if refuseNonAdmin(w, r) {
 			return
@@ -245,8 +262,9 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			return
 		}
 		var patch struct {
-			Admin *bool     `json:"admin"`
-			Roles *[]string `json:"roles"`
+			Admin       *bool     `json:"admin"`
+			TeamManager *bool     `json:"teamManager"`
+			Roles       *[]string `json:"roles"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -267,7 +285,7 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		}
 		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
 			var n int
-			if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM users WHERE id = ? FOR UPDATE", id).Scan(&n); err != nil {
+			if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM users WHERE id = ? AND removed_at IS NULL FOR UPDATE", id).Scan(&n); err != nil {
 				return err
 			}
 			if n == 0 {
@@ -275,6 +293,11 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			}
 			if patch.Admin != nil {
 				if _, err := tx.ExecContext(r.Context(), "UPDATE users SET admin = ? WHERE id = ?", *patch.Admin, id); err != nil {
+					return err
+				}
+			}
+			if patch.TeamManager != nil {
+				if _, err := tx.ExecContext(r.Context(), "UPDATE users SET team_manager = ? WHERE id = ?", *patch.TeamManager, id); err != nil {
 					return err
 				}
 			}
@@ -297,6 +320,66 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			return
 		}
 		writeJSON(w, http.StatusOK, p)
+	})
+
+	// Removes someone: they are signed out and can't sign in again until an
+	// admin adds them back. Their flows and schedules can't be left to nobody,
+	// so they go to the admin removing them; their roles, teams, model keys
+	// and MCP connections go. They stay in the table, removed, so the runs
+	// they started and the reviews they decided still say so.
+	mux.HandleFunc("DELETE /api/users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if refuseNonAdmin(w, r) {
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		me := requestUser(r)
+		if id == me.ID {
+			http.Error(w, "you can't remove yourself; ask another admin", http.StatusBadRequest)
+			return
+		}
+		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
+			var n int
+			if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM users WHERE id = ? AND removed_at IS NULL FOR UPDATE", id).Scan(&n); err != nil {
+				return err
+			}
+			if n == 0 {
+				return sql.ErrNoRows
+			}
+			for _, q := range []string{
+				"UPDATE flows SET owner_user_id = ? WHERE owner_user_id = ?",
+				"UPDATE schedules SET created_by = ? WHERE created_by = ?",
+			} {
+				if _, err := tx.ExecContext(r.Context(), q, me.ID, id); err != nil {
+					return err
+				}
+			}
+			for _, q := range []string{
+				"DELETE FROM sessions WHERE user_id = ?",
+				"DELETE FROM user_roles WHERE user_id = ?",
+				"DELETE FROM team_members WHERE user_id = ?",
+				"DELETE FROM model_keys WHERE user_id = ?",
+				"DELETE FROM mcp_tokens WHERE user_id = ?",
+				"UPDATE users SET removed_at = CURRENT_TIMESTAMP(3), admin = FALSE, team_manager = FALSE WHERE id = ?",
+			} {
+				if _, err := tx.ExecContext(r.Context(), q, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "no one with that id", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	// The roles boards name, the human objects on them, with those people

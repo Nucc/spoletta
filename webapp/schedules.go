@@ -244,14 +244,14 @@ func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error 
 func registerScheduleRoutes(mux *http.ServeMux, db *sql.DB) {
 	// Every schedule, or with flow, those of that flow, by flow then id.
 	mux.HandleFunc("GET /api/schedules", func(w http.ResponseWriter, r *http.Request) {
-		q := "SELECT " + scheduleColumns + " FROM schedules s JOIN flows f ON f.id = s.flow_id"
-		var args []any
+		cond, args := visibleFlows(requestUser(r))
+		q := "SELECT " + scheduleColumns + " FROM schedules s JOIN flows f ON f.id = s.flow_id WHERE " + cond
 		if r.URL.Query().Has("flow") {
 			f, ok := flowParam(w, r)
 			if !ok {
 				return
 			}
-			q += " WHERE s.flow_id = ?"
+			q += " AND s.flow_id = ?"
 			args = append(args, f)
 		}
 		rows, err := db.QueryContext(r.Context(), q+" ORDER BY f.name, s.id", args...)
@@ -323,8 +323,8 @@ func registerScheduleRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		enabled := body.Enabled == nil || *body.Enabled
-		res, err := db.ExecContext(r.Context(), "INSERT INTO schedules (flow_id, cron, timezone, enabled, next_run_at) VALUES (?, ?, ?, ?, ?)",
-			body.Flow, body.Cron, body.Timezone, enabled, nextRun(body.Cron, body.Timezone, enabled, time.Now()))
+		res, err := db.ExecContext(r.Context(), "INSERT INTO schedules (flow_id, cron, timezone, enabled, next_run_at, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+			body.Flow, body.Cron, body.Timezone, enabled, nextRun(body.Cron, body.Timezone, enabled, time.Now()), requestUserID(r))
 		if err != nil {
 			serverError(w, err)
 			return

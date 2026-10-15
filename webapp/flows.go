@@ -30,6 +30,10 @@ type flow struct {
 	// branches are named; see workspace.go.
 	Settings  flowSettings `json:"settings"`
 	CreatedAt time.Time    `json:"createdAt"`
+	// Who sees it and may change it, and how far whoever asked may go with
+	// it: accessEdit or accessReview; see owners.go.
+	Owner  flowOwner `json:"owner"`
+	Access string    `json:"access"`
 	// Its latest run of the whole flow, if any.
 	LastRun *run `json:"lastRun"`
 }
@@ -230,10 +234,14 @@ func flowFor(ctx context.Context, db *sql.DB, given int64, parent *int64) (int64
 
 func getFlow(ctx context.Context, db *sql.DB, id int64) (flow, error) {
 	var f flow
-	err := db.QueryRowContext(ctx, "SELECT id, name, module, is_struct, settings, created_at FROM flows WHERE id = ?", id).Scan(&f.ID, &f.Name, &f.Module, &f.Struct, &f.Settings, &f.CreatedAt)
+	var ownerUser, ownerTeam sql.NullInt64
+	var ownerName string
+	err := db.QueryRowContext(ctx, "SELECT f.id, f.name, f.module, f.is_struct, f.settings, f.created_at, "+ownerColumns+" FROM flows f WHERE f.id = ?", id).
+		Scan(&f.ID, &f.Name, &f.Module, &f.Struct, &f.Settings, &f.CreatedAt, &ownerUser, &ownerTeam, &ownerName)
 	if err != nil {
 		return f, err
 	}
+	f.Owner = scanOwner(ownerUser, ownerTeam, ownerName)
 	if f.Struct {
 		f.UsedBy, err = structUsers(ctx, db, id)
 	} else {
@@ -292,8 +300,10 @@ func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
 }
 
 func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
+	// The flows the user sees; see owners.go.
 	mux.HandleFunc("GET /api/flows", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT id FROM flows ORDER BY name, id")
+		cond, args := visibleFlows(requestUser(r))
+		rows, err := db.QueryContext(r.Context(), "SELECT f.id FROM flows f WHERE "+cond+" ORDER BY f.name, f.id", args...)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -316,6 +326,9 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		fs := []flow{}
 		for _, id := range ids {
 			f, err := getFlow(r.Context(), db, id)
+			if err == nil {
+				f.Access, err = flowAccess(r.Context(), db, requestUser(r), id)
+			}
 			if err != nil {
 				serverError(w, err)
 				return
@@ -332,6 +345,9 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 		f, err := getFlow(r.Context(), db, id)
+		if err == nil {
+			f.Access, err = flowAccess(r.Context(), db, requestUser(r), id)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return
@@ -368,7 +384,7 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module, is_struct) VALUES (?, ?, ?)", body.Name, body.Module, body.Struct)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module, is_struct, owner_user_id) VALUES (?, ?, ?, ?)", body.Name, body.Module, body.Struct, newOwner(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -397,6 +413,7 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			serverError(w, err)
 			return
 		}
+		f.Access = accessEdit
 		writeJSON(w, http.StatusCreated, f)
 	})
 
@@ -469,6 +486,7 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			serverError(w, err)
 			return
 		}
+		f.Access = accessEdit
 		writeJSON(w, http.StatusOK, f)
 	})
 

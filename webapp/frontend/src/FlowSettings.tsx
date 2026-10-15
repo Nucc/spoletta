@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { FlowSettings, Repository } from './api'
 
 // What a repository is called in the workspace, from its URL: the last part
@@ -26,6 +26,7 @@ const githubPath = (url: string) => /^https:\/\/github\.com\/([^/]+\/[^/]+?)(\.g
 // how its runs' branches are named. Each run checks the repositories out on
 // a branch of its own, which every process of the run works on.
 export function FlowSettingsPanel({
+  owner,
   settings,
   module,
   usedBy,
@@ -36,6 +37,8 @@ export function FlowSettingsPanel({
   onClose,
   onError,
 }: {
+  // Who sees it, to pick another; see Owner.tsx.
+  owner?: ReactNode
   settings: FlowSettings
   // Whether other flows reuse it, and how many do.
   module: boolean
@@ -105,6 +108,7 @@ export function FlowSettingsPanel({
           ×
         </button>
       </header>
+      {owner}
       <label className="panel-check">
         <input
           type="checkbox"

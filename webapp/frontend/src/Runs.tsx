@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { Data } from './Data'
-import RerunDialog from './RerunDialog'
 import {
   fileUrl,
   getStepMessages,
@@ -161,18 +160,14 @@ export function RunPanel({
   onStopStep: (id: number) => void
   // Opens another run: the one a recording flow process ran as, or the one it ran in.
   onOpenRun: (id: number) => void
-  // A re-run of this run started; see RerunDialog.
-  onRerun: (run: FlowRun) => void
+  // Opens the dialog re-running this run from the step's process; see RerunDialog.
+  onRerun: (step: number) => void
   // A follow-up started or was stopped, so the run is loaded again.
   onChanged: () => void
   onClose: () => void
 }) {
   // Follow-ups work on the run's branch, so only one goes at a time, once its steps are over.
   const busy = run.steps.some((s) => s.status === 'active' || s.followUps.some((f) => f.status === 'active'))
-  // The step whose process the run is being re-run from.
-  const [rerunning, setRerunning] = useState<number | null>(null)
-  // A run can be re-run once it ended.
-  const rerunnable = run.status !== 'running'
   return (
     <aside className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
@@ -231,7 +226,7 @@ export function RunPanel({
                 objects={run.objects.filter((o) => o.step === s.id)}
                 onStop={stoppable(s) ? () => onStopStep(s.id) : undefined}
                 onOpenRun={onOpenRun}
-                onRerun={rerunnable && s.process !== null && s.kind !== 'copied' ? () => setRerunning(s.id) : undefined}
+                onRerun={rerunnableFrom(run, s) ? () => onRerun(s.id) : undefined}
                 busy={busy}
                 onChanged={onChanged}
               />
@@ -239,21 +234,13 @@ export function RunPanel({
           ))}
         </ol>
       )}
-      {rerunning !== null && (
-        <RerunDialog
-          run={run.id}
-          step={rerunning}
-          within={run.parent !== null ? { name: run.processName, run: run.parent } : undefined}
-          onStarted={(r) => {
-            setRerunning(null)
-            onRerun(r)
-          }}
-          onClose={() => setRerunning(null)}
-        />
-      )}
     </aside>
   )
 }
+
+// A run can be re-run from a step's process once it ended, unless the step
+// was copied from an earlier run or its process is gone.
+export const rerunnableFrom = (run: FlowRunDetail, s: RunStep) => run.status !== 'running' && s.process !== null && s.kind !== 'copied'
 
 // Agent, script and Sentry steps can be stopped while they go.
 export const stoppable = (s: { kind: ProcessKind | 'copied'; status: StepStatus }) =>

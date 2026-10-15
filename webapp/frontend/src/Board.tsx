@@ -68,7 +68,8 @@ import {
   StructPalette,
   type Block,
 } from './Palette'
-import { decisionText, RunList, RunPanel } from './Runs'
+import { decisionText, rerunnableFrom, RunList, RunPanel } from './Runs'
+import RerunDialog from './RerunDialog'
 import OPLPanel from './OPLPanel'
 import Assistant from './Assistant'
 import { Sidebar, SidebarGroup } from './Sidebar'
@@ -852,6 +853,7 @@ export default function Board({
   // Someone who only decides the flow's reviews sees it, and changes nothing.
   const viewOnly = flow.access === 'review'
   const readOnly = reviewing || viewOnly
+  const runShown = shownRun !== null
   useEffect(() => {
     if (runVersion === shownVersion && boardId === shownBoard && unfolded === shownUnfolded) return
     let stale = false
@@ -880,6 +882,7 @@ export default function Board({
   useEffect(() => {
     if (!shownRun || shownVersion !== runVersion) return
     const steps = new Map(shownRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
+    const rerunnable = new Set(shownRun.steps.flatMap((s) => (rerunnableFrom(shownRun, s) ? [String(s.process)] : [])))
     const objects = new Map(shownRun.objects.flatMap((o) => (o.object === null ? [] : [[objectNodeId(o.object), o] as const])))
     // A review inside a flow process opens once its board shows.
     for (const [process, s] of steps) {
@@ -899,7 +902,14 @@ export default function Board({
           const review = s?.kind === 'human' && s.status === 'waiting' ? s.inputs : undefined
           return {
             ...n,
-            data: { ...n.data, status: s?.status, output: output || undefined, runError: s?.error || undefined, review },
+            data: {
+              ...n.data,
+              status: s?.status,
+              output: output || undefined,
+              runError: s?.error || undefined,
+              review,
+              rerunnable: rerunnable.has(n.id),
+            },
           }
         }
         if (n.type === 'object') {
@@ -1707,10 +1717,20 @@ export default function Board({
     if (shownRun && step) onStopStep(shownRun.id, step.id)
   }
 
+  // The step of the open run it is being re-run from; see RerunDialog.
+  const [rerunning, setRerunning] = useState<number | null>(null)
+  useEffect(() => setRerunning(null), [runId])
+
+  // Re-runs the open run from the last step the process had in it.
+  const rerunProcess = (id: string) => {
+    const step = shownRun?.steps.filter((s) => String(s.process) === id && rerunnableFrom(shownRun, s)).at(-1)
+    if (step) setRerunning(step.id)
+  }
+
   // Nodes and edges reach the board through a context whose functions stay
   // the same, so they don't all re-render whenever the board does.
-  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess })
-  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess }
+  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess })
+  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess }
   const actions = useMemo<BoardActions>(
     () => ({
       commitName: (id, name) => latest.current.commitName(id, name),
@@ -1718,6 +1738,7 @@ export default function Board({
       openPanel: (id) => setPanelId(id),
       zoomIn: (id) => latest.current.zoomIn(id),
       stopProcess: (id) => latest.current.stopProcess(id),
+      rerunProcess: (id) => latest.current.rerunProcess(id),
       remove: (id) => latest.current.remove(id),
       append: (id) => latest.current.append(id),
       insert: (edgeId) => latest.current.insert(edgeId),
@@ -1732,8 +1753,9 @@ export default function Board({
       setRoute: (edgeId, route, save) => latest.current.setRoute(edgeId, route, save),
       resize: (id, x, width) => latest.current.resize(id, x, width),
       editable: !readOnly,
+      runShown,
     }),
-    [readOnly, updateObjectData],
+    [readOnly, runShown, updateObjectData],
   )
 
   const startTarget = edges.find((e) => e.id === START_EDGE_ID)?.target
@@ -2482,12 +2504,24 @@ export default function Board({
             onStop={() => onStop(runDetail.id)}
             onStopStep={(step) => onStopStep(runDetail.id, step)}
             onOpenRun={openRunById}
-            onRerun={onRerun}
+            onRerun={setRerunning}
             onChanged={() => setRunReload((n) => n + 1)}
             onClose={() => setRunId(null)}
           />
         )}
       </div>
+      {rerunning !== null && runDetail && (
+        <RerunDialog
+          run={runDetail.id}
+          step={rerunning}
+          within={runDetail.parent !== null ? { name: runDetail.processName, run: runDetail.parent } : undefined}
+          onStarted={(r) => {
+            setRerunning(null)
+            onRerun(r)
+          }}
+          onClose={() => setRerunning(null)}
+        />
+      )}
       {reviewNode && (
         <ReviewDialog
           key={reviewNode.id}

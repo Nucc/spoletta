@@ -154,6 +154,12 @@ export const TrashIcon = () => (
   </Icon>
 )
 
+export const RerunIcon = () => (
+  <Icon>
+    <path d="M13 8a5 5 0 1 1-1.46-3.54M13 2.5v3h-3" />
+  </Icon>
+)
+
 export const StopIcon = () => (
   <Icon>
     <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />

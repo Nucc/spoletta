@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Handle, Position, useNodeConnections, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { ProcessKind, ProcessSettings, RunInput, ThinkingLevel } from './api'
-import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, ScriptIcon, SentryIcon, StopIcon, SubflowIcon, TrashIcon, ZoomInIcon } from './icons'
+import { AgentIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, RerunIcon, ScriptIcon, SentryIcon, StopIcon, SubflowIcon, TrashIcon, ZoomInIcon } from './icons'
 import { stoppable } from './Runs'
 import WidthResizer from './WidthResizer'
 
@@ -25,6 +25,9 @@ export type ProcessNodeData = {
   runError?: string
   // While a human process waits for a decision: the inputs under review.
   review?: RunInput[]
+  // Whether the run shown can be re-run from this process: it ended, and
+  // the process ran in it rather than being copied from an earlier run.
+  rerunnable?: boolean
 }
 
 export type RunStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate' | 'skipped'
@@ -115,10 +118,19 @@ export default function ProcessNode({ id, data, selected, width }: NodeProps<Pro
           <button title="Settings" aria-label="Settings" onClick={() => actions.openPanel(id)}>
             <GearIcon />
           </button>
-          {/* Stop takes Delete's place, which a run's board doesn't allow, so the card keeps its width. */}
+          {/* Stop and Re-run take Delete's place, which a run's board doesn't allow, so the card keeps its width. */}
           {data.status && stoppable({ kind: data.kind, status: data.status }) ? (
             <button title="Stop" aria-label="Stop" onClick={() => actions.stopProcess(id)}>
               <StopIcon />
+            </button>
+          ) : actions.runShown ? (
+            <button
+              title="Re-run from here"
+              aria-label="Re-run from here"
+              disabled={!data.rerunnable}
+              onClick={() => actions.rerunProcess(id)}
+            >
+              <RerunIcon />
             </button>
           ) : (
             <button

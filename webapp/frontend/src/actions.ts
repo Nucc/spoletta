@@ -17,6 +17,8 @@ export type BoardActions = {
   zoomIn: (id: string) => void
   // Stops the process's step going in the run shown.
   stopProcess: (id: string) => void
+  // Opens the dialog re-running the run shown from the process.
+  rerunProcess: (id: string) => void
   remove: (id: string) => void
   // Adds what comes next below a node nothing leads on from.
   append: (id: string) => void
@@ -43,6 +45,9 @@ export type BoardActions = {
   setQuantity: (objectId: string, quantity: Quantity) => Promise<boolean>
   // False while a run is in progress, when the flow can't change shape.
   editable: boolean
+  // True while a run shows on the board, whose processes can't be deleted
+  // but can be re-run from once it ended.
+  runShown: boolean
 }
 
 export const BoardActionsContext = createContext<BoardActions | null>(null)

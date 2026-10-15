@@ -145,9 +145,18 @@ export function RunList({
   )
 }
 
+// A process or object of the board the run panel is on, double-clicked
+// while the run shows, with its name on the board; seq tells a second
+// double-click on it from the first.
+export type RunFocus = { kind: 'process' | 'object'; id: number; name: string; seq: number }
+
 // What happened in a run: each process execution in the order it started.
+// On a process, its steps open and the panel scrolls to them; on an object,
+// what it held in the run comes first, and the steps that made it open.
 export function RunPanel({
   run,
+  focus,
+  onClearFocus,
   onStop,
   onStopStep,
   onOpenRun,
@@ -156,6 +165,8 @@ export function RunPanel({
   onClose,
 }: {
   run: FlowRunDetail
+  focus: RunFocus | null
+  onClearFocus: () => void
   onStop: () => void
   onStopStep: (id: number) => void
   // Opens another run: the one a recording flow process ran as, or the one it ran in.
@@ -168,8 +179,20 @@ export function RunPanel({
 }) {
   // Follow-ups work on the run's branch, so only one goes at a time, once its steps are over.
   const busy = run.steps.some((s) => s.status === 'active' || s.followUps.some((f) => f.status === 'active'))
+  const focusedObjects = focus?.kind === 'object' ? run.objects.filter((o) => o.object === focus.id) : []
+  const focused = (s: RunStep) =>
+    focus?.kind === 'process' ? s.process === focus.id : focus?.kind === 'object' && focusedObjects.some((o) => o.step === s.id)
+  const panel = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!focus || !panel.current) return
+    const steps = [...panel.current.querySelectorAll<HTMLDetailsElement>('.step.focused')]
+    steps.forEach((d) => (d.open = true))
+    const first = panel.current.querySelector('.run-focus') ?? steps[0]
+    first?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    // Only a new focus moves the panel, not the run refreshing.
+  }, [focus?.seq])
   return (
-    <aside className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
+    <aside ref={panel} className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
         <h2>
           Run #{run.id} <span className={`run-badge ${run.status}`}>{RUN_LABELS[run.status]}</span>
@@ -214,6 +237,15 @@ export function RunPanel({
             ? `Running on version ${run.version}.`
             : `Ran on version ${run.version}, which the board shows until the run closes.`}
       </p>
+      {focus?.kind === 'object' && <ObjectInRun run={run} name={focus.name} objects={focusedObjects} onClose={onClearFocus} />}
+      {focus?.kind === 'process' && !run.steps.some(focused) && (
+        <p className="panel-note run-focus">
+          {focus.name} didn't run in this run.{' '}
+          <button className="link-button" onClick={onClearFocus}>
+            Show all
+          </button>
+        </p>
+      )}
       {run.steps.length === 0 ? (
         <p className="panel-note">No process has run yet.</p>
       ) : (
@@ -223,6 +255,7 @@ export function RunPanel({
               <Step
                 run={run.id}
                 step={s}
+                focused={focused(s)}
                 objects={run.objects.filter((o) => o.step === s.id)}
                 onStop={stoppable(s) ? () => onStopStep(s.id) : undefined}
                 onOpenRun={onOpenRun}
@@ -249,6 +282,7 @@ export const stoppable = (s: { kind: ProcessKind | 'copied'; status: StepStatus 
 function Step({
   run,
   step: s,
+  focused,
   objects,
   onStop,
   onOpenRun,
@@ -258,6 +292,8 @@ function Step({
 }: {
   run: number
   step: RunStep
+  // Its process, or an object it made, was double-clicked on the board.
+  focused: boolean
   objects: FlowRunDetail['objects']
   onStop?: () => void
   onOpenRun: (id: number) => void
@@ -266,9 +302,9 @@ function Step({
   busy: boolean
   onChanged: () => void
 }) {
-  if (s.kind === 'copied') return <CopiedStep step={s} objects={objects} />
+  if (s.kind === 'copied') return <CopiedStep step={s} focused={focused} objects={objects} />
   return (
-    <details className="step" open={s.status !== 'done' || s.followUps.length > 0}>
+    <details className={`step${focused ? ' focused' : ''}`} open={s.status !== 'done' || s.followUps.length > 0}>
       <summary>
         <span className={`status-dot ${s.status}`} aria-hidden="true" />
         <span className="step-name">{s.processName}</span>
@@ -393,9 +429,9 @@ function Step({
 
 // What a re-run copied from the run it re-runs, as the run left it before
 // the process it re-ran from.
-function CopiedStep({ step: s, objects }: { step: RunStep; objects: FlowRunDetail['objects'] }) {
+function CopiedStep({ step: s, focused, objects }: { step: RunStep; focused: boolean; objects: FlowRunDetail['objects'] }) {
   return (
-    <details className="step">
+    <details className={`step${focused ? ' focused' : ''}`}>
       <summary>
         <span className={`status-dot ${s.status}`} aria-hidden="true" />
         <span className="step-name">{s.processName}</span>
@@ -407,6 +443,59 @@ function CopiedStep({ step: s, objects }: { step: RunStep; objects: FlowRunDetai
         ))}
       </div>
     </details>
+  )
+}
+
+// What an object held in the run: each instance of it a step made, in the
+// state it was made in, and the steps that took it.
+function ObjectInRun({
+  run,
+  name,
+  objects,
+  onClose,
+}: {
+  run: FlowRunDetail
+  name: string
+  objects: FlowRunDetail['objects']
+  onClose: () => void
+}) {
+  const stepOf = (step: number) => run.steps.find((s) => s.id === step)
+  // Inputs name the object they were, not its id.
+  const takers = run.steps.filter((s) => s.inputs.some((i) => i.name === name))
+  return (
+    <section className="run-focus">
+      <header>
+        <h3>{name}</h3>
+        <button className="link-button" onClick={onClose}>
+          Show all
+        </button>
+      </header>
+      {objects.length === 0 ? (
+        <p className="panel-note">Nothing made it in this run.</p>
+      ) : (
+        objects.map((o) => (
+          <div key={o.id} className="run-focus-instance">
+            <Block
+              label={`${o.state ? `${o.name} (${o.state})` : o.name} · ${stepOf(o.step)?.kind === 'copied' ? 'copied from the run re-run' : `made by ${stepOf(o.step)?.processName ?? 'a step'}`}`}
+              text={o.content}
+              data
+            />
+            {o.files.length > 0 && (
+              <ul className="step-files">
+                {o.files.map((f) => (
+                  <li key={f}>
+                    <a href={fileUrl(f)} target="_blank" rel="noreferrer">
+                      {f.split('/').pop()}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))
+      )}
+      {takers.length > 0 && <p className="panel-note">Taken by {[...new Set(takers.map((s) => s.processName))].join(', ')}</p>}
+    </section>
   )
 }
 

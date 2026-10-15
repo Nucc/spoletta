@@ -3661,3 +3661,34 @@ select.flow-owner:disabled {
 .key-item .key-provider {
   width: 260px;
 }
+
+/* The steps of a process, or that made an object, double-clicked on the board while the run shows. */
+.step.focused {
+  border-color: #0969da;
+  box-shadow: 0 0 0 1px #0969da;
+}
+
+/* What an object double-clicked on the board held in the run shown. */
+.run-focus {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #0969da;
+  border-radius: 8px;
+}
+
+.run-focus > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.run-focus h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.run-focus .panel-run {
+  max-height: none;
+}

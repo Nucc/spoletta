@@ -68,7 +68,7 @@ import {
   StructPalette,
   type Block,
 } from './Palette'
-import { decisionText, rerunnableFrom, RunList, RunPanel } from './Runs'
+import { decisionText, rerunnableFrom, RunList, RunPanel, type RunFocus } from './Runs'
 import RerunDialog from './RerunDialog'
 import OPLPanel from './OPLPanel'
 import Assistant from './Assistant'
@@ -1013,10 +1013,31 @@ export default function Board({
   }
 
   // A flow process opens its board, a subflow process the flow it runs;
-  // other nodes their settings. An object unfolds from its menu or button.
+  // other nodes their settings, or, while a run is shown, what they did and
+  // held in it, their settings staying behind their Settings button. An
+  // object unfolds from its menu or button; a person has nothing in a run.
   const onNodeDoubleClick: NodeMouseHandler<FlowNode> = (_, node) => {
     if (node.type === 'process' && zoomable(node.id)) zoomIn(node.id)
-    else if (!isDraft(node.id) && node.type !== 'start' && node.type !== 'end') setPanelId(node.id)
+    else if (isDraft(node.id) || node.type === 'start' || node.type === 'end') return
+    else if (shownRun && (node.type === 'process' || (node.type === 'object' && !node.data.human))) showInRun(node.id, node.data.name)
+    else setPanelId(node.id)
+  }
+
+  // Brings the run panel back, closing what took it, on what the node did
+  // or held in the run.
+  const showInRun = (id: string, name: string) => {
+    setPanelId(null)
+    setMenu(null)
+    setMCPOpen(false)
+    setSettingsOpen(false)
+    setOPLOpen(false)
+    setVersionsOpen(false)
+    setRunFocus((f) => ({
+      kind: isObject(id) ? 'object' : 'process',
+      id: isObject(id) ? objectIdOf(id) : Number(id),
+      name,
+      seq: (f?.seq ?? 0) + 1,
+    }))
   }
 
   // An object, other than a person, unfolds, unless it is the one unfolded.
@@ -1720,6 +1741,10 @@ export default function Board({
   // The step of the open run it is being re-run from; see RerunDialog.
   const [rerunning, setRerunning] = useState<number | null>(null)
   useEffect(() => setRerunning(null), [runId])
+
+  // The process or object of the open run its panel is on; see showInRun.
+  const [runFocus, setRunFocus] = useState<RunFocus | null>(null)
+  useEffect(() => setRunFocus(null), [runId])
 
   // Re-runs the open run from the last step the process had in it.
   const rerunProcess = (id: string) => {
@@ -2503,6 +2528,8 @@ export default function Board({
             run={runDetail}
             onStop={() => onStop(runDetail.id)}
             onStopStep={(step) => onStopStep(runDetail.id, step)}
+            focus={runFocus}
+            onClearFocus={() => setRunFocus(null)}
             onOpenRun={openRunById}
             onRerun={setRerunning}
             onChanged={() => setRunReload((n) => n + 1)}

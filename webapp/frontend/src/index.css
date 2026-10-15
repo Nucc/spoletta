@@ -3594,3 +3594,13 @@ select.flow-owner:disabled {
 .settings-mcp .mcp-list {
   margin: 12px 0 20px;
 }
+
+.flows-whose label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flows-whose label + label {
+  margin-left: auto;
+}

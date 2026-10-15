@@ -48,8 +48,39 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const onOwner = (f: Flow, owner: Parameters<typeof setFlowOwner>[1]) =>
     setFlowOwner(f.id, owner).then(refresh, report)
 
+  // Who new flows belong to: the team picked last, else the first of one's
+  // teams, else oneself.
+  const myTeams = teams.filter((t) => t.members.some((m) => m.id === me?.user?.id))
+  const [picked, setPicked] = useState(() => {
+    try {
+      return localStorage.getItem(NEW_OWNER_KEY) ?? ''
+    } catch {
+      return ''
+    }
+  })
+  const newOwnerKey =
+    picked === 'me' || picked === 'global' || myTeams.some((t) => `team:${t.id}` === picked)
+      ? picked
+      : myTeams.length > 0
+        ? `team:${myTeams[0].id}`
+        : 'me'
+  const pickNewOwner = (key: string) => {
+    setPicked(key)
+    try {
+      localStorage.setItem(NEW_OWNER_KEY, key)
+    } catch {
+      // Only remembered while it can be.
+    }
+  }
+  const newOwner = (): Parameters<typeof createFlow>[2] => {
+    if (!me?.user) return undefined
+    if (newOwnerKey === 'global') return { kind: 'global' }
+    if (newOwnerKey === 'me') return { kind: 'user', id: me.user.id }
+    return { kind: 'team', id: Number(newOwnerKey.slice('team:'.length)) }
+  }
+
   const onCreate = async (name: string, kind: FlowKind) => {
-    const f = await createFlow(name, kind)
+    const f = await createFlow(name, kind, newOwner())
     onOpen(f.id)
   }
 
@@ -144,16 +175,30 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
       )}
       <main className="flows">
         {me?.user && all && (
-          <label className="flows-whose">
-            Show
-            <select value={whose} onChange={(e) => setWhose(e.target.value)}>
-              {whoseChoices(all, me).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flows-whose">
+            <label>
+              Show
+              <select value={whose} onChange={(e) => setWhose(e.target.value)}>
+                {whoseChoices(all, me).map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label title="Who sees the flows, procedures and structs you make, and may change them">
+              New ones belong to
+              <select value={newOwnerKey} onChange={(e) => pickNewOwner(e.target.value)}>
+                {myTeams.map((t) => (
+                  <option key={t.id} value={`team:${t.id}`}>
+                    Team {t.name}
+                  </option>
+                ))}
+                <option value="me">Only me</option>
+                <option value="global">Everyone</option>
+              </select>
+            </label>
+          </div>
         )}
         <FlowSection
           title="Flows"
@@ -223,6 +268,9 @@ function whoseChoices(flows: Flow[], me: Me): [string, string][] {
   }
   return [...choices]
 }
+
+// Where who new flows belong to is remembered.
+const NEW_OWNER_KEY = 'spoletta.newOwner'
 
 const usedByLabel = (n: number) => `Used in ${n} ${n === 1 ? 'flow' : 'flows'}`
 

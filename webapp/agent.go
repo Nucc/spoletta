@@ -87,8 +87,8 @@ type agentRun struct {
 	NoTools bool `json:"noTools,omitempty"`
 	// Has the worker put the guide to authoring flows before the prompt.
 	Guide bool `json:"guide,omitempty"`
-	// The keys the agent reaches its model's provider with, by the
-	// environment variable pi reads each from; see model_keys.go.
+	// The instance's keys the agent reaches its model's provider with, by
+	// the environment variable pi reads each from; see model_keys.go.
 	Keys map[string]string `json:"keys,omitempty"`
 }
 
@@ -199,15 +199,15 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 			return res, err
 		}
 	}
-	// The step works for whoever the run is for, with their model keys and
-	// MCP connections. Its token reaches its MCP servers until the step
-	// ends, retry included.
+	// The step works for whoever the run is for, with their MCP
+	// connections. Its token reaches its MCP servers until the step ends,
+	// retry included.
 	if res.Error == "" {
-		who, err := runUser(ctx, db, runID)
-		if err != nil {
+		if run.Keys, err = modelKeys(ctx, db); err != nil {
 			return res, err
 		}
-		if run.Keys, err = modelKeys(ctx, db, who); err != nil {
+		who, err := runUser(ctx, db, runID)
+		if err != nil {
 			return res, err
 		}
 		var msg string

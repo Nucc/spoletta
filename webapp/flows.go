@@ -365,6 +365,8 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			Module bool   `json:"module"`
 			// Made with its object, named after it.
 			Struct bool `json:"struct"`
+			// Who it belongs to; see newOwner.
+			Owner *flowOwner `json:"owner"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -378,13 +380,27 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			http.Error(w, "a struct holds an object, not processes to run, so it can't be a procedure", http.StatusBadRequest)
 			return
 		}
+		ownerUser, ownerTeam, msg, err := newOwner(r.Context(), db, requestUser(r), body.Owner)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if msg != "" {
+			http.Error(w, msg, http.StatusForbidden)
+			return
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module, is_struct, owner_user_id) VALUES (?, ?, ?, ?)", body.Name, body.Module, body.Struct, newOwner(r))
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module, is_struct, owner_user_id, owner_team_id) VALUES (?, ?, ?, ?, ?)",
+			body.Name, body.Module, body.Struct, ownerUser, ownerTeam)
+		if mysqlErrorIs(err, mysqlErrForeignKey) {
+			http.Error(w, "no such owner", http.StatusBadRequest)
+			return
+		}
 		if err != nil {
 			serverError(w, err)
 			return

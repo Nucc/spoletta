@@ -95,14 +95,16 @@ func TestTeamsFlowOwners(t *testing.T) {
 	a.call("POST", "/api/teams", map[string]any{"name": fmt.Sprint("Other", bobRow.ID)}, http.StatusCreated, &other)
 
 	usersSignIn(a, p, bob)
-	f := a.newFlow("Invoices")
+	var f flow
+	a.call("POST", "/api/flows", map[string]any{"name": "Invoices", "owner": map[string]any{"kind": "user", "id": bobRow.ID}}, http.StatusCreated, &f)
 	if f.Owner.Kind != "user" || f.Owner.ID != bobRow.ID || f.Owner.Name != "Bob" {
 		t.Errorf("a new flow is owned by %+v", f.Owner)
 	}
 	proc := a.agent(f.ID, "Draft", "Draft it.")
 	obj := a.newObject(f.ID, "Invoice")
 	a.output(proc.ID, obj.ID)
-	mine := a.newFlow("Elsewhere")
+	var mine flow
+	a.call("POST", "/api/flows", map[string]any{"name": "Elsewhere", "owner": map[string]any{"kind": "user", "id": bobRow.ID}}, http.StatusCreated, &mine)
 	rn := a.startRun(f.ID)
 
 	usersSignIn(a, p, carl)
@@ -235,4 +237,38 @@ func TestTeamsReviewersSeeFlows(t *testing.T) {
 	if r := onlyStep(t, a.finish(rn.ID), "Review"); r.DecidedBy != "Bob" {
 		t.Errorf("decided by %q", r.DecidedBy)
 	}
+}
+
+// A new flow is its maker's team's when they are in one only; otherwise
+// theirs, unless they give it to a team of theirs or everyone as they make it.
+func TestTeamsNewFlowOwner(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	bob := usersNewPerson("Bob")
+	bobRow := usersAdd(a, bob.email)
+	var one, two, other teamsTeam
+	a.call("POST", "/api/teams", map[string]any{"name": fmt.Sprint("One", bobRow.ID), "members": []int64{bobRow.ID}}, http.StatusCreated, &one)
+	a.call("POST", "/api/teams", map[string]any{"name": fmt.Sprint("Two", bobRow.ID)}, http.StatusCreated, &two)
+	a.call("POST", "/api/teams", map[string]any{"name": fmt.Sprint("Other", bobRow.ID)}, http.StatusCreated, &other)
+
+	usersSignIn(a, p, bob)
+	if f := a.newFlow("Team's"); f.Owner.Kind != "team" || f.Owner.ID != one.ID {
+		t.Errorf("in one team, a new flow is owned by %+v", f.Owner)
+	}
+	usersSignIn(a, p, usersAda)
+	a.call("PATCH", fmt.Sprintf("/api/teams/%d", two.ID), map[string]any{"members": []int64{bobRow.ID}}, http.StatusOK, nil)
+	usersSignIn(a, p, bob)
+	if f := a.newFlow("Mine"); f.Owner.Kind != "user" || f.Owner.ID != bobRow.ID {
+		t.Errorf("in two teams, a new flow is owned by %+v", f.Owner)
+	}
+	var f flow
+	a.call("POST", "/api/flows", map[string]any{"name": "Two's", "owner": map[string]any{"kind": "team", "id": two.ID}}, http.StatusCreated, &f)
+	if f.Owner.Kind != "team" || f.Owner.ID != two.ID {
+		t.Errorf("given to two, owned by %+v", f.Owner)
+	}
+	a.call("POST", "/api/flows", map[string]any{"name": "Everyone's", "owner": map[string]any{"kind": "global"}}, http.StatusCreated, &f)
+	if f.Owner.Kind != "global" {
+		t.Errorf("made global, owned by %+v", f.Owner)
+	}
+	a.refused("POST", "/api/flows", map[string]any{"name": "Theirs", "owner": map[string]any{"kind": "team", "id": other.ID}}, http.StatusForbidden, "a team you are in")
 }

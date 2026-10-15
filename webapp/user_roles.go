@@ -324,8 +324,8 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 
 	// Removes someone: they are signed out and can't sign in again until an
 	// admin adds them back. Their flows and schedules can't be left to nobody,
-	// so they go to the admin removing them; their roles, teams, model keys
-	// and MCP connections go. They stay in the table, removed, so the runs
+	// so they go to the admin removing them; their roles, teams and MCP
+	// connections go. They stay in the table, removed, so the runs
 	// they started and the reviews they decided still say so.
 	mux.HandleFunc("DELETE /api/users/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if refuseNonAdmin(w, r) {
@@ -361,7 +361,6 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 				"DELETE FROM sessions WHERE user_id = ?",
 				"DELETE FROM user_roles WHERE user_id = ?",
 				"DELETE FROM team_members WHERE user_id = ?",
-				"DELETE FROM model_keys WHERE user_id = ?",
 				"DELETE FROM mcp_tokens WHERE user_id = ?",
 				"UPDATE users SET removed_at = CURRENT_TIMESTAMP(3), admin = FALSE, team_manager = FALSE WHERE id = ?",
 			} {

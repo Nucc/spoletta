@@ -1,7 +1,9 @@
 package main
 
 // Each flow, procedure and struct has an owner: someone, a team, or nobody,
-// when it is global. A new one is its maker's. Only its owner sees it, or
+// when it is global. Most are a team's: a new one is its maker's team's,
+// when they are in one only, unless they give it to another team of theirs,
+// themselves or everyone as they make it. Only its owner sees it, or
 // for a team's, the team's members, and anyone sees a global one; they may
 // change it and run it. Admins see everything, so nothing can end up out of
 // everyone's reach. Someone holding a role a human object on a flow names,
@@ -157,9 +159,37 @@ func neededAccess(r *http.Request) string {
 	return accessEdit
 }
 
-// The owner a new flow gets: its maker, when there is one.
-func newOwner(r *http.Request) *int64 {
-	return requestUserID(r)
+// The owner a new flow gets from its maker: the one they ask for, else
+// their team, when they are in one only, else themselves; nobody without
+// sign-in. Says why they may not give it to the one they asked for, if they
+// may not.
+func newOwner(ctx context.Context, db *sql.DB, u *user, asked *flowOwner) (userID, teamID *int64, msg string, err error) {
+	if u == nil {
+		return nil, nil, "", nil
+	}
+	maker := flowOwner{Kind: ownerUser, ID: u.ID}
+	to := maker
+	if asked != nil {
+		to = *asked
+		if msg, err = refuseOwner(ctx, db, u, maker, to); msg != "" || err != nil {
+			return nil, nil, msg, err
+		}
+	} else {
+		teams, err := userTeams(ctx, db, u.ID)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		if len(teams) == 1 {
+			to = flowOwner{Kind: ownerTeam, ID: teams[0].ID}
+		}
+	}
+	switch to.Kind {
+	case ownerUser:
+		return &to.ID, nil, "", nil
+	case ownerTeam:
+		return nil, &to.ID, "", nil
+	}
+	return nil, nil, "", nil
 }
 
 // Why the user may not give the flow from its owner now to the one given, if

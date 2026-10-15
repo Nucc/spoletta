@@ -282,12 +282,12 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	return f, run, mcpServers, nil
 }
 
-// Runs a follow-up in the worker for whoever asked for it, with their model
-// keys and MCP connections, recording its conversation as the step's.
+// Runs a follow-up in the worker for whoever asked for it, with their MCP
+// connections, recording its conversation as the step's.
 func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, who *int64, run agentRun, mcpServers []int64, stepID int64, attempt int) runResult {
 	var msg string
 	var err error
-	if run.Keys, err = modelKeys(ctx, db, who); err != nil {
+	if run.Keys, err = modelKeys(ctx, db); err != nil {
 		return runResult{Error: err.Error()}
 	}
 	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, mcpServers)

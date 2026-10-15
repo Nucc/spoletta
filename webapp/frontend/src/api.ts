@@ -347,10 +347,16 @@ export function getFlow(id: number): Promise<Flow> {
 }
 
 // A struct is made with its object, named after it.
-export function createFlow(name: string, kind: 'flow' | 'module' | 'struct' = 'flow'): Promise<Flow> {
+// Without an owner, it is its maker's team's when they are in one only, else
+// theirs.
+export function createFlow(
+  name: string,
+  kind: 'flow' | 'module' | 'struct' = 'flow',
+  owner?: { kind: 'global' } | { kind: 'team' | 'user'; id: number },
+): Promise<Flow> {
   return request('/api/flows', {
     method: 'POST',
-    body: JSON.stringify({ name, module: kind === 'module', struct: kind === 'struct' }),
+    body: JSON.stringify({ name, module: kind === 'module', struct: kind === 'struct', owner }),
   })
 }
 
@@ -1186,23 +1192,21 @@ export type ModelProvider = { id: string; name: string; env: string }
 // A saved key, of which only the last four characters show.
 export type ModelKey = { provider: string; hint: string; updatedAt: string }
 
-// Whose keys: the instance's, which admins set for everyone, or one's own.
-export type KeyScope = 'instance' | 'me'
-
 export function listModelProviders(): Promise<ModelProvider[]> {
   return request('/api/model-providers')
 }
 
-export function listModelKeys(scope: KeyScope): Promise<ModelKey[]> {
-  return request(`/api/model-keys/${scope}`)
+// The instance's keys, which admins set and everyone's agents use.
+export function listModelKeys(): Promise<ModelKey[]> {
+  return request('/api/model-keys')
 }
 
-export function setModelKey(scope: KeyScope, provider: string, key: string): Promise<ModelKey[]> {
-  return request(`/api/model-keys/${scope}/${provider}`, { method: 'PUT', body: JSON.stringify({ key }) })
+export function setModelKey(provider: string, key: string): Promise<ModelKey[]> {
+  return request(`/api/model-keys/${provider}`, { method: 'PUT', body: JSON.stringify({ key }) })
 }
 
-export function deleteModelKey(scope: KeyScope, provider: string): Promise<void> {
-  return request(`/api/model-keys/${scope}/${provider}`, { method: 'DELETE' })
+export function deleteModelKey(provider: string): Promise<void> {
+  return request(`/api/model-keys/${provider}`, { method: 'DELETE' })
 }
 
 // The roles boards name and people hold, to pick from.

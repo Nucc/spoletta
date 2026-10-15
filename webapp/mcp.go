@@ -800,6 +800,30 @@ func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected st
 	return t.AccessToken, nil
 }
 
+// The user a run's agents work for, with their MCP connections: whoever
+// started it, or the run it is part of, else whoever made the schedule that
+// did, else the owner of the flow it runs; nil when none of them is anyone.
+func runUser(ctx context.Context, db *sql.DB, run int64) (*int64, error) {
+	for {
+		var parent, who, owner sql.NullInt64
+		err := db.QueryRowContext(ctx,
+			`SELECT r.parent_run_id, COALESCE(r.started_by, s.created_by), f.owner_user_id FROM runs r
+			JOIN flows f ON f.id = r.flow_id LEFT JOIN schedules s ON s.id = r.schedule_id WHERE r.id = ?`, run).Scan(&parent, &who, &owner)
+		switch {
+		case err != nil:
+			return nil, err
+		case who.Valid:
+			return &who.Int64, nil
+		case parent.Valid:
+			run = parent.Int64
+		case owner.Valid:
+			return &owner.Int64, nil
+		default:
+			return nil, nil
+		}
+	}
+}
+
 // An MCP server as the worker registers it with pi for one agent step.
 type mcpRunServer struct {
 	Name        string `json:"name"`

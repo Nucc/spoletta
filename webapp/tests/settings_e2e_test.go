@@ -21,15 +21,19 @@ type settingsKey struct {
 	Hint     string `json:"hint"`
 }
 
-// An agent gets the keys of whoever started its run, over the instance's;
-// only an admin sets the instance's, and keys aren't shown again.
+// Only an admin sets the model keys, which every agent gets, whoever started
+// its run; keys aren't shown again.
 func TestSettingsModelKeys(t *testing.T) {
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
-	a.call("PUT", "/api/model-keys/instance/anthropic", map[string]any{"key": "sk-instance-anthropic"}, http.StatusOK, nil)
-	a.call("PUT", "/api/model-keys/instance/openai", map[string]any{"key": "sk-instance-openai"}, http.StatusOK, nil)
-	a.refused("PUT", "/api/model-keys/instance/nobody", map[string]any{"key": "x"}, http.StatusNotFound, "no such provider")
-	a.refused("PUT", "/api/model-keys/instance/openai", map[string]any{"key": " "}, http.StatusBadRequest, "key is required")
+	var keys []settingsKey
+	a.call("PUT", "/api/model-keys/anthropic", map[string]any{"key": "sk-instance-anthropic"}, http.StatusOK, nil)
+	a.call("PUT", "/api/model-keys/openai", map[string]any{"key": "sk-instance-openai"}, http.StatusOK, &keys)
+	if len(keys) != 2 || keys[1].Provider != "openai" || keys[1].Hint != "enai" {
+		t.Errorf("keys: %+v", keys)
+	}
+	a.refused("PUT", "/api/model-keys/nobody", map[string]any{"key": "x"}, http.StatusNotFound, "no such provider")
+	a.refused("PUT", "/api/model-keys/openai", map[string]any{"key": " "}, http.StatusBadRequest, "key is required")
 	f := a.newFlow("Keys")
 	usersShare(a, f.ID)
 	a.startAt(f.ID, a.agent(f.ID, "Write", "Write.").ID)
@@ -38,25 +42,22 @@ func TestSettingsModelKeys(t *testing.T) {
 	bob := usersNewPerson("Bob")
 	usersAdd(a, bob.email)
 	usersSignIn(a, p, bob)
-	a.refused("PUT", "/api/model-keys/instance/openai", map[string]any{"key": "mine"}, http.StatusForbidden, "only an admin")
-	a.refused("GET", "/api/model-keys/instance", nil, http.StatusForbidden, "only an admin")
-	var keys []settingsKey
-	a.call("PUT", "/api/model-keys/me/openai", map[string]any{"key": "sk-bob-openai-1234"}, http.StatusOK, &keys)
-	if len(keys) != 1 || keys[0].Provider != "openai" || keys[0].Hint != "1234" {
-		t.Errorf("bob's keys: %+v", keys)
-	}
+	a.refused("GET", "/api/model-keys", nil, http.StatusForbidden, "only an admin")
+	a.refused("PUT", "/api/model-keys/openai", map[string]any{"key": "mine"}, http.StatusForbidden, "only an admin")
+	a.refused("DELETE", "/api/model-keys/openai", nil, http.StatusForbidden, "only an admin")
 	a.finish(a.startRun(f.ID).ID)
 	runs := a.worker.runsOf("Write")
 	got := runs[len(runs)-1].Keys
-	if got["OPENAI_API_KEY"] != "sk-bob-openai-1234" || got["ANTHROPIC_API_KEY"] != "sk-instance-anthropic" {
+	if got["OPENAI_API_KEY"] != "sk-instance-openai" || got["ANTHROPIC_API_KEY"] != "sk-instance-anthropic" {
 		t.Errorf("bob's agent got keys %v", got)
 	}
 
-	a.call("DELETE", "/api/model-keys/me/openai", nil, http.StatusNoContent, nil)
+	usersSignIn(a, p, usersAda)
+	a.call("DELETE", "/api/model-keys/openai", nil, http.StatusNoContent, nil)
 	a.finish(a.startRun(f.ID).ID)
 	runs = a.worker.runsOf("Write")
-	if got := runs[len(runs)-1].Keys; got["OPENAI_API_KEY"] != "sk-instance-openai" {
-		t.Errorf("without his own, bob's agent got %v", got)
+	if got := runs[len(runs)-1].Keys; got["OPENAI_API_KEY"] != "" || got["ANTHROPIC_API_KEY"] == "" {
+		t.Errorf("after removing openai's key, the agent got %v", got)
 	}
 }
 

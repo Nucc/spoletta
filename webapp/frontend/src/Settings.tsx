@@ -5,7 +5,6 @@ import {
   listModelKeys,
   listModelProviders,
   setModelKey,
-  type KeyScope,
   type MCPServer,
   type Me,
   type ModelKey,
@@ -26,15 +25,16 @@ export type SettingsTab = 'account' | 'keys' | 'mcp' | 'people' | 'teams'
 function tabsFor(me: Me): { id: SettingsTab; label: string }[] {
   const tabs: { id: SettingsTab; label: string }[] = []
   if (me.user) tabs.push({ id: 'account', label: 'Account' })
-  tabs.push({ id: 'keys', label: 'Model keys' }, { id: 'mcp', label: 'MCP servers' })
+  if (configures(me)) tabs.push({ id: 'keys', label: 'Model keys' })
+  tabs.push({ id: 'mcp', label: 'MCP servers' })
   if (me.user) tabs.push({ id: 'teams', label: 'Teams' })
   if (me.user?.admin) tabs.push({ id: 'people', label: 'People' })
   return tabs
 }
 
-// Where everyone keeps their model keys and MCP connections, and admins and
-// team managers configure the instance: its keys and MCP servers, who signs
-// in, and the teams.
+// Where everyone keeps their MCP connections, and admins and team managers
+// configure the instance: its model keys and MCP servers, who signs in, and
+// the teams.
 export default function Settings({ tab }: { tab: SettingsTab | null }) {
   const me = useMe()
   const [error, setError] = useState<string | null>(null)
@@ -81,7 +81,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
           </nav>
           <main className="settings-main">
             {shown === 'account' && <AccountSection me={me} />}
-            {shown === 'keys' && <ModelKeysSection me={me} onError={report} />}
+            {shown === 'keys' && <ModelKeysSection onError={report} />}
             {shown === 'mcp' && <MCPSection me={me} onError={report} />}
             {shown === 'teams' && (
               <TeamsSection canManage={!!(me.user?.admin || me.user?.teamManager)} onError={report} />
@@ -121,59 +121,21 @@ function AccountSection({ me }: { me: Me }) {
   )
 }
 
-// The keys agents reach their models' providers with: one's own, which the
-// agents of runs for them use, and for admins the instance's, which those
-// without one of their own use.
-function ModelKeysSection({ me, onError }: { me: Me; onError: (err: unknown) => void }) {
+// The keys agents reach their models' providers with, which admins set and
+// everyone's agents use.
+function ModelKeysSection({ onError }: { onError: (err: unknown) => void }) {
   const [providers, setProviders] = useState<ModelProvider[]>([])
   useEffect(() => {
     listModelProviders().then(setProviders, onError)
   }, [onError])
-  return (
-    <>
-      {me.user && (
-        <KeyList
-          scope="me"
-          title="Your keys"
-          note="Agents of the runs you start, and of your schedules, reach their model with your key for its provider, else the instance's. Keys don't show again once saved."
-          providers={providers}
-          onError={onError}
-        />
-      )}
-      {configures(me) && (
-        <KeyList
-          scope="instance"
-          title="The instance's keys"
-          note="Used by everyone without a key of their own for the provider; the worker's environment has the last say for a provider without either."
-          providers={providers}
-          onError={onError}
-        />
-      )}
-    </>
-  )
-}
-
-function KeyList({
-  scope,
-  title,
-  note,
-  providers,
-  onError,
-}: {
-  scope: KeyScope
-  title: string
-  note: string
-  providers: ModelProvider[]
-  onError: (err: unknown) => void
-}) {
   const [keys, setKeys] = useState<ModelKey[] | null>(null)
   useEffect(() => {
-    listModelKeys(scope).then(setKeys, onError)
-  }, [scope, onError])
+    listModelKeys().then(setKeys, onError)
+  }, [onError])
 
   const save = async (provider: string, key: string) => {
     try {
-      setKeys(await setModelKey(scope, provider, key))
+      setKeys(await setModelKey(provider, key))
       return true
     } catch (err) {
       onError(err)
@@ -182,7 +144,7 @@ function KeyList({
   }
   const remove = async (provider: string) => {
     try {
-      await deleteModelKey(scope, provider)
+      await deleteModelKey(provider)
       setKeys((ks) => ks && ks.filter((k) => k.provider !== provider))
     } catch (err) {
       onError(err)
@@ -190,9 +152,12 @@ function KeyList({
   }
 
   return (
-    <section className="flow-section" aria-label={title}>
-      <h2>{title}</h2>
-      <p className="flows-note">{note}</p>
+    <section className="flow-section" aria-label="Model keys">
+      <h2>Model keys</h2>
+      <p className="flows-note">
+        The keys every agent reaches its model's provider with, whoever started its run. The worker's environment has
+        the last say for a provider without one. Keys don't show again once saved.
+      </p>
       {keys === null ? (
         <p className="flows-note">Loading…</p>
       ) : (

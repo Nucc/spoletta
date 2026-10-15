@@ -389,6 +389,8 @@ type repository struct {
 	URL string `json:"url"`
 	// The branch runs' branches start from; empty for the default branch.
 	Base string `json:"base"`
+	// What the worker gets for a re-run: the commit its branch starts from.
+	Start string `json:"start,omitempty"`
 }
 
 // A run is one execution of the flow from the start node. The engine walks
@@ -408,6 +410,11 @@ type run struct {
 	Parent      *int64 `json:"parent"`
 	Process     *int64 `json:"process"`
 	ProcessName string `json:"processName"`
+	// For a run re-running another from one of its processes: that run, and
+	// the process.
+	RerunOf       *int64 `json:"rerunOf"`
+	RerunFrom     *int64 `json:"rerunFrom"`
+	RerunFromName string `json:"rerunFromName"`
 	// For a run of a flow process for one item of a list: what tells the
 	// item apart, its first unique attribute's value or its place in the list.
 	ItemKey string `json:"itemKey"`
@@ -685,7 +692,11 @@ type version struct {
 // What the worker takes for a step: the workspace with the repositories the
 // process works on.
 type workspaceSpec struct {
-	ID           string       `json:"id"`
-	Branch       string       `json:"branch"`
+	ID     string `json:"id"`
+	Branch string `json:"branch"`
+	// The run and step working in it, which the worker's commit of what the
+	// step left uncommitted names.
+	Run          int64        `json:"run,omitempty"`
+	Step         int64        `json:"step,omitempty"`
 	Repositories []repository `json:"repositories"`
 }

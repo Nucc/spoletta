@@ -298,6 +298,27 @@ func main() {
 		reply(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 
+	// Releases the workspaces of runs that are over, keeping their branches
+	// and sessions: {"runs": [ids]}; see releaseWorkspaces.
+	mux.HandleFunc("POST /workspaces/release", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Runs []int64 `json:"runs"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
+			reply(w, http.StatusBadRequest, map[string]string{"error": "invalid request: " + err.Error()})
+			return
+		}
+		released, err := releaseWorkspaces(body.Runs)
+		if err != nil {
+			reply(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if released == nil {
+			released = []string{}
+		}
+		reply(w, http.StatusOK, map[string][]string{"released": released})
+	})
+
 	log.Printf("worker: listening on %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
@@ -421,6 +442,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
+	ws.process, ws.session = run.ProcessName, run.SessionID
 	defer ws.done(&res)
 
 	// An empty model or thinking level leaves the choice to the pi settings.
@@ -468,6 +490,9 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 		args = append(args, "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates")
 	}
 	prompt := run.Prompt
+	if run.Resume && len(ws.recreated) > 0 {
+		prompt = recreatedNote(ws.recreated) + prompt
+	}
 	if run.Guide {
 		guide, err := os.ReadFile(flowsGuide)
 		if err != nil {
@@ -616,6 +641,15 @@ func (s *eventStream) outcome() (output, failure string) {
 	return strings.TrimSpace(strings.Join(texts, "\n")), ""
 }
 
+// Tells an agent carrying on its conversation that its checkouts were made
+// again since, so it doesn't count on what only the old ones held.
+func recreatedNote(repos []string) string {
+	return fmt.Sprintf("Note: since you last worked here, the checkouts of %s were removed to save space and made again from the branch. "+
+		"Everything committed is there, including what was left uncommitted, which was committed for you; "+
+		"but files git ignores, such as installed dependencies and build output, are gone, as is anything you left outside the repositories. "+
+		"Set them up again if you need them.\n\n", strings.Join(repos, ", "))
+}
+
 // The directory a step works in, and what gives it back once the step is
 // done: its run's workspace, ready and taken, or a scratch directory deleted
 // afterwards. Getting the workspace ready doesn't count towards the step's
@@ -652,6 +686,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) (r
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
+	ws.process = run.ProcessName
 	defer ws.done(&res)
 	// The inputs and the script stay out of the working directory, which a
 	// workspace shares with other steps.

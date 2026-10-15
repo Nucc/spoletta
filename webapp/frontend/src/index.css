@@ -559,6 +559,23 @@ body {
   background: #fff5f5;
 }
 
+/* Re-runs the run from a step's process; see RerunDialog. */
+.step-rerun {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  cursor: pointer;
+}
+
+.step-rerun:hover {
+  background: #f6f8fa;
+}
+
 .steps {
   margin: 0;
   padding: 0;
@@ -612,6 +629,12 @@ body {
 .process-kind.sentry {
   color: #6639ba;
   background: #fbefff;
+}
+
+/* What a re-run copied from the run it re-runs. */
+.process-kind.copied {
+  color: #656d76;
+  background: #f6f8fa;
 }
 
 .step-meta {
@@ -2922,6 +2945,22 @@ button.toolbar-link {
     flex: none;
     overflow: visible;
   }
+}
+
+/* Re-running a run from a process: what it took, to change, above the buttons. */
+.rerun-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.rerun-dialog .panel-field textarea.rerun-input {
+  flex: none;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
 }
 
 .review-dialog::backdrop {

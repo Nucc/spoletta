@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -129,17 +131,34 @@ func (s flowSettings) prefix(flowName string) string {
 type runWorkspace struct {
 	// Names its directory in the worker: run-<id> for a run, run-<id>-step-<id>
 	// for an item of a list that runs without a run of its own.
-	id     string
+	id string
+	// The run working in it: the run it is named after, or for an item
+	// without a run of its own, the run the item is in.
+	run    int64
 	branch string
 	repos  []repository
+	// For a re-run: the commit each repository's branch starts from, by
+	// name; see reruns.go.
+	starts map[string]string
 }
 
 // What the worker takes for a step: the workspace with the repositories the
 // process works on.
 type workspaceSpec struct {
-	ID           string       `json:"id"`
-	Branch       string       `json:"branch"`
-	Repositories []repository `json:"repositories"`
+	ID     string `json:"id"`
+	Branch string `json:"branch"`
+	// The run and step working in it, which the worker's commit of what the
+	// step left uncommitted names.
+	Run          int64           `json:"run,omitempty"`
+	Step         int64           `json:"step,omitempty"`
+	Repositories []workspaceRepo `json:"repositories"`
+}
+
+// A repository as the worker takes it: for a re-run, with the commit its
+// branch starts from instead of its base.
+type workspaceRepo struct {
+	repository
+	Start string `json:"start,omitempty"`
 }
 
 // The workspace for a process with these settings, or nil if it works on no
@@ -148,16 +167,16 @@ func (ws *runWorkspace) forProcess(s processSettings) *workspaceSpec {
 	if ws == nil {
 		return nil
 	}
-	var repos []repository
+	var repos []workspaceRepo
 	for _, r := range ws.repos {
 		if s.Repositories == nil || contains(*s.Repositories, r.Name) {
-			repos = append(repos, r)
+			repos = append(repos, workspaceRepo{r, ws.starts[r.Name]})
 		}
 	}
 	if len(repos) == 0 {
 		return nil
 	}
-	return &workspaceSpec{ID: ws.id, Branch: ws.branch, Repositories: repos}
+	return &workspaceSpec{ID: ws.id, Branch: ws.branch, Run: ws.run, Repositories: repos}
 }
 
 func contains(ss []string, s string) bool {
@@ -182,6 +201,9 @@ func withWorkspace(prompt string, ws *workspaceSpec) string {
 		if base == "" {
 			base = "its default branch"
 		}
+		if r.Start != "" {
+			base = "commit " + r.Start[:min(len(r.Start), 12)] + ", where the run this one re-runs had got to"
+		}
 		fmt.Fprintf(&b, "- %s/: %s, branched from %s\n", r.Name, r.URL, base)
 	}
 	b.WriteString("The checkouts hold only the latest commit of the branch they started from, with what this run committed on top: " +
@@ -189,7 +211,8 @@ func withWorkspace(prompt string, ws *workspaceSpec) string {
 	// pi loads context files from the working directory up, which the checkouts are below.
 	b.WriteString("Before working in a repository, read its AGENTS.md or CLAUDE.md if it has one, else its README, for how to work in it. " +
 		"Other processes of this run work on the same branch, before and after you, so what they committed is there. " +
-		"Commit your changes to this branch as you go. Don't switch branches, and don't push.\n")
+		"Commit your changes to this branch as you go; whatever you leave uncommitted is committed for you once you are done. " +
+		"Don't switch branches, and don't push.\n")
 	return b.String()
 }
 
@@ -244,6 +267,105 @@ func recordBranch(ctx context.Context, db execer, stepID int64, ws *workspaceSpe
 	}
 	_, err := db.ExecContext(ctx, "UPDATE run_steps SET branch = ? WHERE id = ?", ws.Branch, stepID)
 	return err
+}
+
+// Has the worker release the workspaces of runs that are over, run-<id> and
+// run-<id>-*, to save their space: it commits what they hold uncommitted
+// and removes the checkouts, keeping the branches and the agents' sessions,
+// so a follow-up or a re-run makes them again; see worker/workspace.go. A
+// workspace a step or follow-up is using stays, and is released once that
+// is over. A worker that can't be reached keeps them; the next start of the
+// webapp releases them.
+func releaseWorkspaces(workerURL string, runs []int64) {
+	if len(runs) == 0 {
+		return
+	}
+	go func() {
+		if err := askRelease(workerURL, runs); err != nil {
+			log.Printf("release workspaces of %d runs: %v", len(runs), err)
+		}
+	}()
+}
+
+func askRelease(workerURL string, runs []int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	var res struct {
+		Error string `json:"error"`
+	}
+	return callWorker(ctx, http.MethodPost, workerURL+"/workspaces/release", map[string][]int64{"runs": runs}, &res)
+}
+
+// The run a workspace is named after: 42 for run-42 and run-42-step-7.
+var workspaceRun = regexp.MustCompile(`^run-(\d+)(?:-step-\d+)?$`)
+
+// Releases the workspaces of the run whose workspace this is, once that run
+// is over, such as after a follow-up in it.
+func releaseIfOver(ctx context.Context, db *sql.DB, workerURL, workspace string) {
+	m := workspaceRun.FindStringSubmatch(workspace)
+	if m == nil {
+		return
+	}
+	id, _ := strconv.ParseInt(m[1], 10, 64)
+	var status string
+	if err := db.QueryRowContext(ctx, "SELECT status FROM runs WHERE id = ?", id).Scan(&status); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("release the workspace %s: %v", workspace, err)
+		}
+		return
+	}
+	if status != runRunning {
+		releaseWorkspaces(workerURL, []int64{id})
+	}
+}
+
+// Releases the workspaces of every run that is over, as the webapp starts:
+// those that ended while it couldn't reach the worker, or before workspaces
+// were released. The worker may be starting too, so it is asked a few times.
+func releaseEnded(db *sql.DB, workerURL string) {
+	ctx := context.Background()
+	ids := map[int64]bool{}
+	err := scanAll(ctx, db, "SELECT DISTINCT SUBSTRING_INDEX(branch, '/', -1) FROM run_steps WHERE branch <> ''", func(rows *sql.Rows) error {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if m := workspaceRun.FindStringSubmatch(name); m != nil {
+			id, _ := strconv.ParseInt(m[1], 10, 64)
+			ids[id] = true
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("find the workspaces to release: %v", err)
+		return
+	}
+	var ended []int64
+	err = scanAll(ctx, db, "SELECT id FROM runs WHERE status <> ?", func(rows *sql.Rows) error {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		if ids[id] {
+			ended = append(ended, id)
+		}
+		return nil
+	}, runRunning)
+	if err != nil || len(ended) == 0 {
+		if err != nil {
+			log.Printf("find the workspaces to release: %v", err)
+		}
+		return
+	}
+	for try := 0; ; try++ {
+		if err = askRelease(workerURL, ended); err == nil || try == 5 {
+			break
+		}
+		time.Sleep(30 * time.Second)
+	}
+	if err != nil {
+		log.Printf("release the workspaces of %d runs that are over: %v", len(ended), err)
+	}
 }
 
 // Has the worker delete the workspaces of runs. The runs are gone either way,

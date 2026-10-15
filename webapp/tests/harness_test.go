@@ -536,6 +536,8 @@ type fakeWorker struct {
 	// Every run asked for, in the order asked.
 	agentRuns  []agentRun
 	scriptRuns []scriptRun
+	// The runs whose workspaces the webapp asked to release, in the order asked.
+	released []int64
 }
 
 func newFakeWorker(t *testing.T) *fakeWorker {
@@ -553,6 +555,19 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 	})
 	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{})
+	})
+	mux.HandleFunc("POST /workspaces/release", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Runs []int64 `json:"runs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		fw.mu.Lock()
+		fw.released = append(fw.released, body.Runs...)
+		fw.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string][]string{"released": {}})
 	})
 	// As the real one: a record per line, each message of the conversation,
 	// then the result.

@@ -1757,6 +1757,14 @@ export default function Board({
     }
   }
 
+  // A re-run started from the open run; it opens as a run started with play
+  // does, having saved the board as a new version if it changed.
+  const onRerun = (run: FlowRun) => {
+    refreshVersions()
+    setRuns((rs) => [run, ...rs])
+    showRun(run)
+  }
+
   // Opens a run on the board it ran on: a recording flow process's run on
   // the flow process's board, a run of the whole flow, or of a flow a subflow
   // process ran, on the top board.
@@ -2474,6 +2482,7 @@ export default function Board({
             onStop={() => onStop(runDetail.id)}
             onStopStep={(step) => onStopStep(runDetail.id, step)}
             onOpenRun={openRunById}
+            onRerun={onRerun}
             onChanged={() => setRunReload((n) => n + 1)}
             onClose={() => setRunId(null)}
           />

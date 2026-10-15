@@ -163,6 +163,10 @@ func registerFollowUpRoutes(mux *http.ServeMux, db *sql.DB, workerURL string, mc
 			if err := finishFollowUp(db, f.ID, res); err != nil {
 				log.Printf("finish follow-up %d of step %d: %v", f.ID, stepID, err)
 			}
+			// The run's workspace isn't needed again until the next one.
+			if run.Workspace != nil {
+				releaseIfOver(context.Background(), db, workerURL, run.Workspace.ID)
+			}
 		}()
 		writeJSON(w, http.StatusCreated, f)
 	})

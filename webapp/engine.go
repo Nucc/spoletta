@@ -136,9 +136,25 @@ func (e *engine) start(id, flow, version int64, board snapshot, repos []reposito
 	lr := e.register(id, cancel)
 	go func() {
 		fr := newFlowRun(flow, version, board, repos, prefix)
-		w := newWalk(ctx, e, id, lr, fr, nil, nil, fr.workspace("run-"+strconv.FormatInt(id, 10)))
+		w := newWalk(ctx, e, id, lr, fr, nil, nil, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
 		w.enter()
 		e.finish(ctx, id, w)
+	}()
+}
+
+// Executes a run re-running another from process from, as start does, but
+// on board, nil for the top board, given what came from outside, starting at
+// the process, with the objects holding values, and its branches starting
+// from the commits in starts; see reruns.go.
+func (e *engine) rerun(nr pendingRun, flow int64, board *int64, given map[int64]value, from int64, values map[int64]value, starts map[string]string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	lr := e.register(nr.id, cancel)
+	go func() {
+		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
+		fr.starts = starts
+		w := newWalk(ctx, e, nr.id, lr, fr, board, given, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10)))
+		w.resume(from, values)
+		e.finish(ctx, nr.id, w)
 	}()
 }
 
@@ -168,6 +184,11 @@ func (e *engine) finish(ctx context.Context, id int64, w *walk) string {
 		lr.cancel()
 	}
 	rn, err := endRun(context.Background(), e.db, id, status)
+	// Its workspaces aren't needed until a follow-up or a re-run; see
+	// releaseWorkspaces.
+	if w.ws != nil {
+		releaseWorkspaces(e.workerURL, []int64{id})
+	}
 	if err != nil {
 		log.Printf("end run %d: %v", id, err)
 		return status
@@ -284,6 +305,9 @@ type flowRun struct {
 	// The flow's repositories as the run started, and its branches' prefix.
 	repos  []repository
 	prefix string
+	// For a re-run: the commit each repository's branches start from, by
+	// name; see reruns.go.
+	starts map[string]string
 	// For a flow a subflow process runs: the flows it runs inside, outermost
 	// first.
 	callers []int64
@@ -308,13 +332,13 @@ func newFlowRun(flow, version int64, board snapshot, repos []repository, prefix 
 	return fr
 }
 
-// A workspace of its own, named id, on the branch <prefix>/id; nil when the
-// flow has no repositories.
-func (fr *flowRun) workspace(id string) *runWorkspace {
+// A workspace of its own for run, named id, on the branch <prefix>/id; nil
+// when the flow has no repositories.
+func (fr *flowRun) workspace(run int64, id string) *runWorkspace {
 	if len(fr.repos) == 0 {
 		return nil
 	}
-	return &runWorkspace{id: id, branch: fr.prefix + "/" + id, repos: fr.repos}
+	return &runWorkspace{id: id, run: run, branch: fr.prefix + "/" + id, repos: fr.repos, starts: fr.starts}
 }
 
 // A run walking a board: the top board, or a flow process's.
@@ -359,8 +383,8 @@ type walk struct {
 	// State to the object it belongs to.
 	stateObjects map[int64]int64
 	// Object to the states with rules, in order, and their rules.
-	rules map[int64][]ruledState
-	generated    map[int64]bool
+	rules     map[int64][]ruledState
+	generated map[int64]bool
 
 	mu     sync.Mutex
 	values map[int64]value
@@ -562,6 +586,23 @@ func (w *walk) enter() {
 	}
 	w.mu.Unlock()
 	all(next)
+}
+
+// Runs the board from process from, with the objects holding values, rather
+// than from its start. A process waiting for an object to enter a state takes
+// it as entering the state it is in. Returns once nothing on it is left to run.
+func (w *walk) resume(from int64, values map[int64]value) {
+	w.mu.Lock()
+	maps.Copy(w.values, values)
+	var trigger int64
+	for _, i := range w.inputs[from] {
+		if v, ok := w.values[i.object]; ok && i.state != 0 && v.state == i.state {
+			trigger = i.object
+			break
+		}
+	}
+	w.mu.Unlock()
+	w.runProcess(from, newPass(), trigger)
 }
 
 // The run is over for whatever hasn't started yet.
@@ -1092,12 +1133,12 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		if recording {
 			name = "run-" + strconv.FormatInt(run, 10)
 		}
-		ws = w.fr.workspace(name)
+		ws = w.fr.workspace(run, name)
 	}
 	// Another flow works on its own repositories, in a workspace of its run's.
 	var inner *walk
 	if callee != nil {
-		inner = newWalk(ctx, w.e, run, lr, callee, nil, w.toCallee(callee, given), callee.workspace("run-"+strconv.FormatInt(run, 10)))
+		inner = newWalk(ctx, w.e, run, lr, callee, nil, w.toCallee(callee, given), callee.workspace(run, "run-"+strconv.FormatInt(run, 10)))
 	} else {
 		inner = newWalk(ctx, w.e, run, lr, w.fr, &id, given, ws)
 	}

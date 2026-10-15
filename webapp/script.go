@@ -74,6 +74,9 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 		return res, err
 	}
 	started(stepID)
+	if run.Workspace != nil {
+		run.Workspace.Step = stepID
+	}
 	if err := recordBranch(ctx, db, stepID, run.Workspace); err != nil {
 		return res, err
 	}

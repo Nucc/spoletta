@@ -682,10 +682,16 @@ export type FlowRun = {
   version: number | null
   // For the run of a recording flow process: the run it ran in, and the
   // process. Null for runs of the whole flow. The run of a flow a subflow
-  // process ran has a parent in that process's flow, and no process.
+  // process ran has a parent in that process's flow, and no process. A
+  // re-run of such a run is another run of it in the same run.
   parent: number | null
   process: number | null
   processName: string
+  // For a run re-running another from one of its processes: that run, and
+  // the process.
+  rerunOf: number | null
+  rerunFrom: number | null
+  rerunFromName: string
   // For the run of one item of a list: what tells the item apart.
   itemKey: string
   // The schedule that started it, if one did.
@@ -721,7 +727,9 @@ export type RunStep = {
   // deleted before that.
   process: number | null
   processName: string
-  kind: ProcessKind
+  // A re-run's step holding what it copied from the run it re-runs has no
+  // process, and is of kind copied.
+  kind: ProcessKind | 'copied'
   model: string
   thinking: ThinkingLevel | ''
   // For agents, the prompt as sent, inputs and change request included.
@@ -844,6 +852,26 @@ export function listRuns(flow: number): Promise<FlowRun[]> {
 
 export function startRun(flow: number): Promise<FlowRun> {
   return request(`/api/runs?flow=${flow}`, { method: 'POST' })
+}
+
+// An object the process a run is re-run from takes, as it took it in the
+// run; present is false if the run had nothing of it then.
+export type RerunInput = { object: number; name: string; state: string; content: string; present: boolean }
+
+// What re-running a run from a process takes: the objects the process took,
+// which can be changed, and the names of the objects the re-run copies from
+// the run and those it generates anew.
+export type RerunPlan = { process: number; processName: string; inputs: RerunInput[]; copied: string[]; anew: string[] }
+
+export function getRerun(run: number, step: number): Promise<RerunPlan> {
+  return request(`/api/runs/${run}/steps/${step}/rerun`)
+}
+
+// Re-runs the run from the step's process as a new run on the board as it
+// is, with content in place of what the process took of each object given,
+// by object id.
+export function rerun(run: number, step: number, inputs: Record<number, string>): Promise<FlowRun> {
+  return request(`/api/runs/${run}/steps/${step}/rerun`, { method: 'POST', body: JSON.stringify({ inputs }) })
 }
 
 // What a run held of an object: the latest content and state its steps gave

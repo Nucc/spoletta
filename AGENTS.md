@@ -5,7 +5,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 ## Layout
 - `webapp/` Go 1.24 HTTP server, stdlib `net/http` mux, MySQL via `database/sql` (no ORM). One package `main`, one file per domain.
 - `webapp/frontend/` React 19 + TypeScript + Vite + `@xyflow/react` (React Flow) + dagre. Plain CSS in `index.css`. All API calls and types live in `api.ts`.
-- `worker/` Go service that runs the `pi` coding agent (npm `@earendil-works/pi-coding-agent`) and bash scripts for the webapp; manages per-run git workspaces (`workspace.go`). `*.ts` there are pi extensions.
+- `worker/` Go service that runs the `pi` coding agent (npm `@earendil-works/pi-coding-agent`) and bash scripts for the webapp; manages per-run git workspaces (`workspace.go`): what a step leaves uncommitted is committed with the run, step and pi session as trailers, and once a run is over the webapp has its checkouts released (`releaseWorkspaces` in `webapp/workspace.go`), keeping branches and sessions, so a follow-up or re-run makes them again from the branch. `*.ts` there are pi extensions.
 - `compose.yaml` runs mysql + worker + webapp with podman compose. Secrets go in `.env` (never committed).
 
 ## Key concepts (start here before editing)
@@ -13,6 +13,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 - Process kinds: agent, script, human, flow (nested board, `boards.go`), subflow (`calls.go`), sentry.
 - Objects have states, attributes, parts; links are OPM links (instrument, consumption, effect, condition on state). Runtime instances in `instances.go`.
 - `engine.go`: executes runs; header comment documents the scheduling semantics. `runs.go` stores runs/steps.
+- `reruns.go`: re-running an ended run from one of its processes as a new run on the board as it is: what came before the process is copied as a `copied` step, the process starts with what it took (editable in `RerunDialog.tsx`), and it and what follows run anew (`walk.resume` in `engine.go`), on a branch starting from the commit the run's branch was at as the process started.
 - `versions.go`: full-board snapshots; `history.go` undo/redo reuses them. Adding board data means updating `snapshot` and `restoreSnapshot`, and usually `paste.go` and `opl.go`.
 - `opl.go`: renders the board as OPL sentences, shown in the UI and given to agents.
 - `assistant.go`: each flow's assistant, a chat at the bottom right of the board (`Assistant.tsx`). pi in the worker, run without tools and kept to the flow by its prompt, replies with the flow as a setup file, which is imported through `setup_import.go` (saving a version first); it may change only that flow.

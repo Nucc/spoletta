@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,10 @@ type workspaceSpec struct {
 	// Names the workspace's directory, such as run-42.
 	ID     string `json:"id"`
 	Branch string `json:"branch"`
+	// The run and step working in it, which the commits of what a step left
+	// uncommitted name; see commitLeftovers.
+	Run  int64 `json:"run,omitempty"`
+	Step int64 `json:"step,omitempty"`
 	// The repositories the step works on; others already in the workspace stay.
 	Repositories []repository `json:"repositories"`
 }
@@ -43,6 +48,11 @@ type repository struct {
 	URL  string `json:"url"`
 	// The branch the run's branch starts from; empty for the default branch.
 	Base string `json:"base"`
+	// For a run re-running another: the commit its branch starts from instead,
+	// where the other run's branch was as the process it re-runs from started.
+	// Runs' branches live in the shared repository, so it is there as long as
+	// that run's branch is.
+	Start string `json:"start,omitempty"`
 }
 
 // Where workspaces live, a volume of their own.
@@ -55,6 +65,8 @@ const prepareTimeout = 15 * time.Minute
 var (
 	safeID   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	safeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	// A full commit id, SHA-1 or SHA-256.
+	commitID = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 )
 
 // Per-path locks: a workspace is used by one step at a time, so agents
@@ -66,24 +78,42 @@ var locks = struct {
 }{m: map[string]*sync.Mutex{}}
 
 func lockPath(p string) func() {
+	l := pathLock(p)
+	l.Lock()
+	return l.Unlock
+}
+
+// Locks the path unless someone holds it already; false then.
+func tryLockPath(p string) (func(), bool) {
+	l := pathLock(p)
+	return l.Unlock, l.TryLock()
+}
+
+func pathLock(p string) *sync.Mutex {
 	locks.Lock()
+	defer locks.Unlock()
 	l, ok := locks.m[p]
 	if !ok {
 		l = &sync.Mutex{}
 		locks.m[p] = l
 	}
-	locks.Unlock()
-	l.Lock()
-	return l.Unlock
+	return l
 }
 
 // A workspace a step has taken, or its scratch directory.
 type takenWorkspace struct {
 	dir   string
+	spec  *workspaceSpec
 	repos []repository
 	// Each repository's commit as the step started, by name.
-	before  map[string]string
-	release func()
+	before map[string]string
+	// The repositories whose checkouts were made again from their branch, the
+	// workspace having been released since the run last worked in it.
+	recreated []string
+	// What the step's commit of what it left uncommitted says it was: its
+	// process and, for an agent, its pi session.
+	process, session string
+	release          func()
 }
 
 // What a step did to a repository it worked on.
@@ -123,6 +153,9 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec) (*takenWorkspace, err
 				return nil, fmt.Errorf("repository %s: invalid base branch %q", r.Name, r.Base)
 			}
 		}
+		if r.Start != "" && !commitID.MatchString(r.Start) {
+			return nil, fmt.Errorf("repository %s: invalid start commit %q", r.Name, r.Start)
+		}
 	}
 	dir := filepath.Join(workspacesRoot, ws.ID)
 	unlock := lockPath(dir)
@@ -132,11 +165,15 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec) (*takenWorkspace, err
 	}
 	pctx, cancel := context.WithTimeout(ctx, prepareTimeout)
 	defer cancel()
-	t := &takenWorkspace{dir: dir, repos: ws.Repositories, before: map[string]string{}, release: unlock}
+	t := &takenWorkspace{dir: dir, spec: ws, repos: ws.Repositories, before: map[string]string{}, release: unlock}
 	for _, r := range ws.Repositories {
-		if err := checkout(pctx, dir, ws.Branch, r); err != nil {
+		recreated, err := checkout(pctx, dir, ws.Branch, r)
+		if err != nil {
 			unlock()
 			return nil, fmt.Errorf("repository %s: %w", r.Name, err)
+		}
+		if recreated {
+			t.recreated = append(t.recreated, r.Name)
 		}
 		head, err := gitOut(pctx, filepath.Join(dir, r.Name), "rev-parse", "HEAD")
 		if err != nil {
@@ -159,6 +196,13 @@ func (t *takenWorkspace) done(res *runResult) {
 	for _, r := range t.repos {
 		dir := filepath.Join(t.dir, r.Name)
 		c := repoCommits{Name: r.Name, Before: t.before[r.Name], Commits: []string{}}
+		subject := "Commit what " + t.process + " left uncommitted"
+		if t.process == "" {
+			subject = "Commit what the step left uncommitted"
+		}
+		if err := commitLeftovers(ctx, dir, subject, t.trailers()); err != nil {
+			log.Printf("commit what was left uncommitted in %s: %v", dir, err)
+		}
 		var err error
 		if c.After, err = gitOut(ctx, dir, "rev-parse", "HEAD"); err != nil {
 			continue
@@ -175,23 +219,67 @@ func (t *takenWorkspace) done(res *runResult) {
 	}
 }
 
+// The trailers of a step's commit of what it left uncommitted, which tie it to
+// the run, the step and the agent's session.
+func (t *takenWorkspace) trailers() []string {
+	var ts []string
+	if t.spec != nil && t.spec.Run != 0 {
+		ts = append(ts, fmt.Sprintf("Spoletta-Run: %d", t.spec.Run))
+	}
+	if t.spec != nil && t.spec.Step != 0 {
+		ts = append(ts, fmt.Sprintf("Spoletta-Step: %d", t.spec.Step))
+	}
+	if t.session != "" {
+		ts = append(ts, "Pi-Session: "+t.session)
+	}
+	return ts
+}
+
+// Commits whatever the checkout holds that isn't committed, ignored files
+// aside, so the branch has all of a step's work and the checkout can be
+// removed and made again from it without losing any. Nothing to commit is
+// no commit. Hooks don't run: the checkout is the run's, not a person's.
+func commitLeftovers(ctx context.Context, dir, subject string, trailers []string) error {
+	status, err := gitOut(ctx, dir, "status", "--porcelain")
+	if err != nil || status == "" {
+		return err
+	}
+	if err := gitOK(ctx, dir, "add", "--all"); err != nil {
+		return err
+	}
+	args := []string{"-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "-m", subject}
+	for _, tr := range trailers {
+		args = append(args, "--trailer", tr)
+	}
+	return gitOK(ctx, dir, args...)
+}
+
 // Adds the repository to the workspace as a worktree on the branch, unless
 // it is there. The branch starts from the base branch as just fetched, or
-// stays as it is if it exists already. The worktree is added beside its
-// place and moved in once ready, so one cut short leaves nothing that looks
-// ready.
-func checkout(ctx context.Context, dir, branch string, r repository) error {
+// the repository's start commit if it has one, or stays as it is if it
+// exists already: then nothing is fetched, as the checkout is only made
+// again, the workspace having been released. Says whether it was. The
+// worktree is added beside its place and moved in once ready, so one cut
+// short leaves nothing that looks ready.
+func checkout(ctx context.Context, dir, branch string, r repository) (bool, error) {
 	dest := filepath.Join(dir, r.Name)
 	if _, err := os.Stat(dest); err == nil {
-		return nil
+		return false, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
+		return false, err
 	}
 	repo := sharedRepo(r.URL)
 	defer lockPath(repo)()
-	start, err := fetchShared(ctx, repo, r.URL, r.Base)
-	if err != nil {
-		return err
+	exists := false
+	if _, err := os.Stat(repo); err == nil {
+		exists = gitOK(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil
+	}
+	var start string
+	if !exists {
+		var err error
+		if start, err = fetchShared(ctx, repo, r.URL, r.Base); err != nil {
+			return false, err
+		}
 	}
 	// Git names the worktree after this, so the shared repository says
 	// whose it is: run-42-myrepo.
@@ -200,22 +288,27 @@ func checkout(ctx context.Context, dir, branch string, r repository) error {
 	// What an earlier try left behind.
 	os.RemoveAll(tmp)
 	if err := gitOK(ctx, repo, "worktree", "prune"); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.MkdirAll(adding, 0o777); err != nil {
-		return err
+		return false, err
 	}
 	defer os.Remove(adding)
 	args := []string{"worktree", "add", "--quiet"}
-	if gitOK(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil {
+	if exists {
 		args = append(args, "--", tmp, branch)
+	} else if r.Start != "" {
+		if gitOK(ctx, repo, "rev-parse", "--verify", "--quiet", r.Start+"^{commit}") != nil {
+			return false, fmt.Errorf("the commit %s the run starts from is gone, along with the branch of the run it re-runs", r.Start[:7])
+		}
+		args = append(args, "-b", branch, "--", tmp, r.Start)
 	} else {
 		args = append(args, "-b", branch, "--", tmp, start)
 	}
 	if err := gitOK(ctx, repo, args...); err != nil {
-		return err
+		return false, err
 	}
-	return gitOK(ctx, repo, "worktree", "move", tmp, dest)
+	return exists, gitOK(ctx, repo, "worktree", "move", tmp, dest)
 }
 
 // Where the repository behind url is shared from.
@@ -352,6 +445,81 @@ func sessionArgs(run runRequest) ([]string, error) {
 		return nil, err
 	}
 	return []string{"--session-dir", dir, "--session-id", run.SessionID}, nil
+}
+
+// Releases the workspaces of runs that are over, run-<id> and the ones of its
+// items, run-<id>-*, to save their space: what each checkout holds
+// uncommitted is committed, and the checkouts are removed, but the branches
+// stay in the shared repositories, and the pi sessions beside them, so a
+// follow-up or a re-run makes the checkouts again from the branches; see
+// checkout. A workspace a step is using is left as it is; what asked for
+// the release asks again once it is over. Returns the workspaces released.
+func releaseWorkspaces(runs []int64) ([]string, error) {
+	var released []string
+	for _, id := range runs {
+		name := fmt.Sprintf("run-%d", id)
+		matches, err := filepath.Glob(filepath.Join(workspacesRoot, name+"-*"))
+		if err != nil {
+			return released, err
+		}
+		for _, dir := range append(matches, filepath.Join(workspacesRoot, name)) {
+			unlock, ok := tryLockPath(dir)
+			if !ok {
+				continue
+			}
+			ok, err := releaseWorkspace(dir)
+			unlock()
+			if err != nil {
+				return released, err
+			}
+			if ok {
+				released = append(released, filepath.Base(dir))
+			}
+		}
+	}
+	return released, nil
+}
+
+// Commits what each worktree in the workspace holds uncommitted and removes
+// it, keeping its branch, then the workspace, unless a worktree couldn't be
+// committed: it then stays, with the workspace. False if there was nothing
+// to release.
+func releaseWorkspace(dir string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	kept := false
+	for _, e := range entries {
+		wt := filepath.Join(dir, e.Name())
+		if fi, err := os.Stat(filepath.Join(wt, ".git")); err != nil || fi.IsDir() {
+			continue
+		}
+		repo, err := gitOut(ctx, wt, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			continue
+		}
+		if err := commitLeftovers(ctx, wt, "Commit what was left uncommitted as the workspace was released", nil); err != nil {
+			log.Printf("release %s: %v; keeping it", wt, err)
+			kept = true
+			continue
+		}
+		unlock := lockPath(repo)
+		err = gitOK(ctx, repo, "worktree", "remove", "--force", wt)
+		unlock()
+		if err != nil {
+			return false, err
+		}
+	}
+	if kept {
+		return false, nil
+	}
+	return true, os.RemoveAll(dir)
 }
 
 // Deletes the workspaces of runs, run-<id> and the ones of its items,

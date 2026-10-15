@@ -23,10 +23,16 @@ type run struct {
 	// For the run of a recording flow process: the run it ran in, and the
 	// process, kept after it is deleted. Null for runs of the whole flow. The
 	// run of a flow a subflow process ran has a parent in that process's
-	// flow, and no process: it ran on its own flow's top board.
+	// flow, and no process: it ran on its own flow's top board. A re-run of
+	// such a run is another run of it in the same run.
 	Parent      *int64 `json:"parent"`
 	Process     *int64 `json:"process"`
 	ProcessName string `json:"processName"`
+	// For a run re-running another from one of its processes: that run, and
+	// the process, kept after it is deleted; see reruns.go.
+	RerunOf       *int64 `json:"rerunOf"`
+	RerunFrom     *int64 `json:"rerunFrom"`
+	RerunFromName string `json:"rerunFromName"`
 	// For a run of a flow process for one item of a list: what tells the
 	// item apart, its first unique attribute's value or its place in the list.
 	ItemKey string `json:"itemKey"`
@@ -38,7 +44,7 @@ type run struct {
 	FinishedAt *time.Time `json:"finishedAt"`
 }
 
-var runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", started_at, finished_at"
+var runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", started_at, finished_at"
 
 // The tokens a step's model calls took in and gave out, and what they cost
 // at the models' catalog prices, in dollars.
@@ -73,7 +79,7 @@ func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage,
 }
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -241,6 +247,11 @@ func migrateRuns(db *sql.DB) error {
 		{"runs", "item_key", "VARCHAR(255) NOT NULL DEFAULT '' AFTER process_name"},
 		{"run_steps", "child_run_id", "BIGINT NULL AFTER instructions"},
 		{"runs", "schedule_id", "BIGINT NULL AFTER item_key"},
+		{"runs", "rerun_of", "BIGINT NULL AFTER process_name"},
+		{"runs", "rerun_from", "BIGINT NULL AFTER rerun_of"},
+		{"runs", "rerun_from_name", "VARCHAR(255) NOT NULL DEFAULT '' AFTER rerun_from"},
+		// For a re-run: the commit each repository's branch started from.
+		{"runs", "starts", "JSON NULL AFTER rerun_from_name"},
 	} {
 		if err := addColumn(db, c.table, c.name, c.def); err != nil {
 			return err
@@ -447,8 +458,7 @@ func endRun(ctx context.Context, db *sql.DB, id int64, status string) (run, erro
 }
 
 // Starts a run of the whole flow on its board as it is, for schedule if one
-// started it, or the user who did: a board changed since its version is saved
-// as a new one first, so the run's version shows what it ran. The run goes on in the server;
+// started it, or the user who did; see newRun. The run goes on in the server;
 // this returns its id once it started, or sql.ErrNoRows without the flow.
 func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule, startedBy *int64) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
@@ -456,32 +466,51 @@ func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule
 		return 0, err
 	}
 	defer tx.Rollback()
-	var name string
-	var settings flowSettings
-	if err := tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ?", flow).Scan(&name, &settings); err != nil {
-		return 0, err
-	}
-	version, err := saveVersion(ctx, tx, flow, true)
-	if err != nil {
-		return 0, err
-	}
-	board, err := takeSnapshot(ctx, tx, flow)
-	if err != nil {
-		return 0, err
-	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by) VALUES (?, ?, ?, ?, ?)", flow, runRunning, version, schedule, startedBy)
-	if err != nil {
-		return 0, err
-	}
-	id, err := res.LastInsertId()
+	nr, err := newRun(ctx, tx, flow, schedule, startedBy)
 	if err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	eng.start(id, flow, version, board, settings.Repositories, settings.prefix(name))
-	return id, nil
+	eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix)
+	return nr.id, nil
+}
+
+// A run recorded, and what the engine needs to execute it.
+type pendingRun struct {
+	id, version int64
+	board       snapshot
+	repos       []repository
+	prefix      string
+}
+
+// Records a run of the flow on its board as it is: a board changed since its
+// version is saved as a new one first, so the run's version shows what it
+// ran. sql.ErrNoRows without the flow.
+func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *int64) (pendingRun, error) {
+	var name string
+	var settings flowSettings
+	if err := tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ?", flow).Scan(&name, &settings); err != nil {
+		return pendingRun{}, err
+	}
+	version, err := saveVersion(ctx, tx, flow, true)
+	if err != nil {
+		return pendingRun{}, err
+	}
+	board, err := takeSnapshot(ctx, tx, flow)
+	if err != nil {
+		return pendingRun{}, err
+	}
+	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by) VALUES (?, ?, ?, ?, ?)", flow, runRunning, version, schedule, startedBy)
+	if err != nil {
+		return pendingRun{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return pendingRun{}, err
+	}
+	return pendingRun{id: id, version: version, board: board, repos: settings.Repositories, prefix: settings.prefix(name)}, nil
 }
 
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {

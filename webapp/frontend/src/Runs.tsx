@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Data } from './Data'
+import RerunDialog from './RerunDialog'
 import {
   fileUrl,
   getStepMessages,
@@ -73,8 +74,8 @@ export function decisionText(outcome: string, object: string | undefined, instru
 }
 
 // Every run of the flow, newest first, each with the runs of its recording
-// flow processes under it, such as one per item of a list, in the order they
-// started.
+// flow processes under it, such as one per item of a list, and its re-runs,
+// in the order they started.
 export function RunList({
   runs,
   selected,
@@ -86,11 +87,14 @@ export function RunList({
 }) {
   const ids = new Set(runs.map((r) => r.id))
   const children = new Map<number, FlowRun[]>()
+  // A re-run goes under the run it re-runs.
+  const parentOf = (r: FlowRun) => r.rerunOf ?? r.parent
   for (const r of [...runs].reverse()) {
-    if (r.parent !== null && ids.has(r.parent)) children.set(r.parent, [...(children.get(r.parent) ?? []), r])
+    const p = parentOf(r)
+    if (p !== null && ids.has(p)) children.set(p, [...(children.get(p) ?? []), r])
   }
   // A run whose parent fell off the list shows on its own.
-  const top = runs.filter((r) => r.parent === null || !ids.has(r.parent))
+  const top = runs.filter((r) => parentOf(r) === null || !ids.has(parentOf(r)!))
 
   const item = (r: FlowRun, nested: boolean) => (
     <li key={r.id}>
@@ -114,10 +118,15 @@ export function RunList({
             {r.itemKey}
           </span>
         )}
+        {r.rerunOf !== null && (
+          <span className="run-item-process">
+            {nested ? 'Re-run' : `Re-run of #${r.rerunOf}`} from {r.rerunFromName}
+          </span>
+        )}
         {r.parent !== null && (
           <span className="run-item-process">
             {r.processName}
-            {!nested && ` · in run #${r.parent}`}
+            {(!nested || r.rerunOf !== null) && ` · in run #${r.parent}`}
           </span>
         )}
         <time dateTime={r.startedAt}>
@@ -143,6 +152,7 @@ export function RunPanel({
   onStop,
   onStopStep,
   onOpenRun,
+  onRerun,
   onChanged,
   onClose,
 }: {
@@ -151,12 +161,18 @@ export function RunPanel({
   onStopStep: (id: number) => void
   // Opens another run: the one a recording flow process ran as, or the one it ran in.
   onOpenRun: (id: number) => void
+  // A re-run of this run started; see RerunDialog.
+  onRerun: (run: FlowRun) => void
   // A follow-up started or was stopped, so the run is loaded again.
   onChanged: () => void
   onClose: () => void
 }) {
   // Follow-ups work on the run's branch, so only one goes at a time, once its steps are over.
   const busy = run.steps.some((s) => s.status === 'active' || s.followUps.some((f) => f.status === 'active'))
+  // The step whose process the run is being re-run from.
+  const [rerunning, setRerunning] = useState<number | null>(null)
+  // A run can be re-run once it ended.
+  const rerunnable = run.status !== 'running'
   return (
     <aside className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
@@ -174,6 +190,15 @@ export function RunPanel({
             run #{run.parent}
           </button>
           .
+        </p>
+      )}
+      {run.rerunOf !== null && (
+        <p className="panel-note">
+          A re-run of{' '}
+          <button className="link-button" onClick={() => onOpenRun(run.rerunOf!)}>
+            run #{run.rerunOf}
+          </button>{' '}
+          from {run.rerunFromName}.
         </p>
       )}
       <p className="panel-note">
@@ -206,6 +231,7 @@ export function RunPanel({
                 objects={run.objects.filter((o) => o.step === s.id)}
                 onStop={stoppable(s) ? () => onStopStep(s.id) : undefined}
                 onOpenRun={onOpenRun}
+                onRerun={rerunnable && s.process !== null && s.kind !== 'copied' ? () => setRerunning(s.id) : undefined}
                 busy={busy}
                 onChanged={onChanged}
               />
@@ -213,12 +239,24 @@ export function RunPanel({
           ))}
         </ol>
       )}
+      {rerunning !== null && (
+        <RerunDialog
+          run={run.id}
+          step={rerunning}
+          within={run.parent !== null ? { name: run.processName, run: run.parent } : undefined}
+          onStarted={(r) => {
+            setRerunning(null)
+            onRerun(r)
+          }}
+          onClose={() => setRerunning(null)}
+        />
+      )}
     </aside>
   )
 }
 
 // Agent, script and Sentry steps can be stopped while they go.
-export const stoppable = (s: { kind: ProcessKind; status: StepStatus }) =>
+export const stoppable = (s: { kind: ProcessKind | 'copied'; status: StepStatus }) =>
   s.status === 'active' && (s.kind === 'agent' || s.kind === 'script' || s.kind === 'sentry')
 
 function Step({
@@ -227,6 +265,7 @@ function Step({
   objects,
   onStop,
   onOpenRun,
+  onRerun,
   busy,
   onChanged,
 }: {
@@ -235,9 +274,12 @@ function Step({
   objects: FlowRunDetail['objects']
   onStop?: () => void
   onOpenRun: (id: number) => void
+  // Re-runs the run from the step's process; absent when it can't be.
+  onRerun?: () => void
   busy: boolean
   onChanged: () => void
 }) {
+  if (s.kind === 'copied') return <CopiedStep step={s} objects={objects} />
   return (
     <details className="step" open={s.status !== 'done' || s.followUps.length > 0}>
       <summary>
@@ -255,6 +297,15 @@ function Step({
         {onStop && (
           <button className="run-stop" onClick={onStop} title="Stop this step; its branch ends, the rest of the run goes on">
             Stop step
+          </button>
+        )}
+        {onRerun && (
+          <button
+            className="step-rerun"
+            onClick={onRerun}
+            title="Run the flow again from this process, with what came before it copied from this run"
+          >
+            Re-run from here
           </button>
         )}
         {s.kind === 'agent' && (
@@ -348,6 +399,25 @@ function Step({
           <FollowUpItem key={f.id} run={run} step={s.id} followUp={f} onChanged={onChanged} />
         ))}
         {s.canFollowUp && s.status !== 'active' && <FollowUpForm run={run} step={s.id} busy={busy} onSent={onChanged} />}
+      </div>
+    </details>
+  )
+}
+
+// What a re-run copied from the run it re-runs, as the run left it before
+// the process it re-ran from.
+function CopiedStep({ step: s, objects }: { step: RunStep; objects: FlowRunDetail['objects'] }) {
+  return (
+    <details className="step">
+      <summary>
+        <span className={`status-dot ${s.status}`} aria-hidden="true" />
+        <span className="step-name">{s.processName}</span>
+        <span className={`process-kind ${s.kind}`}>{s.kind}</span>
+      </summary>
+      <div className="step-body">
+        {objects.map((o) => (
+          <Block key={o.id} label={o.state ? `${o.name} (${o.state})` : o.name} text={o.content} data />
+        ))}
       </div>
     </details>
   )

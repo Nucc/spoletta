@@ -1,56 +1,31 @@
 package main
 
-// Model keys are the API keys agents reach their models' providers with,
-// such as Anthropic's or OpenAI's. They are the instance's: an admin sets
-// them in the settings, as they choose the models agents may use, and
-// everyone's agents use them; the worker's environment has the last say for
-// a provider without one. A key goes to the worker for each agent step, as
-// the environment variable pi reads it from, and isn't shown again once
-// saved: the settings show its last four characters.
+// Model keys are the API keys agents reach their models' providers with.
+// They are the instance's: an admin sets them in the settings, as they
+// choose the models agents may use, and everyone's agents use them. pi reads
+// each provider's key from an environment variable, which several providers
+// may share, as a gateway's do; the worker says which variables the models
+// it offers read, and which it has in its own environment (see the worker's
+// keys.go). A key saved here goes to the worker for each agent step, over
+// the worker's own, and isn't shown again: the settings show its last four
+// characters.
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
-
-// A provider pi takes a key for, and the environment variable it reads it from.
-type modelProvider struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Env  string `json:"env"`
-}
-
-var modelProviders = []modelProvider{
-	{"anthropic", "Anthropic", "ANTHROPIC_API_KEY"},
-	{"openai", "OpenAI", "OPENAI_API_KEY"},
-	{"google", "Google Gemini", "GEMINI_API_KEY"},
-	{"openrouter", "OpenRouter", "OPENROUTER_API_KEY"},
-	{"mistral", "Mistral", "MISTRAL_API_KEY"},
-	{"groq", "Groq", "GROQ_API_KEY"},
-	{"xai", "xAI", "XAI_API_KEY"},
-	{"cerebras", "Cerebras", "CEREBRAS_API_KEY"},
-	{"zai", "Z.ai", "ZAI_API_KEY"},
-}
-
-func providerByID(id string) (modelProvider, bool) {
-	for _, p := range modelProviders {
-		if p.ID == id {
-			return p, true
-		}
-	}
-	return modelProvider{}, false
-}
 
 // The longest key taken.
 const maxModelKey = 4096
 
 func migrateModelKeys(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS model_keys (
-		provider VARCHAR(64) NOT NULL PRIMARY KEY,
+		env VARCHAR(255) NOT NULL PRIMARY KEY,
 		api_key TEXT NOT NULL,
 		updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
 	)`); err != nil {
@@ -59,57 +34,109 @@ func migrateModelKeys(db *sql.DB) error {
 	// People once kept keys of their own beside the instance's, which were
 	// the user 0's; only the instance's stay.
 	personal, err := hasColumn(db, "model_keys", "user_id")
-	if err != nil || !personal {
+	if err != nil {
 		return err
 	}
-	for _, q := range []string{
-		"DELETE FROM model_keys WHERE user_id <> 0",
-		"ALTER TABLE model_keys DROP PRIMARY KEY, DROP COLUMN user_id, ADD PRIMARY KEY (provider)",
+	if personal {
+		for _, q := range []string{
+			"DELETE FROM model_keys WHERE user_id <> 0",
+			"ALTER TABLE model_keys DROP PRIMARY KEY, DROP COLUMN user_id, ADD PRIMARY KEY (provider)",
+		} {
+			if _, err := db.Exec(q); err != nil {
+				return err
+			}
+		}
+	}
+	// Keys were once kept by provider, from a list of the ones pi knows;
+	// they are kept by the variable it reads them from now.
+	byProvider, err := hasColumn(db, "model_keys", "provider")
+	if err != nil || !byProvider {
+		return err
+	}
+	for provider, env := range map[string]string{
+		"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY",
+		"openrouter": "OPENROUTER_API_KEY", "mistral": "MISTRAL_API_KEY", "groq": "GROQ_API_KEY",
+		"xai": "XAI_API_KEY", "cerebras": "CEREBRAS_API_KEY", "zai": "ZAI_API_KEY",
 	} {
-		if _, err := db.Exec(q); err != nil {
+		if _, err := db.Exec("UPDATE model_keys SET provider = ? WHERE provider = ?", env, provider); err != nil {
 			return err
 		}
 	}
-	return nil
+	_, err = db.Exec("ALTER TABLE model_keys CHANGE provider env VARCHAR(255) NOT NULL")
+	return err
 }
 
-// A key as the settings show it.
+// A variable the worker's models read a key from, as the worker says: the
+// providers reading it, and whether the worker's environment has it. With
+// no variable, the providers' keys are set up in the worker otherwise.
+type workerKey struct {
+	Env       string   `json:"env"`
+	Providers []string `json:"providers"`
+	Set       bool     `json:"set"`
+}
+
+// A key as the settings show it: what the worker says of its variable, and
+// whether one is saved here, by its last four characters.
 type modelKey struct {
-	Provider  string    `json:"provider"`
-	Hint      string    `json:"hint"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	workerKey
+	Saved     bool       `json:"saved"`
+	Hint      string     `json:"hint,omitempty"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
 }
 
-func listModelKeys(ctx context.Context, db *sql.DB) ([]modelKey, error) {
-	keys := []modelKey{}
-	err := scanAll(ctx, db, "SELECT provider, api_key, updated_at FROM model_keys ORDER BY provider", func(rows *sql.Rows) error {
-		var k modelKey
-		var key string
-		if err := rows.Scan(&k.Provider, &key, &k.UpdatedAt); err != nil {
-			return err
-		}
-		if len(key) > 4 {
-			k.Hint = key[len(key)-4:]
-		}
-		keys = append(keys, k)
-		return nil
-	})
+// What pi takes as a variable's name.
+var envNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,254}$`)
+
+// The variables the worker's models read keys from.
+func workerKeys(ctx context.Context, workerURL string) ([]workerKey, error) {
+	var keys []workerKey
+	err := callWorker(ctx, http.MethodGet, workerURL+"/keys", nil, &keys)
 	return keys, err
 }
 
-// The keys agents reach providers with, by environment variable; nil
-// without any.
-func modelKeys(ctx context.Context, db *sql.DB) (map[string]string, error) {
-	keys := map[string]string{}
-	err := scanAll(ctx, db, "SELECT provider, api_key FROM model_keys", func(rows *sql.Rows) error {
-		var provider, key string
-		if err := rows.Scan(&provider, &key); err != nil {
+// The keys the worker's models read, with those saved here; a key saved for
+// a variable no model reads any more shows too, to be removed. Says why the
+// worker couldn't say, if it couldn't.
+func listModelKeys(ctx context.Context, db *sql.DB, workerURL string) ([]modelKey, string, error) {
+	keys := []modelKey{}
+	reported, err := workerKeys(ctx, workerURL)
+	workerError := ""
+	if err != nil {
+		workerError = "the worker didn't say which keys its models read: " + err.Error()
+	}
+	for _, k := range reported {
+		keys = append(keys, modelKey{workerKey: k})
+	}
+	err = scanAll(ctx, db, "SELECT env, api_key, updated_at FROM model_keys ORDER BY env", func(rows *sql.Rows) error {
+		var env, key string
+		var at time.Time
+		if err := rows.Scan(&env, &key, &at); err != nil {
 			return err
 		}
-		if p, ok := providerByID(provider); ok {
-			keys[p.Env] = key
+		i := 0
+		for i < len(keys) && keys[i].Env != env {
+			i++
+		}
+		if i == len(keys) {
+			keys = append(keys, modelKey{workerKey: workerKey{Env: env, Providers: []string{}}})
+		}
+		keys[i].Saved, keys[i].UpdatedAt = true, &at
+		if len(key) > 4 {
+			keys[i].Hint = key[len(key)-4:]
 		}
 		return nil
+	})
+	return keys, workerError, err
+}
+
+// The keys saved here, by variable; nil without any.
+func modelKeys(ctx context.Context, db *sql.DB) (map[string]string, error) {
+	keys := map[string]string{}
+	err := scanAll(ctx, db, "SELECT env, api_key FROM model_keys", func(rows *sql.Rows) error {
+		var env, key string
+		err := rows.Scan(&env, &key)
+		keys[env] = key
+		return err
 	})
 	if len(keys) == 0 {
 		return nil, err
@@ -122,32 +149,29 @@ func refuseKeys(w http.ResponseWriter, r *http.Request) bool {
 	return requestUser(r) != nil && refuseNonAdmin(w, r)
 }
 
-func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
-	mux.HandleFunc("GET /api/model-providers", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, modelProviders)
-	})
+func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
+	writeKeys := func(w http.ResponseWriter, r *http.Request) {
+		keys, workerError, err := listModelKeys(r.Context(), db, workerURL)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"keys": keys, "workerError": workerError})
+	}
 
 	mux.HandleFunc("GET /api/model-keys", func(w http.ResponseWriter, r *http.Request) {
 		if refuseKeys(w, r) {
 			return
 		}
-		keys, err := listModelKeys(r.Context(), db)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, keys)
+		writeKeys(w, r)
 	})
 
-	mux.HandleFunc("PUT /api/model-keys/{provider}", func(w http.ResponseWriter, r *http.Request) {
+	// Only a variable one of the worker's models reads takes a key.
+	mux.HandleFunc("PUT /api/model-keys/{env}", func(w http.ResponseWriter, r *http.Request) {
 		if refuseKeys(w, r) {
 			return
 		}
-		p, ok := providerByID(r.PathValue("provider"))
-		if !ok {
-			http.Error(w, "no such provider", http.StatusNotFound)
-			return
-		}
+		env := r.PathValue("env")
 		var body struct {
 			Key string `json:"key"`
 		}
@@ -157,6 +181,9 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		body.Key = strings.TrimSpace(body.Key)
 		switch {
+		case !envNamePattern.MatchString(env):
+			http.Error(w, "that isn't a variable's name", http.StatusBadRequest)
+			return
 		case body.Key == "":
 			http.Error(w, "key is required", http.StatusBadRequest)
 			return
@@ -164,25 +191,33 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "that isn't a key", http.StatusBadRequest)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(),
-			"INSERT INTO model_keys (provider, api_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE api_key = VALUES(api_key)",
-			p.ID, body.Key); err != nil {
-			serverError(w, err)
-			return
-		}
-		keys, err := listModelKeys(r.Context(), db)
+		reported, err := workerKeys(r.Context(), workerURL)
 		if err != nil {
+			http.Error(w, "the worker didn't say which keys its models read: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		read := false
+		for _, k := range reported {
+			read = read || k.Env == env
+		}
+		if !read {
+			http.Error(w, "no model the worker offers reads "+env, http.StatusBadRequest)
+			return
+		}
+		if _, err := db.ExecContext(r.Context(),
+			"INSERT INTO model_keys (env, api_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE api_key = VALUES(api_key)",
+			env, body.Key); err != nil {
 			serverError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, keys)
+		writeKeys(w, r)
 	})
 
-	mux.HandleFunc("DELETE /api/model-keys/{provider}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("DELETE /api/model-keys/{env}", func(w http.ResponseWriter, r *http.Request) {
 		if refuseKeys(w, r) {
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "DELETE FROM model_keys WHERE provider = ?", r.PathValue("provider")); err != nil {
+		if _, err := db.ExecContext(r.Context(), "DELETE FROM model_keys WHERE env = ?", r.PathValue("env")); err != nil {
 			serverError(w, err)
 			return
 		}

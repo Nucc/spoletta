@@ -544,6 +544,13 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, agentModels{Default: "fake/model", Models: []string{"fake/model"}})
 	})
+	// Its models read OpenAI's key and a gateway's, which the worker has.
+	mux.HandleFunc("GET /keys", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, []map[string]any{
+			{"env": "GATEWAY_KEY", "providers": []string{"amazon-bedrock", "fireworks"}, "set": true},
+			{"env": "OPENAI_API_KEY", "providers": []string{"openai"}, "set": false},
+		})
+	})
 	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{})
 	})

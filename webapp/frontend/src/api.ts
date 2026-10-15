@@ -1186,27 +1186,34 @@ export function deleteTeam(id: number): Promise<void> {
   return request(`/api/teams/${id}`, { method: 'DELETE' })
 }
 
-// A provider agents reach their models at with a key.
-export type ModelProvider = { id: string; name: string; env: string }
-
-// A saved key, of which only the last four characters show.
-export type ModelKey = { provider: string; hint: string; updatedAt: string }
-
-export function listModelProviders(): Promise<ModelProvider[]> {
-  return request('/api/model-providers')
+// A variable the worker's models read their provider's key from, as the
+// worker says: the providers reading it, whether the worker's environment
+// has it, and whether one is saved here, of which only the last four
+// characters show. With no variable, the providers' keys are set up in the
+// worker otherwise, in its models.json or with cloud credentials.
+export type ModelKey = {
+  env: string
+  providers: string[]
+  set: boolean
+  saved: boolean
+  hint?: string
+  updatedAt?: string
 }
 
-// The instance's keys, which admins set and everyone's agents use.
-export function listModelKeys(): Promise<ModelKey[]> {
+// The keys, and why the worker didn't say which its models read, if it didn't.
+export type ModelKeys = { keys: ModelKey[]; workerError: string }
+
+// The keys admins save and everyone's agents use.
+export function listModelKeys(): Promise<ModelKeys> {
   return request('/api/model-keys')
 }
 
-export function setModelKey(provider: string, key: string): Promise<ModelKey[]> {
-  return request(`/api/model-keys/${provider}`, { method: 'PUT', body: JSON.stringify({ key }) })
+export function setModelKey(env: string, key: string): Promise<ModelKeys> {
+  return request(`/api/model-keys/${env}`, { method: 'PUT', body: JSON.stringify({ key }) })
 }
 
-export function deleteModelKey(provider: string): Promise<void> {
-  return request(`/api/model-keys/${provider}`, { method: 'DELETE' })
+export function deleteModelKey(env: string): Promise<void> {
+  return request(`/api/model-keys/${env}`, { method: 'DELETE' })
 }
 
 // The roles boards name and people hold, to pick from.

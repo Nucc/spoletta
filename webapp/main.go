@@ -93,7 +93,7 @@ func main() {
 	registerUserRoleRoutes(mux, db, auth)
 	registerTeamRoutes(mux, db, auth)
 	registerOwnerRoutes(mux, db)
-	registerModelKeyRoutes(mux, db)
+	registerModelKeyRoutes(mux, db, workerURL)
 	registerFlowListRoutes(mux, db, workerURL)
 	registerProcessRoutes(mux, db)
 	registerFlowRoutes(mux, db)

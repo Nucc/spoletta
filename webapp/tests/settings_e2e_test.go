@@ -17,23 +17,37 @@ import (
 )
 
 type settingsKey struct {
-	Provider string `json:"provider"`
-	Hint     string `json:"hint"`
+	Env       string   `json:"env"`
+	Providers []string `json:"providers"`
+	Set       bool     `json:"set"`
+	Saved     bool     `json:"saved"`
+	Hint      string   `json:"hint"`
 }
 
-// Only an admin sets the model keys, which every agent gets, whoever started
-// its run; keys aren't shown again.
+type settingsKeys struct {
+	Keys        []settingsKey `json:"keys"`
+	WorkerError string        `json:"workerError"`
+}
+
+// The keys are the variables the worker's models read; only an admin saves
+// one, which every agent gets, whoever started its run, over the worker's
+// own. Keys aren't shown again.
 func TestSettingsModelKeys(t *testing.T) {
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
-	var keys []settingsKey
-	a.call("PUT", "/api/model-keys/anthropic", map[string]any{"key": "sk-instance-anthropic"}, http.StatusOK, nil)
-	a.call("PUT", "/api/model-keys/openai", map[string]any{"key": "sk-instance-openai"}, http.StatusOK, &keys)
-	if len(keys) != 2 || keys[1].Provider != "openai" || keys[1].Hint != "enai" {
-		t.Errorf("keys: %+v", keys)
+	var keys settingsKeys
+	a.call("GET", "/api/model-keys", nil, http.StatusOK, &keys)
+	if len(keys.Keys) != 2 || keys.Keys[0].Env != "GATEWAY_KEY" || !keys.Keys[0].Set || keys.Keys[0].Saved || keys.Keys[1].Set {
+		t.Errorf("before any is saved: %+v", keys)
 	}
-	a.refused("PUT", "/api/model-keys/nobody", map[string]any{"key": "x"}, http.StatusNotFound, "no such provider")
-	a.refused("PUT", "/api/model-keys/openai", map[string]any{"key": " "}, http.StatusBadRequest, "key is required")
+	a.call("PUT", "/api/model-keys/OPENAI_API_KEY", map[string]any{"key": "sk-instance-openai"}, http.StatusOK, &keys)
+	if k := keys.Keys[1]; !k.Saved || k.Hint != "enai" || !slices.Equal(k.Providers, []string{"openai"}) {
+		t.Errorf("saved: %+v", keys)
+	}
+	a.call("PUT", "/api/model-keys/GATEWAY_KEY", map[string]any{"key": "gw-saved"}, http.StatusOK, nil)
+	a.refused("PUT", "/api/model-keys/ANTHROPIC_API_KEY", map[string]any{"key": "x"}, http.StatusBadRequest, "no model the worker offers reads")
+	a.refused("PUT", "/api/model-keys/lower", map[string]any{"key": "x"}, http.StatusBadRequest, "variable's name")
+	a.refused("PUT", "/api/model-keys/OPENAI_API_KEY", map[string]any{"key": " "}, http.StatusBadRequest, "key is required")
 	f := a.newFlow("Keys")
 	usersShare(a, f.ID)
 	a.startAt(f.ID, a.agent(f.ID, "Write", "Write.").ID)
@@ -43,21 +57,21 @@ func TestSettingsModelKeys(t *testing.T) {
 	usersAdd(a, bob.email)
 	usersSignIn(a, p, bob)
 	a.refused("GET", "/api/model-keys", nil, http.StatusForbidden, "only an admin")
-	a.refused("PUT", "/api/model-keys/openai", map[string]any{"key": "mine"}, http.StatusForbidden, "only an admin")
-	a.refused("DELETE", "/api/model-keys/openai", nil, http.StatusForbidden, "only an admin")
+	a.refused("PUT", "/api/model-keys/OPENAI_API_KEY", map[string]any{"key": "mine"}, http.StatusForbidden, "only an admin")
+	a.refused("DELETE", "/api/model-keys/OPENAI_API_KEY", nil, http.StatusForbidden, "only an admin")
 	a.finish(a.startRun(f.ID).ID)
 	runs := a.worker.runsOf("Write")
 	got := runs[len(runs)-1].Keys
-	if got["OPENAI_API_KEY"] != "sk-instance-openai" || got["ANTHROPIC_API_KEY"] != "sk-instance-anthropic" {
+	if got["OPENAI_API_KEY"] != "sk-instance-openai" || got["GATEWAY_KEY"] != "gw-saved" {
 		t.Errorf("bob's agent got keys %v", got)
 	}
 
 	usersSignIn(a, p, usersAda)
-	a.call("DELETE", "/api/model-keys/openai", nil, http.StatusNoContent, nil)
+	a.call("DELETE", "/api/model-keys/OPENAI_API_KEY", nil, http.StatusNoContent, nil)
 	a.finish(a.startRun(f.ID).ID)
 	runs = a.worker.runsOf("Write")
-	if got := runs[len(runs)-1].Keys; got["OPENAI_API_KEY"] != "" || got["ANTHROPIC_API_KEY"] == "" {
-		t.Errorf("after removing openai's key, the agent got %v", got)
+	if got := runs[len(runs)-1].Keys; got["OPENAI_API_KEY"] != "" || got["GATEWAY_KEY"] == "" {
+		t.Errorf("after removing OpenAI's key, the agent got %v", got)
 	}
 }
 

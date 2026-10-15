@@ -3604,3 +3604,21 @@ select.flow-owner:disabled {
 .flows-whose label + label {
   margin-left: auto;
 }
+
+.key-env {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.key-status {
+  color: #1a7f37;
+  font-size: 12px;
+}
+
+.key-status.missing {
+  color: #9a6700;
+}
+
+.key-item .key-provider {
+  width: 260px;
+}

@@ -3,12 +3,11 @@ import {
   deleteModelKey,
   listMCPServers,
   listModelKeys,
-  listModelProviders,
   setModelKey,
   type MCPServer,
   type Me,
   type ModelKey,
-  type ModelProvider,
+  type ModelKeys,
 } from './api'
 import { configures, useMe } from './Account'
 import { FlowBuilderIcon } from './icons'
@@ -121,70 +120,78 @@ function AccountSection({ me }: { me: Me }) {
   )
 }
 
-// The keys agents reach their models' providers with, which admins set and
-// everyone's agents use.
+// The keys agents reach their models' providers with, which admins save and
+// everyone's agents use: one for each variable the worker's models read a
+// key from, which several providers may share, as a gateway's do.
 function ModelKeysSection({ onError }: { onError: (err: unknown) => void }) {
-  const [providers, setProviders] = useState<ModelProvider[]>([])
+  const [keys, setKeys] = useState<ModelKeys | null>(null)
+  const refresh = useCallback(() => listModelKeys().then(setKeys, onError), [onError])
   useEffect(() => {
-    listModelProviders().then(setProviders, onError)
-  }, [onError])
-  const [keys, setKeys] = useState<ModelKey[] | null>(null)
-  useEffect(() => {
-    listModelKeys().then(setKeys, onError)
-  }, [onError])
+    refresh()
+  }, [refresh])
 
-  const save = async (provider: string, key: string) => {
+  const save = async (env: string, key: string) => {
     try {
-      setKeys(await setModelKey(provider, key))
+      setKeys(await setModelKey(env, key))
       return true
     } catch (err) {
       onError(err)
       return false
     }
   }
-  const remove = async (provider: string) => {
+  const remove = async (env: string) => {
     try {
-      await deleteModelKey(provider)
-      setKeys((ks) => ks && ks.filter((k) => k.provider !== provider))
+      await deleteModelKey(env)
+      await refresh()
     } catch (err) {
       onError(err)
     }
   }
 
+  const settable = keys?.keys.filter((k) => k.env !== '') ?? []
+  const elsewhere = keys?.keys.filter((k) => k.env === '').flatMap((k) => k.providers) ?? []
   return (
     <section className="flow-section" aria-label="Model keys">
       <h2>Model keys</h2>
       <p className="flows-note">
-        The keys every agent reaches its model's provider with, whoever started its run. The worker's environment has
-        the last say for a provider without one. Keys don't show again once saved.
+        The keys the models agents may use reach their providers with, whoever started the run. A key saved here goes
+        over the worker's own; keys don't show again once saved.
       </p>
+      {keys?.workerError && <p className="panel-warning">{keys.workerError}</p>}
       {keys === null ? (
         <p className="flows-note">Loading…</p>
+      ) : settable.length === 0 ? (
+        <p className="flows-note">The worker's models read no key it doesn't set up itself.</p>
       ) : (
         <ul className="flow-list key-list">
-          {providers.map((p) => (
-            <KeyItem
-              key={p.id}
-              provider={p}
-              saved={keys.find((k) => k.provider === p.id)}
-              onSave={(k) => save(p.id, k)}
-              onRemove={() => remove(p.id)}
-            />
+          {settable.map((k) => (
+            <KeyItem key={k.env} modelKey={k} onSave={(key) => save(k.env, key)} onRemove={() => remove(k.env)} />
           ))}
         </ul>
+      )}
+      {elsewhere.length > 0 && (
+        <p className="flows-note">
+          {elsewhere.join(', ')} {elsewhere.length === 1 ? 'gets its key' : 'get their keys'} in the worker itself: from
+          its models.json, or its cloud credentials.
+        </p>
       )}
     </section>
   )
 }
 
+// Where a key comes from, said on its row.
+function keyStatus(k: ModelKey): string {
+  if (k.saved) return `Saved here, …${k.hint ?? ''}${k.updatedAt ? ` · ${formatTime(k.updatedAt)}` : ''}`
+  if (k.set) return 'From the worker’s environment'
+  return 'Not set: models of these providers fail'
+}
+
 function KeyItem({
-  provider,
-  saved,
+  modelKey: k,
   onSave,
   onRemove,
 }: {
-  provider: ModelProvider
-  saved: ModelKey | undefined
+  modelKey: ModelKey
   onSave: (key: string) => Promise<boolean>
   onRemove: () => void
 }) {
@@ -193,28 +200,36 @@ function KeyItem({
     e.preventDefault()
     if (key.trim() && (await onSave(key.trim()))) setKey('')
   }
+  const unused = k.providers.length === 0
   return (
     <li>
       <form className="key-item" onSubmit={submit}>
         <span className="key-provider">
-          <span className="flow-card-name">{provider.name}</span>
+          <span className="flow-card-name key-env">{k.env}</span>
           <span className="flows-note">
-            {saved ? `…${saved.hint} · saved ${formatTime(saved.updatedAt)}` : 'Not set'}
+            {unused ? 'No model the worker offers reads it' : `For ${k.providers.join(', ')}`}
           </span>
+          <span className={`key-status${!k.saved && !k.set ? ' missing' : ''}`}>{keyStatus(k)}</span>
         </span>
-        <input
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={saved ? 'Replace the key' : provider.env}
-          aria-label={`${provider.name} key`}
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-        <button type="submit" disabled={!key.trim()}>
-          Save
-        </button>
-        {saved && (
+        {!unused && (
+          <>
+            <input
+              type="password"
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
+              spellCheck={false}
+              placeholder={k.saved || k.set ? 'Replace the key' : 'Paste the key'}
+              aria-label={`Key for ${k.env}`}
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+            />
+            <button type="submit" disabled={!key.trim()}>
+              Save
+            </button>
+          </>
+        )}
+        {k.saved && (
           <button type="button" className="danger" onClick={onRemove}>
             Remove
           </button>

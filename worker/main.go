@@ -193,6 +193,10 @@ func main() {
 		def = "(pi default)"
 	}
 	log.Printf("worker: %d enabled models, default %s", len(models.Models), def)
+	keys, err := modelKeysOf(hostConfigDir, models)
+	if err != nil {
+		log.Fatalf("worker: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -200,6 +204,9 @@ func main() {
 	})
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, models)
+	})
+	mux.HandleFunc("GET /keys", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, http.StatusOK, keys.report())
 	})
 	mux.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
 		var run runRequest
@@ -425,7 +432,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 
 	// The specs and the result live outside the agent's working directory.
 	var resultFile string
-	env, err := withKeys(os.Environ(), run.Keys)
+	env, err := run.withKeys(os.Environ())
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
@@ -772,35 +779,4 @@ func reply(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
-}
-
-// Names pi reads a provider's key from.
-var keyName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*_API_KEY$`)
-
-// The environment with the run's model keys in place of the worker's own. A
-// provider's OAuth token, which pi prefers to its key, goes, so the key given
-// is the one used.
-func withKeys(env []string, keys map[string]string) ([]string, error) {
-	if len(keys) == 0 {
-		return env, nil
-	}
-	drop := map[string]bool{}
-	for name, key := range keys {
-		if !keyName.MatchString(name) || strings.ContainsAny(key, "\x00\n") {
-			return nil, fmt.Errorf("invalid model key %s", name)
-		}
-		drop[name] = true
-		drop[strings.TrimSuffix(name, "_API_KEY")+"_OAUTH_TOKEN"] = true
-	}
-	out := make([]string, 0, len(env)+len(keys))
-	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		if !drop[name] {
-			out = append(out, kv)
-		}
-	}
-	for name, key := range keys {
-		out = append(out, name+"="+key)
-	}
-	return out, nil
 }

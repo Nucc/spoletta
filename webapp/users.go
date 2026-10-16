@@ -268,8 +268,13 @@ type signIn struct {
 }
 
 // Only a path of this webapp, so signing in can't send anyone elsewhere.
+// Browsers drop tabs and newlines from a URL and read a backslash as a
+// slash, so "/\t/evil.example" would be "//evil.example" to them: a path
+// with either anywhere isn't taken.
 func localPath(p string) string {
-	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, "/\\") {
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsFunc(p, func(r rune) bool {
+		return r < ' ' || r == 0x7f || r == '\\'
+	}) {
 		return "/"
 	}
 	return p

@@ -50,6 +50,12 @@ func TestLocalPath(t *testing.T) {
 		" /flows":              "/",
 		"evil.example/flows":   "/",
 		"///evil.example":      "/",
+		// Browsers drop tabs and newlines and read a backslash as a slash.
+		"/\t/evil.example":   "/",
+		"/\n/evil.example":   "/",
+		"/\r\n/evil.example": "/",
+		"/flows\\..\\x":      "/",
+		"/\x00/evil.example": "/",
 	} {
 		if got := localPath(in); got != want {
 			t.Errorf("localPath(%q) = %q, want %q", in, got, want)

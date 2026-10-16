@@ -20,7 +20,7 @@ func TestStartRow(t *testing.T) {
 }
 
 func TestPlaceholders(t *testing.T) {
-	for n, want := range map[int]string{1: "(?)", 2: "(?, ?)", 4: "(?, ?, ?, ?)"} {
+	for n, want := range map[int]string{0: "(SELECT NULL FROM DUAL WHERE FALSE)", 1: "(?)", 2: "(?, ?)", 4: "(?, ?, ?, ?)"} {
 		if got := placeholders(n); got != want {
 			t.Errorf("placeholders(%d) = %q, want %q", n, got, want)
 		}

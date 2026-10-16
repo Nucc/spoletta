@@ -386,7 +386,12 @@ const (
 	wrapNodeHeight = 64
 )
 
+// "(?, ?, ...)" for n ids. For none, a list nothing is in, so "IN" holds of
+// nothing and "NOT IN" of everything, where "()" would be an SQL error.
 func placeholders(n int) string {
+	if n == 0 {
+		return "(SELECT NULL FROM DUAL WHERE FALSE)"
+	}
 	return "(?" + strings.Repeat(", ?", n-1) + ")"
 }
 

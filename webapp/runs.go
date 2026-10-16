@@ -164,7 +164,7 @@ func validRunEnd(s string) bool {
 }
 
 func validStepStatus(s string) bool {
-	return s == stepActive || s == stepWaiting || s == stepDone || s == stepError
+	return s == stepActive || s == stepWaiting || s == stepDone || s == stepError || s == stepSkipped
 }
 
 // Processes and objects can be deleted later; their history stays.

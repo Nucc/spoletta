@@ -70,7 +70,7 @@ func (s sentrySettings) problem() string {
 	case s.Sort != "" && !slices.Contains(sentrySorts, s.Sort):
 		return "sort must be one of " + strings.Join(sentrySorts, ", ")
 	case s.Limit < 0 || s.Limit > maxSentryIssues:
-		return fmt.Sprintf("limit must be between 1 and %d", maxSentryIssues)
+		return fmt.Sprintf("limit must be between 1 and %d, or 0 for the default of %d", maxSentryIssues, defaultSentrySettings().Limit)
 	case len(s.Query) > 2000 || len(s.Environment) > 255:
 		return "query or environment is too long"
 	}

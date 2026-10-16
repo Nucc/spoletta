@@ -8,7 +8,7 @@ func TestValidRunEndAndStepStatus(t *testing.T) {
 			t.Errorf("validRunEnd(%q) = %v, want %v", s, got, want)
 		}
 	}
-	for s, want := range map[string]bool{stepActive: true, stepWaiting: true, stepDone: true, stepError: true, "": false, "running": false} {
+	for s, want := range map[string]bool{stepActive: true, stepWaiting: true, stepDone: true, stepError: true, stepSkipped: true, "": false, "running": false} {
 		if got := validStepStatus(s); got != want {
 			t.Errorf("validStepStatus(%q) = %v, want %v", s, got, want)
 		}

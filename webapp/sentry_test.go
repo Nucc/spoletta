@@ -30,7 +30,7 @@ func TestSentrySettingsProblem(t *testing.T) {
 		{func(s *sentrySettings) { s.Organization = "acme co" }, "slugs"},
 		{func(s *sentrySettings) { s.Project = "web?x=1" }, "slugs"},
 		{func(s *sentrySettings) { s.Sort = "oldest" }, "sort must be one of"},
-		{func(s *sentrySettings) { s.Limit = -1 }, "limit must be"},
+		{func(s *sentrySettings) { s.Limit = -1 }, "or 0 for the default of 10"},
 		{func(s *sentrySettings) { s.Limit = maxSentryIssues + 1 }, "limit must be"},
 		{func(s *sentrySettings) { s.Query = strings.Repeat("q", 2001) }, "too long"},
 		{func(s *sentrySettings) { s.Environment = strings.Repeat("e", 256) }, "too long"},

@@ -8,8 +8,11 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-apppass}
     volumes:
       - mysql-data:/var/lib/mysql
+    # Published on the host's loopback only, for the e2e tests and a webapp
+    # run outside compose. With another MySQL on 127.0.0.1:3306 already, set
+    # MYSQL_PUBLISH=[::1]:3306 in .env, and TEST_DB_ADDR to the same.
     ports:
-      - "3306:3306"
+      - "${MYSQL_PUBLISH:-127.0.0.1:3306}:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 5s
@@ -70,6 +73,8 @@ services:
       DB_USER: ${MYSQL_USER:-app}
       DB_PASSWORD: ${MYSQL_PASSWORD:-apppass}
       PORT: "8080"
+      # Inside the container; the port is published below.
+      HOST: 0.0.0.0
       WORKER_URL: http://worker:8090
       # Where the worker reaches the proxy agents use MCP servers through.
       MCP_PROXY_URL: http://webapp:8080
@@ -92,8 +97,12 @@ services:
     volumes:
       # Read-only: the webapp checks and serves files; the worker writes them.
       - files:/data/files:ro
+    # Published on the host's loopback only, since without OIDC_ISSUER
+    # anyone reaching the webapp can do anything, running bash on the worker
+    # included. Once people sign in, set PUBLISH_HOST=0.0.0.0 in .env to
+    # reach it from other machines.
     ports:
-      - "8080:8080"
+      - "${PUBLISH_HOST:-127.0.0.1}:8080:8080"
     depends_on:
       mysql:
         condition: service_healthy

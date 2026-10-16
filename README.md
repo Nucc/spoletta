@@ -80,7 +80,9 @@ The worker uses the models in your pi config (`~/.pi/agent/models.json` and
 token to clone the flows' repositories and the OpenID Connect settings for
 signing in go in a `.env` file next to `compose.yaml`; the comments in
 [compose.yaml](compose.yaml) list them all. Without `OIDC_ISSUER` nobody
-signs in and anyone reaching the webapp can do anything.
+signs in and anyone reaching the webapp can do anything, so compose
+publishes it, and MySQL, only on this machine's loopback; once people sign
+in, set `PUBLISH_HOST=0.0.0.0` to reach it from elsewhere.
 
 ## Development
 

@@ -30,7 +30,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 - Frontend: `cd webapp/frontend && npm run build` (runs `tsc -b`). Dev: `npm run dev` proxies `/api` to :8080.
 - Go: `cd webapp && go build ./... && go vet ./...`; same in `worker/`.
 - Unit tests: `cd webapp && go test .`
-- E2E tests: `cd webapp && go test -race ./tests` need compose MySQL on 127.0.0.1:3306 (`podman compose up -d mysql`); otherwise skipped. They build and start the real webapp, drive it over HTTP, and fake the worker. New behavior gets an e2e test in `tests/*_e2e_test.go`.
+- E2E tests: `cd webapp && go test -race ./tests` need compose MySQL on 127.0.0.1:3306 (`podman compose up -d mysql`; `MYSQL_PUBLISH` and `TEST_DB_ADDR` move it); otherwise skipped. They build and start the real webapp, drive it over HTTP, and fake the worker. New behavior gets an e2e test in `tests/*_e2e_test.go`.
 - Full stack: `podman compose up --build`, app on http://localhost:8080.
 
 ## Conventions

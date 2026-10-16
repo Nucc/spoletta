@@ -8,7 +8,8 @@ package main
 // /api/auth/callback on PUBLIC_URL, or on the address the browser reached the
 // webapp by when that isn't set. Without OIDC_ISSUER nobody signs in and
 // everyone can do everything, as before there were users, which suits a
-// webapp only its developer reaches.
+// webapp only its developer reaches: it then listens only on this machine
+// unless HOST says otherwise; see listenAddr in main.go.
 //
 // Not everyone the provider knows may sign in, as with a provider anyone can
 // have an account at: only people whose email is in ADMIN_EMAILS, whose

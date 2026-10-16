@@ -21,6 +21,19 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+// Where the webapp listens: on PORT, and on HOST when that is set. Without
+// sign-in anyone who reaches the webapp can do anything in it, running bash
+// on the worker included, so it then listens only on this machine unless
+// HOST says otherwise; a container sets HOST to 0.0.0.0 and publishes the
+// port on the host's loopback instead, as compose.yaml does.
+func listenAddr(signIn bool) string {
+	host := os.Getenv("HOST")
+	if host == "" && !signIn {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, env("PORT", "8080"))
+}
+
 func openDB() (*sql.DB, error) {
 	cfg := mysql.NewConfig()
 	cfg.Net = "tcp"
@@ -136,7 +149,7 @@ func main() {
 		fmt.Fprintf(w, "ok, mysql %s\n", version)
 	})
 
-	addr := ":" + env("PORT", "8080")
+	addr := listenAddr(auth != nil)
 	log.Printf("listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, auth.protect(guardFlows(db, mux))))
 }

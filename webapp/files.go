@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -19,30 +20,46 @@ var filesRoot = env("FILES_DIR", "/data/files")
 // The paths of files under the files root that a generated object's content
 // names, in the order they appear.
 func filesIn(content string) []string {
-	var v any
-	if json.Unmarshal([]byte(content), &v) != nil {
-		return nil
-	}
+	// Read token by token, as decoding into maps would lose the order of an
+	// object's keys. An open object's next string is a key when key is set.
+	type level struct{ object, key bool }
+	var open []level
 	var paths []string
-	var walk func(any)
-	walk = func(v any) {
-		switch v := v.(type) {
+	dec := json.NewDecoder(strings.NewReader(content))
+	for {
+		t, err := dec.Token()
+		if err == io.EOF && len(open) == 0 {
+			return paths
+		}
+		if err != nil {
+			return nil
+		}
+		n := len(open)
+		if _, ok := t.(string); ok && n > 0 && open[n-1].key {
+			open[n-1].key = false
+			continue
+		}
+		switch t := t.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				open = append(open, level{object: true, key: true})
+				continue
+			case '[':
+				open = append(open, level{})
+				continue
+			}
+			open = open[:n-1]
 		case string:
-			if strings.HasPrefix(v, filesRoot+"/") {
-				paths = append(paths, v)
-			}
-		case []any:
-			for _, e := range v {
-				walk(e)
-			}
-		case map[string]any:
-			for _, e := range v {
-				walk(e)
+			if strings.HasPrefix(t, filesRoot+"/") {
+				paths = append(paths, t)
 			}
 		}
+		// A value ended, so the object it's in has a key next.
+		if n := len(open); n > 0 && open[n-1].object {
+			open[n-1].key = true
+		}
 	}
-	walk(v)
-	return paths
 }
 
 func registerFileRoutes(mux *http.ServeMux) {

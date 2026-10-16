@@ -119,7 +119,7 @@ export function FlowPalette({
 }) {
   if (blocks.length === 0) return <p className="panel-note">No procedures yet. Make one on the main page, or mark a flow as one in its settings.</p>
   return (
-    <ul className="palette flows">
+    <ul className="palette procedures">
       {blocks.map((b) => (
         <li key={b.id}>
           <PaletteTile block={b} disabled={disabled} onAdd={onAdd}>

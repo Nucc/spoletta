@@ -51,6 +51,8 @@ func TestJSONObject(t *testing.T) {
 		`{"a": 1`:           "it is not a JSON object",
 		`{"a": 1} {"b": 2}`: "it has text after the JSON object",
 		`{"a": 1} and more`: "it has text after the JSON object",
+		`{"a": 1}}`:         "it has text after the JSON object",
+		`{"a": 1}]`:         "it has text after the JSON object",
 	} {
 		if _, err := jsonObject(in); err == nil || err.Error() != problem {
 			t.Errorf("jsonObject(%q) = %v, want %q", in, err, problem)
@@ -77,6 +79,8 @@ func TestJSONArray(t *testing.T) {
 		`[1, 2`:     "it is not a JSON array",
 		`[1] [2]`:   "it has text after the JSON array",
 		`[1] done.`: "it has text after the JSON array",
+		`[1]]`:      "it has text after the JSON array",
+		`[1]}`:      "it has text after the JSON array",
 	} {
 		if _, err := jsonArray(in); err == nil || err.Error() != problem {
 			t.Errorf("jsonArray(%q) = %v, want %q", in, err, problem)
@@ -413,7 +417,7 @@ func TestCheckFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, f := range []string{filepath.Join(steps, "a.txt"), filepath.Join(steps, "sub", "b.txt"), filepath.Join(dir, "other", "secret")} {
+	for _, f := range []string{filepath.Join(steps, "a.txt"), filepath.Join(steps, "..notes.txt"), filepath.Join(steps, "sub", "b.txt"), filepath.Join(dir, "other", "secret")} {
 		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -427,6 +431,8 @@ func TestCheckFile(t *testing.T) {
 		{`"a.txt"`, filepath.Join(steps, "a.txt")},
 		{`"sub/b.txt"`, filepath.Join(steps, "sub", "b.txt")},
 		{`"./sub/../a.txt"`, filepath.Join(steps, "a.txt")},
+		// A name starting with two dots is still the step's own file.
+		{`"..notes.txt"`, filepath.Join(steps, "..notes.txt")},
 		{quote(filepath.Join(steps, "a.txt")), filepath.Join(steps, "a.txt")},
 	} {
 		if got, err := c.checkFile(json.RawMessage(ok.value)); err != nil || got != ok.path {

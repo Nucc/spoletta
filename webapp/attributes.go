@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -856,7 +857,7 @@ func jsonArray(s string) ([]json.RawMessage, error) {
 	if err := dec.Decode(&items); err != nil || items == nil {
 		return nil, errors.New("it is not a JSON array")
 	}
-	if dec.More() {
+	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("it has text after the JSON array")
 	}
 	return items, nil
@@ -889,7 +890,7 @@ func jsonObject(s string) (map[string]json.RawMessage, error) {
 	if err := dec.Decode(&fields); err != nil || fields == nil {
 		return nil, errors.New("it is not a JSON object")
 	}
-	if dec.More() {
+	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("it has text after the JSON object")
 	}
 	return fields, nil
@@ -937,7 +938,7 @@ func (c *outputContract) checkFile(value json.RawMessage) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s doesn't exist", path)
 	}
-	if rel, err := filepath.Rel(root, real); err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+	if rel, err := filepath.Rel(root, real); err != nil || rel == "." || !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("%s isn't in %s", path, c.filesDir)
 	}
 	if info, err := os.Stat(real); err != nil || !info.Mode().IsRegular() {

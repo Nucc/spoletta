@@ -94,6 +94,15 @@ services:
       OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       PUBLIC_URL: ${PUBLIC_URL:-}
+      # Seals the model keys and MCP tokens the webapp keeps in the
+      # database; make one with `openssl rand -base64 32`, and keep it, as
+      # the webapp doesn't start without the key it sealed them with. See
+      # webapp/secrets.go. SECRET_KEY_SECONDARY is the key coming in while
+      # rotating it; see docs/SECRETS.md. The webapp also takes either from
+      # a file, named by SECRET_KEY_FILE or SECRET_KEY_SECONDARY_FILE, to
+      # add here with the file mounted.
+      SECRET_KEY: ${SECRET_KEY:-}
+      SECRET_KEY_SECONDARY: ${SECRET_KEY_SECONDARY:-}
     volumes:
       # Read-only: the webapp checks and serves files; the worker writes them.
       - files:/data/files:ro

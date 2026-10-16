@@ -8,7 +8,7 @@ package main
 // it offers read, and which it has in its own environment (see the worker's
 // keys.go). A key saved here goes to the worker for each agent step, over
 // the worker's own, and isn't shown again: the settings show its last four
-// characters.
+// characters. Keys are sealed with SECRET_KEY; see secrets.go.
 
 import (
 	"context"
@@ -108,9 +108,13 @@ func listModelKeys(ctx context.Context, db *sql.DB, workerURL string) ([]modelKe
 		keys = append(keys, modelKey{workerKey: k})
 	}
 	err = scanAll(ctx, db, "SELECT env, api_key, updated_at FROM model_keys ORDER BY env", func(rows *sql.Rows) error {
-		var env, key string
+		var env, stored string
 		var at time.Time
-		if err := rows.Scan(&env, &key, &at); err != nil {
+		if err := rows.Scan(&env, &stored, &at); err != nil {
+			return err
+		}
+		key, err := secrets.open(modelKeyPlace(env), stored)
+		if err != nil {
 			return err
 		}
 		i := 0
@@ -133,8 +137,11 @@ func listModelKeys(ctx context.Context, db *sql.DB, workerURL string) ([]modelKe
 func modelKeys(ctx context.Context, db *sql.DB) (map[string]string, error) {
 	keys := map[string]string{}
 	err := scanAll(ctx, db, "SELECT env, api_key FROM model_keys", func(rows *sql.Rows) error {
-		var env, key string
-		err := rows.Scan(&env, &key)
+		var env, stored string
+		if err := rows.Scan(&env, &stored); err != nil {
+			return err
+		}
+		key, err := secrets.open(modelKeyPlace(env), stored)
 		keys[env] = key
 		return err
 	})
@@ -204,9 +211,14 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			http.Error(w, "no model the worker offers reads "+env, http.StatusBadRequest)
 			return
 		}
+		stored, err := secrets.seal(modelKeyPlace(env), body.Key)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		if _, err := db.ExecContext(r.Context(),
 			"INSERT INTO model_keys (env, api_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE api_key = VALUES(api_key)",
-			env, body.Key); err != nil {
+			env, stored); err != nil {
 			serverError(w, err)
 			return
 		}

@@ -42,6 +42,9 @@ const testDBPrefix = "spoletta_test_"
 // Set by race_test.go when the tests run with -race.
 var raceEnabled bool
 
+// The SECRET_KEY webapps start with, unless a test gives another.
+const testSecretKey = "e2e-secret-key-0123456789abcdef0123"
+
 var testDB struct {
 	// Where the webapp finds its database, and the webapp built.
 	host, port, name, user, password string
@@ -221,6 +224,8 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 		// Lets schedules come round every second; see schedules_e2e_test.go.
 		"SCHEDULE_SECONDS=1",
 		"STATIC_DIR=" + static,
+		// Seals the secrets it keeps; see secrets_e2e_test.go.
+		"SECRET_KEY=" + testSecretKey,
 	}
 	w.cmd.Env = append(w.cmd.Env, extra...)
 	w.cmd.Stdout, w.cmd.Stderr = w.log, w.log

@@ -32,7 +32,8 @@ import (
 // The agent never sees the servers' tokens: the webapp hands each agent step
 // a token of its own that reaches only the step's servers, through the proxy
 // at /mcp/{id}, which puts the server's token on the request. The step's
-// token stops working when the step ends.
+// token stops working when the step ends. The servers' tokens are sealed
+// with SECRET_KEY; see secrets.go.
 
 type mcpServer struct {
 	ID          int64  `json:"id"`
@@ -716,14 +717,22 @@ func (b *mcpBroker) finishSignIn(ctx context.Context, q url.Values) (string, err
 	if err != nil {
 		return "", err
 	}
+	access, err := secrets.seal(mcpTokenPlace("access_token", p.server, p.user), t.AccessToken)
+	if err != nil {
+		return "", err
+	}
 	var refresh *string
 	if t.RefreshToken != "" {
-		refresh = &t.RefreshToken
+		r, err := secrets.seal(mcpTokenPlace("refresh_token", p.server, p.user), t.RefreshToken)
+		if err != nil {
+			return "", err
+		}
+		refresh = &r
 	}
 	if _, err := b.db.ExecContext(ctx,
 		`INSERT INTO mcp_tokens (server_id, user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE access_token = VALUES(access_token), refresh_token = VALUES(refresh_token), expires_at = VALUES(expires_at)`,
-		p.server, p.user, t.AccessToken, refresh, expiresAt(t)); err != nil {
+		p.server, p.user, access, refresh, expiresAt(t)); err != nil {
 		return "", err
 	}
 	var name string
@@ -765,6 +774,13 @@ func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected st
 	if err != nil {
 		return "", err
 	}
+	for column, token := range map[string]*sql.NullString{"access_token": &access, "refresh_token": &refresh} {
+		if token.Valid {
+			if token.String, err = secrets.open(mcpTokenPlace(column, id, user), token.String); err != nil {
+				return "", err
+			}
+		}
+	}
 	fresh := !expires.Valid || time.Now().Add(30*time.Second).Before(expires.Time)
 	// Another request may have refreshed it while this one waited.
 	if access.Valid && fresh && (rejected == "" || access.String != rejected) {
@@ -793,8 +809,16 @@ func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected st
 	if t.RefreshToken == "" {
 		t.RefreshToken = refresh.String
 	}
+	sealedAccess, err := secrets.seal(mcpTokenPlace("access_token", id, user), t.AccessToken)
+	if err != nil {
+		return "", err
+	}
+	sealedRefresh, err := secrets.seal(mcpTokenPlace("refresh_token", id, user), t.RefreshToken)
+	if err != nil {
+		return "", err
+	}
 	if _, err := b.db.ExecContext(ctx, "UPDATE mcp_tokens SET access_token = ?, refresh_token = ?, expires_at = ? WHERE server_id = ? AND user_id = ?",
-		t.AccessToken, t.RefreshToken, expiresAt(t), id, user); err != nil {
+		sealedAccess, sealedRefresh, expiresAt(t), id, user); err != nil {
 		return "", err
 	}
 	return t.AccessToken, nil

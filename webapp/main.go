@@ -97,6 +97,19 @@ func main() {
 	if err := migrateModelKeys(db); err != nil {
 		log.Fatal(err)
 	}
+	// seal-secrets seals the secrets with the key coming in, and ends,
+	// failing if some changed meanwhile, to be run again; see secrets.go.
+	sealSecrets := len(os.Args) > 1 && os.Args[1] == "seal-secrets"
+	changed, err := setUpSecrets(db, sealSecrets)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if sealSecrets {
+		if changed > 0 {
+			os.Exit(1)
+		}
+		return
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))

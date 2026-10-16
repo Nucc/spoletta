@@ -27,27 +27,6 @@ for it to run at all. That is what drives a flow: processes connect through
 the objects they generate, not through arrows drawn from one step to the
 next.
 
-Every board can also be read as **OPL**, OPM's language of plain sentences,
-one fact per sentence. Spoletta writes it from the diagram, shows it beside
-the board and can give it to agents, so they know the flow they work in.
-The board above reads:
-
-```
-"Ticket" can be "bug" or "feature".
-"Risk" is "high" when score >= 7.
-"Tech lead" is a person.
-"Triage" is an agent process, which an AI agent carries out.
-"Triage" requires "Triage guide", which it doesn't change.
-"Triage" yields "Ticket" as "bug" or "feature", deciding which.
-"Fix" occurs if "Ticket" is "bug", and is skipped otherwise.
-"Fix" yields "Risk".
-"Risk" entering "low" triggers "Merge".
-"Risk" entering "high" triggers "Approve risky fix".
-"Tech lead" handles "Approve risky fix".
-"Ticket" entering "feature" triggers "Plan".
-The flow starts with "Triage".
-```
-
 ## What a flow is made of
 
 | Process | Carried out by |

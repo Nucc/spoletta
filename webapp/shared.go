@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -359,14 +360,23 @@ type sharedRecord struct {
 	Updated time.Time `json:"updated"`
 }
 
-// A shared struct's records, the latest written first, with the fields its
-// object has in the board's order: its attributes, then the objects it is
-// made of, so a table of them has its columns before any record does.
+// A shared struct's records, the latest written first or as sorted, with
+// the fields its object has in the board's order: its attributes, then the
+// objects it is made of, so a table of them has its columns before any
+// record does. A search (search.go) picks which, over every stored record:
+// by id, state, updated and run, and each field as @field.
 type sharedRecords struct {
 	Fields  []string       `json:"fields"`
 	Records []sharedRecord `json:"records"`
-	// More records than these are stored.
+	// More records than these match.
 	More bool `json:"more"`
+	// The facets the records were searched by; how many records the search
+	// matched among how many it read; and whether more are stored than a
+	// search reads.
+	Facets    []facet `json:"facets"`
+	Matched   int     `json:"matched"`
+	Searched  int     `json:"searched"`
+	Truncated bool    `json:"truncated"`
 }
 
 // How many records the struct's records list, the latest written first.
@@ -385,7 +395,7 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		out := sharedRecords{Fields: []string{}, Records: []sharedRecord{}}
+		out := sharedRecords{Fields: []string{}, Records: []sharedRecord{}, Facets: []facet{}}
 		err = scanAll(ctx, db, `SELECT name FROM (
 				SELECT name, 0 AS kind, id FROM object_attributes WHERE object_id = ?
 				UNION ALL SELECT name, 1, id FROM objects WHERE owner_id = ?
@@ -402,6 +412,18 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		t := newSearchTable()
+		idFacet := t.facet("id", facet{Key: "id", Label: "Record", Group: "Record", Hidden: true})
+		state := t.facet("state", facet{Key: "state", Label: "State", Group: "Record"})
+		updated := t.facet("updated", facet{Key: "updated", Label: "Updated", Group: "Record", Date: true, Hidden: true})
+		runFacet := t.facet("run", facet{Key: "run", Label: "Run", Group: "Record"})
+		field := func(f string) int {
+			return t.facet("."+f, facet{Key: "@" + slug(f), Label: f, Group: "Fields", Kind: "field", Field: f})
+		}
+		for _, f := range out.Fields {
+			field(f)
+		}
+		var records []sharedRecord
 		err = scanAll(ctx, db, `SELECT sr.id, sr.content, sr.state, sr.run_id, ru.flow_id, sr.updated_at
 			FROM shared_records sr LEFT JOIN runs ru ON ru.id = sr.run_id
 			WHERE sr.object_id = ? ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?`,
@@ -412,16 +434,46 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 					return err
 				}
 				rec.Content = json.RawMessage(asItem(content))
-				out.Records = append(out.Records, rec)
+				records = append(records, rec)
+				if len(records) > searchedRows {
+					return nil
+				}
+				row := t.row()
+				row[idFacet] = []string{strconv.FormatInt(rec.ID, 10)}
+				row[state] = scalars(rec.State)
+				row[updated] = []string{rec.Updated.UTC().Format(time.RFC3339)}
+				if rec.Run != nil {
+					row[runFacet] = []string{strconv.FormatInt(*rec.Run, 10)}
+				}
+				if fields, ok := contentValue(content).(map[string]any); ok {
+					names := make([]string, 0, len(fields))
+					for f := range fields {
+						names = append(names, f)
+					}
+					sort.Strings(names)
+					for _, f := range names {
+						row[field(f)] = scalars(fields[f])
+					}
+				}
 				return nil
-			}, root, maxListedRecords+1)
+			}, root, searchedRows+1)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		if len(out.Records) > maxListedRecords {
-			out.Records, out.More = out.Records[:maxListedRecords], true
+		if len(records) > searchedRows {
+			records, out.Truncated = records[:searchedRows], true
 		}
+		s := t.search()
+		q := parseSearch(r.URL.Query().Get("q"))
+		key, desc := sortParam(r.URL.Query().Get("sort"))
+		matched := s.run(q, key, desc)
+		s.count(q, matched)
+		out.Facets, out.Matched, out.Searched = t.list(), len(matched), len(records)
+		for _, i := range matched[:min(len(matched), maxListedRecords)] {
+			out.Records = append(out.Records, records[i])
+		}
+		out.More = len(matched) > maxListedRecords
 		writeJSON(w, http.StatusOK, out)
 	})
 }

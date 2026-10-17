@@ -376,7 +376,9 @@ off. After an agent step ends, a person can send it follow-up messages
     (a schedule skips a time while its last run goes on).
   - A shared object's copy isn't `persistent` too. The struct's board lists
     its records, and its Records page (`#/flows/<struct>/records`) shows them
-    as a table, a column per field, filtered by state.
+    as a table, a column per field, searched and sorted as a flow's Data page
+    is: Datadog-style queries such as `state:new -@severity:low crash`, over
+    every record stored.
 
 ### 3.9 Schedules
 

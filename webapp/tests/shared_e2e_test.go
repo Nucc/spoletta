@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -186,6 +187,47 @@ func TestSharedRecordsAcrossFlows(t *testing.T) {
 	}
 	if len(listed.Records) == 0 || listed.Records[0].RunFlow == nil || *listed.Records[0].RunFlow != process.ID {
 		t.Errorf("the latest record wasn't written by a run of flow %d", process.ID)
+	}
+
+	// The records are searched and sorted on the server, by their state,
+	// their fields and what wrote them, and the state facet counts every
+	// state with one of them ticked.
+	ingest(`{"id": "3", "title": "Disk full"}`)
+	search := func(q, sort string) (ids []string, facets []searchFacet) {
+		t.Helper()
+		var rs struct {
+			Records []sharedRecord `json:"records"`
+			Facets  []searchFacet  `json:"facets"`
+			Matched int            `json:"matched"`
+		}
+		a.call("GET", fmt.Sprintf("/api/structs/%d/records?q=%s&sort=%s", s.ID, url.QueryEscape(q), url.QueryEscape(sort)), nil, http.StatusOK, &rs)
+		for _, r := range rs.Records {
+			var fields struct {
+				ID string `json:"id"`
+			}
+			json.Unmarshal(r.Content, &fields)
+			ids = append(ids, fields.ID)
+		}
+		if rs.Matched != len(ids) {
+			t.Errorf("%q matched %d records but listed %d", q, rs.Matched, len(ids))
+		}
+		return ids, rs.Facets
+	}
+	for _, c := range []struct{ query, sort, want string }{
+		{"state:new", "", "3"},
+		{"-state:new", "id", "1,2"},
+		{"title:*null*", "", "2"},
+		{"@id:1 OR @id:3", "-@title", "1,3"},
+		{"", "@title", "3,2,1"},
+		{"run:* -state:completed", "", "3"},
+		{"timeout", "", "1"},
+	} {
+		if got, _ := search(c.query, c.sort); strings.Join(got, ",") != c.want {
+			t.Errorf("records %q sorted by %q = %v, want %s", c.query, c.sort, got, c.want)
+		}
+	}
+	if _, facets := search("state:new", ""); facetCounts(facets, "state") != "completed=2,new=1" {
+		t.Errorf("state counts with new ticked = %s, want both states", facetCounts(facets, "state"))
 	}
 
 	// Turned off, the copies keep to their flows' runs again.

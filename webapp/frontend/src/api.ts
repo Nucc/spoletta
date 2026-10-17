@@ -386,13 +386,48 @@ export type SharedRecord = {
   updated: string
 }
 
-// A shared struct's records, the latest written first, with the fields its
-// object has in the board's order. more: there are more than these.
-export type SharedRecords = { fields: string[]; records: SharedRecord[]; more: boolean }
+// A column a table page's rows are searched by, as the server found it
+// (search.go): its values the most common first among the rows the rest
+// of the query matches, how many values it has in all, and how many rows
+// have none. Object, kind and field say which of the page's columns it is.
+export type SearchFacet = {
+  key: string
+  label: string
+  group: string
+  object?: string
+  kind?: 'state' | 'field' | 'whole'
+  field?: string
+  date?: boolean
+  hidden?: boolean
+  numeric: boolean
+  values: { value: string; count: number }[]
+  distinct: number
+  none: number
+}
 
-// The struct's records, the latest written first.
-export function listSharedRecords(struct: number): Promise<SharedRecords> {
-  return request(`/api/structs/${struct}/records`)
+// What a search found: the rows it matched among those it read, and
+// whether more are stored than a search reads.
+export type SearchResult = { facets: SearchFacet[]; matched: number; searched: number; truncated: boolean }
+
+// A query for a table page, and the facet key to sort by, with a - before
+// it for the other way.
+export type Search = { q?: string; sort?: string }
+
+const searchParams = (s: Search | undefined) => {
+  const p = new URLSearchParams()
+  if (s?.q) p.set('q', s.q)
+  if (s?.sort) p.set('sort', s.sort)
+  return p.size > 0 ? p.toString() : ''
+}
+
+// A shared struct's records, the latest written first or as sorted, with
+// the fields its object has in the board's order. more: more than these match.
+export type SharedRecords = { fields: string[]; records: SharedRecord[]; more: boolean } & SearchResult
+
+// The struct's records the search matches, the latest written first.
+export function listSharedRecords(struct: number, search?: Search): Promise<SharedRecords> {
+  const p = searchParams(search)
+  return request(`/api/structs/${struct}/records${p ? '?' + p : ''}`)
 }
 
 // A module other flows run stays one.
@@ -938,11 +973,13 @@ export type DataRow = FlowRun & { cells: DataCell[] }
 // content holds them.
 export type DataObject = { id: number; name: string; many: boolean; attributes: string[] }
 
-// The flow's objects and what its latest runs held of them, newest first.
-export type FlowData = { objects: DataObject[]; rows: DataRow[] }
+// The flow's objects and what the latest of its runs the search matches
+// held of them, newest first or as sorted.
+export type FlowData = { objects: DataObject[]; rows: DataRow[] } & SearchResult
 
-export function getFlowData(flow: number): Promise<FlowData> {
-  return request(`/api/data?flow=${flow}`)
+export function getFlowData(flow: number, search?: Search): Promise<FlowData> {
+  const p = searchParams(search)
+  return request(`/api/data?flow=${flow}${p ? '&' + p : ''}`)
 }
 
 export function getRun(id: number): Promise<FlowRunDetail> {

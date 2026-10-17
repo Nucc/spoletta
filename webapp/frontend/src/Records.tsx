@@ -1,24 +1,28 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type Json } from './Data'
-import { ValueDialog, type Opened } from './FlowData'
-import { getFlow, listSharedRecords, type Flow, type SharedRecords as Records } from './api'
+import { searchable, ValueDialog, type Opened } from './FlowData'
+import { getFlow, listSharedRecords, type Flow, type Search, type SharedRecords as Records } from './api'
 import { FlowBuilderIcon, TableIcon } from './icons'
+import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { formatTime } from './Runs'
+import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useFacetsShown, useSearch } from './Search'
 
 // How often the records are asked for again, as flows write them.
 const REFRESH_MS = 10_000
 
-// A shared struct's records, asked for again every so often.
-function useRecords(struct: number) {
+// A shared struct's records the search matches, asked for again every so
+// often. Only the answer to the latest ask shows, so a slow one for an
+// older search doesn't replace it.
+function useRecords(struct: number, search?: Search) {
   const [records, setRecords] = useState<Records | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const load = useCallback(
-    () =>
-      listSharedRecords(struct)
-        .then((r) => (setRecords(r), setError(null)))
-        .catch((err) => setError(err instanceof Error ? err.message : String(err))),
-    [struct],
-  )
+  const asked = useRef(0)
+  const load = useCallback(() => {
+    const n = ++asked.current
+    return listSharedRecords(struct, search)
+      .then((r) => n === asked.current && (setRecords(r), setError(null)))
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+  }, [struct, search])
   useEffect(() => {
     load()
     const timer = setInterval(load, REFRESH_MS)
@@ -91,14 +95,16 @@ function fieldsOf(records: Records): string[] {
 
 // A shared struct's records as a table, a record per row and a column per
 // field, with its state and the run that last wrote it, so what every flow
-// using the struct made of them reads at a glance. A state picked shows only
-// the records in it.
+// using the struct made of them reads at a glance. The records can be
+// searched and sorted by any of them, on the server over every record
+// stored (Search.tsx).
 export default function RecordsPage({ id }: { id: number }) {
   const [flow, setFlow] = useState<Flow | null>(null)
   const [flowError, setFlowError] = useState<string | null>(null)
-  const { records, error, load } = useRecords(id)
-  const [state, setState] = useState<string | null>(null)
+  const { query, setQuery, sort, setSort, search } = useSearch('records', id)
+  const { records, error, load } = useRecords(id, search)
   const [opened, setOpened] = useState<Opened | null>(null)
+  const [facetsShown, toggleFacets] = useFacetsShown()
 
   useEffect(() => {
     getFlow(id)
@@ -111,13 +117,24 @@ export default function RecordsPage({ id }: { id: number }) {
   }, [flow])
 
   const fields = useMemo(() => (records ? fieldsOf(records) : []), [records])
-  const states = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const r of records?.records ?? []) counts.set(r.state, (counts.get(r.state) ?? 0) + 1)
-    return [...counts].sort(([a], [b]) => a.localeCompare(b))
-  }, [records])
-  const shown = (records?.records ?? []).filter((r) => state === null || r.state === state)
+  const facets = useMemo(() => indexFacets(records?.facets ?? []), [records])
+  // The facet each field is searched by (shared.go).
+  const keyOf = (field: string) => records?.facets.find((f) => f.kind === 'field' && f.field === field)?.key
+  const ast = useMemo(() => parseQuery(query).ast, [query])
   const name = flow?.name ?? '…'
+
+  const filterBy = (key: string, value: string, out: boolean) => {
+    setQuery(out ? exclude(facets, query, key, value) : select(facets, query, key, [value]))
+    setOpened(null)
+  }
+  const sortable = (key: string | undefined, label: string, newestFirst = false) =>
+    key ? (
+      <SortButton facet={key} sort={sort} onSort={setSort} newestFirst={newestFirst}>
+        {label}
+      </SortButton>
+    ) : (
+      label
+    )
 
   return (
     <div className="flows-page data-page">
@@ -135,20 +152,10 @@ export default function RecordsPage({ id }: { id: number }) {
           </span>
           Records
         </h1>
-        {states.length > 1 && (
-          <select
-            className="records-state"
-            value={state ?? ''}
-            onChange={(e) => setState(e.target.value === '' ? null : e.target.value)}
-            title="Show only the records in a state"
-          >
-            <option value="">Every state ({records?.records.length})</option>
-            {states.map(([s, n]) => (
-              <option key={s} value={s}>
-                {s || 'no state'} ({n})
-              </option>
-            ))}
-          </select>
+        {records !== null && records.searched > 0 && (
+          <button className="facets-toggle" aria-pressed={facetsShown} onClick={toggleFacets} title="Show or hide the facets">
+            Facets
+          </button>
         )}
         <button onClick={load} title="Fetch the latest records">
           Refresh
@@ -162,68 +169,97 @@ export default function RecordsPage({ id }: { id: number }) {
       <main className="data-main">
         {records === null ? (
           <p className="flows-note">Loading…</p>
-        ) : records.records.length === 0 ? (
+        ) : records.searched === 0 ? (
           <p className="flows-note">
             <TableIcon /> No records yet. Once a flow using {name} generates it, each record shows here as a row.
           </p>
         ) : (
-          <div className="data-table-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th className="data-run">Record</th>
-                  <th>State</th>
-                  {fields.map((f) => (
-                    <th key={f} className="data-column">
-                      {f}
-                    </th>
-                  ))}
-                  <th>Updated</th>
-                  <th>Run</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((r) => {
-                  const content = r.content as Json
-                  const title = `${name} · record ${r.id}`
-                  const whole = { title, text: JSON.stringify(content, null, 2) }
-                  return (
-                    <tr key={r.id}>
-                      <td className="data-run">
-                        <button className="link-button" title="Show all of it" onClick={() => setOpened(whole)}>
-                          {r.id}
-                        </button>
-                      </td>
-                      <td>{r.state || <span className="data-started">no state</span>}</td>
-                      {fields.map((f) => (
-                        <Cell key={f} value={isFields(content) ? content[f] : undefined} title={`${title}: ${f}`} whole={whole} onOpen={setOpened} />
-                      ))}
-                      <td className="data-started">{formatTime(r.updated)}</td>
-                      <td>
-                        {r.run !== null &&
-                          (r.runFlow !== null ? (
-                            <a href={`#/flows/${r.runFlow}/runs/${r.run}`} title="Open the run on its flow's board">
-                              #{r.run}
-                            </a>
-                          ) : (
-                            `#${r.run}`
-                          ))}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {records && records.records.length > 0 && (
-          <p className="flows-note">
-            {records.more ? `The latest ${records.records.length} records` : `All ${records.records.length} records`}, the latest
-            written first{state !== null && `, ${shown.length} of them ${state || 'with no state'}`}. Click a cell to see all of it.
-          </p>
+          <>
+            <div className="search-row">
+              <QueryBar
+                facets={facets}
+                query={query}
+                onChange={setQuery}
+                placeholder="Search records, e.g. state:open -@severity:low crash"
+              />
+              <TimeRange facets={facets} query={query} field="updated" onChange={setQuery} />
+            </div>
+            <div className="search-body">
+              {facetsShown && <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} rows={records.searched} />}
+              <div className="search-results">
+                <div className="data-table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th className="data-run" aria-sort={ariaSort(sort, 'id')}>
+                          {sortable('id', 'Record')}
+                        </th>
+                        <th aria-sort={ariaSort(sort, 'state')}>{sortable('state', 'State')}</th>
+                        {fields.map((f) => {
+                          const key = keyOf(f)
+                          return (
+                            <th key={f} className="data-column" aria-sort={key ? ariaSort(sort, key) : undefined}>
+                              {sortable(key, f)}
+                            </th>
+                          )
+                        })}
+                        <th aria-sort={ariaSort(sort, 'updated')}>{sortable('updated', 'Updated', true)}</th>
+                        <th aria-sort={ariaSort(sort, 'run')}>{sortable('run', 'Run')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {records.records.map((r) => {
+                        const content = r.content as Json
+                        const title = `${name} · record ${r.id}`
+                        const whole = { title, text: JSON.stringify(content, null, 2) }
+                        return (
+                          <tr key={r.id}>
+                            <td className="data-run">
+                              <button className="link-button" title="Show all of it" onClick={() => setOpened(whole)}>
+                                {r.id}
+                              </button>
+                            </td>
+                            <td>{r.state || <span className="data-started">no state</span>}</td>
+                            {fields.map((f) => (
+                              <Cell
+                                key={f}
+                                value={isFields(content) ? content[f] : undefined}
+                                title={`${title}: ${f}`}
+                                facet={keyOf(f)}
+                                whole={whole}
+                                onOpen={setOpened}
+                              />
+                            ))}
+                            <td className="data-started">{formatTime(r.updated)}</td>
+                            <td>
+                              {r.run !== null &&
+                                (r.runFlow !== null ? (
+                                  <a href={`#/flows/${r.runFlow}/runs/${r.run}`} title="Open the run on its flow's board">
+                                    #{r.run}
+                                  </a>
+                                ) : (
+                                  `#${r.run}`
+                                ))}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  {records.records.length === 0 && <p className="search-none">No records match the search.</p>}
+                </div>
+                <p className="flows-note">
+                  {search.q !== '' ? `${records.matched} of ${records.searched} records match` : `${records.searched} records`}
+                  {records.truncated && ', searching the latest written of them'}
+                  {records.more && `; the first ${records.records.length} show`}
+                  {sort ? '' : ', the latest written first'}. Click a cell to see all of it, a column's name to sort by it.
+                </p>
+              </div>
+            </div>
+          </>
         )}
       </main>
-      {opened && <ValueDialog opened={opened} onOpen={setOpened} onClose={() => setOpened(null)} />}
+      {opened && <ValueDialog opened={opened} onOpen={setOpened} onClose={() => setOpened(null)} onFilter={filterBy} />}
     </div>
   )
 }
@@ -233,11 +269,13 @@ export default function RecordsPage({ id }: { id: number }) {
 function Cell({
   value,
   title,
+  facet,
   whole,
   onOpen,
 }: {
   value: Json | undefined
   title: string
+  facet: string | undefined
   whole: Opened
   onOpen: (o: Opened) => void
 }) {
@@ -246,7 +284,14 @@ function Cell({
   const label = Array.isArray(value) ? `${value.length} ${value.length === 1 ? 'item' : 'items'}` : text
   return (
     <td className="data-cell">
-      <button className="data-cell-open" title="Show all of it" onClick={() => onOpen({ title, text, whole })}>
+      <button
+        className="data-cell-open"
+        title="Show all of it"
+        onClick={() => {
+          const s = searchable(value)
+          onOpen({ title, text, whole, ...(s !== null && facet !== undefined && { filter: { key: facet, value: s } }) })
+        }}
+      >
         {label}
       </button>
     </td>

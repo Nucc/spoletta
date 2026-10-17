@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Data, parse, type Json } from './Data'
-import { getFlow, getFlowData, type DataCell, type DataRow, type Flow, type FlowData } from './api'
+import { getFlow, getFlowData, type DataCell, type DataRow, type Flow, type FlowData, type FlowRunStatus, type SearchFacet } from './api'
 import { FlowBuilderIcon, TableIcon } from './icons'
+import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { formatTime, RUN_LABELS } from './Runs'
+import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useFacetsShown, useSearch, type Display } from './Search'
 
 // How often the table catches up with runs still going.
 const REFRESH_MS = 5000
@@ -14,8 +16,14 @@ type Column = { id: string; object: string; label: string; field: string | null;
 // The columns of an object, by what tells it apart in the rows.
 type Group = { key: string; name: string; columns: Column[] }
 
-// What a cell opens in full.
-export type Opened = { title: string; text: string; whole?: { title: string; text: string } }
+// What a cell opens in full, and the facet value it is, to search by.
+export type Opened = { title: string; text: string; whole?: { title: string; text: string }; filter?: { key: string; value: string } }
+
+// What a run held of an object, its content parsed.
+type Held = { cell: DataCell; value: Json | undefined }
+
+// A run's status as the runs list names it.
+const display: Display = (f, v) => (f.key === 'status' ? RUN_LABELS[v as FlowRunStatus] : undefined)
 
 const cellKey = (c: Pick<DataCell, 'object' | 'name'>) => (c.object !== null ? `#${c.object}` : c.name)
 
@@ -25,26 +33,47 @@ const isFields = (v: Json | undefined): v is { [key: string]: Json } =>
 // The value as a cell shows it: text as it is, anything else as JSON.
 const asText = (v: Json): string => (typeof v === 'string' ? v : JSON.stringify(v, null, 2))
 
+// A value short and plain enough to search by, as a cell offers it.
+export const searchable = (v: Json | undefined): string | null =>
+  (typeof v === 'string' && v !== '' && v.length <= 200 && !v.includes('\n')) || typeof v === 'number' || typeof v === 'boolean'
+    ? String(v)
+    : null
+
 // A flow's runs as a table, a run per row and a column per attribute of each
 // object they held, so what the flow processed reads at a glance. Columns
 // come from what the runs held, in the board's order where it has them, so
-// older runs' attributes and deleted objects still show.
+// older runs' attributes and deleted objects still show. The runs can be
+// searched and sorted by any column, hidden ones too (Search.tsx).
 export default function FlowDataPage({ id }: { id: number }) {
   const [flow, setFlow] = useState<Flow | null>(null)
   const [data, setData] = useState<FlowData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [hidden, setHidden] = useState(() => loadHidden(id))
   const [opened, setOpened] = useState<Opened | null>(null)
+  const { query, setQuery, sort, setSort, search } = useSearch('data', id)
+  const [facetsShown, toggleFacets] = useFacetsShown()
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
-  const refresh = useCallback(() => getFlowData(id).then(setData).catch(report), [id, report])
+  // Only the answer to the latest ask shows, so a slow one for an older
+  // query doesn't replace it; the rows shown stay until it comes.
+  const asked = useRef(0)
+  const refresh = useCallback(() => {
+    const n = ++asked.current
+    return getFlowData(id, search)
+      .then((d) => n === asked.current && setData(d))
+      .catch(report)
+  }, [id, search, report])
 
   useEffect(() => {
     getFlow(id).then(setFlow).catch(report)
     refresh()
   }, [id, refresh, report])
 
-  const running = data?.rows.some((r) => r.status === 'running') ?? false
+  // Runs the search leaves out keep it asking too.
+  const running =
+    (data?.rows.some((r) => r.status === 'running') ||
+      data?.facets.some((f) => f.key === 'status' && f.values.some((v) => v.value === 'running'))) ??
+    false
   useEffect(() => {
     if (!running) return
     const t = window.setInterval(refresh, REFRESH_MS)
@@ -57,6 +86,15 @@ export default function FlowDataPage({ id }: { id: number }) {
 
   const groups = useMemo(() => (data ? columnsOf(data) : []), [data])
   const items = data?.rows.some((r) => r.itemKey !== '' || r.parent !== null) ?? false
+  const facets = useMemo(() => indexFacets(data?.facets ?? []), [data])
+  const keys = useMemo(() => keysOf(groups, data?.facets ?? []), [groups, data])
+  const ast = useMemo(() => parseQuery(query).ast, [query])
+  const searching = search.q !== ''
+
+  const filterBy = (key: string, value: string, out: boolean) => {
+    setQuery(out ? exclude(facets, query, key, value) : select(facets, query, key, [value]))
+    setOpened(null)
+  }
 
   const toggle = (column: string) => {
     const next = new Set(hidden)
@@ -86,6 +124,11 @@ export default function FlowDataPage({ id }: { id: number }) {
           </span>
           Data
         </h1>
+        {data !== null && data.searched > 0 && (
+          <button className="facets-toggle" aria-pressed={facetsShown} onClick={toggleFacets} title="Show or hide the facets">
+            Facets
+          </button>
+        )}
         {groups.length > 0 && <ColumnPicker groups={groups} hidden={hidden} onToggle={toggle} />}
         <button onClick={refresh} title="Fetch the latest runs">
           Refresh
@@ -99,53 +142,101 @@ export default function FlowDataPage({ id }: { id: number }) {
       <main className="data-main">
         {data === null ? (
           <p className="flows-note">Loading…</p>
-        ) : data.rows.length === 0 ? (
+        ) : data.searched === 0 ? (
           <p className="flows-note">
             <TableIcon /> No runs yet. Once the flow runs, each run shows here as a row of what it held of each object.
           </p>
         ) : (
-          <div className="data-table-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th rowSpan={2} className="data-run">
-                    Run
-                  </th>
-                  <th rowSpan={2}>Status</th>
-                  <th rowSpan={2}>Started</th>
-                  {items && <th rowSpan={2}>Item</th>}
-                  {shown.map((g) => (
-                    <th key={g.key} colSpan={g.columns.length} className="data-group">
-                      {g.name}
-                    </th>
-                  ))}
-                </tr>
-                <tr>
-                  {shown.flatMap((g) =>
-                    g.columns.map((c) => (
-                      <th key={c.id} className="data-column" title={`${g.name}: ${c.label}`}>
-                        {c.label}
-                      </th>
-                    )),
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {data.rows.map((r) => (
-                  <Row key={r.id} row={r} flow={id} groups={shown} items={items} onOpen={setOpened} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {data && data.rows.length > 0 && (
-          <p className="flows-note">
-            The latest {data.rows.length} runs, newest first; a run of one item of a list is a row of its own. Click a
-            cell to see all of it.
-          </p>
+          <>
+            <div className="search-row">
+              <QueryBar
+                facets={facets}
+                query={query}
+                onChange={setQuery}
+                display={display}
+                placeholder="Search runs, e.g. status:failed -@Bug.state:fixed timeout"
+              />
+              <TimeRange facets={facets} query={query} field="started" onChange={setQuery} />
+            </div>
+            <div className="search-body">
+              {facetsShown && (
+                <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} display={display} rows={data.searched} />
+              )}
+              <div className="search-results">
+                <div className="data-table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th rowSpan={2} className="data-run" aria-sort={ariaSort(sort, 'run')}>
+                          <SortButton facet="run" sort={sort} onSort={setSort}>
+                            Run
+                          </SortButton>
+                        </th>
+                        <th rowSpan={2} aria-sort={ariaSort(sort, 'status')}>
+                          <SortButton facet="status" sort={sort} onSort={setSort}>
+                            Status
+                          </SortButton>
+                        </th>
+                        <th rowSpan={2} aria-sort={ariaSort(sort, 'started')}>
+                          <SortButton facet="started" sort={sort} onSort={setSort} newestFirst>
+                            Started
+                          </SortButton>
+                        </th>
+                        {items && (
+                          <th rowSpan={2} aria-sort={ariaSort(sort, 'item')}>
+                            <SortButton facet="item" sort={sort} onSort={setSort}>
+                              Item
+                            </SortButton>
+                          </th>
+                        )}
+                        {shown.map((g) => (
+                          <th key={g.key} colSpan={g.columns.length} className="data-group">
+                            {g.name}
+                          </th>
+                        ))}
+                      </tr>
+                      <tr>
+                        {shown.flatMap((g) =>
+                          g.columns.map((c) => {
+                            const key = keys.get(c.id)
+                            return (
+                              <th key={c.id} className="data-column" title={`${g.name}: ${c.label}`} aria-sort={key ? ariaSort(sort, key) : undefined}>
+                                {key ? (
+                                  <SortButton facet={key} sort={sort} onSort={setSort}>
+                                    {c.label}
+                                  </SortButton>
+                                ) : (
+                                  c.label
+                                )}
+                              </th>
+                            )
+                          }),
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.rows.map((r) => (
+                        <Row key={r.id} row={r} flow={id} groups={shown} items={items} keys={keys} onOpen={setOpened} />
+                      ))}
+                    </tbody>
+                  </table>
+                  {data.rows.length === 0 && <p className="search-none">No runs match the search.</p>}
+                </div>
+                <p className="flows-note">
+                  {searching ? `${data.matched} of ${data.searched} runs match` : `${data.searched} runs`}
+                  {data.truncated && ', searching the latest of them'}
+                  {data.rows.length < data.matched && `; the first ${data.rows.length} show`}
+                  {sort ? '' : ', newest first'}. A run of one item of a list is a row of its own. Click a cell to see all of it,
+                  a column's name to sort by it.
+                </p>
+              </div>
+            </div>
+          </>
         )}
       </main>
-      {opened && <ValueDialog opened={opened} onOpen={setOpened} onClose={() => setOpened(null)} />}
+      {opened && (
+        <ValueDialog opened={opened} onOpen={setOpened} onClose={() => setOpened(null)} onFilter={filterBy} />
+      )}
     </div>
   )
 }
@@ -155,15 +246,17 @@ function Row({
   flow,
   groups,
   items,
+  keys,
   onOpen,
 }: {
   row: DataRow
   flow: number
   groups: Group[]
   items: boolean
+  keys: Map<string, string>
   onOpen: (o: Opened) => void
 }) {
-  const cells = new Map(row.cells.map((c) => [cellKey(c), c]))
+  const cells = new Map(row.cells.map((cell) => [cellKey(cell), { cell, value: parse(cell.content) }]))
   return (
     <tr>
       <td className="data-run">
@@ -191,7 +284,9 @@ function Row({
       )}
       {groups.flatMap((g) => {
         const cell = cells.get(g.key)
-        return g.columns.map((c) => <Cell key={c.id} run={row.id} group={g} column={c} cell={cell} onOpen={onOpen} />)
+        return g.columns.map((c) => (
+          <Cell key={c.id} run={row.id} group={g} column={c} held={cell} facet={keys.get(c.id)} onOpen={onOpen} />
+        ))
       })}
     </tr>
   )
@@ -201,17 +296,19 @@ function Cell({
   run,
   group,
   column,
-  cell,
+  held,
+  facet,
   onOpen,
 }: {
   run: number
   group: Group
   column: Column
-  cell: DataCell | undefined
+  held: Held | undefined
+  facet: string | undefined
   onOpen: (o: Opened) => void
 }) {
-  if (!cell) return <td className="data-cell empty" />
-  const value = parse(cell.content)
+  if (!held) return <td className="data-cell empty" />
+  const { cell, value } = held
   const whole = { title: `Run #${run} · ${group.name}`, text: cell.content }
   const given = cell.given ? ' given' : ''
   const givenTitle = cell.given ? ' It was given to the run.' : ''
@@ -225,7 +322,14 @@ function Cell({
     const label = Array.isArray(value) ? `${value.length} ${value.length === 1 ? 'item' : 'items'}` : cell.content
     return (
       <td className={`data-cell${given}`}>
-        <button className="data-cell-open" title={`Show all of it.${givenTitle}`} onClick={() => onOpen(whole)}>
+        <button
+          className="data-cell-open"
+          title={`Show all of it.${givenTitle}`}
+          onClick={() => {
+            const v = searchable(cell.content)
+            onOpen(v === null || facet === undefined ? whole : { ...whole, filter: { key: facet, value: v } })
+          }}
+        >
           {label}
         </button>
       </td>
@@ -240,7 +344,15 @@ function Cell({
       <button
         className="data-cell-open"
         title={`Show all of it.${givenTitle}`}
-        onClick={() => onOpen({ title: `Run #${run} · ${group.name}: ${column.label}`, text, whole })}
+        onClick={() => {
+          const s = searchable(v)
+          onOpen({
+            title: `Run #${run} · ${group.name}: ${column.label}`,
+            text,
+            whole,
+            ...(s !== null && facet !== undefined && { filter: { key: facet, value: s } }),
+          })
+        }}
       >
         {label}
       </button>
@@ -248,8 +360,19 @@ function Cell({
   )
 }
 
-// A value in full, formatted as a run's objects are.
-export function ValueDialog({ opened, onOpen, onClose }: { opened: Opened; onOpen: (o: Opened) => void; onClose: () => void }) {
+// A value in full, formatted as a run's objects are, with what searches
+// for it or leaves it out where it is short enough to search by.
+export function ValueDialog({
+  opened,
+  onOpen,
+  onClose,
+  onFilter,
+}: {
+  opened: Opened
+  onOpen: (o: Opened) => void
+  onClose: () => void
+  onFilter?: (key: string, value: string, out: boolean) => void
+}) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     const dialog = ref.current
@@ -261,6 +384,16 @@ export function ValueDialog({ opened, onOpen, onClose }: { opened: Opened; onOpe
     <dialog ref={ref} className="data-dialog" onClose={onClose} onClick={(e) => e.target === ref.current && onClose()}>
       <header>
         <h2>{opened.title}</h2>
+        {opened.filter && onFilter && (
+          <>
+            <button className="link-button" onClick={() => onFilter(opened.filter!.key, opened.filter!.value, false)}>
+              Show only these
+            </button>
+            <button className="link-button" onClick={() => onFilter(opened.filter!.key, opened.filter!.value, true)}>
+              Leave these out
+            </button>
+          </>
+        )}
         {opened.whole && (
           <button className="link-button" onClick={() => onOpen(opened.whole!)}>
             Show the whole object
@@ -359,6 +492,18 @@ function columnsOf(data: FlowData): Group[] {
     groups.push({ key, name: s.name, columns })
   }
   return groups
+}
+
+// The key of the facet the server searches each column by (rundata.go),
+// to sort by it and to search for a cell's value.
+function keysOf(groups: Group[], facets: SearchFacet[]): Map<string, string> {
+  const keys = new Map<string, string>()
+  for (const g of groups)
+    for (const c of g.columns) {
+      const f = facets.find((f) => f.object === g.key && f.kind === c.kind && (c.kind !== 'field' || f.field === c.field))
+      if (f) keys.set(c.id, f.key)
+    }
+  return keys
 }
 
 const HIDDEN_KEY_PREFIX = 'data-hidden-'

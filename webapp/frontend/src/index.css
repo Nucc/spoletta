@@ -3269,7 +3269,7 @@ button.toolbar-link {
 
 .data-table-scroll {
   overflow: auto;
-  max-height: calc(100vh - 140px);
+  max-height: calc(100vh - 200px);
   background: #fff;
   border: 1px solid #d8dee4;
   border-radius: 8px;
@@ -3380,11 +3380,6 @@ button.toolbar-link {
 
 .data-picker {
   position: relative;
-  margin-left: auto;
-}
-
-/* The state a shared struct's records table shows only the records in. */
-.records-state {
   margin-left: auto;
 }
 
@@ -3784,4 +3779,383 @@ select.flow-owner:disabled {
   text-overflow: ellipsis;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
+}
+
+/* The search over a table page's rows, as Datadog's log explorer has it: a
+   query bar coloured by what each part of the query is, with suggestions
+   under it, a time range beside it, and the facets left of the table. */
+.search-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 12px;
+}
+
+.search-body {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.search-results {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-none {
+  margin: 0;
+  padding: 24px;
+  color: #656d76;
+  text-align: center;
+}
+
+.query-bar {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+}
+
+.query-bar:focus-within {
+  border-color: #0969da;
+  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15);
+}
+
+.query-glyph {
+  flex: none;
+  color: #656d76;
+}
+
+.query-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* The input's text is see-through; the coloured copy under it shows. */
+.query-input,
+.query-mirror {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 0;
+  font: 13px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: normal;
+  white-space: pre;
+  border: none;
+}
+
+.query-input {
+  position: relative;
+  color: transparent;
+  caret-color: #1f2328;
+  background: transparent;
+  outline: none;
+}
+
+.query-input::placeholder {
+  color: #8c959f;
+}
+
+.query-input::selection {
+  color: transparent;
+  background: rgba(9, 105, 218, 0.25);
+}
+
+.query-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: #1f2328;
+  pointer-events: none;
+}
+
+.q-key {
+  color: #8250df;
+}
+
+.q-key.q-unknown {
+  text-decoration: underline wavy #cf222e;
+  text-underline-offset: 3px;
+}
+
+.q-value {
+  color: #0a3069;
+  font-weight: 600;
+}
+
+.q-op {
+  color: #cf222e;
+  font-weight: 600;
+}
+
+.q-text {
+  color: #1f2328;
+}
+
+.query-clear {
+  flex: none;
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1;
+  color: #656d76;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.query-clear:hover {
+  color: #1f2328;
+}
+
+.query-suggestions {
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: calc(100% + 4px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 4px 0 0;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.15);
+}
+
+.query-suggestions > button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 12px;
+  font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: left;
+  color: #1f2328;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.query-suggestions > button.active {
+  background: #ddf4ff;
+}
+
+.query-suggestion-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.query-suggestion-hint {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  color: #656d76;
+}
+
+.query-help {
+  position: sticky;
+  bottom: 0;
+  margin-top: 4px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #656d76;
+  background: #f6f8fa;
+  border-top: 1px solid #eaeef2;
+}
+
+.query-help code {
+  padding: 1px 5px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+}
+
+.time-range {
+  flex: none;
+  padding: 0 10px;
+  font-size: 13px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.facets-toggle[aria-pressed='true'] {
+  background: #ddf4ff;
+  border-color: #54aeff;
+}
+
+.facets {
+  flex: none;
+  width: 240px;
+  max-height: calc(100vh - 200px);
+  overflow: auto;
+  font-size: 13px;
+}
+
+.facet-group + .facet-group {
+  margin-top: 12px;
+}
+
+.facet-group h3 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #656d76;
+}
+
+.facet {
+  border-bottom: 1px solid #eaeef2;
+}
+
+.facet-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.facet-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  color: #1f2328;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.facet-caret {
+  width: 10px;
+  color: #656d76;
+}
+
+.facet-clear {
+  font-size: 12px;
+}
+
+.facet-values {
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 8px 16px;
+}
+
+.facet-filter {
+  margin: 0 0 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.facet-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.facet-value input {
+  margin: 0;
+}
+
+.facet-value-name {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.facet-value-name:hover {
+  color: #0969da;
+}
+
+.facet-value.none {
+  color: #8c959f;
+}
+
+.facet-missing {
+  font-style: italic;
+}
+
+.facet-count {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #656d76;
+}
+
+.facet-more {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.facet-empty {
+  color: #8c959f;
+}
+
+/* A column's name sorts the rows by it. */
+.sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.sort-arrow {
+  font-size: 11px;
+  color: #afb8c1;
+}
+
+.sort-button:hover .sort-arrow,
+.sort-button.sorted .sort-arrow {
+  color: #0969da;
+}
+
+@media (max-width: 720px) {
+  .search-row,
+  .search-body {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .facets {
+    width: auto;
+    max-height: 40vh;
+  }
 }

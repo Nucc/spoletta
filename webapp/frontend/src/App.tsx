@@ -11,7 +11,7 @@ import Settings, { type SettingsTab } from './Settings'
 // The page the URL's hash names: #/flows/<id> for a flow's board,
 // #/flows/<id>/runs/<run> for it with one of its runs open, #/flows/<id>/data
 // for what its runs held, #/flows/<id>/records for a shared struct's
-// records, #/schedules for the schedules, #/settings/<tab>
+// records, both with ?q=<search>&sort=<key> for what they show, #/schedules for the schedules, #/settings/<tab>
 // for the settings, anything else for the list of flows. #/people, where
 // the people were before the settings, is their tab now.
 type Page = { flow: number; run: number | null } | { data: number } | { records: number } | { settings: SettingsTab | null } | 'schedules' | null
@@ -21,9 +21,9 @@ const pageInHash = (): Page => {
   if (window.location.hash === '#/people') return { settings: 'people' }
   const s = /^#\/settings(?:\/(\w+))?$/.exec(window.location.hash)
   if (s) return { settings: (s[1] as SettingsTab | undefined) ?? null }
-  const d = /^#\/flows\/(\d+)\/data$/.exec(window.location.hash)
+  const d = /^#\/flows\/(\d+)\/data(?:\?.*)?$/.exec(window.location.hash)
   if (d) return { data: Number(d[1]) }
-  const r = /^#\/flows\/(\d+)\/records$/.exec(window.location.hash)
+  const r = /^#\/flows\/(\d+)\/records(?:\?.*)?$/.exec(window.location.hash)
   if (r) return { records: Number(r[1]) }
   const m = /^#\/flows\/(\d+)(?:\/runs\/(\d+))?$/.exec(window.location.hash)
   return m ? { flow: Number(m[1]), run: m[2] ? Number(m[2]) : null } : null

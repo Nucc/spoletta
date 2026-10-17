@@ -70,6 +70,9 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 		res.Error = "the process has no script"
 	case msg != "":
 		res.Error = msg
+	default:
+		// One file in $INPUTS would hide the other.
+		res.Error = inputClash(run.ProcessName, inputs)
 	}
 
 	run.Workspace = ws.forProcess(settings)

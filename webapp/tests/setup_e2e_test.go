@@ -338,6 +338,7 @@ func TestSetupImportRefusesWhatIsWrong(t *testing.T) {
 		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n      - name: P\n", "give one a key"},
 		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: subflow\n        runs: PFX B\n  - name: PFX B\n", "belongs under procedures"},
 		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: script\n        yields: [{object: O, states: [s]}]\n    objects:\n      - name: O\n        states: [s]\n", "only a human's or an agent's output link lists states"},
+		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: script\n        takes: [Jira Ticket, Jira_Ticket]\n    objects:\n      - name: Jira Ticket\n      - name: Jira_Ticket\n", `"P" already takes an object named "Jira Ticket"`},
 		{"spoletta: 1\nprocedures:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: subflow\n        runs: PFX B\n  - name: PFX B\n    processes:\n      - name: Q\n        kind: subflow\n        runs: PFX A\n", "in a circle"},
 	} {
 		file := strings.ReplaceAll(c.file, "PFX", prefix)

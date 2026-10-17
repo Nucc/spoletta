@@ -476,6 +476,15 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		if patch.Name != nil {
+			if msg, err := renameClash(r.Context(), db, id, *patch.Name); err != nil {
+				serverError(w, err)
+				return
+			} else if msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
+		}
 
 		if patch.Human != nil && *patch.Human {
 			var n int
@@ -1024,6 +1033,9 @@ func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
 	}
 	if err != nil {
 		return "", err
+	}
+	if msg, err := linkClash(ctx, db, l.Process, l.Object, l.Direction); err != nil || msg != "" {
+		return msg, err
 	}
 	if l.Direction == directionInput && kind != kindHuman {
 		var human bool

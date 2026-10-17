@@ -171,11 +171,15 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		return res, err
 	}
 	run.TimeoutMS = settings.timeout().Milliseconds()
+	// The prompt couldn't tell apart two inputs of one name.
+	clash := inputClash(run.ProcessName, inputs)
 	switch {
 	case strings.TrimSpace(run.Prompt) == "":
 		res.Error = "the process has no prompt"
 	case msg != "":
 		res.Error = msg
+	case clash != "":
+		res.Error = clash
 	default:
 		run.Workspace = ws.forProcess(settings)
 		run.Prompt = withChangeRequest(withInputs(withFlow(withWorkspace(run.Prompt, run.Workspace), run.ProcessName, about), inputs), cr)

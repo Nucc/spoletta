@@ -263,6 +263,12 @@ A link that says nothing but the object is written as just the object's name.
 | `takes: [Notes]` + `yields: [Notes]` (agent or script) | **effect**: hands in a changed Notes |
 | `yields: [Ticket]` on a human process that doesn't take Ticket | a person **fills in** Ticket |
 
+A process tells its objects apart by name: no two it takes may share one,
+nor two it yields, compared as file names in `$INPUTS` (`Jira Ticket` and
+`Jira_Ticket` are the same). One it takes and another it yields may, such as
+a ticket in and the updated ticket out. Give objects on different boards
+that meet at one process different names.
+
 ### 3.5 Connections and the start
 
 - `start: {next: P}` on a board names the process a run of it begins with.

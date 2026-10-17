@@ -466,16 +466,6 @@ func TestEngineStepErrors(t *testing.T) {
 			message: "the process has no script",
 		},
 		{
-			name: "two outputs of one name",
-			build: func(a *app, f int64) process {
-				p := a.agent(f, "P", "Go.")
-				a.output(p.ID, a.newObject(f, "Same").ID)
-				a.output(p.ID, a.newObject(f, "Same").ID)
-				return p
-			},
-			message: `generates two objects named "Same"`,
-		},
-		{
 			name: "script output off the interface",
 			build: func(a *app, f int64) process {
 				p := a.newProcess(f, map[string]any{"name": "P", "kind": kindScript, "script": "echo hi"})

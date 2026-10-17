@@ -1226,6 +1226,13 @@ func (b *builder) checkLinks() error {
 		state           int64
 	}
 	seen := map[key]bool{}
+	// The object each process takes, and generates, by name; see names.go.
+	type named struct {
+		process   int64
+		direction string
+		name      string
+	}
+	names := map[named]*bobj{}
 	outputs := map[[2]int64]int{}
 	consumed := map[int64]*bproc{}
 	linked := map[[2]int64]bool{}
@@ -1238,6 +1245,11 @@ func (b *builder) checkLinks() error {
 			return problemf("%s: it does so twice", l.where)
 		}
 		seen[k] = true
+		n := named{l.proc.id, l.direction, inputFileName(l.obj.o.Name)}
+		if other := names[n]; other != nil && other != l.obj {
+			return problemf("%s: %s", l.where, nameClashMessage(l.proc.p.Name, l.direction, other.o.Name))
+		}
+		names[n] = l.obj
 		// On the process's board, or on the board around it and linked to the
 		// flow process it is in, which shows it inside.
 		if !sameBoard(l.obj.parent, l.proc.parent) && (l.proc.parent == nil || !linked[[2]int64{*l.proc.parent, l.obj.id}]) {

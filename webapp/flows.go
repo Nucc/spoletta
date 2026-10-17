@@ -472,6 +472,21 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 		if s && patch.Name != nil {
+			var object int64
+			err := db.QueryRowContext(r.Context(), "SELECT id FROM objects WHERE flow_id = ? AND parent_id IS NULL AND owner_id IS NULL", id).Scan(&object)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				serverError(w, err)
+				return
+			}
+			if err == nil {
+				if msg, err := renameClash(r.Context(), db, object, *patch.Name); err != nil {
+					serverError(w, err)
+					return
+				} else if msg != "" {
+					http.Error(w, msg, http.StatusBadRequest)
+					return
+				}
+			}
 			if err := renameStruct(r.Context(), db, id, *patch.Name); err != nil {
 				serverError(w, err)
 				return

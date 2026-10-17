@@ -861,7 +861,8 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 				Instructions: v.review.instructions,
 				Reviewed:     []runInput{w.asInput(trigger)},
 			}
-		} else {
+		} else if !taken[trigger] {
+			// Taken plainly too, it goes in once.
 			given = append(given, w.inputOf(id, trigger))
 		}
 	}

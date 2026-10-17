@@ -375,7 +375,8 @@ off. After an agent step ends, a person can send it follow-up messages
     once may take the same one; don't let the working flow's runs overlap
     (a schedule skips a time while its last run goes on).
   - A shared object's copy isn't `persistent` too. The struct's board lists
-    its records.
+    its records, and its Records page (`#/flows/<struct>/records`) shows them
+    as a table, a column per field, filtered by state.
 
 ### 3.9 Schedules
 

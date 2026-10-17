@@ -15,7 +15,7 @@ type Column = { id: string; object: string; label: string; field: string | null;
 type Group = { key: string; name: string; columns: Column[] }
 
 // What a cell opens in full.
-type Opened = { title: string; text: string; whole?: { title: string; text: string } }
+export type Opened = { title: string; text: string; whole?: { title: string; text: string } }
 
 const cellKey = (c: Pick<DataCell, 'object' | 'name'>) => (c.object !== null ? `#${c.object}` : c.name)
 
@@ -249,7 +249,7 @@ function Cell({
 }
 
 // A value in full, formatted as a run's objects are.
-function ValueDialog({ opened, onOpen, onClose }: { opened: Opened; onOpen: (o: Opened) => void; onClose: () => void }) {
+export function ValueDialog({ opened, onOpen, onClose }: { opened: Opened; onOpen: (o: Opened) => void; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     const dialog = ref.current

@@ -347,19 +347,30 @@ func querySharedRecords(ctx context.Context, db *sql.DB, store int64, q *linkQue
 	return string(b), err
 }
 
-// A record as the struct's board lists it.
+// A record as the struct's records list it.
 type sharedRecord struct {
 	ID      int64           `json:"id"`
 	Content json.RawMessage `json:"content"`
 	State   string          `json:"state"`
-	// The run that last moved it on, or added it; null once that run is
-	// deleted.
+	// The run that last moved it on, or added it, and that run's flow; null
+	// once that run is deleted.
 	Run     *int64    `json:"run"`
+	RunFlow *int64    `json:"runFlow"`
 	Updated time.Time `json:"updated"`
 }
 
-// How many records the struct's board lists, the latest written first.
-const maxListedRecords = 200
+// A shared struct's records, the latest written first, with the fields its
+// object has in the board's order: its attributes, then the objects it is
+// made of, so a table of them has its columns before any record does.
+type sharedRecords struct {
+	Fields  []string       `json:"fields"`
+	Records []sharedRecord `json:"records"`
+	// More records than these are stored.
+	More bool `json:"more"`
+}
+
+// How many records the struct's records list, the latest written first.
+const maxListedRecords = 1000
 
 func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/structs/{id}/records", func(w http.ResponseWriter, r *http.Request) {
@@ -368,27 +379,49 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		root, err := structRoot(r.Context(), db, id)
+		ctx := r.Context()
+		root, err := structRoot(ctx, db, id)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		records := []sharedRecord{}
-		err = scanAll(r.Context(), db, "SELECT id, content, state, run_id, updated_at FROM shared_records WHERE object_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
+		out := sharedRecords{Fields: []string{}, Records: []sharedRecord{}}
+		err = scanAll(ctx, db, `SELECT name FROM (
+				SELECT name, 0 AS kind, id FROM object_attributes WHERE object_id = ?
+				UNION ALL SELECT name, 1, id FROM objects WHERE owner_id = ?
+			) f ORDER BY kind, id`,
+			func(rows *sql.Rows) error {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					return err
+				}
+				out.Fields = append(out.Fields, name)
+				return nil
+			}, root, root)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		err = scanAll(ctx, db, `SELECT sr.id, sr.content, sr.state, sr.run_id, ru.flow_id, sr.updated_at
+			FROM shared_records sr LEFT JOIN runs ru ON ru.id = sr.run_id
+			WHERE sr.object_id = ? ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?`,
 			func(rows *sql.Rows) error {
 				var rec sharedRecord
 				var content string
-				if err := rows.Scan(&rec.ID, &content, &rec.State, &rec.Run, &rec.Updated); err != nil {
+				if err := rows.Scan(&rec.ID, &content, &rec.State, &rec.Run, &rec.RunFlow, &rec.Updated); err != nil {
 					return err
 				}
 				rec.Content = json.RawMessage(asItem(content))
-				records = append(records, rec)
+				out.Records = append(out.Records, rec)
 				return nil
-			}, root, maxListedRecords)
+			}, root, maxListedRecords+1)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, records)
+		if len(out.Records) > maxListedRecords {
+			out.Records, out.More = out.Records[:maxListedRecords], true
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 }

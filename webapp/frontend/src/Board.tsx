@@ -2269,6 +2269,11 @@ export default function Board({
               <span className="version-latest">latest {versions.versions[0].id}</span>
             )}
           </button>
+          {sharedRoot && (
+            <button onClick={() => (window.location.hash = `#/flows/${flowId}/records`)} title="The records every flow using the struct wrote, a record per row">
+              <TableIcon /> Records
+            </button>
+          )}
           {!structBoard && (
             <>
               <button

@@ -380,13 +380,18 @@ export type SharedRecord = {
   id: number
   content: unknown
   state: string
-  // The run that last moved it on, or added it.
+  // The run that last moved it on, or added it, and that run's flow.
   run: number | null
+  runFlow: number | null
   updated: string
 }
 
+// A shared struct's records, the latest written first, with the fields its
+// object has in the board's order. more: there are more than these.
+export type SharedRecords = { fields: string[]; records: SharedRecord[]; more: boolean }
+
 // The struct's records, the latest written first.
-export function listSharedRecords(struct: number): Promise<SharedRecord[]> {
+export function listSharedRecords(struct: number): Promise<SharedRecords> {
   return request(`/api/structs/${struct}/records`)
 }
 

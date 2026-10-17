@@ -3358,6 +3358,18 @@ button.toolbar-link {
   margin-left: auto;
 }
 
+/* The state a shared struct's records table shows only the records in. */
+.records-state {
+  margin-left: auto;
+}
+
+.records-table-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
 .data-picker summary {
   display: inline-flex;
   align-items: center;

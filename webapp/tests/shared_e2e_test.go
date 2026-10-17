@@ -20,10 +20,12 @@ type sharedRecord struct {
 
 func sharedRecords(a *app, s int64) map[string]sharedRecord {
 	a.t.Helper()
-	var rs []sharedRecord
+	var rs struct {
+		Records []sharedRecord `json:"records"`
+	}
 	a.call("GET", fmt.Sprintf("/api/structs/%d/records", s), nil, http.StatusOK, &rs)
 	byID := map[string]sharedRecord{}
-	for _, r := range rs {
+	for _, r := range rs.Records {
 		var fields struct {
 			ID string `json:"id"`
 		}
@@ -167,6 +169,23 @@ func TestSharedRecordsAcrossFlows(t *testing.T) {
 	state("2", "completed", "Null pointer")
 	if n := len(sharedRecords(a, s.ID)); n != 2 {
 		t.Errorf("the struct has %d records, want 2", n)
+	}
+
+	// The table of them has the object's fields as columns, and each
+	// record names the flow of the run that last wrote it.
+	var listed struct {
+		Fields  []string `json:"fields"`
+		Records []struct {
+			RunFlow *int64 `json:"runFlow"`
+		} `json:"records"`
+		More bool `json:"more"`
+	}
+	a.call("GET", fmt.Sprintf("/api/structs/%d/records", s.ID), nil, http.StatusOK, &listed)
+	if strings.Join(listed.Fields, ",") != "id,title" || listed.More {
+		t.Errorf("the records have the fields %v, more %v; want id, title and no more", listed.Fields, listed.More)
+	}
+	if len(listed.Records) == 0 || listed.Records[0].RunFlow == nil || *listed.Records[0].RunFlow != process.ID {
+		t.Errorf("the latest record wasn't written by a run of flow %d", process.ID)
 	}
 
 	// Turned off, the copies keep to their flows' runs again.

@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -21,6 +23,15 @@ import (
 // interrupted or terminated releases its values, so they can be processed
 // again. Instances outlive the object, so deleting it from the board doesn't
 // lose what was stored.
+//
+// One that only the processes taking it generate, as OPM's effect, is
+// carried from run to run: a run of the flow starts with what the latest run
+// to end done stored of it, so a script can keep a cursor, such as when it
+// last fetched and from which offset, and move it on each run. A run that
+// fails doesn't move it. Only a run of the whole flow carries it, from its
+// top board; items of a list run alongside each other and would race over
+// one value. Its attributes shouldn't be unique, or a run leaving it as it
+// was would be a duplicate.
 
 // A value a step generated that another run already stored.
 type duplicate struct {
@@ -263,4 +274,58 @@ func compact(raw json.RawMessage) string {
 		s = string(r[:limit]) + "…"
 	}
 	return s
+}
+
+// Starts the walk of a run's top board with the persistent objects carried
+// over: what the latest run to end done stored of each, or, before any did,
+// an object existing but holding nothing, so the processes taking it run.
+// Like an object no process generates, it isn't followed from the start:
+// the process the start points at takes it, and one waiting only for it runs
+// once the process moving it on did, on the new value. One that also waits
+// for something ready sooner may run on the old one.
+func (w *walk) carry() error {
+	for _, o := range w.fr.board.Objects {
+		if o.Parent != nil || o.Owner != nil || !o.Persistent || o.Many || !w.generated[o.ID] || !w.onlyAffected(o.ID) {
+			continue
+		}
+		var content, state string
+		err := w.e.db.QueryRowContext(w.ctx,
+			`SELECT i.content, i.state FROM object_instances i JOIN runs r ON r.id = i.run_id
+			WHERE i.object_id = ? AND r.status = ? ORDER BY r.finished_at DESC, r.id DESC LIMIT 1`, o.ID, runDone).
+			Scan(&content, &state)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		w.mu.Lock()
+		if err != nil {
+			w.values[o.ID] = value{}
+			w.unstored[o.ID] = true
+		} else {
+			w.values[o.ID] = value{content: content, state: w.stateNamed(o.ID, state)}
+		}
+		w.mu.Unlock()
+	}
+	return nil
+}
+
+// Whether every process generating the object takes it too.
+func (w *walk) onlyAffected(o int64) bool {
+	for p, ends := range w.outputs {
+		if slices.ContainsFunc(ends, func(e linkEnd) bool { return e.object == o }) &&
+			!slices.ContainsFunc(w.inputs[p], func(e linkEnd) bool { return e.object == o }) {
+			return false
+		}
+	}
+	return true
+}
+
+// The object's state of that name, or none, such as for a state renamed or
+// deleted since it was stored.
+func (w *walk) stateNamed(o int64, name string) int64 {
+	for id, n := range w.stateNames {
+		if n == name && w.stateObjects[id] == o {
+			return id
+		}
+	}
+	return 0
 }

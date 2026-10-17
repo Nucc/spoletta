@@ -142,6 +142,18 @@ Other object flags:
 - For a persistent **list**, each item is claimed by its own run when it
   starts. An item another run already holds is skipped, so fetching the same
   issues every morning processes only the new ones.
+- A persistent object (not a list) on the top board that only the processes
+  taking it yield, an **effect**, is **carried over**: each run of the flow
+  starts with what the last run to end *done* stored of it. That is how a
+  flow keeps a cursor, such as when it last fetched or the offset it got to:
+  `takes: [Cursor]` + `yields: [Cursor]`. A script finds it in
+  `$INPUTS/Cursor` and prints the new value. On the first run there is
+  nothing yet and no file; a failed run doesn't move it on. A process waiting
+  only for it runs after the one moving it on, on the new value; one that
+  also waits for something ready sooner may get the old one. Leave its
+  attributes not unique, or a run leaving it as it was is a duplicate. Only
+  a whole run of the flow carries it: not a subflow process running the
+  flow, nor items of a list.
 - `file: true` on an attribute means it holds the path of a file the step
   wrote. A script writes the file in `$OUTPUTS`; an agent writes it in its
   step's files directory. A person can't enter a file by hand.
@@ -501,6 +513,8 @@ definitions do that.
   since, and make what it lists persistent with a unique attribute, so the
   overlap is skipped. A failed run doesn't move it on; an item whose own run
   fails comes round only if it changes again.
+  For a cursor of your own, such as the newest `updated_at` seen, carry a
+  persistent object over instead (see 3.1).
 - A non-zero exit fails it, with stderr as the error.
 - A script can't decide states. Route its output with state rules.
 

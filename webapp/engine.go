@@ -79,6 +79,11 @@ import (
 // A step generating a unique value another run stored terminates the run: no
 // further process starts, and reviews still waiting end undecided.
 //
+// A persistent object that only the processes taking it generate, such as a
+// cursor its fetching process moves on, is carried over: a run of the flow
+// starts with what its last run to end done stored of it, as an object no
+// process generates exists from the start; see carry in instances.go.
+//
 // A flow process runs the board inside it, which starts from its start and
 // from the objects the flow process takes, given as they are outside; the
 // process its start points at takes them all, as do those linked to them. What
@@ -137,7 +142,12 @@ func (e *engine) start(id, flow, version int64, board snapshot, repos []reposito
 	go func() {
 		fr := newFlowRun(flow, version, board, repos, prefix)
 		w := newWalk(ctx, e, id, lr, fr, nil, nil, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
-		w.enter()
+		if err := w.carry(); err != nil {
+			log.Printf("carry objects into run %d: %v", id, err)
+			w.fail()
+		} else {
+			w.enter()
+		}
 		e.finish(ctx, id, w)
 	}()
 }
@@ -390,6 +400,9 @@ type walk struct {
 	values map[int64]value
 	// Objects a skipped process would have generated, settled as absent.
 	skipped map[int64]bool
+	// Objects carried over that no run stored yet: they exist, so the
+	// processes taking them run, but hold nothing to hand in.
+	unstored map[int64]bool
 	// How many times each process has run, over all passes.
 	ran        map[int64]int
 	failed     bool
@@ -444,7 +457,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{}, roles: map[int64]map[int64]string{}, conditions: map[int64]map[int64][]int64{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{}, rules: map[int64][]ruledState{},
-		generated: map[int64]bool{}, values: map[int64]value{}, skipped: map[int64]bool{}, ran: map[int64]int{},
+		generated: map[int64]bool{}, values: map[int64]value{}, skipped: map[int64]bool{}, unstored: map[int64]bool{}, ran: map[int64]int{},
 	}
 	w.reviews, w.terminate = context.WithCancel(ctx)
 	s := fr.board
@@ -788,6 +801,7 @@ func (w *walk) skipVisited(id int64, p *pass) {
 func (w *walk) set(o int64, v value) {
 	w.values[o] = v
 	delete(w.skipped, o)
+	delete(w.unstored, o)
 }
 
 func (w *walk) takersIn(object, state int64) []int64 {
@@ -842,7 +856,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 	taken := map[int64]bool{}
 	// What doesn't hold its condition doesn't go in, as with a quorum.
 	for _, i := range w.plainInputs(id) {
-		if v, ok := w.values[i.object]; ok && w.generated[i.object] && w.holds(id, i.object, v.state) {
+		if v, ok := w.values[i.object]; ok && w.generated[i.object] && !w.unstored[i.object] && w.holds(id, i.object, v.state) {
 			given = append(given, w.inputOf(id, i.object))
 			taken[i.object] = true
 		}
@@ -1007,7 +1021,7 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 	w.mu.Lock()
 	given := map[int64]value{}
 	for _, i := range w.inputs[id] {
-		if v, ok := w.values[i.object]; ok {
+		if v, ok := w.values[i.object]; ok && !w.unstored[i.object] {
 			given[i.object] = v
 		}
 	}

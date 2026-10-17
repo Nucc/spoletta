@@ -164,6 +164,43 @@ func withLastRun(ctx context.Context, db *sql.DB, s *schedule) error {
 	return err
 }
 
+// When the schedule that started the run, or the run it is part of, last
+// started a run that ended done, as a Unix timestamp; nil for a run no
+// schedule started, or a schedule's first. A script in the run gets it as
+// $SINCE and $LAST_RUN, so it can fetch only what changed since, such as the
+// pull requests updated after it. A run that fails, is stopped or terminated
+// doesn't move it on, so what that run was to handle comes round again; an
+// item of a list whose own run fails doesn't hold it back, though, so it
+// comes round only if it changes again.
+func scheduleSince(ctx context.Context, db *sql.DB, run int64) (*int64, error) {
+	for {
+		var parent, sched sql.NullInt64
+		if err := db.QueryRowContext(ctx, "SELECT parent_run_id, schedule_id FROM runs WHERE id = ?", run).Scan(&parent, &sched); err != nil {
+			return nil, err
+		}
+		if !sched.Valid {
+			if !parent.Valid {
+				return nil, nil
+			}
+			run = parent.Int64
+			continue
+		}
+		// UNIX_TIMESTAMP reads a TIMESTAMP in the session's zone, as it was
+		// stored, so the zone doesn't matter.
+		var since int64
+		err := db.QueryRowContext(ctx,
+			`SELECT FLOOR(UNIX_TIMESTAMP(started_at)) FROM runs
+			WHERE schedule_id = ? AND status = ? AND id < ? ORDER BY id DESC LIMIT 1`, sched.Int64, runDone, run).Scan(&since)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &since, nil
+	}
+}
+
 func getSchedule(ctx context.Context, db *sql.DB, id int64) (schedule, error) {
 	var s schedule
 	err := scanSchedule(db.QueryRowContext(ctx, "SELECT "+scheduleColumns+" FROM schedules s JOIN flows f ON f.id = s.flow_id WHERE s.id = ?", id), &s)

@@ -16,6 +16,8 @@ import (
 // agent's output does: {"data": ...} for an object without attributes, a
 // JSON array for a list. Files it generates go in the directory $OUTPUTS
 // points to, with their paths in its output. A non-zero exit fails the step.
+// In a scheduled run, $SINCE and its alias $LAST_RUN say when the schedule
+// last got through, so the script can fetch only what changed since.
 
 // What the worker runs.
 type scriptRun struct {
@@ -32,6 +34,9 @@ type scriptRun struct {
 	// How long the script may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
+	// When its schedule's last run that got through started, as a Unix
+	// timestamp, which $SINCE and $LAST_RUN hold; see scheduleSince.
+	Since *int64 `json:"since,omitempty"`
 }
 
 type scriptInput struct {
@@ -69,6 +74,9 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 
 	run.Workspace = ws.forProcess(settings)
 	run.TimeoutMS = settings.timeout().Milliseconds()
+	if run.Since, err = scheduleSince(ctx, db, runID); err != nil {
+		return res, err
+	}
 	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Script, inputs, nil)
 	if err != nil {
 		return res, err

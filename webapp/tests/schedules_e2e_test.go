@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -142,6 +144,70 @@ func TestScheduleSkipsWhileItsRunGoes(t *testing.T) {
 	if got.Schedule != nil {
 		t.Errorf("run of a deleted schedule has schedule %d", *got.Schedule)
 	}
+}
+
+// A scheduled run's scripts are told when the schedule's last run that
+// ended done started, so they can fetch only what changed since; a failed
+// run doesn't move it on, and a run started by hand isn't told.
+func TestScheduleTellsScriptsSince(t *testing.T) {
+	a := newApp(t)
+	f := a.newFlow("Poll")
+	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindScript, "script": "echo $SINCE"})
+	a.startAt(f.ID, fetch.ID)
+	// The schedule's runs go one at a time, so the calls come in their order.
+	var mu sync.Mutex
+	var since []*int64
+	a.worker.onScript("Fetch", func(_ context.Context, run scriptRun) runResult {
+		mu.Lock()
+		defer mu.Unlock()
+		since = append(since, run.Since)
+		if len(since) == 2 {
+			return runResult{Error: "GitHub is down"}
+		}
+		return runResult{OK: true, Output: `{"data": "fetched"}`}
+	})
+
+	s := a.newSchedule(f.ID, everySecond)
+	a.waitScheduledRuns(f.ID, s.ID, 4)
+	a.call("PATCH", fmt.Sprintf("/api/schedules/%d", s.ID), map[string]any{"enabled": false}, http.StatusOK, nil)
+	rs := a.scheduledRuns(f.ID, s.ID)
+	slices.Reverse(rs)
+	for _, rn := range rs {
+		a.finish(rn.ID)
+	}
+	if got := a.finish(rs[1].ID).Status; got == runDone {
+		t.Fatalf("the second run is %s, want it to have failed", got)
+	}
+
+	mu.Lock()
+	got := slices.Clone(since[:4])
+	mu.Unlock()
+	first, third := rs[0].StartedAt.Unix(), rs[2].StartedAt.Unix()
+	want := []*int64{nil, &first, &first, &third}
+	for i := range want {
+		switch {
+		case (got[i] == nil) != (want[i] == nil):
+			t.Errorf("run %d's script was told since %v, want %v", i+1, show(got[i]), show(want[i]))
+		case got[i] != nil && *got[i] != *want[i]:
+			t.Errorf("run %d's script was told since %d, want %d", i+1, *got[i], *want[i])
+		}
+	}
+
+	a.finish(a.startRun(f.ID).ID)
+	mu.Lock()
+	byHand := since[len(since)-1]
+	mu.Unlock()
+	if byHand != nil {
+		t.Errorf("a run started by hand was told since %d, want nothing", *byHand)
+	}
+}
+
+// What a pointer holds, or nil.
+func show(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // Only what can come round is saved, for a flow that runs.

@@ -489,6 +489,12 @@ definitions do that.
 - Files go in `$OUTPUTS`, with their paths in file attributes.
 - In a workspace, `$WORKSPACE` is the checkouts' directory and `$BRANCH` the
   run's branch.
+- In a run a schedule started, `$SINCE` (alias `$LAST_RUN`) is when the
+  schedule's last run that ended done started, as a Unix timestamp, and empty
+  on its first run or in a run started by hand. Fetch only what changed
+  since, and make what it lists persistent with a unique attribute, so the
+  overlap is skipped. A failed run doesn't move it on; an item whose own run
+  fails comes round only if it changes again.
 - A non-zero exit fails it, with stderr as the error.
 - A script can't decide states. Route its output with state rules.
 

@@ -118,6 +118,9 @@ type scriptRequest struct {
 	Workspace *workspaceSpec `json:"workspace"`
 	// How long the script may take, if not the worker's own limit.
 	TimeoutMS int64 `json:"timeoutMs"`
+	// When its schedule's last run that got through started, in seconds
+	// since 1970, which $SINCE and $LAST_RUN hold; nil for none.
+	Since *int64 `json:"since"`
 }
 
 // The run's own limit, if it has one, or the worker's.
@@ -677,7 +680,10 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // scratch directory. Each object it takes is a file in the directory $INPUTS
 // points to, named after the object: spaces and other characters unsafe in a
 // file name become underscores, so Jira Ticket is $INPUTS/Jira_Ticket. Files
-// it generates go in the directory $OUTPUTS points to, which is kept. What
+// it generates go in the directory $OUTPUTS points to, which is kept. In a
+// scheduled run, $SINCE and its alias $LAST_RUN hold when the schedule's
+// last run that got through started, as a Unix timestamp, and are empty
+// when there was none, so the script can fetch only what changed since. What
 // the script prints is its output; a non-zero exit fails it, with what it
 // printed to stderr as the error. Like pi, it runs in a process group of its own,
 // which a cancelled request or the timeout kills.
@@ -717,7 +723,12 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) (r
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "bash", script)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "INPUTS="+inputs)
+	// Set even when empty, so the worker's own environment can't stand in.
+	since := ""
+	if run.Since != nil {
+		since = strconv.FormatInt(*run.Since, 10)
+	}
+	cmd.Env = append(os.Environ(), "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)
 	if run.Workspace != nil {
 		cmd.Env = append(cmd.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
 	}

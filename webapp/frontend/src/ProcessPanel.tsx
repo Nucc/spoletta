@@ -364,7 +364,8 @@ export default function ProcessPanel({
             Runs with bash, curl and jq. Each object it takes is a file in <code>$INPUTS</code>, named after the object
             with spaces as underscores. What it prints is its output; a list of items is a JSON array. A non-zero exit
             fails it. With repositories, it runs in their workspace, <code>$WORKSPACE</code>, on the branch{' '}
-            <code>$BRANCH</code>.
+            <code>$BRANCH</code>. In a scheduled run, <code>$SINCE</code> (or <code>$LAST_RUN</code>) is when the
+            schedule's last run that got through started, as a Unix timestamp, empty if none did.
           </small>
         </label>
       )}

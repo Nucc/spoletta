@@ -513,6 +513,9 @@ type scriptRun struct {
 	// How long the script may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
+	// When its schedule's last run that got through started, as a Unix
+	// timestamp, which $SINCE and $LAST_RUN hold.
+	Since *int64 `json:"since,omitempty"`
 }
 
 type sentrySettings struct {

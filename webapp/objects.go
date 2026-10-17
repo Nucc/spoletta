@@ -23,6 +23,9 @@ type object struct {
 	Width *float64 `json:"width"`
 	// Runs store what they generate it with; see instances.go.
 	Persistent bool `json:"persistent"`
+	// Every copy of a struct's object, in whatever flow, reads and writes
+	// the struct's records; see shared.go.
+	Shared bool `json:"shared"`
 	// A list of items: an agent generating it replies with a list, and a
 	// flow process taking it runs once per item; see items.go.
 	Many bool `json:"many"`
@@ -211,7 +214,7 @@ func migrateObjects(db *sql.DB) error {
 }
 
 const objectColumns = "id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id, " +
-	"(SELECT src.flow_id FROM objects src WHERE src.id = objects.source_id)"
+	"(SELECT src.flow_id FROM objects src WHERE src.id = objects.source_id), store_id IS NOT NULL"
 
 // Whether an object is on a board of processes, rather than owned by
 // another object.
@@ -219,7 +222,7 @@ const onProcessBoard = "owner_id IS NULL"
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow)
+	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow, &o.Shared)
 	if err != nil {
 		return o, err
 	}
@@ -264,7 +267,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow); err != nil {
+			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow, &o.Shared); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -369,7 +372,10 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			Y     *float64 `json:"y"`
 			// Turning it off keeps what was stored.
 			Persistent *bool `json:"persistent"`
-			Many       *bool `json:"many"`
+			// Only a struct's object is shared or not; turning it off keeps
+			// its records, for when it is shared again.
+			Shared *bool `json:"shared"`
+			Many   *bool `json:"many"`
 			// How many items a list holds; raw so that an explicit null max,
 			// no most, is told apart from an absent one. Checked with what
 			// the object has once patched.
@@ -424,6 +430,28 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		if root && (isTrue(patch.Human) || isTrue(patch.Persistent) || isTrue(patch.End)) {
 			http.Error(w, "a struct's object is what flows use; whether it is a person, stored or leads into an end is up to each copy of it", http.StatusBadRequest)
 			return
+		}
+		if patch.Shared != nil && !root {
+			http.Error(w, "only a struct's object is shared, and its copies with it", http.StatusBadRequest)
+			return
+		}
+		if isTrue(patch.Shared) {
+			if msg, err := checkShared(r.Context(), db, id); err != nil {
+				serverError(w, err)
+				return
+			} else if msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
+		}
+		if isTrue(patch.Persistent) {
+			if store, err := storeOf(r.Context(), db, id); err != nil {
+				serverError(w, err)
+				return
+			} else if store != 0 {
+				http.Error(w, "the object is shared, so every flow using it keeps its records already; it isn't stored in this flow's runs too", http.StatusBadRequest)
+				return
+			}
 		}
 		if owned && (isTrue(patch.Human) || isTrue(patch.Persistent) || isTrue(patch.End)) {
 			http.Error(w, "an object making up another is part of what that one holds: it can't be a person, stored or lead into an end on its own", http.StatusBadRequest)
@@ -527,6 +555,12 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		if patch.Shared != nil {
+			if _, err := db.ExecContext(r.Context(), "UPDATE objects SET store_id = IF(?, id, NULL) WHERE id = ?", *patch.Shared, id); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
 		if setGeneral {
 			if _, err := db.ExecContext(r.Context(), "UPDATE objects SET general_id = ? WHERE id = ?", general, id); err != nil {
 				serverError(w, err)
@@ -542,7 +576,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		// Only what copies have changes them; a new outcome comes out of the
 		// subflow processes running the flow.
-		if patch.Name != nil || patch.Many != nil || patch.Min != nil || len(patch.Max) > 0 || patch.Relation != nil || setGeneral || isTrue(patch.End) {
+		if patch.Name != nil || patch.Many != nil || patch.Min != nil || len(patch.Max) > 0 || patch.Relation != nil || setGeneral || isTrue(patch.End) || patch.Shared != nil {
 			if err := propagate(r.Context(), db, flow, isTrue(patch.End)); err != nil {
 				serverError(w, err)
 				return

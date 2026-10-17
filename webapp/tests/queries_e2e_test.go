@@ -110,7 +110,7 @@ func TestQueryLinkRefusals(t *testing.T) {
 		msg  string
 	}{
 		{query(agent.ID, stored.ID, directionOutput, nil), "only an input link has a query"},
-		{query(agent.ID, plain.ID, directionInput, nil), "only a persistent object has records"},
+		{query(agent.ID, plain.ID, directionInput, nil), "only a persistent or shared object has records"},
 		{query(human.ID, stored.ID, directionInput, nil), "only an agent or a script queries"},
 		{query(agent.ID, stored.ID, directionInput, map[string]any{"role": "consumption"}), "can't consume"},
 		{query(agent.ID, stored.ID, directionInput, map[string]any{"query": linkQuery{Where: "score"}}), "the query's rule"},

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -553,6 +554,8 @@ type builder struct {
 	used  map[string]map[int64]bool
 	// Placeholders get names of their own, as attributes' must differ.
 	placeholders int
+	// Building a struct, whose object alone can be shared.
+	isStruct bool
 }
 
 func newBuilder(im *importer, flow int64, name string) (*builder, error) {
@@ -601,7 +604,14 @@ func (b *builder) buildStruct(o *setupObject) error {
 	if o.Human || o.Relation != "" || o.Specializes != "" {
 		return problemf("%s: a struct's object is neither a person, a part nor a specialization", where)
 	}
+	if o.Shared && !slices.ContainsFunc(o.Attributes, func(a setupAttribute) bool { return a.Unique }) {
+		return problemf("%s: records are told apart by a unique attribute; mark one unique before sharing the object", where)
+	}
+	if o.Shared && o.Persistent {
+		return problemf("%s: a shared object is stored by every flow using it; it isn't persistent too", where)
+	}
 	o.Name = b.name
+	b.isStruct = true
 	board := &setupBoard{Objects: []setupObject{*o}}
 	return b.build(board)
 }
@@ -1200,8 +1210,17 @@ func (b *builder) resolveObject(bo *bobj) error {
 	if msg := checkQuantity(o.Many, quantity{min: o.Min, max: o.Max}); msg != "" {
 		return problemf("%s: %s", at, msg)
 	}
+	if o.Shared && (!b.isStruct || bo.parent != nil || bo.owner != nil) {
+		return problemf("%s: only a struct's object is shared, and its copies with it", at)
+	}
+	if o.Persistent && b.shared(bo) {
+		return problemf("%s: it is a copy of a shared object, which every flow using it stores already; it isn't persistent too", at)
+	}
 	so := snapshotObject{ID: bo.id, Name: o.Name, X: bo.x, Y: bo.y, Width: o.Width, Persistent: o.Persistent, Many: o.Many,
 		Min: o.Min, Max: o.Max, Human: o.Human, End: o.End, Parent: bo.parent, Owner: bo.owner, Relation: o.Relation, Source: bo.source}
+	if o.Shared {
+		so.Store = &bo.id
+	}
 	if o.Specializes != "" {
 		g := b.objs[o.Specializes]
 		if g == nil || g == bo {
@@ -1316,13 +1335,22 @@ func (b *builder) checkLinks() error {
 	return nil
 }
 
+// Whether an object is a copy of a shared one, whose records it reads.
+func (b *builder) shared(bo *bobj) bool {
+	if bo.source == nil {
+		return false
+	}
+	store, err := storeOf(b.ctx, b.tx, *bo.source)
+	return err == nil && store != 0
+}
+
 // Says what is wrong with the link as to queries, as checkQuery does for
 // one; a query's state isn't checked, as a copy's states come from what it
 // copies.
 func (b *builder) checkQuery(l blink, takes map[[2]int64]int, queries map[[2]int64]bool) string {
 	k := [2]int64{l.proc.id, l.obj.id}
 	switch {
-	case l.query == nil && queries[k]:
+	case l.query == nil && l.direction == directionInput && queries[k]:
 		return "the process queries that object already; it takes it by its query alone"
 	case l.query == nil:
 		return ""
@@ -1338,8 +1366,8 @@ func (b *builder) checkQuery(l blink, takes map[[2]int64]int, queries map[[2]int
 		return "a query reads records; it can't consume them"
 	case l.proc.p.Kind != kindAgent && l.proc.p.Kind != kindScript && l.proc.p.Kind != "":
 		return "only an agent or a script queries records"
-	case !l.obj.o.Persistent:
-		return "only a persistent object has records to query"
+	case !l.obj.o.Persistent && !b.shared(l.obj):
+		return "only a persistent or shared object has records to query"
 	}
 	return ""
 }

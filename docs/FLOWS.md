@@ -277,8 +277,8 @@ A link that says nothing but the object is written as just the object's name.
 | `takes: [{object: Review, query: {where: 'score >= 4', state: approved, limit: 5}}]` | **looks up** Review's stored records, not waiting for it |
 
 A **query** link (agent or script only) takes what earlier runs stored of a
-persistent object rather than the object in this run: the records of runs
-that ended *done*, whose fields hold `where` (a rule, as a state's; all when
+persistent object rather than the object in this run (for a shared struct's
+copy, its records; see 3.8): the records of runs that ended *done*, whose fields hold `where` (a rule, as a state's; all when
 left out) and that are in `state` (any when left out), newest first unless
 `oldest: true`, at most `limit` (20 by default, 100 at most). They come as
 a JSON array, the object's shape as a list, in `$INPUTS/<Name>` or the
@@ -348,6 +348,34 @@ off. After an agent step ends, a person can send it follow-up messages
   object `copyOf: {flow: <struct name>}`, which follows the struct as a
   procedure's copies do. Use a struct when several flows exchange the same
   shape, such as a `Ticket` with `key`, `summary` and `priority`.
+- A struct's object can be **shared** (`shared: true` on it, which needs a
+  `unique` attribute): every copy of it, in whatever flow, reads and writes
+  one store of **records**, told apart by the unique attribute, as a table
+  the flows have in common. Use it when one flow adds things and another
+  works on them, such as one fetching Sentry issues and another fixing them.
+  - A process that only **generates** it (a Sentry or fetching script) adds
+    the records that are new, in the state its link names, and refreshes
+    the fields of those it knows, **keeping their state**. Fetching an issue
+    again doesn't undo how far it got. Name the state new records start in
+    on the link, `yields: [{object: Exception, state: new}]`, rather than by
+    a rule that holds of every record.
+  - A process that also **takes** it, by any input link or a query, moves
+    the records it generates into the state it comes out in: `yields:
+    [{object: Exception, state: completed}]`, a rule, or an agent's decision.
+    It writes fields it leaves out as they were.
+  - A list writes a record per item, all in the state the list comes out in.
+  - What gets worked on, or worked on again, is up to **queries**: `takes:
+    [{object: Exception, query: {state: new, limit: 1, oldest: true}}]`
+    reads the records in that state, whichever flow wrote them, and a rule
+    on their fields narrows them, such as `attempts < 3`. To retry what
+    failed, have the failure handler take it and yield it `failed`, and
+    query that state too.
+  - Records stay once the step writing them is done, whatever its run does
+    later. No run claims a record, so two runs querying the same state at
+    once may take the same one; don't let the working flow's runs overlap
+    (a schedule skips a time while its last run goes on).
+  - A shared object's copy isn't `persistent` too. The struct's board lists
+    its records.
 
 ### 3.9 Schedules
 
@@ -576,6 +604,7 @@ check that each one is what you meant.
 | list | `"Exceptions" is a list of items, at least 1.` / `… between 2 and 5.` / `… is a list of items.` |
 | specialization | `"Bug" is a "Ticket".` |
 | persistent | `"Exceptions" is stored, so each run keeps what it generated of it.` |
+| shared | `"Exception" is shared, so every flow using it reads and writes the same records.` |
 | states | `"Post" can be "good" or "weak".` |
 | rule | `"Ticket" is "urgent" when priority <= 2.` |
 | attributes and exhibited parts | `"Ticket" exhibits "key" and "summary".` |

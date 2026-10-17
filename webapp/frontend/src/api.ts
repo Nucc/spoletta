@@ -116,6 +116,9 @@ export type FlowObject = {
   // Runs store what they generate it with, and its unique attributes tell
   // whether another run already stored a value.
   persistent: boolean
+  // A struct's object whose copies, in whatever flow, read and write one
+  // store of records, and those copies; see shared.go.
+  shared: boolean
   // A list of items: an agent generating it replies with a list, and a flow
   // process taking it runs once per item. Inside that flow process, it is
   // the item.
@@ -371,6 +374,22 @@ export function copyStruct(
   return request(`/api/structs/${struct}/copies`, { method: 'POST', body: JSON.stringify(at) })
 }
 
+// A record of a shared struct's object, as every flow using it reads and
+// writes it.
+export type SharedRecord = {
+  id: number
+  content: unknown
+  state: string
+  // The run that last moved it on, or added it.
+  run: number | null
+  updated: string
+}
+
+// The struct's records, the latest written first.
+export function listSharedRecords(struct: number): Promise<SharedRecord[]> {
+  return request(`/api/structs/${struct}/records`)
+}
+
 // A module other flows run stays one.
 export function updateFlow(id: number, patch: Partial<Pick<Flow, 'name' | 'module' | 'settings'>>): Promise<Flow> {
   return request(`/api/flows/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
@@ -496,6 +515,7 @@ export function createObject(
     | 'attributes'
     | 'width'
     | 'persistent'
+    | 'shared'
     | 'source'
     | 'sourceFlow'
     | 'many'

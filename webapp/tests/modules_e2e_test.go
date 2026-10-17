@@ -37,6 +37,7 @@ type modObject struct {
 	Name       string         `json:"name"`
 	Many       bool           `json:"many"`
 	Persistent bool           `json:"persistent"`
+	Shared     bool           `json:"shared"`
 	Owner      *int64         `json:"owner"`
 	Source     *int64         `json:"source"`
 	SourceFlow *int64         `json:"sourceFlow"`

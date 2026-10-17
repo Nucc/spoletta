@@ -73,6 +73,7 @@ import RerunDialog from './RerunDialog'
 import OPLPanel from './OPLPanel'
 import Assistant from './Assistant'
 import { Sidebar, SidebarGroup } from './Sidebar'
+import { SharedRecords } from './Records'
 import { VersionPanel } from './Versions'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
@@ -553,6 +554,7 @@ export default function Board({
         })),
         general: objects.find((g) => g.id === o.general)?.name,
         persistent: o.persistent,
+        shared: o.shared,
         many: o.many,
         min: o.min,
         max: o.max,
@@ -943,7 +945,7 @@ export default function Board({
       const draft: FlowNode =
         type === 'process'
           ? { ...base, type, data: { name, kind, prompt: '', script: '', model: '', thinking: '', recording: false, settings, editing: true } }
-          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, many: false, min: 0, max: null, human, editing: true } }
+          : { ...base, type, data: { name: '', states: [], attributes: [], persistent: false, shared: false, many: false, min: 0, max: null, human, editing: true } }
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), draft])
     },
     [screenToFlowPosition, setNodes],
@@ -1000,6 +1002,10 @@ export default function Board({
     return o !== undefined && o.owner === null && o.parent === null
   }
   isStructRootRef.current = isStructRoot
+  // On a shared struct's board, its object, whose records the sidebar lists.
+  const sharedRoot = structBoard
+    ? nodes.find((n): n is ObjectNodeType => n.type === 'object' && isStructRoot(n.id) && Boolean(n.data.shared))
+    : undefined
 
   // Only modules and structs are reused; the flows that run stay on the main page.
   const flowBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.module).map(flowBlock), [otherFlows])
@@ -1666,6 +1672,18 @@ export default function Board({
     }
   }
 
+  const setShared = async (objectId: string, shared: boolean) => {
+    if (readOnly) return false
+    try {
+      await updateObject(objectIdOf(objectId), { shared })
+      updateObjectData(objectId, { shared })
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
   const changeAttribute = async (
     objectId: string,
     id: number,
@@ -2090,14 +2108,14 @@ export default function Board({
 
   // The names of the objects a process takes or generates, which a subflow
   // process hands to and from their namesakes in the flow it runs.
-  // The process's input links naming no state to persistent objects, which
-  // it can take as queries of their stored records.
+  // The process's input links naming no state to persistent or shared
+  // objects, which it can take as queries of their stored records.
   const queryLinks = (id: string): QueryLink[] =>
     edges.flatMap((e) => {
       const l = e.data?.link
       if (!l || l.direction !== 'input' || String(l.process) !== id || l.state !== null || l.role === 'consumption') return []
       const object = getNode(objectNodeId(l.object))
-      if (object?.type !== 'object' || !object.data.persistent || object.data.human) return []
+      if (object?.type !== 'object' || !(object.data.persistent || object.data.shared) || object.data.human) return []
       return [{ link: l.id, object: object.data.name, states: object.data.states.map((s) => s.name), query: l.query }]
     })
 
@@ -2326,6 +2344,14 @@ export default function Board({
               </SidebarGroup>
             </>
           )}
+          {structBoard && !objectBoard && sharedRoot && (
+            <SidebarGroup id="records" title="Records" fill>
+              <SharedRecords
+                struct={flow.id}
+                keyName={sharedRoot.data.attributes.find((a) => a.unique)?.name ?? null}
+              />
+            </SidebarGroup>
+          )}
           {!structBoard && (
             <SidebarGroup id="runs" title="Runs" fill>
               <RunList
@@ -2493,6 +2519,8 @@ export default function Board({
             onUnfoldPart={unfold}
             persistent={objectPanelNode.data.persistent}
             onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
+            shared={objectPanelNode.data.shared}
+            onSharedChange={(shared) => setShared(objectPanelNode.id, shared)}
             quantity={objectPanelNode.data}
             onQuantityChange={(quantity) => setQuantity(objectPanelNode.id, quantity)}
             human={objectPanelNode.data.human}

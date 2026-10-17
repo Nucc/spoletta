@@ -28,6 +28,8 @@ export type ObjectNodeData = {
   fixed?: boolean
   // Runs store what they generate it with; see FlowObject.
   persistent: boolean
+  // Every flow using it reads and writes one store of records; see FlowObject.
+  shared: boolean
   // A list of items on its own board; inside a flow process taking it, the
   // item. Its links write how many items it holds at its end.
   many: boolean

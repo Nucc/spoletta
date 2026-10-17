@@ -33,7 +33,11 @@ type snapshotObject struct {
 	Y          float64  `json:"y"`
 	Width      *float64 `json:"width"`
 	Persistent bool     `json:"persistent"`
-	Many       bool     `json:"many"`
+	// The shared object whose records it reads and writes: its own id for a
+	// struct's object shared by its copies, and theirs; left out when not,
+	// as in versions from before objects were shared.
+	Store *int64 `json:"store,omitempty"`
+	Many  bool   `json:"many"`
 	// Left out when unset, as in versions from before lists said how many
 	// items they hold.
 	Min int  `json:"min,omitempty"`
@@ -155,9 +159,9 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, store_id, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source)
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Store, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source)
 		s.Objects = append(s.Objects, o)
 		return err
 	}, flow)
@@ -384,6 +388,10 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			}
 		}
 		if _, err := tx.ExecContext(ctx, "UPDATE objects SET source_id = ? WHERE id = ?", source, o.ID); err != nil {
+			return err
+		}
+		// A copy's store is its source's again once copies are synced.
+		if _, err := tx.ExecContext(ctx, "UPDATE objects SET store_id = ? WHERE id = ?", o.Store, o.ID); err != nil {
 			return err
 		}
 	}

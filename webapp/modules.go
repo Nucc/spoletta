@@ -422,7 +422,7 @@ func partsOf(s structure, object int64) []*structObject {
 }
 
 // Makes a copy match its source in the module whose structure s is: its
-// name and how many it is, its states, the attributes it has (its generals'
+// name and how many it is, whether it is shared, its states, the attributes it has (its generals'
 // too), and the objects making it up, each matched in turn. What the copy
 // has that its source no longer does goes, the links naming its states too.
 func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) error {
@@ -432,6 +432,11 @@ func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) e
 	}
 	_, err := tx.ExecContext(ctx, "UPDATE objects SET name = ?, many = ?, min_items = ?, max_items = ?, relation = ?, source_id = ? WHERE id = ?",
 		o.name, o.many, o.quantity.min, o.quantity.max, o.relation, source, dup)
+	if err != nil {
+		return err
+	}
+	// A copy of a shared object reads and writes its store; see shared.go.
+	_, err = tx.ExecContext(ctx, "UPDATE objects c JOIN objects src ON src.id = ? SET c.store_id = src.store_id, c.persistent = c.persistent AND src.store_id IS NULL WHERE c.id = ?", source, dup)
 	if err != nil {
 		return err
 	}

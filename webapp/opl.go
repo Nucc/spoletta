@@ -160,6 +160,9 @@ func (o *oplWriter) objectSentences(ob snapshotObject, indent string) {
 	if ob.Persistent {
 		o.line(indent, "%s is stored, so each run keeps what it generated of it.", name)
 	}
+	if ob.Store != nil {
+		o.line(indent, "%s is shared, so every flow using it reads and writes the same records.", name)
+	}
 	var states []int64
 	var rules []string
 	for _, st := range o.s.States {

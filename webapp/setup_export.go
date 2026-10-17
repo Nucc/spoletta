@@ -327,7 +327,7 @@ func (x exporter) process(p process) setupProcess {
 func (x exporter) object(o snapshotObject) setupObject {
 	id := x.e.objIDs[o.ID]
 	so := setupObject{
-		Name: o.Name, Key: setupKeyOf(o.Name, id), Persistent: o.Persistent, Many: o.Many, Min: o.Min, Max: o.Max,
+		Name: o.Name, Key: setupKeyOf(o.Name, id), Persistent: o.Persistent, Shared: o.Store != nil && *o.Store == o.ID, Many: o.Many, Min: o.Min, Max: o.Max,
 		Human: o.Human, End: o.End, X: addrOf(o.X), Y: addrOf(o.Y), Width: o.Width,
 	}
 	if o.Owner != nil {

@@ -376,6 +376,11 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 	if err != nil {
 		return nil, err
 	}
+	if dup == nil {
+		if err := storeShared(ctx, tx, runID, stepID); err != nil {
+			return nil, err
+		}
+	}
 	if dup != nil {
 		// The step keeps what it generated, for the history.
 		if _, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT store"); err != nil {

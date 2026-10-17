@@ -149,17 +149,19 @@ type setupLink struct {
 }
 
 type setupObject struct {
-	Name       string   `yaml:"name"`
-	Key        string   `yaml:"key,omitempty"`
-	Persistent bool     `yaml:"persistent,omitempty"`
-	Many       bool     `yaml:"many,omitempty"`
-	Min        int      `yaml:"min,omitempty"`
-	Max        *int     `yaml:"max,omitempty"`
-	Human      bool     `yaml:"human,omitempty"`
-	End        bool     `yaml:"end,omitempty"`
-	X          *float64 `yaml:"x,omitempty"`
-	Y          *float64 `yaml:"y,omitempty"`
-	Width      *float64 `yaml:"width,omitempty"`
+	Name       string `yaml:"name"`
+	Key        string `yaml:"key,omitempty"`
+	Persistent bool   `yaml:"persistent,omitempty"`
+	// Only a struct's object; see shared.go.
+	Shared bool     `yaml:"shared,omitempty"`
+	Many   bool     `yaml:"many,omitempty"`
+	Min    int      `yaml:"min,omitempty"`
+	Max    *int     `yaml:"max,omitempty"`
+	Human  bool     `yaml:"human,omitempty"`
+	End    bool     `yaml:"end,omitempty"`
+	X      *float64 `yaml:"x,omitempty"`
+	Y      *float64 `yaml:"y,omitempty"`
+	Width  *float64 `yaml:"width,omitempty"`
 	// For a part: exhibition when absent, or aggregation.
 	Relation    string       `yaml:"relation,omitempty"`
 	Specializes string       `yaml:"specializes,omitempty"`

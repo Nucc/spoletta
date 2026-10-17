@@ -20,6 +20,7 @@ export default function ObjectPanel({
   attributes,
   states,
   persistent,
+  shared,
   quantity,
   human,
   editable,
@@ -28,6 +29,7 @@ export default function ObjectPanel({
   content,
   generals,
   onPersistentChange,
+  onSharedChange,
   onQuantityChange,
   onHumanChange,
   onRelationChange,
@@ -48,6 +50,9 @@ export default function ObjectPanel({
   attributes: ObjectAttribute[]
   states: ObjectState[]
   persistent: boolean
+  // Every flow using a struct's object reads and writes one store of its
+  // records; see shared.go.
+  shared: boolean
   quantity: Quantity
   human: boolean
   // False while a run is in progress.
@@ -64,6 +69,7 @@ export default function ObjectPanel({
   onRename: (name: string) => void
   // Each resolves to whether the server took the change.
   onPersistentChange: (persistent: boolean) => Promise<boolean>
+  onSharedChange: (shared: boolean) => Promise<boolean>
   onQuantityChange: (quantity: Quantity) => Promise<boolean>
   onHumanChange: (human: boolean) => Promise<boolean>
   onRelationChange: (relation: Relation) => Promise<boolean>
@@ -210,7 +216,34 @@ export default function ObjectPanel({
         taking it runs once per item, each item as this object inside it; a list it collects from its items' runs has as
         many as ran. Stored, each item's run claims its item, so an item another run took is skipped.`}
       </p>
-      {!owner && !human && !structRoot && (
+      {structRoot && (
+        <>
+          <label className="panel-check">
+            <input
+              type="checkbox"
+              checked={shared}
+              disabled={!editable}
+              onChange={(e) => onSharedChange(e.target.checked)}
+            />
+            <span>Share its records with every flow using it</span>
+          </label>
+          <p className="panel-note">
+            Every copy of {name}, in whatever flow, reads and writes the same records, told apart by its unique
+            attributes, so mark one unique first. A process only generating it adds new records and refreshes the
+            fields of known ones, keeping their state; one that takes or queries it too moves the records it generates
+            into the state it comes out in. Which records get worked on, or worked on again, is up to the processes'
+            queries: no run claims a record, so runs querying the same state at once may take the same one.
+          </p>
+        </>
+      )}
+      {!owner && !human && !structRoot && shared && (
+        <p className="panel-note">
+          Shared by {module?.name ?? 'its struct'}: every flow using it reads and writes the same records. A process
+          taking or querying it moves the records it generates into the state it comes out in; one only generating it
+          adds and refreshes records, keeping their state.
+        </p>
+      )}
+      {!owner && !human && !structRoot && !shared && (
         <>
           <label className="panel-check">
             <input
@@ -280,7 +313,7 @@ export default function ObjectPanel({
             key={a.id}
             attribute={a}
             editable={own}
-            persistent={persistent && !owner}
+            persistent={(persistent || structRoot) && !owner}
             taken={taken(a.id)}
             onUpdate={(patch) => onUpdate(a.id, patch)}
             onRemove={() => onRemove(a.id)}
@@ -389,7 +422,8 @@ function AttributeRow({
 }: {
   attribute: ObjectAttribute
   editable: boolean
-  // Unique only matters while the object is persistent.
+  // Unique only matters while the object is persistent, or a struct's,
+  // whose records may be shared.
   persistent: boolean
   // The names of the object's other attributes.
   taken: string[]

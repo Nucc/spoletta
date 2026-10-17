@@ -543,7 +543,7 @@ function SentryFields({
 // A whole number a process's settings may hold, from min to max; empty
 // leaves it out, which means fallback. What is typed shows as it is, and only
 // a number in range is saved.
-// An input link to a persistent object, which can take the object's stored
+// An input link to a persistent or shared object, which can take the object's stored
 // records instead of the object in the run; see queries.go.
 export type QueryLink = {
   link: number

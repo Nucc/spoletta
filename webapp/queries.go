@@ -117,7 +117,7 @@ func checkQuery(ctx context.Context, db *sql.DB, l link) (string, error) {
 	}
 	var kind string
 	var persistent bool
-	err = db.QueryRowContext(ctx, "SELECT p.kind, o.persistent FROM processes p JOIN objects o ON o.id = ? WHERE p.id = ?", l.Object, l.Process).
+	err = db.QueryRowContext(ctx, "SELECT p.kind, o.persistent OR o.store_id IS NOT NULL FROM processes p JOIN objects o ON o.id = ? WHERE p.id = ?", l.Object, l.Process).
 		Scan(&kind, &persistent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "process or object not found", nil
@@ -129,7 +129,7 @@ func checkQuery(ctx context.Context, db *sql.DB, l link) (string, error) {
 		return "only an agent or a script queries records", nil
 	}
 	if !persistent {
-		return "only a persistent object has records to query", nil
+		return "only a persistent or shared object has records to query", nil
 	}
 	if l.Query.State != "" {
 		var n int
@@ -144,8 +144,16 @@ func checkQuery(ctx context.Context, db *sql.DB, l link) (string, error) {
 }
 
 // The records of the object the query selects, as a list of it: what
-// runs other than run that ended done stored of it.
+// runs other than run that ended done stored of it, or for a shared object
+// its store's records; see shared.go.
 func queryRecords(ctx context.Context, db *sql.DB, run, object int64, q *linkQuery) (string, error) {
+	store, err := storeOf(ctx, db, object)
+	if err != nil {
+		return "", err
+	}
+	if store != 0 {
+		return querySharedRecords(ctx, db, store, q)
+	}
 	where, err := parseRule(q.Where)
 	if err != nil {
 		return "", err

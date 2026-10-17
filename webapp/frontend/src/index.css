@@ -2562,6 +2562,31 @@ body {
   border-color: #57606a;
 }
 
+/* A persistent or shared object's database badge, centered on the corner where its
+   top and right borders meet: the offsets reach from the padding box to the
+   border's outer edge. */
+.object-persistent {
+  position: absolute;
+  top: -1.5px;
+  right: -1.5px;
+  transform: translate(50%, -50%);
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #1a7f37;
+  background: #fff;
+  border: 1px solid #8c959f;
+  border-radius: 50%;
+}
+
+.object-node.refined .object-persistent {
+  top: -2px;
+  right: -2px;
+}
+
 .object-parts ul li {
   display: inline-flex;
   align-items: center;

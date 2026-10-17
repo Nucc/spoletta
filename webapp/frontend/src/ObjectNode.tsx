@@ -2,7 +2,7 @@ import { useContext, useEffect, useState } from 'react'
 import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
 import { StructFlowsContext, useBoardActions } from './actions'
 import type { ObjectAttribute, ObjectState, Relation } from './api'
-import { AggregationIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
+import { AggregationIcon, DatabaseIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
 import { AppendButton, NameInput, Subtitle } from './ProcessNode'
 import { quantityText, type Quantity } from './quantity'
 import WidthResizer from './WidthResizer'
@@ -67,7 +67,9 @@ export const stateSourceHandle = (state: number) => `state-out-${state}`
 // OPM, each with its own links in and out. The attributes it exhibits are
 // listed below them, then the objects it is made of, which its own board
 // shows, unfolded, linked to it. An object made of others has a thick
-// border, as OPM marks a refined thing.
+// border, as OPM marks a refined thing. A persistent or shared object, which
+// keeps a store of records, has a database badge centered on its top right
+// corner.
 export default function ObjectNode({ id, data, selected, width }: NodeProps<ObjectNodeType>) {
   const actions = useBoardActions()
   const structs = useContext(StructFlowsContext)
@@ -85,6 +87,14 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
       title={data.content}
     >
       <WidthResizer id={id} minWidth={140} />
+      {(data.persistent || data.shared) && (
+        <span
+          className="object-persistent"
+          title={data.shared ? 'Shared: every flow using it reads and writes one store of records' : 'Persistent: runs store what they generate it with'}
+        >
+          <DatabaseIcon />
+        </span>
+      )}
       <Handle type="target" position={Position.Top} />
       <Handle type="source" position={Position.Bottom} />
       <div className="object-main">

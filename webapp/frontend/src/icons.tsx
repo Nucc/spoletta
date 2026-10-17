@@ -54,6 +54,15 @@ export const ObjectIcon = () => (
   </Icon>
 )
 
+// A database: a stack of disks, on a persistent object.
+export const DatabaseIcon = ({ size = 12 }: { size?: number }) => (
+  <Icon size={size}>
+    <ellipse cx="8" cy="3.75" rx="5.25" ry="2" />
+    <path d="M2.75 3.75v8.5c0 1.1 2.35 2 5.25 2s5.25-.9 5.25-2v-8.5" />
+    <path d="M2.75 8c0 1.1 2.35 2 5.25 2s5.25-.9 5.25-2" />
+  </Icon>
+)
+
 // OPM's exhibition-characterization symbol: a triangle with a smaller,
 // filled one inside, linking a thing to the attributes it exhibits.
 export const ExhibitionIcon = ({ size = 12 }: { size?: number }) => (

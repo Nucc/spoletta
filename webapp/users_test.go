@@ -137,6 +137,33 @@ func TestAuthAdmitted(t *testing.T) {
 	}
 }
 
+// Anyone can make a Google account with any email, so Google's word is
+// taken only for a Gmail address or an account of the email's domain's own
+// Workspace; another provider's always is.
+func TestProviderVouches(t *testing.T) {
+	google := &provider{hostedDomains: true, mailDomains: []string{"gmail.com", "googlemail.com"}}
+	for _, c := range []struct {
+		email, hd string
+		want      bool
+	}{
+		{"ann@example.com", "example.com", true},
+		{"ann@example.com", "Example.com", true},
+		{"ann@example.com", "", false},
+		{"ann@example.com", "other.com", false},
+		{"ann@gmail.com", "", true},
+		{"ann@googlemail.com", "", true},
+		{"ann@sub.gmail.com", "", false},
+		{"ann", "", false},
+	} {
+		if got := google.vouches(c.email, c.hd); got != c.want {
+			t.Errorf("vouches(%q, hd %q) = %v, want %v", c.email, c.hd, got, c.want)
+		}
+	}
+	if !(&provider{}).vouches("ann@example.com", "") {
+		t.Error("a provider other than Google isn't taken at its word")
+	}
+}
+
 func idToken(t *testing.T, claims map[string]any) string {
 	t.Helper()
 	payload, err := json.Marshal(claims)
@@ -150,7 +177,7 @@ func idToken(t *testing.T, claims map[string]any) string {
 // provider, but it must be from the issuer, for this webapp, not expired,
 // for this sign-in, and name someone.
 func TestAuthIDClaims(t *testing.T) {
-	a := &auth{issuer: "https://id.example.com", clientID: "spoletta"}
+	a := &provider{issuer: "https://id.example.com", clientID: "spoletta"}
 	later := float64(time.Now().Add(time.Hour).Unix())
 	valid := func() map[string]any {
 		return map[string]any{
@@ -207,6 +234,28 @@ func TestAuthIDClaims(t *testing.T) {
 		if c.problem == "" && (got.Subject != "u-1" || got.Email != "ann@example.com" || got.Name != "Ann" || got.EmailVerified == nil || !*got.EmailVerified) {
 			t.Errorf("%s: idClaims = %+v", c.name, got)
 		}
+	}
+}
+
+// Google's ID tokens may write its issuer without the scheme, which only
+// Google's is taken without.
+func TestAuthIDClaimsIssuerAlias(t *testing.T) {
+	google := &provider{issuer: googleIssuer, issuerAliases: []string{"accounts.google.com"}, clientID: "spoletta"}
+	other := &provider{issuer: "https://id.example.com", clientID: "spoletta"}
+	later := float64(time.Now().Add(time.Hour).Unix())
+	token := func(iss string) string {
+		return idToken(t, map[string]any{"iss": iss, "aud": "spoletta", "exp": later, "nonce": "n1", "sub": "u-1"})
+	}
+	for _, iss := range []string{"https://accounts.google.com", "accounts.google.com"} {
+		if _, err := google.idClaims(token(iss), "n1"); err != nil {
+			t.Errorf("Google with iss %q: %v", iss, err)
+		}
+	}
+	if _, err := google.idClaims(token("evil.example.com"), "n1"); err == nil {
+		t.Error("Google took an ID token from another issuer")
+	}
+	if _, err := other.idClaims(token("id.example.com"), "n1"); err == nil {
+		t.Error("a provider without aliases took its issuer without the scheme")
 	}
 }
 

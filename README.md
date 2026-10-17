@@ -78,11 +78,12 @@ then open http://localhost:8080.
 The worker uses the models in your pi config (`~/.pi/agent/models.json` and
 `settings.json`, or `PI_CONFIG_DIR`). Model API keys, a Sentry token, a
 token to clone the flows' repositories and the OpenID Connect settings for
-signing in go in a `.env` file next to `compose.yaml`; the comments in
-[compose.yaml](compose.yaml) list them all. Without `OIDC_ISSUER` nobody
-signs in and anyone reaching the webapp can do anything, so compose
-publishes it, and MySQL, only on this machine's loopback; once people sign
-in, set `PUBLISH_HOST=0.0.0.0` to reach it from elsewhere. Set `SECRET_KEY`
+signing in, with your identity provider, Google or both, go in a `.env` file
+next to `compose.yaml`; the comments in [compose.yaml](compose.yaml) list
+them all. Without `OIDC_ISSUER` or `GOOGLE_CLIENT_ID` nobody signs in and
+anyone reaching the webapp can do anything, so compose publishes it, and
+MySQL, only on this machine's loopback; once people sign in, set
+`PUBLISH_HOST=0.0.0.0` to reach it from elsewhere. Set `SECRET_KEY`
 too, such as `openssl rand -base64 32` makes, to seal the model keys and MCP
 tokens kept in the database, and keep it with your backups: the webapp
 doesn't start without the key they were sealed with. [docs/SECRETS.md](docs/SECRETS.md)

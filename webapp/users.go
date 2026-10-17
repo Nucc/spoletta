@@ -1,20 +1,30 @@
 package main
 
-// People sign in with the company's identity provider over OpenID Connect,
-// and then work in the webapp as themselves: a run records who started it,
-// and a human step who decided it, so a decision on the record says who made
-// it. The webapp is the provider's client, set up by OIDC_ISSUER,
-// OIDC_CLIENT_ID and OIDC_CLIENT_SECRET; the provider sends people back to
+// People sign in over OpenID Connect, with the company's identity provider,
+// with Google, or with either, and then work in the webapp as themselves: a
+// run records who started it, and a human step who decided it, so a
+// decision on the record says who made it. The webapp is each provider's
+// client: the company's is set up by OIDC_ISSUER, OIDC_CLIENT_ID and
+// OIDC_CLIENT_SECRET, and named on the sign-in page by OIDC_NAME; Google by
+// GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Both send people back to
 // /api/auth/callback on PUBLIC_URL, or on the address the browser reached the
-// webapp by when that isn't set. Without OIDC_ISSUER nobody signs in and
-// everyone can do everything, as before there were users, which suits a
-// webapp only its developer reaches: it then listens only on this machine
-// unless HOST says otherwise; see listenAddr in main.go.
+// webapp by when that isn't set. With both, signing in first asks which.
+// With neither nobody signs in and everyone can do everything, as before
+// there were users, which suits a webapp only its developer reaches: it then
+// listens only on this machine unless HOST says otherwise; see listenAddr in
+// main.go.
 //
-// Not everyone the provider knows may sign in, as with a provider anyone can
+// Not everyone a provider knows may sign in, as with a provider anyone can
 // have an account at: only people whose email is in ADMIN_EMAILS, whose
 // email's domain is in OIDC_ALLOWED_DOMAINS, or who an admin added. Those in
-// ADMIN_EMAILS are admins.
+// ADMIN_EMAILS are admins. Anyone can make a Google account with any email,
+// and keep it after leaving the company, so Google is taken at its word only
+// for a Gmail address, or for an account of the Google Workspace at the
+// email's domain.
+//
+// A user is known to each provider they signed in with by its subject for
+// them, kept in user_identities, and found by their email the first time
+// they sign in with one; so signing in with either is the same user.
 //
 // Signing in is the authorization code flow with PKCE. The ID token comes
 // straight from the provider's token endpoint, so, as OpenID Connect allows,
@@ -114,39 +124,93 @@ func migrateUsers(db *sql.DB) error {
 			return err
 		}
 	}
+	// Who a user is to each provider they signed in with. Users once had one
+	// provider, in their issuer and subject, which are now only read here.
+	for _, s := range []string{
+		`CREATE TABLE IF NOT EXISTS user_identities (
+			issuer VARCHAR(255) NOT NULL,
+			subject VARCHAR(255) NOT NULL,
+			user_id BIGINT NOT NULL,
+			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+			PRIMARY KEY (issuer, subject),
+			KEY user_identities_user (user_id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`INSERT IGNORE INTO user_identities (issuer, subject, user_id)
+			SELECT issuer, subject, id FROM users WHERE subject IS NOT NULL AND issuer <> ''`,
+	} {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // Signing in, as the environment sets it up; nil when nobody signs in.
 type auth struct {
-	db                             *sql.DB
-	issuer, clientID, clientSecret string
-	publicURL                      string
-	domains                        []string
-	admins                         map[string]bool
+	db        *sql.DB
+	providers []*provider
+	publicURL string
+	domains   []string
+	admins    map[string]bool
 }
 
+// An identity provider people sign in with.
+type provider struct {
+	// Names it in a sign-in under way and in ?provider; label on the page
+	// asking which to sign in with.
+	key, label                     string
+	issuer, clientID, clientSecret string
+	// How else its ID tokens may write its issuer.
+	issuerAliases []string
+	// Whether it vouches for an email only at one of mailDomains, or for an
+	// account of the email's domain's own, as the ID token's hd claim says.
+	hostedDomains bool
+	mailDomains   []string
+}
+
+// Google's issuer; GOOGLE_ISSUER stands in for it in tests.
+const googleIssuer = "https://accounts.google.com"
+
 func newAuth(db *sql.DB) *auth {
-	issuer := strings.TrimRight(env("OIDC_ISSUER", ""), "/")
-	if issuer == "" {
-		log.Printf("WARNING: OIDC_ISSUER isn't set, so nobody signs in: anyone who reaches the webapp can do anything in it")
+	a := &auth{
+		db:        db,
+		publicURL: strings.TrimRight(env("PUBLIC_URL", ""), "/"),
+		admins:    map[string]bool{},
+	}
+	if issuer := strings.TrimRight(env("OIDC_ISSUER", ""), "/"); issuer != "" {
+		p := &provider{key: "oidc", issuer: issuer, clientID: env("OIDC_CLIENT_ID", ""), clientSecret: env("OIDC_CLIENT_SECRET", "")}
+		if p.clientID == "" {
+			log.Fatal("OIDC_CLIENT_ID must be set with OIDC_ISSUER")
+		}
+		p.label = env("OIDC_NAME", "")
+		if p.label == "" {
+			u, _ := url.Parse(issuer)
+			p.label = u.Hostname()
+		}
+		a.providers = append(a.providers, p)
+	}
+	if id := env("GOOGLE_CLIENT_ID", ""); id != "" {
+		p := &provider{key: "google", label: "Google", issuer: strings.TrimRight(env("GOOGLE_ISSUER", googleIssuer), "/"),
+			clientID: id, clientSecret: env("GOOGLE_CLIENT_SECRET", ""),
+			hostedDomains: true, mailDomains: []string{"gmail.com", "googlemail.com"}}
+		if p.clientSecret == "" {
+			log.Fatal("GOOGLE_CLIENT_SECRET must be set with GOOGLE_CLIENT_ID")
+		}
+		// Google's ID tokens may leave the scheme out of its issuer.
+		p.issuerAliases = []string{strings.TrimPrefix(p.issuer, "https://")}
+		a.providers = append(a.providers, p)
+	}
+	if len(a.providers) == 0 {
+		log.Printf("WARNING: neither OIDC_ISSUER nor GOOGLE_CLIENT_ID is set, so nobody signs in: anyone who reaches the webapp can do anything in it")
 		return nil
 	}
-	// The ID token's signature isn't checked, as the connection to the
-	// provider vouches for it; one in the clear vouches for nothing.
-	if u, err := url.Parse(issuer); err != nil || (u.Scheme != "https" && !slices.Contains([]string{"localhost", "127.0.0.1", "::1"}, u.Hostname())) {
-		log.Fatalf("OIDC_ISSUER must be an https address, or one on this machine: %q", issuer)
-	}
-	a := &auth{
-		db:           db,
-		issuer:       issuer,
-		clientID:     env("OIDC_CLIENT_ID", ""),
-		clientSecret: env("OIDC_CLIENT_SECRET", ""),
-		publicURL:    strings.TrimRight(env("PUBLIC_URL", ""), "/"),
-		admins:       map[string]bool{},
-	}
-	if a.clientID == "" {
-		log.Fatal("OIDC_CLIENT_ID must be set with OIDC_ISSUER")
+	for _, p := range a.providers {
+		// The ID token's signature isn't checked, as the connection to the
+		// provider vouches for it; one in the clear vouches for nothing.
+		if u, err := url.Parse(p.issuer); err != nil || (u.Scheme != "https" && !slices.Contains([]string{"localhost", "127.0.0.1", "::1"}, u.Hostname())) {
+			log.Fatalf("the issuer of %s must be an https address, or one on this machine: %q", p.label, p.issuer)
+		}
 	}
 	for _, d := range strings.Split(env("OIDC_ALLOWED_DOMAINS", ""), ",") {
 		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
@@ -245,13 +309,26 @@ type oidcProvider struct {
 	UserinfoEndpoint      string `json:"userinfo_endpoint"`
 }
 
-func (a *auth) discover(ctx context.Context) (oidcProvider, error) {
+// The provider the key names, or the only one without a key; nil if none.
+func (a *auth) provider(key string) *provider {
+	if key == "" && len(a.providers) == 1 {
+		return a.providers[0]
+	}
+	for _, p := range a.providers {
+		if p.key == key {
+			return p
+		}
+	}
+	return nil
+}
+
+func (pr *provider) discover(ctx context.Context) (oidcProvider, error) {
 	var p oidcProvider
-	if err := getJSON(ctx, a.issuer+"/.well-known/openid-configuration", &p); err != nil {
+	if err := getJSON(ctx, pr.issuer+"/.well-known/openid-configuration", &p); err != nil {
 		return p, fmt.Errorf("discover the identity provider: %w", err)
 	}
-	if strings.TrimRight(p.Issuer, "/") != a.issuer {
-		return p, fmt.Errorf("the identity provider says its issuer is %q, not %q", p.Issuer, a.issuer)
+	if strings.TrimRight(p.Issuer, "/") != pr.issuer {
+		return p, fmt.Errorf("the identity provider says its issuer is %q, not %q", p.Issuer, pr.issuer)
 	}
 	if p.AuthorizationEndpoint == "" || p.TokenEndpoint == "" {
 		return p, errors.New("the identity provider names no authorization or token endpoint")
@@ -264,6 +341,8 @@ type signIn struct {
 	State    string `json:"state"`
 	Verifier string `json:"verifier"`
 	Nonce    string `json:"nonce"`
+	// The key of the provider signing in with.
+	Provider string `json:"provider"`
 	// The page to come back to.
 	Next string `json:"next"`
 }
@@ -291,11 +370,13 @@ type idClaims struct {
 	Email         string          `json:"email"`
 	EmailVerified *bool           `json:"email_verified"`
 	Name          string          `json:"name"`
+	// The Google Workspace domain whose account it is; see provider.
+	HostedDomain string `json:"hd"`
 }
 
 // The claims of an ID token from the token endpoint, checked as being for
 // this sign-in.
-func (a *auth) idClaims(token, nonce string) (idClaims, error) {
+func (p *provider) idClaims(token, nonce string) (idClaims, error) {
 	var c idClaims
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -316,9 +397,9 @@ func (a *auth) idClaims(token, nonce string) (idClaims, error) {
 		return c, errors.New("the ID token has no audience")
 	}
 	switch {
-	case strings.TrimRight(c.Issuer, "/") != a.issuer:
+	case strings.TrimRight(c.Issuer, "/") != p.issuer && !slices.Contains(p.issuerAliases, c.Issuer):
 		return c, fmt.Errorf("the ID token is from %q", c.Issuer)
-	case !slices.Contains(audiences, a.clientID):
+	case !slices.Contains(audiences, p.clientID):
 		return c, errors.New("the ID token isn't for this webapp")
 	case time.Now().After(time.Unix(int64(c.Expiry), 0)):
 		return c, errors.New("the ID token expired")
@@ -331,7 +412,7 @@ func (a *auth) idClaims(token, nonce string) (idClaims, error) {
 }
 
 // Fills in the email and name the ID token left out from the userinfo endpoint.
-func (a *auth) fillFromUserinfo(ctx context.Context, p oidcProvider, accessToken string, c *idClaims) error {
+func fillFromUserinfo(ctx context.Context, p oidcProvider, accessToken string, c *idClaims) error {
 	if (c.Email != "" && c.Name != "") || p.UserinfoEndpoint == "" {
 		return nil
 	}
@@ -374,34 +455,53 @@ func (a *auth) admitted(email string) bool {
 	return slices.Contains(a.domains, domain)
 }
 
+// Whether the provider's word that an account has the email is taken; hd
+// is the domain it says the account is of.
+func (p *provider) vouches(email, hd string) bool {
+	if !p.hostedDomains {
+		return true
+	}
+	_, domain, _ := strings.Cut(email, "@")
+	return slices.Contains(p.mailDomains, domain) || (domain != "" && strings.EqualFold(hd, domain))
+}
+
 var (
 	errNotAdmitted = errors.New("not admitted")
+	errNotVouched  = errors.New("the provider doesn't vouch for the email")
 	errEmailTaken  = errors.New("the email is another account's")
 )
 
-// The user who signed in, made or updated from what the provider says of
-// them; errNotAdmitted if they may not sign in.
-func (a *auth) signedIn(ctx context.Context, c idClaims) (int64, error) {
+// The user who signed in with the provider, made or updated from what it
+// says of them; errNotAdmitted if they may not sign in.
+func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims) (int64, error) {
 	email := strings.ToLower(strings.TrimSpace(c.Email))
 	// A provider that says the email isn't verified could be told any.
 	if email == "" || (c.EmailVerified != nil && !*c.EmailVerified) {
 		return 0, errNotAdmitted
+	}
+	if !p.vouches(email, c.HostedDomain) {
+		return 0, errNotVouched
 	}
 	admin := a.admins[email]
 	var id int64
 	err := inTx(ctx, a.db, func(tx *sql.Tx) error {
 		// Known by the provider's subject, which is who they are to it.
 		// Else by their email: when an admin added them and they sign in the
-		// first time, or when the provider changed. Someone else the same
-		// provider gives a known email, such as whoever gets the mailbox of
-		// someone who left, isn't that user.
-		err := tx.QueryRowContext(ctx, "SELECT id FROM users WHERE issuer = ? AND subject = ? FOR UPDATE", a.issuer, c.Subject).Scan(&id)
+		// first time, or the first time with this provider. Someone else the
+		// same provider gives a known email, such as whoever gets the
+		// mailbox of someone who left, isn't that user.
+		err := tx.QueryRowContext(ctx, "SELECT user_id FROM user_identities WHERE issuer = ? AND subject = ? FOR UPDATE", p.issuer, c.Subject).Scan(&id)
+		known := err == nil
 		if errors.Is(err, sql.ErrNoRows) {
-			var issuer string
-			var subject sql.NullString
-			err = tx.QueryRowContext(ctx, "SELECT id, issuer, subject FROM users WHERE email = ? FOR UPDATE", email).Scan(&id, &issuer, &subject)
-			if err == nil && subject.Valid && issuer == a.issuer {
-				return errEmailTaken
+			err = tx.QueryRowContext(ctx, "SELECT id FROM users WHERE email = ? FOR UPDATE", email).Scan(&id)
+			if err == nil {
+				var others int
+				if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM user_identities WHERE user_id = ? AND issuer = ?", id, p.issuer).Scan(&others); err != nil {
+					return err
+				}
+				if others > 0 {
+					return errEmailTaken
+				}
 			}
 		}
 		switch {
@@ -409,12 +509,15 @@ func (a *auth) signedIn(ctx context.Context, c idClaims) (int64, error) {
 			if !a.admitted(email) {
 				return errNotAdmitted
 			}
-			res, err := tx.ExecContext(ctx, "INSERT INTO users (email, issuer, subject, name, admin, signed_in_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))",
-				email, a.issuer, c.Subject, c.Name, admin)
+			res, err := tx.ExecContext(ctx, "INSERT INTO users (email, name, admin, signed_in_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP(3))",
+				email, c.Name, admin)
 			if err != nil {
 				return err
 			}
-			id, err = res.LastInsertId()
+			if id, err = res.LastInsertId(); err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, "INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)", p.issuer, c.Subject, id)
 			return err
 		case err != nil:
 			return err
@@ -428,11 +531,16 @@ func (a *auth) signedIn(ctx context.Context, c idClaims) (int64, error) {
 		if removed {
 			return errNotAdmitted
 		}
+		if !known {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)", p.issuer, c.Subject, id); err != nil {
+				return err
+			}
+		}
 		// ADMIN_EMAILS makes admins, but taking someone off it doesn't undo
 		// that: an admin can.
 		_, err = tx.ExecContext(ctx,
-			"UPDATE users SET email = ?, issuer = ?, subject = ?, name = COALESCE(NULLIF(?, ''), name), admin = admin OR ?, signed_in_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
-			email, a.issuer, c.Subject, c.Name, admin, id)
+			"UPDATE users SET email = ?, name = COALESCE(NULLIF(?, ''), name), admin = admin OR ?, signed_in_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
+			email, c.Name, admin, id)
 		return err
 	})
 	return id, err
@@ -456,15 +564,27 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		return
 	}
 
-	// Sends the browser to the provider to sign in, coming back to ?next.
+	// Sends the browser to ?provider to sign in, coming back to ?next; with
+	// several and none named, asks which.
 	mux.HandleFunc("GET /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
-		p, err := a.discover(r.Context())
+		next := localPath(r.URL.Query().Get("next"))
+		key := r.URL.Query().Get("provider")
+		if key == "" && len(a.providers) > 1 {
+			choosePage(w, a.providers, next)
+			return
+		}
+		pr := a.provider(key)
+		if pr == nil {
+			authPage(w, http.StatusBadRequest, "Signing in failed", "Nobody signs in with "+key+" here.")
+			return
+		}
+		p, err := pr.discover(r.Context())
 		if err != nil {
 			log.Printf("auth: %v", err)
 			authPage(w, http.StatusBadGateway, "Couldn't start signing in", err.Error())
 			return
 		}
-		s := signIn{State: randomToken(), Verifier: randomToken(), Nonce: randomToken(), Next: localPath(r.URL.Query().Get("next"))}
+		s := signIn{State: randomToken(), Verifier: randomToken(), Nonce: randomToken(), Provider: pr.key, Next: next}
 		raw, _ := json.Marshal(s)
 		http.SetCookie(w, &http.Cookie{
 			Name: signInCookie, Value: base64.RawURLEncoding.EncodeToString(raw), Path: "/api/auth/",
@@ -473,7 +593,7 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		challenge := sha256.Sum256([]byte(s.Verifier))
 		q := url.Values{
 			"response_type":         {"code"},
-			"client_id":             {a.clientID},
+			"client_id":             {pr.clientID},
 			"redirect_uri":          {a.redirectURL(r)},
 			"scope":                 {"openid email profile"},
 			"state":                 {s.State},
@@ -511,9 +631,19 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			authPage(w, http.StatusBadRequest, "Signing in failed", e)
 			return
 		}
-		id, err := a.finish(r, s, q.Get("code"))
+		pr := a.provider(s.Provider)
+		if pr == nil {
+			authPage(w, http.StatusBadRequest, "Signing in failed", "This sign-in was with a provider nobody signs in with here any more. Sign in again.")
+			return
+		}
+		id, err := a.finish(r, pr, s, q.Get("code"))
 		if errors.Is(err, errNotAdmitted) {
 			authPage(w, http.StatusForbidden, "You can't sign in yet", "Ask an admin to add you, then sign in again.")
+			return
+		}
+		if errors.Is(err, errNotVouched) {
+			authPage(w, http.StatusForbidden, "You can't sign in with this account",
+				pr.label+" vouches here only for its own addresses and for its Workspace accounts at their email's domain, and this account is neither. Sign in another way, or with your Workspace account.")
 			return
 		}
 		if errors.Is(err, errEmailTaken) {
@@ -560,9 +690,9 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 
 // Exchanges the code the provider came back with for who signed in, and
 // returns their user's id.
-func (a *auth) finish(r *http.Request, s signIn, code string) (int64, error) {
+func (a *auth) finish(r *http.Request, pr *provider, s signIn, code string) (int64, error) {
 	ctx := r.Context()
-	p, err := a.discover(ctx)
+	p, err := pr.discover(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -573,8 +703,8 @@ func (a *auth) finish(r *http.Request, s signIn, code string) (int64, error) {
 		"code_verifier": {s.Verifier},
 	}
 	// A public client says who it is in the form.
-	if a.clientSecret == "" {
-		form.Set("client_id", a.clientID)
+	if pr.clientSecret == "" {
+		form.Set("client_id", pr.clientID)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -582,8 +712,8 @@ func (a *auth) finish(r *http.Request, s signIn, code string) (int64, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	if a.clientSecret != "" {
-		req.SetBasicAuth(url.QueryEscape(a.clientID), url.QueryEscape(a.clientSecret))
+	if pr.clientSecret != "" {
+		req.SetBasicAuth(url.QueryEscape(pr.clientID), url.QueryEscape(pr.clientSecret))
 	}
 	resp, err := oauthClient.Do(req)
 	if err != nil {
@@ -604,14 +734,14 @@ func (a *auth) finish(r *http.Request, s signIn, code string) (int64, error) {
 		}
 		return 0, fmt.Errorf("token endpoint: status %d: %s", resp.StatusCode, msg)
 	}
-	claims, err := a.idClaims(t.IDToken, s.Nonce)
+	claims, err := pr.idClaims(t.IDToken, s.Nonce)
 	if err != nil {
 		return 0, err
 	}
-	if err := a.fillFromUserinfo(ctx, p, t.AccessToken, &claims); err != nil {
+	if err := fillFromUserinfo(ctx, p, t.AccessToken, &claims); err != nil {
 		return 0, err
 	}
-	return a.signedIn(ctx, claims)
+	return a.signedIn(ctx, pr, claims)
 }
 
 // The page a sign-in that can't go on ends on.
@@ -626,6 +756,23 @@ func authPage(w http.ResponseWriter, status int, title, message string) {
 <p>%[2]s</p>
 <p><a href="/api/auth/login">Sign in again</a></p>
 `, html.EscapeString(title), html.EscapeString(message))
+}
+
+// The page asking which provider to sign in with, coming back to next.
+func choosePage(w http.ResponseWriter, providers []*provider, next string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!doctype html>
+<meta charset="utf-8">
+<title>Sign in</title>
+<style>body{font:15px system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem;color:#222}li{margin:.5rem 0}</style>
+<h1>Sign in to Spoletta</h1>
+<ul>
+`)
+	for _, p := range providers {
+		href := "/api/auth/login?" + url.Values{"provider": {p.key}, "next": {next}}.Encode()
+		fmt.Fprintf(w, "<li><a href=\"%s\">Sign in with %s</a></li>\n", html.EscapeString(href), html.EscapeString(p.label))
+	}
+	fmt.Fprint(w, "</ul>\n")
 }
 
 // The name of the user, or their email without one; "someone" for a user

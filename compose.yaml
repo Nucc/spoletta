@@ -82,15 +82,24 @@ services:
       # self-hosted Sentry if not sentry.io.
       SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
       SENTRY_URL: ${SENTRY_URL:-}
-      # Signing in with your identity provider over OpenID Connect; without
-      # OIDC_ISSUER nobody signs in and anyone reaching the webapp can do
-      # anything. Register http://localhost:8080/api/auth/callback, or
-      # PUBLIC_URL's, as the client's redirect URI. Only people in
+      # Signing in over OpenID Connect with your identity provider, with
+      # Google, or with either; without OIDC_ISSUER or GOOGLE_CLIENT_ID
+      # nobody signs in and anyone reaching the webapp can do anything.
+      # Register http://localhost:8080/api/auth/callback, or PUBLIC_URL's,
+      # as each client's redirect URI; for Google, a web application's
+      # OAuth client in the Google Cloud console. OIDC_NAME names your
+      # provider on the page asking which to sign in with. Only people in
       # ADMIN_EMAILS, at a domain in OIDC_ALLOWED_DOMAINS, or added by an
-      # admin sign in; all comma-separated. See webapp/users.go.
+      # admin sign in; all comma-separated. Google is taken at its word
+      # only for Gmail addresses and for accounts of the Google Workspace at
+      # the email's domain, as anyone can make a Google account with any
+      # email. See webapp/users.go.
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_NAME: ${OIDC_NAME:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       PUBLIC_URL: ${PUBLIC_URL:-}
@@ -106,7 +115,7 @@ services:
     volumes:
       # Read-only: the webapp checks and serves files; the worker writes them.
       - files:/data/files:ro
-    # Published on the host's loopback only, since without OIDC_ISSUER
+    # Published on the host's loopback only, since while nobody signs in
     # anyone reaching the webapp can do anything, running bash on the worker
     # included. Once people sign in, set PUBLISH_HOST=0.0.0.0 in .env to
     # reach it from other machines.

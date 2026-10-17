@@ -27,6 +27,8 @@ type usersPerson struct {
 	subject, email, name string
 	// Whether the provider says it checked their email; nil says nothing.
 	verified *bool
+	// The Google Workspace domain their account is of, if any.
+	hd string
 }
 
 // An identity provider that signs in whoever the test says is next, and
@@ -96,6 +98,9 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 		if c.person.verified != nil {
 			claims["email_verified"] = *c.person.verified
 		}
+		if c.person.hd != "" {
+			claims["hd"] = c.person.hd
+		}
 		if tamper != nil {
 			tamper(claims)
 		}
@@ -130,12 +135,22 @@ var usersAda = usersPerson{subject: "ada", email: "ada@example.com", name: "Ada 
 // status and URL signing in ended on.
 func usersTrySignIn(a *app, p *fakeProvider, who usersPerson) (*http.Client, int, string) {
 	a.t.Helper()
+	return usersTrySignInWith(a, p, "", who)
+}
+
+// Signs the person in with the provider the key names, as usersTrySignIn.
+func usersTrySignInWith(a *app, p *fakeProvider, key string, who usersPerson) (*http.Client, int, string) {
+	a.t.Helper()
 	p.mu.Lock()
 	p.next = who
 	p.mu.Unlock()
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
-	resp, err := c.Get(a.url + "/api/auth/login?next=" + url.QueryEscape("/flows/7"))
+	q := url.Values{"next": {"/flows/7"}}
+	if key != "" {
+		q.Set("provider", key)
+	}
+	resp, err := c.Get(a.url + "/api/auth/login?" + q.Encode())
 	if err != nil {
 		a.t.Fatal(err)
 	}
@@ -510,5 +525,104 @@ func TestUsersAdminsManagePeople(t *testing.T) {
 	a.call("GET", "/api/users", nil, http.StatusOK, &people)
 	if !slices.ContainsFunc(people, func(p usersPersonRow) bool { return p.ID == row.ID && p.Admin }) {
 		t.Errorf("people = %+v", people)
+	}
+}
+
+// A webapp people sign in to with the company's provider or with Google,
+// both faked; the admin and anyone at example.org may.
+func usersTwoProviderApp(t *testing.T) (*app, *fakeProvider, *fakeProvider) {
+	t.Helper()
+	company, google := newFakeProvider(t), newFakeProvider(t)
+	fw := newFakeWorker(t)
+	a := startApp(t, fw.url,
+		"OIDC_ISSUER="+company.srv.URL,
+		"OIDC_CLIENT_ID="+usersClientID,
+		"OIDC_CLIENT_SECRET="+usersClientSecret,
+		"OIDC_NAME=Example SSO",
+		"GOOGLE_ISSUER="+google.srv.URL,
+		"GOOGLE_CLIENT_ID="+usersClientID,
+		"GOOGLE_CLIENT_SECRET="+usersClientSecret,
+		"OIDC_ALLOWED_DOMAINS=example.org",
+		"ADMIN_EMAILS=Ada@Example.com")
+	a.worker = fw
+	return a, company, google
+}
+
+// With two providers signing in asks which, and either signs the same
+// person in as the same user, known to each by its own subject.
+func TestUsersSignInWithEitherProvider(t *testing.T) {
+	a, company, google := usersTwoProviderApp(t)
+
+	resp, err := http.Get(a.url + "/api/auth/login?next=" + url.QueryEscape("/flows/7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	for _, want := range []string{"Sign in with Example SSO", "Sign in with Google", "provider=oidc", "provider=google", "next=%2Fflows%2F7"} {
+		if !strings.Contains(string(page), want) {
+			t.Errorf("the page asking which provider lacks %q:\n%s", want, page)
+		}
+	}
+	a.refused("GET", "/api/auth/login?provider=github", nil, http.StatusBadRequest, "Nobody signs in with github")
+
+	signIn := func(p *fakeProvider, key string, who usersPerson) usersMe {
+		t.Helper()
+		c, status, path := usersTrySignInWith(a, p, key, who)
+		if path != "/flows/7" || status != http.StatusNotFound {
+			t.Fatalf("signing in %s with %s ended on %s with %d", who.email, key, path, status)
+		}
+		a.client = c
+		var me usersMe
+		a.call("GET", "/api/me", nil, http.StatusOK, &me)
+		return me
+	}
+	first := signIn(company, "oidc", usersAda)
+	// Google calls Ada otherwise, and she is still the same user.
+	if me := signIn(google, "google", usersPerson{subject: "google-ada", email: "ada@example.com", name: "Ada", hd: "example.com"}); me.User.ID != first.User.ID || !me.User.Admin {
+		t.Errorf("Ada with Google = %+v, want user %d", me.User, first.User.ID)
+	}
+	if me := signIn(company, "oidc", usersAda); me.User.ID != first.User.ID {
+		t.Errorf("Ada with the company's provider again = %+v, want user %d", me.User, first.User.ID)
+	}
+	if me := signIn(google, "google", usersPerson{subject: "google-ada", email: "ada@example.com", hd: "example.com"}); me.User.ID != first.User.ID {
+		t.Errorf("Ada with Google again = %+v, want user %d", me.User, first.User.ID)
+	}
+
+	// Someone else either provider gives Ada's email isn't Ada, whichever
+	// she last signed in with.
+	for _, c := range []struct {
+		p   *fakeProvider
+		key string
+	}{{company, "oidc"}, {google, "google"}} {
+		client, status, _ := usersTrySignInWith(a, c.p, c.key, usersPerson{subject: "not-ada", email: "ada@example.com", name: "Impostor", hd: "example.com"})
+		if status != http.StatusForbidden {
+			t.Errorf("another subject with ada's email at %s ended with %d, want 403", c.key, status)
+		}
+		a.client = client
+		a.refused("GET", "/api/me", nil, http.StatusUnauthorized, "sign in first")
+	}
+
+	// Google is taken at its word only for its own Gmail addresses and for
+	// accounts of the email's domain's Workspace, not for a Google account
+	// anyone made with an email: neither a new user nor an existing one.
+	bob, carol := usersNewPerson("Bob"), usersNewPerson("Carol")
+	for _, who := range []usersPerson{
+		{subject: "g-" + bob.subject, email: bob.email},
+		{subject: "g-dan", email: "dan@example.org", hd: "elsewhere.org"},
+	} {
+		if _, status, _ := usersTrySignInWith(a, google, "google", who); status != http.StatusForbidden {
+			t.Errorf("a Google account with %s, hd %q, ended with %d, want 403", who.email, who.hd, status)
+		}
+	}
+	signIn(company, "oidc", carol)
+	if _, status, _ := usersTrySignInWith(a, google, "google", usersPerson{subject: "g-" + carol.subject, email: carol.email}); status != http.StatusForbidden {
+		t.Errorf("a consumer Google account with carol's email ended with %d, want 403", status)
+	}
+	if me := signIn(google, "google", usersPerson{subject: "g-" + bob.subject, email: bob.email, hd: "example.org"}); me.User == nil || me.User.Email != bob.email {
+		t.Errorf("bob with his Workspace account = %+v", me)
+	}
+	if me := signIn(google, "google", usersPerson{subject: "g-" + carol.subject, email: carol.email, hd: "example.org"}); me.User == nil || me.User.Email != carol.email {
+		t.Errorf("carol with her Workspace account = %+v", me)
 	}
 }

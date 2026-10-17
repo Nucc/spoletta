@@ -73,6 +73,9 @@ type object struct {
 // state makes its process run. One marked a condition, OPM's condition link,
 // instead lets its process run only if the object is in that state once it
 // is ready to; otherwise the process is skipped.
+//
+// An input link with a query takes the object's stored records instead; see
+// queries.go.
 type link struct {
 	ID        int64   `json:"id"`
 	Process   int64   `json:"process"`
@@ -82,6 +85,9 @@ type link struct {
 	States    []int64 `json:"states"`
 	Role      string  `json:"role"`
 	Condition bool    `json:"condition"`
+	// Which stored records of the object it takes, for a query link; see
+	// queries.go.
+	Query *linkQuery `json:"query"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
 	// Where the object shows on the process's own board, if moved there by
@@ -601,7 +607,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		rows, err := db.QueryContext(r.Context(),
-			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role, l.is_condition
+			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role, l.is_condition, l.query
 			FROM object_links l JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, f)
 		if err != nil {
 			serverError(w, err)
@@ -613,9 +619,13 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		for rows.Next() {
 			l := link{States: []int64{}}
 			var state int64
-			var route []byte
+			var route, query []byte
 			var atX, atY sql.NullFloat64
-			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY, &l.Role, &l.Condition); err != nil {
+			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY, &l.Role, &l.Condition, &query); err != nil {
+				serverError(w, err)
+				return
+			}
+			if l.Query, err = queryOf(query); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -689,8 +699,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO object_links (process_id, object_id, direction, state_id, role, is_condition) VALUES (?, ?, ?, ?, ?, ?)",
-			l.Process, l.Object, l.Direction, state, l.Role, l.Condition)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO object_links (process_id, object_id, direction, state_id, role, is_condition, query) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			l.Process, l.Object, l.Direction, state, l.Role, l.Condition, storedQuery(l.Query))
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "link already exists", http.StatusConflict)
@@ -822,8 +832,9 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var l link
-		err = db.QueryRowContext(r.Context(), "SELECT id, process_id, object_id, direction FROM object_links WHERE id = ?", id).
-			Scan(&l.ID, &l.Process, &l.Object, &l.Direction)
+		var query []byte
+		err = db.QueryRowContext(r.Context(), "SELECT id, process_id, object_id, direction, query FROM object_links WHERE id = ?", id).
+			Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &query)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "link not found", http.StatusNotFound)
 			return
@@ -833,6 +844,10 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		l.Role = body.Role
+		if len(query) > 0 && l.Role == roleConsumption {
+			http.Error(w, "a query reads records; it can't consume them", http.StatusBadRequest)
+			return
+		}
 		if msg, err := checkRole(r.Context(), db, l); err != nil {
 			serverError(w, err)
 			return
@@ -1025,6 +1040,9 @@ func checkLink(ctx context.Context, db *sql.DB, l link) (string, error) {
 	}
 	if msg := checkCondition(l); msg != "" {
 		return msg, nil
+	}
+	if msg, err := checkQuery(ctx, db, l); err != nil || msg != "" {
+		return msg, err
 	}
 	var kind string
 	err := db.QueryRowContext(ctx, "SELECT kind FROM processes WHERE id = ?", l.Process).Scan(&kind)

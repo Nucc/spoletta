@@ -200,6 +200,9 @@ export type Link = {
   // For an input link naming a state: its process runs only if the object
   // is in it, and is skipped otherwise, rather than running once it enters it.
   condition: boolean
+  // For an input link: which stored records of a persistent object it takes,
+  // rather than the object in the run; see queries.go.
+  query: LinkQuery | null
   // Where the link's segments run, if moved by hand; see route.ts.
   route: number[] | null
   // Where the object shows on the process's own board, if moved there by
@@ -527,13 +530,24 @@ export function listLinks(flow: number): Promise<Link[]> {
   return request(`/api/links?flow=${flow}`)
 }
 
+// Which stored records a query link takes: those whose fields hold the rule
+// (all when empty) in the state (any when empty), newest first unless
+// oldest, at most limit (20 when absent, 100 at most).
+export type LinkQuery = {
+  where?: string
+  state?: string
+  limit?: number
+  oldest?: boolean
+}
+
 // Without a state, the link names none; without states, it lists none.
 export function createLink(
-  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at' | 'role' | 'condition'> & {
+  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at' | 'role' | 'condition' | 'query'> & {
     state?: number | null
     states?: number[]
     role?: LinkRole
     condition?: boolean
+    query?: LinkQuery | null
   },
 ): Promise<Link> {
   return request('/api/links', { method: 'POST', body: JSON.stringify(l) })
@@ -554,6 +568,11 @@ export type LinkRole = '' | 'instrument' | 'consumption'
 
 export function setLinkCondition(id: number, condition: boolean): Promise<void> {
   return request(`/api/links/${id}/condition`, { method: 'PUT', body: JSON.stringify({ condition }) })
+}
+
+// Makes an input link a query, or with null a plain link again.
+export function setLinkQuery(id: number, query: LinkQuery | null): Promise<void> {
+  return request(`/api/links/${id}/query`, { method: 'PUT', body: JSON.stringify({ query }) })
 }
 
 export function setLinkRole(id: number, role: LinkRole): Promise<void> {
@@ -1090,9 +1109,15 @@ type Snapshot = {
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
-  // places have no at, from before roles no role, and from before failure
-  // connections no kind.
-  links: (Omit<Link, 'state' | 'states' | 'at' | 'role' | 'condition'> & { state: number; at?: Link['at']; role?: LinkRole; condition?: boolean })[]
+  // places have no at, from before roles no role, from before failure
+  // connections no kind, and from before queries no query.
+  links: (Omit<Link, 'state' | 'states' | 'at' | 'role' | 'condition' | 'query'> & {
+    state: number
+    at?: Link['at']
+    role?: LinkRole
+    condition?: boolean
+    query?: LinkQuery
+  })[]
   linkStates: { link: number; state: number }[]
   connections: (Omit<Connection, 'kind'> & { kind?: Connection['kind'] })[]
   start: Start
@@ -1136,6 +1161,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       ...l,
       role: l.role ?? '',
       condition: l.condition ?? false,
+      query: l.query ?? null,
       state: l.state || null,
       at: l.at ?? null,
       states: s.linkStates.filter((ls) => ls.link === l.id).map((ls) => ls.state),

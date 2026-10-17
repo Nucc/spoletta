@@ -126,7 +126,7 @@ export default function LinkEdge({
       <BaseEdge id={id} path={path} markerEnd={agent || role === 'instrument' ? undefined : markerEnd} style={style} />
       {agent && <circle className="agent-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
       {role === 'instrument' && <circle className="instrument-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
-      {role !== undefined && ((selected && actions.editable) || role === 'consumption' || data?.link?.condition) && (
+      {role !== undefined && ((selected && actions.editable) || role === 'consumption' || data?.link?.condition || data?.link?.query) && (
         <EdgeLabelRenderer>
           <div className="link-role nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${roleAt(targetX, targetY, targetPosition)})` }}>
             {selected && actions.editable ? (
@@ -166,6 +166,11 @@ export default function LinkEdge({
                   </span>
                 )}
                 {role === 'consumption' && <span title="The process consumes the object: once taken, it is gone">consumes</span>}
+                {data?.link?.query && (
+                  <span title="A query: the process takes what earlier runs stored of the object, as its panel says, rather than waiting for it">
+                    records
+                  </span>
+                )}
               </>
             )}
           </div>

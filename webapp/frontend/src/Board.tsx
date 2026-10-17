@@ -50,7 +50,7 @@ import ObjectNode, {
 } from './ObjectNode'
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
 import ObjectPanel from './ObjectPanel'
-import ProcessPanel, { type EntryObject, type Review } from './ProcessPanel'
+import ProcessPanel, { type EntryObject, type QueryLink, type Review } from './ProcessPanel'
 import ReviewDialog from './ReviewDialog'
 import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
@@ -124,6 +124,7 @@ import {
   setLinkAt,
   setLinkRoute,
   setLinkCondition,
+  setLinkQuery,
   setStateRule,
   setLinkRole,
   setLinkStates,
@@ -148,6 +149,7 @@ import {
   type MCPServer,
   type FlowRunDetail,
   type Link,
+  type LinkQuery,
   type LinkRole,
   type Models,
   type ObjectAttribute,
@@ -1538,6 +1540,19 @@ export default function Board({
     setEdges((es) => es.map((e) => (e.id === edgeId ? { ...e, data: { ...e.data, link: { ...l, condition } } } : e)))
   }
 
+  // Makes an input link a query of the object's stored records, or a plain
+  // link again; see queries.go.
+  const setQuery = async (linkId: number, query: LinkQuery | null) => {
+    if (readOnly) return
+    try {
+      await setLinkQuery(linkId, query)
+    } catch (err) {
+      report(err)
+      return
+    }
+    setEdges((es) => es.map((e) => (e.data?.link?.id === linkId ? { ...e, data: { ...e.data, link: { ...e.data.link, query } } } : e)))
+  }
+
   const setRole = async (edgeId: string, role: LinkRole) => {
     const edge = edges.find((e) => e.id === edgeId)
     const l = edge?.data?.link
@@ -2075,6 +2090,17 @@ export default function Board({
 
   // The names of the objects a process takes or generates, which a subflow
   // process hands to and from their namesakes in the flow it runs.
+  // The process's input links naming no state to persistent objects, which
+  // it can take as queries of their stored records.
+  const queryLinks = (id: string): QueryLink[] =>
+    edges.flatMap((e) => {
+      const l = e.data?.link
+      if (!l || l.direction !== 'input' || String(l.process) !== id || l.state !== null || l.role === 'consumption') return []
+      const object = getNode(objectNodeId(l.object))
+      if (object?.type !== 'object' || !object.data.persistent || object.data.human) return []
+      return [{ link: l.id, object: object.data.name, states: object.data.states.map((s) => s.name), query: l.query }]
+    })
+
   const linkedNames = (id: string, direction: 'input' | 'output'): string[] => [
     ...new Set(
       edges.flatMap((e) => {
@@ -2436,6 +2462,8 @@ export default function Board({
             flows={otherFlows}
             onFlowSaved={() => loadBoard().catch(report)}
             takes={linkedNames(panelNode.id, 'input')}
+            queries={queryLinks(panelNode.id)}
+            onQuery={(link, query) => void setQuery(link, query)}
             generates={linkedNames(panelNode.id, 'output')}
             shapes={Object.fromEntries(
               (contents?.objects ?? [])

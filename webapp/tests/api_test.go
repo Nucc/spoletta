@@ -207,11 +207,20 @@ type link struct {
 	States    []int64 `json:"states"`
 	Role      string  `json:"role"`
 	Condition bool    `json:"condition"`
+	// Which stored records of the object it takes, for a query link.
+	Query *linkQuery `json:"query"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
 	// Where the object shows on the process's own board, if moved there by
 	// hand; only a flow process has one.
 	At *point `json:"at"`
+}
+
+type linkQuery struct {
+	Where  string `json:"where,omitempty"`
+	State  string `json:"state,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+	Oldest bool   `json:"oldest,omitempty"`
 }
 
 // An MCP server as the worker registers it with pi for one agent step.

@@ -127,6 +127,7 @@ func main() {
 	registerPasteRoutes(mux, db)
 	registerStructRoutes(mux, db)
 	registerObjectRoutes(mux, db)
+	registerQueryRoutes(mux, db)
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
 	// How many agent, script and Sentry steps run at once.

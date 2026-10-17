@@ -1150,6 +1150,37 @@ body {
   gap: 12px;
 }
 
+/* A process's input links taken as queries of stored records. */
+.panel-queries {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.query-link {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.query-link .panel-row {
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.query-link .panel-row select {
+  padding: 8px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
 .panel-row .panel-field:first-child {
   flex: 1;
   min-width: 0;

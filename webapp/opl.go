@@ -257,6 +257,10 @@ func (o *oplWriter) processSentences(p process, indent string) {
 	var conditionOrder []int64
 	for _, l := range ins {
 		ob := o.object(l.Object)
+		if l.Query != nil {
+			o.line(indent, "%s looks up %s.", name, queryPhrase(ob, l.Query))
+			continue
+		}
 		switch {
 		case o.objects[l.Object].Human:
 			o.line(indent, "%s handles %s.", ob, name)
@@ -387,4 +391,21 @@ func registerOPLRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"text": text})
 	})
+}
+
+// What a query link looks up, such as the latest 5 stored records of
+// Review in approved where score >= 4.
+func queryPhrase(object string, q *linkQuery) string {
+	which := "latest"
+	if q.Oldest {
+		which = "earliest"
+	}
+	s := fmt.Sprintf("the %s %d stored records of %s", which, q.limit(), object)
+	if q.State != "" {
+		s += " in " + q.State
+	}
+	if q.Where != "" {
+		s += " where " + q.Where
+	}
+	return s
 }

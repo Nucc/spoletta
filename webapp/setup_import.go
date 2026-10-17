@@ -530,6 +530,7 @@ type blink struct {
 	states    []int64
 	role      string
 	condition bool
+	query     *linkQuery
 	at        *point
 	route     []byte
 	where     string
@@ -1163,7 +1164,7 @@ func (b *builder) resolveLink(bp *bproc, l setupLink, direction string) error {
 	if bo.owner != nil {
 		return problemf("%s: that object makes up another, so it isn't on a board of processes", at)
 	}
-	bl := blink{proc: bp, obj: bo, direction: direction, role: l.Role, condition: l.Condition, where: at}
+	bl := blink{proc: bp, obj: bo, direction: direction, role: l.Role, condition: l.Condition, query: l.Query, where: at}
 	if l.State != "" {
 		if bl.state = bo.states[l.State]; bl.state == 0 {
 			return problemf("%s: the object has no state %s", at, quote(l.State))
@@ -1236,8 +1237,16 @@ func (b *builder) checkLinks() error {
 	outputs := map[[2]int64]int{}
 	consumed := map[int64]*bproc{}
 	linked := map[[2]int64]bool{}
+	// How many input links each process has to each object, and whether
+	// one is a query, which must be the only one.
+	takes, queries := map[[2]int64]int{}, map[[2]int64]bool{}
 	for _, l := range b.links {
-		linked[[2]int64{l.proc.id, l.obj.id}] = true
+		k := [2]int64{l.proc.id, l.obj.id}
+		linked[k] = true
+		if l.direction == directionInput {
+			takes[k]++
+			queries[k] = queries[k] || l.query != nil
+		}
 	}
 	for _, l := range b.links {
 		k := key{l.proc.id, l.obj.id, l.direction, l.state}
@@ -1277,6 +1286,9 @@ func (b *builder) checkLinks() error {
 		if l.condition && (l.direction != directionInput || l.state == 0) {
 			return problemf("%s: only an input link naming a state is a condition", l.where)
 		}
+		if msg := b.checkQuery(l, takes, queries); msg != "" {
+			return problemf("%s: %s", l.where, msg)
+		}
 		if l.direction == directionInput {
 			if kind != kindHuman && l.obj.o.Human {
 				return problemf("%s: %s", l.where, agentLinkMessage)
@@ -1302,6 +1314,34 @@ func (b *builder) checkLinks() error {
 		}
 	}
 	return nil
+}
+
+// Says what is wrong with the link as to queries, as checkQuery does for
+// one; a query's state isn't checked, as a copy's states come from what it
+// copies.
+func (b *builder) checkQuery(l blink, takes map[[2]int64]int, queries map[[2]int64]bool) string {
+	k := [2]int64{l.proc.id, l.obj.id}
+	switch {
+	case l.query == nil && queries[k]:
+		return "the process queries that object already; it takes it by its query alone"
+	case l.query == nil:
+		return ""
+	case l.direction != directionInput:
+		return "only an input link has a query"
+	case takes[k] > 1:
+		return "the process takes that object already; it can't query it too"
+	case l.query.problem() != "":
+		return l.query.problem()
+	case l.state != 0 || l.condition || len(l.states) > 0:
+		return "a query link names no state; the query says which records"
+	case l.role == roleConsumption:
+		return "a query reads records; it can't consume them"
+	case l.proc.p.Kind != kindAgent && l.proc.p.Kind != kindScript && l.proc.p.Kind != "":
+		return "only an agent or a script queries records"
+	case !l.obj.o.Persistent:
+		return "only a persistent object has records to query"
+	}
+	return ""
 }
 
 // Rewrites the flow's board as built: the board, then its links and
@@ -1337,8 +1377,8 @@ func (b *builder) write() error {
 		if l.at != nil {
 			atX, atY = sql.NullFloat64{Float64: l.at.X, Valid: true}, sql.NullFloat64{Float64: l.at.Y, Valid: true}
 		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			id, l.proc.id, l.obj.id, l.direction, l.state, storedRoute(l.route), atX, atY, l.role, l.condition)
+		res, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id, l.proc.id, l.obj.id, l.direction, l.state, storedRoute(l.route), atX, atY, l.role, l.condition, storedQuery(l.query))
 		if err != nil {
 			return err
 		}

@@ -139,11 +139,13 @@ type setupLink struct {
 	Object string `yaml:"object"`
 	State  string `yaml:"state,omitempty"`
 	// The states a human or an agent decides between.
-	States    []string    `yaml:"states,omitempty"`
-	Role      string      `yaml:"role,omitempty"`
-	Condition bool        `yaml:"condition,omitempty"`
-	At        *setupPoint `yaml:"at,omitempty"`
-	Route     any         `yaml:"route,omitempty"`
+	States    []string `yaml:"states,omitempty"`
+	Role      string   `yaml:"role,omitempty"`
+	Condition bool     `yaml:"condition,omitempty"`
+	// Which stored records it takes; see queries.go.
+	Query *linkQuery  `yaml:"query,omitempty"`
+	At    *setupPoint `yaml:"at,omitempty"`
+	Route any         `yaml:"route,omitempty"`
 }
 
 type setupObject struct {
@@ -188,7 +190,7 @@ type setupAttribute struct {
 }
 
 func (l setupLink) MarshalYAML() (any, error) {
-	if l.State == "" && l.States == nil && l.Role == "" && !l.Condition && l.At == nil && l.Route == nil {
+	if l.State == "" && l.States == nil && l.Role == "" && !l.Condition && l.Query == nil && l.At == nil && l.Route == nil {
 		return l.Object, nil
 	}
 	type plain setupLink

@@ -274,6 +274,19 @@ A link that says nothing but the object is written as just the object's name.
 | `takes: [Post]` + `yields: [{object: Post, states: [good, weak]}]` | a **review**: the agent or person keeps Post's content and only decides its state |
 | `takes: [Notes]` + `yields: [Notes]` (agent or script) | **effect**: hands in a changed Notes |
 | `yields: [Ticket]` on a human process that doesn't take Ticket | a person **fills in** Ticket |
+| `takes: [{object: Review, query: {where: 'score >= 4', state: approved, limit: 5}}]` | **looks up** Review's stored records, not waiting for it |
+
+A **query** link (agent or script only) takes what earlier runs stored of a
+persistent object rather than the object in this run: the records of runs
+that ended *done*, whose fields hold `where` (a rule, as a state's; all when
+left out) and that are in `state` (any when left out), newest first unless
+`oldest: true`, at most `limit` (20 by default, 100 at most). They come as
+a JSON array, the object's shape as a list, in `$INPUTS/<Name>` or the
+agent's prompt; it may be empty. The process doesn't wait for it, nor does
+it make the process run: what else it takes, the start or a `next` does.
+What this run stored isn't among them. It is the process's only link taking that
+object; it names no state and doesn't consume. `limit: 1` is the latest
+record, and with `oldest: true` the first.
 
 A process tells its objects apart by name: no two it takes may share one,
 nor two it yields, compared as file names in `$INPUTS` (`Jira Ticket` and

@@ -19,6 +19,7 @@ import {
   type RunInput,
   type SentrySettings,
   type ThinkingLevel,
+  type LinkQuery,
 } from './api'
 import { Data } from './Data'
 import { quantityWords, type Quantity } from './quantity'
@@ -106,6 +107,8 @@ export default function ProcessPanel({
   onFlowSaved,
   takes,
   generates,
+  queries,
+  onQuery,
   shapes,
   onOpenMCPSettings,
   repositories,
@@ -134,6 +137,9 @@ export default function ProcessPanel({
   onFlowSaved: () => void
   takes: string[]
   generates: string[]
+  // Its input links an agent or script can take as queries of stored records.
+  queries: QueryLink[]
+  onQuery: (link: number, query: LinkQuery | null) => void
   // The shape of what each of those objects holds, by name; see shapeOf.
   shapes: Record<string, string>
   onOpenMCPSettings: () => void
@@ -420,6 +426,14 @@ export default function ProcessPanel({
           />
         </div>
       )}
+      {(kind === 'agent' || kind === 'script') && queries.length > 0 && (
+        <div className="panel-queries">
+          <span className="panel-label">Stored records</span>
+          {queries.map((q) => (
+            <QueryLinkFields key={q.link} q={q} readOnly={readOnly} onQuery={onQuery} />
+          ))}
+        </div>
+      )}
       {review && <ReviewForm review={review} />}
       {run?.status === 'active' && <p className="panel-note">Running…</p>}
       {run?.error &&
@@ -529,6 +543,78 @@ function SentryFields({
 // A whole number a process's settings may hold, from min to max; empty
 // leaves it out, which means fallback. What is typed shows as it is, and only
 // a number in range is saved.
+// An input link to a persistent object, which can take the object's stored
+// records instead of the object in the run; see queries.go.
+export type QueryLink = {
+  link: number
+  object: string
+  // The object's states, by name, to pick which records by.
+  states: string[]
+  query: LinkQuery | null
+}
+
+function QueryLinkFields({ q, readOnly, onQuery }: { q: QueryLink; readOnly: boolean; onQuery: (link: number, query: LinkQuery | null) => void }) {
+  const query = q.query
+  const [where, setWhere] = useState(query?.where ?? '')
+  useEffect(() => setWhere(query?.where ?? ''), [query?.where])
+  const set = (patch: LinkQuery) => onQuery(q.link, { ...query, ...patch })
+  return (
+    <div className="query-link">
+      <label
+        className="panel-check"
+        title="Rather than wait for the object in this run, take what runs that ended done stored of it, as a list"
+      >
+        <input type="checkbox" checked={query !== null} disabled={readOnly} onChange={(e) => onQuery(q.link, e.target.checked ? {} : null)} />
+        <span>Look up stored {q.object}</span>
+      </label>
+      {query && (
+        <>
+          <label className="panel-field" title="A rule its fields must hold, as a state's: comparisons joined by and. Empty takes them all.">
+            <span>Where</span>
+            <input
+              type="text"
+              value={where}
+              placeholder='score >= 4 and kind == "bug"'
+              readOnly={readOnly}
+              onChange={(e) => setWhere(e.target.value)}
+              onBlur={() => where.trim() !== (query.where ?? '') && set({ where: where.trim() || undefined })}
+            />
+          </label>
+          <div className="panel-row">
+            <select aria-label="In which state" value={query.state ?? ''} disabled={readOnly} onChange={(e) => set({ state: e.target.value || undefined })}>
+              <option value="">In any state</option>
+              {q.states.map((s) => (
+                <option key={s} value={s}>
+                  In {s}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Which first"
+              value={query.oldest ? 'oldest' : 'newest'}
+              disabled={readOnly}
+              onChange={(e) => set({ oldest: e.target.value === 'oldest' || undefined })}
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+            <NumberSetting
+              label="At most"
+              title="How many records it takes"
+              value={query.limit}
+              fallback={20}
+              min={1}
+              max={100}
+              readOnly={readOnly}
+              onChange={(limit) => set({ limit })}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function NumberSetting({
   label,
   title,

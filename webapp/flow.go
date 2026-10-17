@@ -84,6 +84,9 @@ func migrateFlow(db *sql.DB) error {
 	if err := migrateItems(db); err != nil {
 		return err
 	}
+	if err := migrateQueries(db); err != nil {
+		return err
+	}
 	if err := migrateVersions(db); err != nil {
 		return err
 	}

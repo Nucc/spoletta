@@ -288,8 +288,8 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 				role = roleNone
 			}
 		}
-		r, err := tx.ExecContext(ctx, "INSERT INTO object_links (process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			process, object, l.Direction, state, route, atX, atY, role, l.Condition && state != 0)
+		r, err := tx.ExecContext(ctx, "INSERT INTO object_links (process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			process, object, l.Direction, state, route, atX, atY, role, l.Condition && state != 0, storedQuery(l.Query))
 		if err != nil {
 			return res, "", err
 		}

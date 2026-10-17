@@ -382,6 +382,8 @@ type walk struct {
 	inputs map[int64][]linkEnd
 	// Process to the role of each object it takes in a role.
 	roles map[int64]map[int64]string
+	// Process to the stored records it queries; see queries.go.
+	queries map[int64][]queryEnd
 	// Process to the states each object it takes on a condition must be in.
 	conditions map[int64]map[int64][]int64
 	takers     map[int64][]taker
@@ -441,8 +443,7 @@ func (w *walk) applyRules(stepID int64, out map[int64]value) {
 			continue
 		}
 		out[o] = v
-		if _, err := w.e.db.ExecContext(context.Background(), "UPDATE run_objects SET state = ? WHERE step_id = ? AND object_id = ?",
-			w.stateNames[v.state], stepID, o); err != nil {
+		if err := recordState(context.Background(), w.e.db, stepID, o, w.stateNames[v.state]); err != nil {
 			log.Printf("record state of object %d in step %d: %v", o, stepID, err)
 		}
 	}
@@ -454,7 +455,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 	w := &walk{
 		e: e, ctx: ctx, run: run, lr: lr, fr: fr, board: board, ws: ws,
 		kinds: map[int64]string{}, names: map[int64]string{}, recording: map[int64]bool{}, settings: map[int64]processSettings{},
-		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{}, roles: map[int64]map[int64]string{}, conditions: map[int64]map[int64][]int64{},
+		outputs: map[int64][]linkEnd{}, decides: map[int64]map[int64]bool{}, inputs: map[int64][]linkEnd{}, roles: map[int64]map[int64]string{}, queries: map[int64][]queryEnd{}, conditions: map[int64]map[int64][]int64{},
 		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{}, rules: map[int64][]ruledState{},
 		generated: map[int64]bool{}, values: map[int64]value{}, skipped: map[int64]bool{}, unstored: map[int64]bool{}, ran: map[int64]int{},
@@ -508,6 +509,9 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 			} else {
 				w.outputs[l.Process] = append(w.outputs[l.Process], linkEnd{l.Object, l.State})
 			}
+		} else if l.Query != nil {
+			// A query doesn't wait, nor take the object in this run.
+			w.queries[l.Process] = append(w.queries[l.Process], queryEnd{l.Object, l.Query})
 		} else {
 			// A condition takes its object as a link without a state does.
 			end := linkEnd{l.Object, l.State}
@@ -893,6 +897,17 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 	}
 	w.mu.Unlock()
 
+	if !human {
+		records, err := w.queried(id)
+		if err != nil {
+			log.Printf("query records for process %d in run %d: %v", id, w.run, err)
+			w.note(id, stepError, "Its query couldn't read the records.")
+			w.fail()
+			return
+		}
+		given = append(given, records...)
+	}
+
 	if human {
 		w.runHuman(id, p, given)
 		return
@@ -1239,8 +1254,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 	// The run keeps the state each object came out in, and only the objects
 	// that came out.
 	for o := range contents {
-		if _, err := db.ExecContext(context.Background(), "UPDATE run_objects SET state = ? WHERE step_id = ? AND object_id = ?",
-			w.stateNames[out[o].state], stepID, o); err != nil {
+		if err := recordState(context.Background(), db, stepID, o, w.stateNames[out[o].state]); err != nil {
 			log.Printf("record step %d: %v", stepID, err)
 		}
 	}

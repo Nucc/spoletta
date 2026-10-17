@@ -276,6 +276,18 @@ func compact(raw json.RawMessage) string {
 	return s
 }
 
+// Records the state an object a step generated came out in, by name, once
+// the step is over, such as by its states' rules or an agent's decision:
+// in what the step generated, and in what the run stored of it, if it is
+// persistent, so its records are in the state the run left them in.
+func recordState(ctx context.Context, db *sql.DB, step, object int64, state string) error {
+	if _, err := db.ExecContext(ctx, "UPDATE run_objects SET state = ? WHERE step_id = ? AND object_id = ?", state, step, object); err != nil {
+		return err
+	}
+	_, err := db.ExecContext(ctx, "UPDATE object_instances SET state = ? WHERE step_id = ? AND object_id = ?", state, step, object)
+	return err
+}
+
 // Starts the walk of a run's top board with the persistent objects carried
 // over: what the latest run to end done stored of each, or, before any did,
 // an object existing but holding nothing, so the processes taking it run.

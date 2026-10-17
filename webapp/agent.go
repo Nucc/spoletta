@@ -43,6 +43,8 @@ const (
 	inputInstrument = "instrument"
 	inputConsumed   = "consumed"
 	inputAffected   = "affected"
+	// A query's records; see queries.go.
+	inputRecords = "records"
 )
 
 // Sent when a human process set an object to a state this process takes it
@@ -280,7 +282,7 @@ func recordDecisions(ctx context.Context, db *sql.DB, stepID int64, decisions ma
 		if err := db.QueryRowContext(ctx, "SELECT name FROM object_states WHERE id = ?", d.state).Scan(&name); err != nil {
 			return err
 		}
-		if _, err := db.ExecContext(ctx, "UPDATE run_objects SET state = ? WHERE step_id = ? AND object_id = ?", name, stepID, object); err != nil {
+		if err := recordState(ctx, db, stepID, object, name); err != nil {
 			return err
 		}
 		outcomes = append(outcomes, name)
@@ -412,6 +414,9 @@ func withInputs(prompt string, inputs []runInput) string {
 	}
 	if roles[inputAffected] {
 		fmt.Fprintf(&b, " One whose role is %s is yours to change: what you hand in for it is its new version.", inputAffected)
+	}
+	if roles[inputRecords] {
+		fmt.Fprintf(&b, " One whose role is %s is a JSON array of what earlier runs stored of the object, as its query selects them; it may be empty.", inputRecords)
 	}
 	b.WriteString("\n")
 	for _, in := range inputs {

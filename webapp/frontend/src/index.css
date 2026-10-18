@@ -2153,6 +2153,7 @@ body {
 /* The MCP servers agents can use, in the settings, and picked per process. */
 .toolbar .mcp-toggle.open,
 .toolbar .opl-toggle.open,
+.toolbar .code-toggle.open,
 .toolbar .settings-toggle.open {
   background: #ddf4ff;
   border-color: #54aeff;
@@ -2171,7 +2172,17 @@ body {
   line-height: 1.5;
 }
 
+/* The flow as a setup file, indented as YAML is. */
+.code-text {
+  margin: 0;
+  white-space: pre;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .opl-panel,
+.code-panel,
 .mcp-panel,
 .flow-settings-panel {
   overflow-y: auto;

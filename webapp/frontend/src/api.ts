@@ -529,6 +529,12 @@ export async function getFlowOPL(flow: number): Promise<string> {
   return text
 }
 
+// The flow alone as a setup file, the YAML Export writes it in, as it is
+// now; the structs and procedures it uses are named, not written out.
+export function getFlowSetup(flow: number): Promise<{ name: string; text: string }> {
+  return request(`/api/flows/${flow}/setup`)
+}
+
 export function listConnections(flow: number): Promise<Connection[]> {
   return request(`/api/connections?flow=${flow}`)
 }

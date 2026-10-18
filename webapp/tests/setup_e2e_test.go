@@ -352,3 +352,49 @@ func TestSetupImportRefusesWhatIsWrong(t *testing.T) {
 		t.Errorf("a file turned down left flows behind:\n%s", got)
 	}
 }
+
+// A flow's own setup file, shown beside its board as its code: the flow
+// alone, naming the procedure, struct and MCP server it uses rather than
+// writing them out, and imported back it changes nothing.
+func TestSetupOfAFlow(t *testing.T) {
+	a := setupApp(t)
+	prefix := fmt.Sprintf("fs%d", time.Now().UnixNano())
+	res := setupImportOK(a, strings.ReplaceAll(setupWritten, "PFX", prefix))
+	var triage int64
+	for _, f := range res.Flows {
+		if f.Name == prefix+" Triage" {
+			triage = f.ID
+		}
+	}
+	if triage == 0 {
+		t.Fatalf("imported %+v, want %s Triage", res.Flows, prefix)
+	}
+
+	var got struct {
+		Name string `json:"name"`
+		Text string `json:"text"`
+	}
+	a.call("GET", fmt.Sprintf("/api/flows/%d/setup", triage), nil, http.StatusOK, &got)
+	if got.Name != prefix+" Triage" {
+		t.Errorf("name = %q, want %s Triage", got.Name, prefix)
+	}
+	for _, want := range []string{"flows:", "- name: " + prefix + " Triage", "runs: " + prefix + " Summarize", prefix + "_jira"} {
+		if !strings.Contains(got.Text, want) {
+			t.Errorf("the flow's setup has no %q:\n%s", want, got.Text)
+		}
+	}
+	for _, unwanted := range []string{"\nprocedures:", "\nstructs:", "\nmcpServers:"} {
+		if strings.Contains(got.Text, unwanted) {
+			t.Errorf("the flow's setup writes out %q, want it only named:\n%s", unwanted, got.Text)
+		}
+	}
+
+	before := verDump(a, triage)
+	again := setupImportOK(a, got.Text)
+	if len(again.Flows) != 1 || again.Flows[0].ID != triage || again.Flows[0].Created {
+		t.Fatalf("importing the flow's setup did %+v, want %s Triage made over", again.Flows, prefix)
+	}
+	verSameBoard(t, before, verDump(a, triage))
+
+	a.refused("GET", "/api/flows/999999999/setup", nil, http.StatusNotFound, "flow not found")
+}

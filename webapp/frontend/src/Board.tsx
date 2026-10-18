@@ -24,6 +24,7 @@ import { BoardActionsContext, StructFlowsContext, type BoardActions } from './ac
 import { ColumnResizer, useColumnWidth } from './ColumnResizer'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import {
+  CodeIcon,
   CopyIcon,
   FlowBuilderIcon,
   FlowIcon,
@@ -71,6 +72,7 @@ import {
 import { decisionText, rerunnableFrom, RunList, RunPanel, type RunFocus } from './Runs'
 import RerunDialog from './RerunDialog'
 import OPLPanel from './OPLPanel'
+import CodePanel from './CodePanel'
 import Assistant from './Assistant'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { SharedRecords } from './Records'
@@ -386,6 +388,7 @@ export default function Board({
   const [mcpOpen, setMCPOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [oplOpen, setOPLOpen] = useState(false)
+  const [codeOpen, setCodeOpen] = useState(false)
   // Every other flow, which this one can run; null while they load.
   const [otherFlows, setOtherFlows] = useState<Flow[] | null>(null)
   const [runs, setRuns] = useState<FlowRun[]>([])
@@ -751,6 +754,7 @@ export default function Board({
       setVersionsOpen(false)
       setSettingsOpen(false)
       setOPLOpen(false)
+      setCodeOpen(false)
       refreshMCPServers()
     }
     setMCPOpen(open)
@@ -762,6 +766,7 @@ export default function Board({
       setVersionsOpen(false)
       setMCPOpen(false)
       setOPLOpen(false)
+      setCodeOpen(false)
     }
     setSettingsOpen(open)
   }
@@ -772,8 +777,20 @@ export default function Board({
       setVersionsOpen(false)
       setMCPOpen(false)
       setSettingsOpen(false)
+      setCodeOpen(false)
     }
     setOPLOpen(open)
+  }
+
+  const openCode = (open: boolean) => {
+    if (open) {
+      setPanelId(null)
+      setVersionsOpen(false)
+      setMCPOpen(false)
+      setSettingsOpen(false)
+      setOPLOpen(false)
+    }
+    setCodeOpen(open)
   }
 
   const onSave = async () => {
@@ -1039,6 +1056,7 @@ export default function Board({
     setMCPOpen(false)
     setSettingsOpen(false)
     setOPLOpen(false)
+    setCodeOpen(false)
     setVersionsOpen(false)
     setRunFocus((f) => ({
       kind: isObject(id) ? 'object' : 'process',
@@ -1108,7 +1126,7 @@ export default function Board({
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
   const reviewNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === reviewId && Boolean(n.data.review))
   const objectPanelNode = nodes.find((n): n is ObjectNodeType => n.type === 'object' && n.id === panelId)
-  const panelOpen = Boolean(panelNode || objectPanelNode || mcpOpen || settingsOpen || oplOpen || versionsOpen || runDetail)
+  const panelOpen = Boolean(panelNode || objectPanelNode || mcpOpen || settingsOpen || oplOpen || codeOpen || versionsOpen || runDetail)
 
   // The panel opening or closing changes the canvas's width; the board moves
   // to the middle of it once the canvas has taken its new width.
@@ -2257,6 +2275,7 @@ export default function Board({
                 setMCPOpen(false)
                 setSettingsOpen(false)
                 setOPLOpen(false)
+                setCodeOpen(false)
                 refreshVersions()
               }
               setVersionsOpen(!versionsOpen)
@@ -2274,6 +2293,14 @@ export default function Board({
               <TableIcon /> Records
             </button>
           )}
+          <button
+            className={`code-toggle${codeOpen ? ' open' : ''}`}
+            aria-expanded={codeOpen}
+            onClick={() => openCode(!codeOpen)}
+            title="The flow as code, the setup file Export writes and Import reads"
+          >
+            <CodeIcon /> Code
+          </button>
           {!structBoard && (
             <>
               <button
@@ -2575,7 +2602,10 @@ export default function Board({
         {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && oplOpen && (
           <OPLPanel flowId={flowId} onClose={() => setOPLOpen(false)} onError={report} />
         )}
-        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && versionsOpen && (
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && codeOpen && (
+          <CodePanel flowId={flowId} onClose={() => setCodeOpen(false)} onError={report} />
+        )}
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && versionsOpen && (
           <VersionPanel
             versions={versions.versions}
             current={versions.current}
@@ -2584,7 +2614,7 @@ export default function Board({
             onClose={() => setVersionsOpen(false)}
           />
         )}
-        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !versionsOpen && runDetail && (
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && !versionsOpen && runDetail && (
           <RunPanel
             run={runDetail}
             onStop={() => onStop(runDetail.id)}

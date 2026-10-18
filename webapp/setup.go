@@ -336,6 +336,31 @@ func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
 		w.Write(body)
 	})
 
+	// One flow alone as a setup file, as its assistant is told it, for
+	// people to read beside the board. Whoever sees the flow may: the
+	// structs and procedures it uses are only named, not written out.
+	mux.HandleFunc("GET /api/flows/{id}/setup", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		af, err := loadAssistantFlow(r.Context(), db, id)
+		var p setupProblem
+		switch {
+		case errors.Is(err, sql.ErrNoRows) || errors.Is(err, errNotFound):
+			http.Error(w, "flow not found", http.StatusNotFound)
+			return
+		case errors.As(err, &p):
+			http.Error(w, p.msg, http.StatusConflict)
+			return
+		case err != nil:
+			serverError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"name": af.name, "text": af.setup})
+	})
+
 	// Takes the file as the body, YAML or JSON, and says which flows it
 	// created and which it made over.
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) {

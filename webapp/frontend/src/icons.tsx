@@ -145,6 +145,12 @@ export const ClockIcon = () => (
   </Icon>
 )
 
+export const CodeIcon = () => (
+  <Icon>
+    <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" />
+  </Icon>
+)
+
 export const DownloadIcon = () => (
   <Icon>
     <path d="M8 2v8M4.75 6.75L8 10l3.25-3.25M2.5 12.5v1h11v-1" />

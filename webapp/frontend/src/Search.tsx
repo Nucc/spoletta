@@ -2,13 +2,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { SearchFacet } from './api'
 import { bound, bounds, NONE, parse, quote, resolve, select, selection, type Facets, type Mark, type Node, type Sort } from './query'
 
-// The search over a table page's rows, as a log explorer has it: a
-// query bar that colours what is typed and suggests keys and values, the
-// facets beside the table with how many rows have each value, a time range,
-// and column headers sorting the rows. The server searches every row
-// stored (search.go); the page asks again as the query changes. What is
-// searched and how rows sort stays in the page's address, so a link opens
-// the same rows, and is kept for the next visit.
+// The faceted search over a table page's rows: a query bar that colours what
+// is typed and suggests keys and values, the facets beside the table with
+// how many rows have each value, a time range, and column headers sorting
+// the rows. The server searches every row stored (search.go); the page asks
+// again as the query changes. What is searched and how rows sort stays in
+// the page's address, so a link opens the same rows, and is kept for the
+// next visit.
 
 // How a facet's value reads, such as a run status's label; none for as it is.
 export type Display = (facet: SearchFacet, value: string) => string | undefined

@@ -1,7 +1,7 @@
 import type { SearchFacet } from './api'
 
-// A search over a table page's rows written the way a log explorer
-// takes one. The server searches (search.go), over every row stored; this
+// A faceted search over a table page's rows, written as a query of keys and
+// values. The server searches (search.go), over every row stored; this
 // parses a query the same way, to colour it in the search bar and to tick
 // facets' values, and rewrites it as facets are ticked, so the query stays
 // the only thing saying what shows. See search.go for what a query says.

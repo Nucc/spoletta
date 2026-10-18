@@ -11,10 +11,10 @@ import (
 )
 
 // A search narrows a table page's rows, a flow's runs (rundata.go) or a
-// shared struct's records (shared.go), by a query written the way
-// a log explorer takes one, over every row stored rather than only
-// those a page shows. Each column a row can be searched by is a facet,
-// named by a key: the table's own ones bare (status, state, started), an
+// shared struct's records (shared.go), by a faceted query of keys and
+// values, over every row stored rather than only those a page shows.
+// Each column a row can be searched by is a facet, named by a key: the
+// table's own ones bare (status, state, started), an
 // object's attributes with an @ (@Invoice.amount), which may be left out
 // where no bare key has the name, as may the object of an attribute
 // (title for @Bug.title). A query is terms, all of which a row has to

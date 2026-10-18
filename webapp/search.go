@@ -12,7 +12,7 @@ import (
 
 // A search narrows a table page's rows, a flow's runs (rundata.go) or a
 // shared struct's records (shared.go), by a query written the way
-// Datadog's log explorer takes one, over every row stored rather than only
+// a log explorer takes one, over every row stored rather than only
 // those a page shows. Each column a row can be searched by is a facet,
 // named by a key: the table's own ones bare (status, state, started), an
 // object's attributes with an @ (@Invoice.amount), which may be left out

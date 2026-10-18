@@ -3792,7 +3792,7 @@ select.flow-owner:disabled {
   font-size: 13px;
 }
 
-/* The search over a table page's rows, as Datadog's log explorer has it: a
+/* The search over a table page's rows, as a log explorer has it: a
    query bar coloured by what each part of the query is, with suggestions
    under it, a time range beside it, and the facets left of the table. */
 .search-row {

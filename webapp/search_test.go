@@ -39,7 +39,7 @@ func searchFixture() *searchTable {
 	return t
 }
 
-func TestSearchMatchesAsDatadogDoes(t *testing.T) {
+func TestSearchMatchesQueries(t *testing.T) {
 	tb := searchFixture()
 	for _, c := range []struct{ query, want string }{
 		{"", "1,2,3,4"},

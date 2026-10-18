@@ -1,6 +1,6 @@
 import type { SearchFacet } from './api'
 
-// A search over a table page's rows written the way Datadog's log explorer
+// A search over a table page's rows written the way a log explorer
 // takes one. The server searches (search.go), over every row stored; this
 // parses a query the same way, to colour it in the search bar and to tick
 // facets' values, and rewrites it as facets are ticked, so the query stays

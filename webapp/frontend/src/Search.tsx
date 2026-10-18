@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { SearchFacet } from './api'
 import { bound, bounds, NONE, parse, quote, resolve, select, selection, type Facets, type Mark, type Node, type Sort } from './query'
 
-// The search over a table page's rows, as Datadog's log explorer has it: a
+// The search over a table page's rows, as a log explorer has it: a
 // query bar that colours what is typed and suggests keys and values, the
 // facets beside the table with how many rows have each value, a time range,
 // and column headers sorting the rows. The server searches every row

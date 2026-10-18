@@ -53,6 +53,12 @@ func newConnectorsGitHub(t *testing.T) *connectorsGitHub {
 		g.requests = append(g.requests, strings.TrimSpace(fmt.Sprintf("%s %s %s %s", r.Method, r.URL.Path, r.Header.Get("Authorization"), body)))
 		g.mu.Unlock()
 		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		// Every call has the connector's headers, whether a connector
+		// process or an agent makes it.
+		if r.Header.Get("X-GitHub-Api-Version") != "2022-11-28" || r.Header.Get("User-Agent") != "Spoletta" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": "the call is missing the connector's headers"})
+			return
+		}
 		mux.ServeHTTP(w, r)
 	}))
 	t.Cleanup(g.srv.Close)

@@ -53,7 +53,7 @@ mcpServers:
     url: https://ghe.example.com/api/v3   # its service's API; the connector's own if absent
 ```
 
-A connector is a service the app itself works with, such as GitHub. Agents use it as an MCP server, its operations being its tools, and a `connector` process carries out one of its operations as a step. The app has the connector `github`.
+A connector is a service the app itself works with, such as GitHub. Agents use it as an MCP server, its operations being its tools, and a `connector` process carries out one of its operations as a step. The app has the connectors `github`, `slack`, `telegram`, `google` (Sheets and Docs), `homeassistant` (whose `url` is the installation's, which it needs) and `http` (any JSON API, at its `url`, installed once for each under its own name). docs/FLOWS.md lists their operations.
 
 ### Flows and procedures
 

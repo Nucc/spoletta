@@ -1,6 +1,7 @@
 import type { DragEvent, ReactNode } from 'react'
 import type { Flow, ProcessKind, ProcessSettings } from './api'
-import { GitHubLogo, ObjectIcon, SentryLogo, SubflowIcon } from './icons'
+import { ObjectIcon, SubflowIcon } from './icons'
+import { ServiceLogo } from './logos'
 
 // Something the sidebar adds to the board: a node of an OPM element, or a
 // process of a kind that talks to a service.
@@ -34,18 +35,34 @@ export const BUILDING_BLOCKS: Block[] = [
   },
 ]
 
+// A process carrying out an operation of a built-in connector, named as the
+// directory names it, so its tile has its logo.
+const connectorBlock = (id: string, label: string, title: string): Block & { logo: () => ReactNode } => ({
+  id,
+  label,
+  title,
+  type: 'process',
+  kind: 'connector',
+  name: label,
+  logo: () => <ServiceLogo name={id} title={label} size={32} />,
+})
+
 // Each new service is one more entry, once the server runs processes of its kind.
 export const CONNECTORS: (Block & { logo: () => ReactNode })[] = [
-  { id: 'sentry', label: 'Sentry', title: 'Fetches issues from Sentry as a list', type: 'process', kind: 'sentry', logo: () => <SentryLogo /> },
   {
-    id: 'github',
-    label: 'GitHub',
-    title: 'Carries out an operation on GitHub, such as listing issues, commenting or opening a pull request',
+    id: 'sentry',
+    label: 'Sentry',
+    title: 'Fetches issues from Sentry as a list',
     type: 'process',
-    kind: 'connector',
-    name: 'GitHub',
-    logo: () => <GitHubLogo />,
+    kind: 'sentry',
+    logo: () => <ServiceLogo name="sentry" title="Sentry" size={32} />,
   },
+  connectorBlock('github', 'GitHub', 'Carries out an operation on GitHub, such as listing issues, commenting or opening a pull request'),
+  connectorBlock('slack', 'Slack', 'Carries out an operation on Slack, such as posting a message or reading a channel'),
+  connectorBlock('telegram', 'Telegram', "Carries out an operation on Telegram as a bot, such as sending a message or reading the bot's"),
+  connectorBlock('google', 'Google', 'Carries out an operation on Google Sheets or Docs, such as reading rows or appending them'),
+  connectorBlock('homeassistant', 'Home Assistant', 'Carries out an operation on Home Assistant, such as reading a sensor or turning a light on'),
+  connectorBlock('http', 'HTTP API', 'Calls an HTTP API installed as a connector, such as getting what a path holds'),
 ]
 
 // A module, added as a process that runs it.
@@ -108,7 +125,7 @@ export function ConnectorPalette({
       {CONNECTORS.map((c) => (
         <li key={c.id}>
           <PaletteTile block={c} disabled={disabled} onAdd={onAdd}>
-            <span className={`palette-logo ${c.id}`}>{c.logo()}</span>
+            {c.logo()}
           </PaletteTile>
         </li>
       ))}

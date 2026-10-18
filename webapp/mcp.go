@@ -152,6 +152,9 @@ func (s mcpServer) problem() string {
 	if s.Connector != "" && findConnector(s.Connector) == nil {
 		return fmt.Sprintf("there is no connector named %s", quote(s.Connector))
 	}
+	if c := findConnector(s.Connector); c != nil && s.URL == "" {
+		return fmt.Sprintf("%s needs the URL it is at, such as %s", c.Title, c.URLExample)
+	}
 	u, err := url.Parse(s.URL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || len(s.URL) > 2048 {
 		return "the URL must be an http or https address"
@@ -467,8 +470,8 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			http.Error(w, fmt.Sprintf("the token must be from 1 to %d characters", maxModelKey), http.StatusBadRequest)
 			return
 		}
-		var auth string
-		if err := db.QueryRowContext(r.Context(), "SELECT auth FROM mcp_servers WHERE id = ?", id).Scan(&auth); errors.Is(err, sql.ErrNoRows) {
+		var auth, connector string
+		if err := db.QueryRowContext(r.Context(), "SELECT auth, connector FROM mcp_servers WHERE id = ?", id).Scan(&auth, &connector); errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "server not found", http.StatusNotFound)
 			return
 		} else if err != nil {
@@ -478,6 +481,12 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		if auth != authToken {
 			http.Error(w, "the server is connected by signing in to it, not with a token", http.StatusBadRequest)
 			return
+		}
+		if c := findConnector(connector); c != nil && c.checkToken != nil {
+			if err := c.checkToken(token); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		sealed, err := secrets.seal(mcpTokenPlace("access_token", id, 0), token)
 		if err != nil {
@@ -1148,7 +1157,7 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "token for "+name+": "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		serveConnector(w, r, c, connectorClient{url: serverURL, token: access}, filter, body)
+		serveConnector(w, r, c, c.client(serverURL, access), filter, body)
 		return
 	}
 	messages, _ := parseRPC(body)

@@ -44,13 +44,32 @@ type connector struct {
 	// What it does, which tells agents when to use it.
 	Description string
 	// Its service's API, where an installed connector calls it unless an
-	// admin says otherwise.
-	URL string
+	// admin says otherwise, or "" for one that is wherever its admin
+	// installed it, such as Home Assistant, whose URL looks like the example.
+	URL        string
+	URLExample string
 	// What token it takes, for whoever sets it.
 	TokenHelp string
+	// Whether several may be installed, each its own service, as the HTTP
+	// API connector is.
+	Multiple bool
 	// Headers every call to the service has.
 	Headers    map[string]string
 	Operations []operation
+
+	// How a call carries the token, as a bearer token unless it says
+	// otherwise: Telegram's goes in the path, Google's is a service
+	// account's key that gets one.
+	authorize func(ctx context.Context, req *http.Request, token string) error
+	// Where a call goes, the server's URL and the path unless it says
+	// otherwise, as Google's APIs are each on a host of their own.
+	endpoint func(base, path string) string
+	// What went wrong in a call the service answered with a success, if
+	// anything, as Slack answers one that failed.
+	failed func(answer []byte) string
+	// Why a token can't be the connector's, if it can't, said when an
+	// admin sets it.
+	checkToken func(token string) error
 }
 
 type operation struct {
@@ -85,7 +104,7 @@ const (
 )
 
 // The connectors built into the webapp.
-var connectors = []*connector{githubConnector}
+var connectors = []*connector{githubConnector, slackConnector, telegramConnector, googleConnector, homeAssistantConnector, httpConnector}
 
 func findConnector(name string) *connector {
 	if name == "" {
@@ -302,7 +321,7 @@ const (
 // Calls a connector's service, at its installed server's URL, with its token.
 type connectorClient struct {
 	url, token string
-	headers    map[string]string
+	service    *connector
 }
 
 // How long a call to a service may take; the proxy has no limit of its own.
@@ -311,55 +330,9 @@ const connectorTimeout = time.Minute
 // Sends a request to the service's API at the path, the body as JSON if
 // there is one, and decodes what it answers into out.
 func (c connectorClient) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
-	ctx, cancel := context.WithTimeout(ctx, connectorTimeout)
-	defer cancel()
-	u := strings.TrimSuffix(c.url, "/") + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-	var reader io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reader = strings.NewReader(string(b))
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, reader)
-	if err != nil {
+	answer, _, err := c.send(ctx, method, path, query, body)
+	if err != nil || out == nil || len(answer) == 0 {
 		return err
-	}
-	for k, v := range c.headers {
-		req.Header.Set(k, v)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	answer, err := io.ReadAll(io.LimitReader(resp.Body, maxRunRequestBytes))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode/100 != 2 {
-		var e struct {
-			Message string `json:"message"`
-		}
-		msg := strings.TrimSpace(string(answer))
-		if json.Unmarshal(answer, &e) == nil && e.Message != "" {
-			msg = e.Message
-		}
-		if len(msg) > 500 {
-			msg = msg[:500] + "…"
-		}
-		return fmt.Errorf("%s %s answered %s: %s", method, path, resp.Status, msg)
-	}
-	if out == nil || len(answer) == 0 {
-		return nil
 	}
 	if err := json.Unmarshal(answer, out); err != nil {
 		return fmt.Errorf("%s %s answered what isn't JSON: %w", method, path, err)
@@ -367,8 +340,124 @@ func (c connectorClient) do(ctx context.Context, method, path string, query url.
 	return nil
 }
 
+// Sends a request to the service's API at the path, and says what it
+// answers, with its content type. What goes wrong names the request by its
+// method and path alone, never by the URL it went to, which for some
+// services, such as Telegram, holds the token.
+func (c connectorClient) send(ctx context.Context, method, path string, query url.Values, body any) ([]byte, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, connectorTimeout)
+	defer cancel()
+	u := strings.TrimSuffix(c.url, "/") + path
+	if c.service != nil && c.service.endpoint != nil {
+		u = c.service.endpoint(c.url, path)
+	}
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, "", err
+		}
+		reader = strings.NewReader(string(b))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, reader)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %s: the address isn't valid", method, path)
+	}
+	if c.service != nil {
+		for k, v := range c.service.Headers {
+			req.Header.Set(k, v)
+		}
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	}
+	if c.service != nil && c.service.authorize != nil {
+		err = c.service.authorize(ctx, req, c.token)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	defer resp.Body.Close()
+	answer, err := io.ReadAll(io.LimitReader(resp.Body, maxRunRequestBytes))
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	msg := ""
+	if resp.StatusCode/100 != 2 {
+		if msg = serviceError(answer); msg == "" {
+			msg = strings.TrimSpace(string(answer))
+		}
+	} else if c.service != nil && c.service.failed != nil {
+		msg = c.service.failed(answer)
+	}
+	if msg != "" || resp.StatusCode/100 != 2 {
+		if len(msg) > 500 {
+			msg = msg[:500] + "…"
+		}
+		return nil, "", fmt.Errorf("%s %s answered %s: %s", method, path, resp.Status, msg)
+	}
+	return answer, resp.Header.Get("Content-Type"), nil
+}
+
+// What a service says went wrong, in the field most of them put it in:
+// message (GitHub), description (Telegram), error (Slack), or an error
+// object's message (Google).
+func serviceError(answer []byte) string {
+	var e struct {
+		Message     string          `json:"message"`
+		Description string          `json:"description"`
+		Error       json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(answer, &e) != nil {
+		return ""
+	}
+	var s string
+	var inner struct {
+		Message string `json:"message"`
+	}
+	switch {
+	case e.Message != "":
+		return e.Message
+	case e.Description != "":
+		return e.Description
+	case json.Unmarshal(e.Error, &s) == nil && s != "":
+		return s
+	case json.Unmarshal(e.Error, &inner) == nil && inner.Message != "":
+		return inner.Message
+	}
+	return ""
+}
+
+// What a service answering {"ok": false, ...} with a success, as Slack
+// does, says went wrong, or "" if it went right.
+func notOK(answer []byte) string {
+	var e struct {
+		OK *bool `json:"ok"`
+	}
+	if json.Unmarshal(answer, &e) != nil || e.OK == nil || *e.OK {
+		return ""
+	}
+	if msg := serviceError(answer); msg != "" {
+		return msg
+	}
+	return "it says it failed, without saying why"
+}
+
 func (c *connector) client(serverURL, token string) connectorClient {
-	return connectorClient{url: serverURL, token: token, headers: c.Headers}
+	return connectorClient{url: serverURL, token: token, service: c}
 }
 
 // The MCP versions a connector speaks, the latest it knows first, and
@@ -779,8 +868,12 @@ type directoryEntry struct {
 	// Whether it is built in, a connector, rather than an MCP server.
 	Connector bool   `json:"connector"`
 	URL       string `json:"url"`
-	Auth      string `json:"auth"`
-	TokenHelp string `json:"tokenHelp,omitempty"`
+	// What its URL looks like, for one with none of its own.
+	URLExample string `json:"urlExample,omitempty"`
+	Auth       string `json:"auth"`
+	TokenHelp  string `json:"tokenHelp,omitempty"`
+	// Whether it may be installed several times, each for its own service.
+	Multiple bool `json:"multiple,omitempty"`
 	// Where the service documents it.
 	Docs       string            `json:"docs,omitempty"`
 	Operations []directoryAction `json:"operations,omitempty"`
@@ -849,7 +942,8 @@ func directory(ctx context.Context, db *sql.DB) ([]directoryEntry, error) {
 	entries := []directoryEntry{}
 	for _, c := range connectors {
 		e := directoryEntry{Name: c.Name, Title: c.Title, Category: c.Category, Description: c.Description,
-			Connector: true, URL: c.URL, Auth: authToken, TokenHelp: c.TokenHelp, Operations: []directoryAction{}}
+			Connector: true, URL: c.URL, URLExample: c.URLExample, Auth: authToken, TokenHelp: c.TokenHelp, Multiple: c.Multiple,
+			Operations: []directoryAction{}}
 		for _, op := range c.Operations {
 			a := directoryAction{Name: op.Name, Title: op.Title, Description: op.Description, Write: op.Write, Params: []directoryParam{}}
 			for _, p := range op.Params {

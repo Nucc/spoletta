@@ -771,9 +771,14 @@ export type DirectoryEntry = {
   category: string
   description: string
   connector: boolean
+  // Its service's API, or '' for one that is wherever it was installed,
+  // such as Home Assistant, whose URL looks like urlExample.
   url: string
+  urlExample?: string
   auth: MCPAuth
   tokenHelp?: string
+  // Whether it may be installed several times, each for its own service.
+  multiple?: boolean
   docs?: string
   operations?: ConnectorOperation[]
   // The installed server, if any.

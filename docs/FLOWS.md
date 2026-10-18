@@ -32,7 +32,7 @@ A process is carried out by one of these:
 | `script` | bash in the worker, with `curl` and `jq` | fetch from an API, run a build, transform JSON |
 | `human` | a person in the Spoletta UI | approve or send back work, fill in what a run starts from |
 | `sentry` | Spoletta itself, calling Sentry's issues API | fetch issues to process |
-| `connector` | Spoletta itself, carrying out an operation of a connector built into it, such as GitHub's, with the token an admin set | list issues, comment, label, open or merge a pull request |
+| `connector` | Spoletta itself, carrying out an operation of a connector built into it (GitHub, Slack, Telegram, Google Sheets and Docs, Home Assistant, or any HTTP API), with the token an admin set | list issues, post to Slack, append a spreadsheet row, turn a light on |
 | `flow` | its own board of processes, zoomed into | group steps, run steps once per item of a list |
 | `subflow` | another flow (a procedure), run as a run of its own | reuse a flow across jobs |
 
@@ -251,6 +251,25 @@ by kind:
   `create_pull_request`, `review_pull_request`, `merge_pull_request`. Each
   takes `owner` and `repo`, and one about an issue or pull request its
   `number`.
+- `slack` (a bot token): reads `list_channels`, `list_messages`,
+  `list_replies`, `find_user`; changes `post_message`, `update_message`,
+  `add_reaction`. A channel is named by its id, such as `C0123456789`, and a
+  message by its `ts`.
+- `telegram` (a bot's token): reads `get_updates`, the messages people sent
+  the bot that it hasn't confirmed, and `get_chat`; changes `send_message`,
+  `edit_message`, to a `chat_id`, and `confirm_updates`, after which
+  Telegram forgets the messages up to an update.
+- `google` (a service account's JSON key; it sees only the files shared with
+  its email): reads `find_files`, `get_spreadsheet`, `read_rows` (each row an
+  object named by the first row's headings), `read_document`; changes
+  `append_rows`, `update_cells` (`rows` as JSON: lists of values, or objects
+  by heading), `append_to_document`.
+- `homeassistant` (a long-lived access token, at the installation's URL):
+  reads `list_states`, `get_state`, `get_history`; changes `call_service`,
+  such as `domain: light`, `service: turn_on`, `entity_id: light.kitchen`.
+- `http` (any JSON API, installed once for each, at its URL): reads `get`;
+  changes `post`, `put`, `patch`, `delete`. Each takes a `path` within the
+  API's URL, an optional `query`, and the writes a JSON `body`.
 
 **flow**
 - `board:` an inner board with its own `start`, `processes` and `objects`.
@@ -629,6 +648,14 @@ so a shared struct can tell records apart by it), `repo`, `number`, `title`,
 `stateReason`, `assignees`, `comments`, `closedAt` and `pullRequest`, a pull
 request `draft`, `head`, `headSha`, `base`, `merged`, `mergeable` and
 `mergedAt`.
+
+Other connectors' records have a `key` too: a Slack message
+`channel/ts`, a Telegram message `chatId/messageId`, a Home Assistant entity
+its `entityId`, a Google file its id. Slack's messages have `channel`, `ts`,
+`user`, `text`, `threadTs` and `replies`; Telegram's `messageId`, `chatId`,
+`chat`, `from`, `text`, `replyTo` and `date`; Home Assistant's entities
+`entityId`, `name`, `state`, `unit`, `lastChanged` and `attributes`. An HTTP
+API answers what it answers, or `text` for what isn't JSON.
 
 `{{Object}}` in an argument is what the object holds, its value for one
 without attributes, and `{{Object.attribute}}` one of its attributes: a

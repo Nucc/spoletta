@@ -5,7 +5,7 @@ import { getFlow, listSharedRecords, type Flow, type Search, type SharedRecords 
 import { FlowBuilderIcon, TableIcon } from './icons'
 import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { formatTime } from './Runs'
-import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useFacetsShown, useSearch } from './Search'
+import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch } from './Search'
 
 // How often the records are asked for again, as flows write them.
 const REFRESH_MS = 10_000
@@ -104,7 +104,6 @@ export default function RecordsPage({ id }: { id: number }) {
   const { query, setQuery, sort, setSort, search } = useSearch('records', id)
   const { records, error, load } = useRecords(id, search)
   const [opened, setOpened] = useState<Opened | null>(null)
-  const [facetsShown, toggleFacets] = useFacetsShown()
 
   useEffect(() => {
     getFlow(id)
@@ -152,11 +151,6 @@ export default function RecordsPage({ id }: { id: number }) {
           </span>
           Records
         </h1>
-        {records !== null && records.searched > 0 && (
-          <button className="facets-toggle" aria-pressed={facetsShown} onClick={toggleFacets} title="Show or hide the facets">
-            Facets
-          </button>
-        )}
         <button onClick={load} title="Fetch the latest records">
           Refresh
         </button>
@@ -185,7 +179,7 @@ export default function RecordsPage({ id }: { id: number }) {
               <TimeRange facets={facets} query={query} field="updated" onChange={setQuery} />
             </div>
             <div className="search-body">
-              {facetsShown && <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} rows={records.searched} />}
+              <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} rows={records.searched} />
               <div className="search-results">
                 <div className="data-table-scroll">
                   <table className="data-table">

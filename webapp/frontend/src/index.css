@@ -4002,40 +4002,149 @@ select.flow-owner:disabled {
   background: #fff;
 }
 
-.facets-toggle[aria-pressed='true'] {
-  background: #ddf4ff;
-  border-color: #54aeff;
-}
-
+/* The facets are a card beside the table's, its header staying put while
+   the facets under it scroll, each group's name staying over its facets.
+   Folded, the card is a rail as narrow as a button. */
 .facets {
   flex: none;
-  width: 240px;
+  display: flex;
+  flex-direction: column;
+  width: 248px;
   max-height: calc(100vh - 200px);
-  overflow: auto;
   font-size: 13px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
-.facet-group + .facet-group {
-  margin-top: 12px;
+.facets-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  height: 40px;
+  border-bottom: 1px solid #d8dee4;
+}
+
+.facets-glyph {
+  flex: none;
+  color: #656d76;
+}
+
+.facets-title {
+  font-weight: 600;
+}
+
+.facets-badge {
+  min-width: 18px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: #0969da;
+  border-radius: 9px;
+}
+
+.facets-clear {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.facets-fold {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #656d76;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.facets-head .facets-fold {
+  margin-left: auto;
+}
+
+.facets-clear + .facets-fold {
+  margin-left: 0;
+}
+
+.facets-fold:hover {
+  color: #1f2328;
+  background: #f3f4f6;
+}
+
+.facets.folded {
+  width: 36px;
+}
+
+.facets.folded .facets-fold {
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  height: auto;
+  padding: 12px 0;
+  font: inherit;
+  font-weight: 600;
+  color: #1f2328;
+  border-radius: 0;
+}
+
+.facets.folded .facets-glyph {
+  color: inherit;
+}
+
+.facets-rail-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  letter-spacing: 0.02em;
+}
+
+.facets-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 6px;
 }
 
 .facet-group h3 {
-  margin: 0 0 4px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 6px 12px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #656d76;
+  background: #f6f8fa;
+  border-bottom: 1px solid #eaeef2;
 }
 
-.facet {
-  border-bottom: 1px solid #eaeef2;
+.facet-group + .facet-group h3 {
+  border-top: 1px solid #eaeef2;
+}
+
+.facet + .facet {
+  border-top: 1px solid #eaeef2;
 }
 
 .facet-head {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding-right: 12px;
 }
 
 .facet-name {
@@ -4043,8 +4152,8 @@ select.flow-owner:disabled {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 0;
+  gap: 8px;
+  padding: 8px 0 8px 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4057,9 +4166,25 @@ select.flow-owner:disabled {
   cursor: pointer;
 }
 
+.facet-name:hover {
+  color: #0969da;
+}
+
 .facet-caret {
-  width: 10px;
-  color: #656d76;
+  flex: none;
+  color: #8c959f;
+  transition: transform 0.12s ease;
+}
+
+.facet-name[aria-expanded='true'] .facet-caret {
+  transform: rotate(90deg);
+}
+
+.facet-head > .facet-count {
+  padding: 0 6px;
+  line-height: 18px;
+  background: #f3f4f6;
+  border-radius: 9px;
 }
 
 .facet-clear {
@@ -4069,26 +4194,53 @@ select.flow-owner:disabled {
 .facet-values {
   display: flex;
   flex-direction: column;
-  padding: 0 0 8px 16px;
+  gap: 1px;
+  padding: 0 8px 10px 26px;
 }
 
 .facet-filter {
-  margin: 0 0 4px;
-  padding: 4px 6px;
+  margin: 0 4px 6px;
+  padding: 4px 8px;
+  font: inherit;
   font-size: 12px;
   border: 1px solid #d0d7de;
   border-radius: 6px;
 }
 
+.facet-filter:focus {
+  outline: none;
+  border-color: #0969da;
+  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15);
+}
+
 .facet-value {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 24px;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.facet-value.ticked {
+  background: #ddf4ff;
+}
+
+.facet-value:hover {
+  background: #f6f8fa;
+}
+
+.facet-value.ticked:hover {
+  background: #cae8ff;
 }
 
 .facet-value input {
+  flex: none;
+  width: 14px;
+  height: 14px;
   margin: 0;
+  accent-color: #0969da;
+  cursor: pointer;
 }
 
 .facet-value-name {
@@ -4110,12 +4262,17 @@ select.flow-owner:disabled {
   color: #0969da;
 }
 
+.facet-value.ticked .facet-value-name {
+  font-weight: 500;
+}
+
 .facet-value.none {
   color: #8c959f;
 }
 
 .facet-missing {
   font-style: italic;
+  color: #656d76;
 }
 
 .facet-count {
@@ -4127,11 +4284,13 @@ select.flow-owner:disabled {
 
 .facet-more {
   align-self: flex-start;
-  margin-top: 2px;
+  margin: 4px 0 0 4px;
   font-size: 12px;
 }
 
 .facet-empty {
+  margin: 0;
+  padding: 12px;
   color: #8c959f;
 }
 
@@ -4168,5 +4327,21 @@ select.flow-owner:disabled {
   .facets {
     width: auto;
     max-height: 40vh;
+  }
+
+  /* Over the table rather than beside it, the folded rail lies flat. */
+  .facets.folded {
+    width: auto;
+  }
+
+  .facets.folded .facets-fold {
+    flex-direction: row;
+    justify-content: flex-start;
+    padding: 8px 12px;
+  }
+
+  .facets-rail-label {
+    writing-mode: horizontal-tb;
+    transform: none;
   }
 }

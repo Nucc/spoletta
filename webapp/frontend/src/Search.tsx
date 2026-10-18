@@ -64,7 +64,7 @@ function sortOf(text: string | null): Sort | null {
 }
 
 // Whether the facets show beside the table, the same on every table page.
-export function useFacetsShown(): [boolean, () => void] {
+function useFacetsShown(): [boolean, () => void] {
   const [shown, setShown] = useState(() => {
     try {
       return localStorage.getItem('search-facets') !== 'hidden'
@@ -391,7 +391,9 @@ export function TimeRange({
 }
 
 // The facets beside the table, under what they belong to, each with its
-// values and how many rows the rest of the query leaves have them.
+// values and how many rows the rest of the query leaves have them. The
+// panel folds to a narrow rail, saying how many values are ticked, to give
+// the table the room.
 export function FacetList({
   facets,
   ast,
@@ -408,6 +410,7 @@ export function FacetList({
   // How many rows were searched, to fold facets whose values are mostly each a row's own.
   rows: number
 }) {
+  const [shown, toggle] = useFacetsShown()
   const groups: { name: string; keys: string[] }[] = []
   const seen = new Set<string>()
   for (const f of facets.list) {
@@ -420,17 +423,59 @@ export function FacetList({
     if (g) g.keys.push(f.key)
     else groups.push({ name: f.group, keys: [f.key] })
   }
+  const keys = groups.flatMap((g) => g.keys)
+  const ticked = keys.filter((k) => selection(facets, ast, k).length > 0)
+  const count = ticked.reduce((n, k) => n + selection(facets, ast, k).length, 0)
+  const clearAll = () => onChange(ticked.reduce((q, k) => select(facets, q, k, []), query))
+
+  if (!shown) {
+    return (
+      <aside className="facets folded" aria-label="Filters">
+        <button className="facets-fold" onClick={toggle} title="Show the filters" aria-expanded={false}>
+          <FilterGlyph />
+          <span className="facets-rail-label">Filters</span>
+          {count > 0 && <span className="facets-badge">{count}</span>}
+        </button>
+      </aside>
+    )
+  }
   return (
-    <aside className="facets" aria-label="Facets">
-      {groups.map((g) => (
-        <section key={g.name} className="facet-group">
-          <h3>{g.name}</h3>
-          {g.keys.map((k) => (
-            <FacetItem key={k} facets={facets} facetKey={k} ast={ast} query={query} onChange={onChange} display={display} rows={rows} />
-          ))}
-        </section>
-      ))}
+    <aside className="facets" aria-label="Filters">
+      <div className="facets-head">
+        <FilterGlyph />
+        <span className="facets-title">Filters</span>
+        {count > 0 && <span className="facets-badge">{count}</span>}
+        {count > 0 && (
+          <button className="link-button facets-clear" onClick={clearAll} title="Untick every value">
+            Clear all
+          </button>
+        )}
+        <button className="facets-fold" onClick={toggle} title="Hide the filters" aria-expanded>
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden>
+            <path d="M10 3.5L5.5 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
+      <div className="facets-body">
+        {groups.map((g) => (
+          <section key={g.name} className="facet-group">
+            <h3>{g.name}</h3>
+            {g.keys.map((k) => (
+              <FacetItem key={k} facets={facets} facetKey={k} ast={ast} query={query} onChange={onChange} display={display} rows={rows} />
+            ))}
+          </section>
+        ))}
+        {groups.length === 0 && <p className="facet-empty">Nothing to filter by yet.</p>}
+      </div>
     </aside>
+  )
+}
+
+function FilterGlyph() {
+  return (
+    <svg className="facets-glyph" width="14" height="14" viewBox="0 0 16 16" aria-hidden>
+      <path d="M2 3.5h12M4.5 8h7M7 12.5h2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   )
 }
 
@@ -488,13 +533,13 @@ function FacetItem({
     <div className="facet">
       <div className="facet-head">
         <button className="facet-name" aria-expanded={isOpen} onClick={() => setOpen(!isOpen)} title={facetKey}>
-          <span className="facet-caret" aria-hidden>
-            {isOpen ? '▾' : '▸'}
-          </span>
+          <svg className="facet-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+            <path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
           {facet.label}
         </button>
         {ticked.length > 0 ? (
-          <button className="link-button facet-clear" onClick={() => onChange(select(facets, query, facetKey, []))}>
+          <button className="link-button facet-clear" onClick={() => onChange(select(facets, query, facetKey, []))} title="Untick this facet's values">
             Clear
           </button>
         ) : (
@@ -507,7 +552,7 @@ function FacetItem({
             <input className="facet-filter" placeholder="Filter values" value={filter} onChange={(e) => setFilter(e.target.value)} />
           )}
           {shown.map(([v, n]) => (
-            <div key={v} className={`facet-value${n === 0 ? ' none' : ''}`}>
+            <div key={v} className={`facet-value${n === 0 ? ' none' : ''}${has(v) ? ' ticked' : ''}`}>
               <input type="checkbox" checked={has(v)} onChange={() => toggle(v)} aria-label={`Include ${label(v)}`} />
               <button
                 className={v === NONE ? 'facet-value-name facet-missing' : 'facet-value-name'}

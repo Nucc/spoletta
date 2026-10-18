@@ -4,7 +4,7 @@ import { getFlow, getFlowData, type DataCell, type DataRow, type Flow, type Flow
 import { FlowBuilderIcon, TableIcon } from './icons'
 import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { formatTime, RUN_LABELS } from './Runs'
-import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useFacetsShown, useSearch, type Display } from './Search'
+import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch, type Display } from './Search'
 
 // How often the table catches up with runs still going.
 const REFRESH_MS = 5000
@@ -51,7 +51,6 @@ export default function FlowDataPage({ id }: { id: number }) {
   const [hidden, setHidden] = useState(() => loadHidden(id))
   const [opened, setOpened] = useState<Opened | null>(null)
   const { query, setQuery, sort, setSort, search } = useSearch('data', id)
-  const [facetsShown, toggleFacets] = useFacetsShown()
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
   // Only the answer to the latest ask shows, so a slow one for an older
@@ -124,11 +123,6 @@ export default function FlowDataPage({ id }: { id: number }) {
           </span>
           Data
         </h1>
-        {data !== null && data.searched > 0 && (
-          <button className="facets-toggle" aria-pressed={facetsShown} onClick={toggleFacets} title="Show or hide the facets">
-            Facets
-          </button>
-        )}
         {groups.length > 0 && <ColumnPicker groups={groups} hidden={hidden} onToggle={toggle} />}
         <button onClick={refresh} title="Fetch the latest runs">
           Refresh
@@ -159,9 +153,7 @@ export default function FlowDataPage({ id }: { id: number }) {
               <TimeRange facets={facets} query={query} field="started" onChange={setQuery} />
             </div>
             <div className="search-body">
-              {facetsShown && (
-                <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} display={display} rows={data.searched} />
-              )}
+              <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} display={display} rows={data.searched} />
               <div className="search-results">
                 <div className="data-table-scroll">
                   <table className="data-table">

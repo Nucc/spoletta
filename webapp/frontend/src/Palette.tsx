@@ -1,6 +1,6 @@
 import type { DragEvent, ReactNode } from 'react'
 import type { Flow, ProcessKind, ProcessSettings } from './api'
-import { ObjectIcon, SentryLogo, SubflowIcon } from './icons'
+import { GitHubLogo, ObjectIcon, SentryLogo, SubflowIcon } from './icons'
 
 // Something the sidebar adds to the board: a node of an OPM element, or a
 // process of a kind that talks to a service.
@@ -37,6 +37,15 @@ export const BUILDING_BLOCKS: Block[] = [
 // Each new service is one more entry, once the server runs processes of its kind.
 export const CONNECTORS: (Block & { logo: () => ReactNode })[] = [
   { id: 'sentry', label: 'Sentry', title: 'Fetches issues from Sentry as a list', type: 'process', kind: 'sentry', logo: () => <SentryLogo /> },
+  {
+    id: 'github',
+    label: 'GitHub',
+    title: 'Carries out an operation on GitHub, such as listing issues, commenting or opening a pull request',
+    type: 'process',
+    kind: 'connector',
+    name: 'GitHub',
+    logo: () => <GitHubLogo />,
+  },
 ]
 
 // A module, added as a process that runs it.

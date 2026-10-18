@@ -18,6 +18,7 @@ const decisionLinkMessage = "only a human's or an agent's output link lists stat
 const directionInput = "input"
 const directionOutput = "output"
 const kindAgent = "agent"
+const kindConnector = "connector"
 const kindFlow = "flow"
 const kindHuman = "human"
 const kindScript = "script"
@@ -128,7 +129,7 @@ const (
 	connectionFailure = "failure"
 )
 
-const failureSourceMessage = "only an agent, script or Sentry process fails, so only one leads to what handles its failure"
+const failureSourceMessage = "only an agent, script, Sentry or connector process fails, so only one leads to what handles its failure"
 
 // A flow is a board of its own with everything on it: its processes and
 // objects, the boards of its flow processes, its versions and its runs. Each

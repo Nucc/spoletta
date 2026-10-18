@@ -12,12 +12,13 @@ import {
 import { configures, useMe } from './Account'
 import { FlowBuilderIcon } from './icons'
 import { MCPServers } from './MCPSettings'
+import { DirectorySection } from './Directory'
 import { PeopleSection } from './People'
 import { TeamsSection } from './Teams'
 import { formatTime } from './Runs'
 
 // The parts of the settings, each a tab: #/settings/<tab>.
-export type SettingsTab = 'account' | 'keys' | 'mcp' | 'people' | 'teams'
+export type SettingsTab = 'account' | 'keys' | 'connectors' | 'mcp' | 'people' | 'teams'
 
 // The tabs whoever is signed in sees: their own settings, and an admin's
 // over the instance. Without sign-in, there is only the instance's.
@@ -25,6 +26,7 @@ function tabsFor(me: Me): { id: SettingsTab; label: string }[] {
   const tabs: { id: SettingsTab; label: string }[] = []
   if (me.user) tabs.push({ id: 'account', label: 'Account' })
   if (configures(me)) tabs.push({ id: 'keys', label: 'Model keys' })
+  tabs.push({ id: 'connectors', label: 'Connectors' })
   tabs.push({ id: 'mcp', label: 'MCP servers' })
   if (me.user) tabs.push({ id: 'teams', label: 'Teams' })
   if (me.user?.admin) tabs.push({ id: 'people', label: 'People' })
@@ -81,6 +83,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
           <main className="settings-main">
             {shown === 'account' && <AccountSection me={me} />}
             {shown === 'keys' && <ModelKeysSection onError={report} />}
+            {shown === 'connectors' && <DirectorySection canConfigure={configures(me)} onError={report} />}
             {shown === 'mcp' && <MCPSection me={me} onError={report} />}
             {shown === 'teams' && (
               <TeamsSection canManage={!!(me.user?.admin || me.user?.teamManager)} onError={report} />

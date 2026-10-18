@@ -219,11 +219,12 @@ func (o *oplWriter) structureSentences(id int64, indent string) {
 }
 
 var kindPhrases = map[string]string{
-	kindAgent:  "an agent process, which an AI agent carries out",
-	kindScript: "a script process",
-	kindHuman:  "a human process, which a person carries out",
-	kindFlow:   "a flow process, made of processes of its own",
-	kindSentry: "a Sentry process, which fetches issues",
+	kindAgent:     "an agent process, which an AI agent carries out",
+	kindScript:    "a script process",
+	kindHuman:     "a human process, which a person carries out",
+	kindFlow:      "a flow process, made of processes of its own",
+	kindSentry:    "a Sentry process, which fetches issues",
+	kindConnector: "a connector process, which carries out an operation on a service such as GitHub",
 }
 
 func (o *oplWriter) processSentences(p process, indent string) {

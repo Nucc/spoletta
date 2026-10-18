@@ -139,6 +139,7 @@ func main() {
 	// Where the worker reaches this webapp's MCP proxy.
 	mcp := newMCPBroker(db, env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")), auth != nil)
 	registerMCPRoutes(mux, db, mcp)
+	registerConnectorRoutes(mux, db)
 	eng := newEngine(db, workerURL, sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}, mcp, parallelSteps)
 	registerRunRoutes(mux, db, eng)
 	registerRerunRoutes(mux, db, eng)

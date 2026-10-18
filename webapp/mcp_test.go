@@ -49,7 +49,15 @@ func TestMCPServerProblem(t *testing.T) {
 		{mcpServer{Name: "a", URL: "mcp.example.com"}, "the URL"},
 		{mcpServer{Name: "a", URL: "https://x.io/" + strings.Repeat("p", 2048)}, "the URL"},
 		{mcpServer{Name: "a", URL: "https://x.io", Description: strings.Repeat("d", 1025)}, "the description"},
+		{mcpServer{Name: "a", URL: "https://x.io", Auth: authToken}, ""},
+		{mcpServer{Name: "a", URL: "https://x.io", Auth: "basic"}, "auth must be"},
+		// A connector takes its token, and its service's API unless told otherwise.
+		{mcpServer{Name: "gh", Connector: "github"}, ""},
+		{mcpServer{Name: "gh", Connector: "github", URL: "https://ghe.example.com/api/v3"}, ""},
+		{mcpServer{Name: "gh", Connector: "github", Auth: authOAuth}, "takes a token"},
+		{mcpServer{Name: "gh", Connector: "gitlab"}, "no connector"},
 	} {
+		c.s.defaults()
 		msg := c.s.problem()
 		if (c.problem == "") != (msg == "") || !strings.Contains(msg, c.problem) {
 			t.Errorf("problem(%.80q, %.80q) = %q, want %q", c.s.Name, c.s.URL, msg, c.problem)

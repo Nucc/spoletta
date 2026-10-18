@@ -4345,3 +4345,164 @@ select.flow-owner:disabled {
     transform: none;
   }
 }
+
+/* Connectors built into the webapp, and the tools of MCP servers an agent
+   process keeps to. */
+.process-node.connector .node-icon {
+  background: #1f2328;
+}
+
+.palette-logo.github {
+  background: #1f2328;
+}
+
+.mcp-badge {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  color: #57606a;
+  background: #eaeef2;
+  border-radius: 10px;
+}
+
+.mcp-badge.write {
+  margin-left: 6px;
+  color: #953800;
+  background: #fff1e5;
+}
+
+.mcp-item-head .mcp-badge {
+  margin-right: auto;
+}
+
+.mcp-token {
+  display: flex;
+  gap: 6px;
+}
+
+.mcp-token input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.mcp-token button {
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mcp-token button:disabled {
+  color: #8c959f;
+  cursor: not-allowed;
+}
+
+.mcp-pick {
+  flex-wrap: wrap;
+}
+
+.mcp-tools {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 100%;
+  gap: 4px;
+  padding-left: 24px;
+}
+
+.mcp-tools > .link-button {
+  align-self: flex-start;
+}
+
+.mcp-tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  font-size: 13px;
+}
+
+.connector-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel-required {
+  color: #cf222e;
+}
+
+.settings-directory .directory-category h3 {
+  margin: 20px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #656d76;
+}
+
+.directory-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.directory-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+}
+
+.directory-item > .link-button {
+  align-self: flex-start;
+  font-size: 13px;
+}
+
+.directory-description {
+  font-size: 13px;
+}
+
+.directory-operations {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.directory-docs {
+  font-size: 12px;
+}
+
+.directory-install {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #d8dee4;
+}
+
+.directory-install .panel-button {
+  margin-top: 0;
+}

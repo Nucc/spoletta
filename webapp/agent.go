@@ -220,7 +220,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 			return res, err
 		}
 		var msg string
-		run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, settings.MCPServers)
+		run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, settings)
 		if err != nil {
 			return res, err
 		}

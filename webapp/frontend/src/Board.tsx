@@ -1251,7 +1251,7 @@ export default function Board({
     // A process dropped on another handles its failure, if it can fail.
     if (isProcess(source) && isProcess(target)) {
       const node = getNode(source)
-      const fails = node?.type === 'process' && ['agent', 'script', 'sentry'].includes(node.data.kind)
+      const fails = node?.type === 'process' && ['agent', 'script', 'sentry', 'connector'].includes(node.data.kind)
       return fails && source !== target && !edges.some((e) => e.source === source && e.target === target)
     }
     if (!isProcess(source) || !isObject(target)) return false

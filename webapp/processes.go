@@ -43,6 +43,12 @@ type processSettings struct {
 	Sentry *sentrySettings `json:"sentry,omitempty"`
 	// The MCP servers an agent process may use, by id; none by default. See mcp.go.
 	MCPServers []int64 `json:"mcpServers,omitempty"`
+	// The tools it keeps to of each of them, by server id. A server it
+	// names none for gives it all its tools, and a connector only those
+	// that change nothing; see toolFilter.
+	MCPTools map[int64][]string `json:"mcpTools,omitempty"`
+	// The operation a connector process carries out; see connectors.go.
+	Connector *connectorSettings `json:"connector,omitempty"`
 	// The flow's repositories an agent or script process works on, by name;
 	// all of them when absent, none when empty. See workspace.go.
 	Repositories *[]string `json:"repositories,omitempty"`
@@ -52,10 +58,10 @@ type processSettings struct {
 	// decisions can no longer send the object back to a process that ran;
 	// defaultRounds when absent. See engine.go.
 	Rounds *int `json:"rounds,omitempty"`
-	// How long an agent, script or Sentry step may take, in seconds, before
+	// How long an agent, script, Sentry or connector step may take, in seconds, before
 	// it fails; the worker's own limit when absent.
 	Timeout *int `json:"timeout,omitempty"`
-	// How many more times a failed agent, script or Sentry step is tried, as
+	// How many more times a failed agent, script, Sentry or connector step is tried, as
 	// a step of its own each time; none when absent.
 	Retries *int `json:"retries,omitempty"`
 	// How many of the objects a process takes without waiting for a state
@@ -120,6 +126,21 @@ func (s processSettings) problem() string {
 	if s.Quorum != nil && *s.Quorum < 1 {
 		return "quorum must be at least 1"
 	}
+	for _, tools := range s.MCPTools {
+		if len(tools) > maxConnectorArgs*10 {
+			return "too many MCP tools picked"
+		}
+		for _, t := range tools {
+			if t == "" || len(t) > 128 {
+				return "an MCP tool's name must be from 1 to 128 characters"
+			}
+		}
+	}
+	if s.Connector != nil {
+		if msg := s.Connector.problem(); msg != "" {
+			return msg
+		}
+	}
 	if s.Sentry != nil {
 		return s.Sentry.problem()
 	}
@@ -150,20 +171,29 @@ func (s processSettings) Value() (driver.Value, error) {
 // approves them or requests changes, and fills in the objects it generates. A flow process is made of processes
 // itself, on a board of its own; see boards.go. A subflow process runs
 // another flow, which other flows can reuse the same way; see calls.go. A
-// Sentry process fetches issues from Sentry; see sentry.go.
+// Sentry process fetches issues from Sentry; see sentry.go. A connector
+// process carries out an operation of a connector built into the webapp,
+// such as opening a GitHub issue; see connectors.go.
 const (
-	kindAgent   = "agent"
-	kindScript  = "script"
-	kindHuman   = "human"
-	kindFlow    = "flow"
-	kindSubflow = "subflow"
-	kindSentry  = "sentry"
+	kindAgent     = "agent"
+	kindScript    = "script"
+	kindHuman     = "human"
+	kindFlow      = "flow"
+	kindSubflow   = "subflow"
+	kindSentry    = "sentry"
+	kindConnector = "connector"
 )
 
-const invalidKindMessage = "kind must be agent, script, human, flow, subflow or sentry"
+const invalidKindMessage = "kind must be agent, script, human, flow, subflow, sentry or connector"
 
 func validKind(k string) bool {
-	return k == kindAgent || k == kindScript || k == kindHuman || k == kindFlow || k == kindSubflow || k == kindSentry
+	return k == kindAgent || k == kindScript || k == kindHuman || k == kindFlow || k == kindSubflow || k == kindSentry || k == kindConnector
+}
+
+// Whether a step of the kind runs on its own and may fail, so it can have
+// a timeout, retries and processes running instead once it fails.
+func failingKind(k string) bool {
+	return k == kindAgent || k == kindScript || k == kindSentry || k == kindConnector
 }
 
 const processColumns = "id, flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings"

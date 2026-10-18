@@ -47,8 +47,13 @@ type setupFile struct {
 
 type setupMCPServer struct {
 	Name        string `yaml:"name"`
-	URL         string `yaml:"url"`
+	URL         string `yaml:"url,omitempty"`
 	Description string `yaml:"description,omitempty"`
+	// oauth or token; oauth when absent, but for a connector.
+	Auth string `yaml:"auth,omitempty"`
+	// The built-in connector it is, if any; its URL is then its service's
+	// API, the connector's own when absent.
+	Connector string `yaml:"connector,omitempty"`
 }
 
 type setupFlow struct {
@@ -99,22 +104,25 @@ type setupProcess struct {
 	// agent when absent.
 	Kind string `yaml:"kind,omitempty"`
 	// The procedure a subflow process runs.
-	Runs         string       `yaml:"runs,omitempty"`
-	Model        string       `yaml:"model,omitempty"`
-	Thinking     string       `yaml:"thinking,omitempty"`
-	MCPServers   []string     `yaml:"mcpServers,omitempty"`
-	Repositories *[]string    `yaml:"repositories,omitempty"`
-	Sentry       *setupSentry `yaml:"sentry,omitempty"`
-	Rounds       *int         `yaml:"rounds,omitempty"`
-	Timeout      *int         `yaml:"timeout,omitempty"`
-	Retries      *int         `yaml:"retries,omitempty"`
-	Quorum       *int         `yaml:"quorum,omitempty"`
-	DescribeFlow bool         `yaml:"describeFlow,omitempty"`
-	Recording    bool         `yaml:"recording,omitempty"`
-	Prompt       string       `yaml:"prompt,omitempty"`
-	Script       string       `yaml:"script,omitempty"`
-	Takes        []setupLink  `yaml:"takes,omitempty"`
-	Yields       []setupLink  `yaml:"yields,omitempty"`
+	Runs       string   `yaml:"runs,omitempty"`
+	Model      string   `yaml:"model,omitempty"`
+	Thinking   string   `yaml:"thinking,omitempty"`
+	MCPServers []string `yaml:"mcpServers,omitempty"`
+	// The tools it keeps to of its MCP servers, by server name.
+	MCPTools     map[string][]string `yaml:"mcpTools,omitempty"`
+	Repositories *[]string           `yaml:"repositories,omitempty"`
+	Sentry       *setupSentry        `yaml:"sentry,omitempty"`
+	Connector    *setupConnector     `yaml:"connector,omitempty"`
+	Rounds       *int                `yaml:"rounds,omitempty"`
+	Timeout      *int                `yaml:"timeout,omitempty"`
+	Retries      *int                `yaml:"retries,omitempty"`
+	Quorum       *int                `yaml:"quorum,omitempty"`
+	DescribeFlow bool                `yaml:"describeFlow,omitempty"`
+	Recording    bool                `yaml:"recording,omitempty"`
+	Prompt       string              `yaml:"prompt,omitempty"`
+	Script       string              `yaml:"script,omitempty"`
+	Takes        []setupLink         `yaml:"takes,omitempty"`
+	Yields       []setupLink         `yaml:"yields,omitempty"`
 	// The processes that run after it, and those that run instead once it fails.
 	Next      []string    `yaml:"next,omitempty"`
 	OnFailure []string    `yaml:"onFailure,omitempty"`
@@ -122,6 +130,14 @@ type setupProcess struct {
 	Y         *float64    `yaml:"y,omitempty"`
 	Width     *float64    `yaml:"width,omitempty"`
 	Board     *setupBoard `yaml:"board,omitempty"`
+}
+
+// What a connector process carries out: an operation of a connector's
+// server, by name, with its arguments.
+type setupConnector struct {
+	Server    string            `yaml:"server"`
+	Operation string            `yaml:"operation"`
+	Args      map[string]string `yaml:"args,omitempty"`
 }
 
 type setupSentry struct {

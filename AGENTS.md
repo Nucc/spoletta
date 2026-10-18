@@ -1,6 +1,6 @@
 # Spoletta
 
-Visual builder and engine for agent workflows, modeled on OPM (Object-Process Methodology). Users draw flows of processes and objects on a board; runs execute them server-side with AI agents, bash scripts, people and Sentry fetches.
+Visual builder and engine for agent workflows, modeled on OPM (Object-Process Methodology). Users draw flows of processes and objects on a board; runs execute them server-side with AI agents, bash scripts, people, Sentry fetches and built-in connectors such as GitHub.
 
 ## Layout
 - `webapp/` Go 1.24 HTTP server, stdlib `net/http` mux, MySQL via `database/sql` (no ORM). One package `main`, one file per domain.
@@ -10,7 +10,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 
 ## Key concepts (start here before editing)
 - Flow: a board of processes, objects, links. Kinds: job flow, module/procedure (reused by subflow processes, `modules.go`), struct (single reusable object, `structs.go`).
-- Process kinds: agent, script, human, flow (nested board, `boards.go`), subflow (`calls.go`), sentry.
+- Process kinds: agent, script, human, flow (nested board, `boards.go`), subflow (`calls.go`), sentry, connector (`connectors.go`).
 - Objects have states, attributes, parts; links are OPM links (instrument, consumption, effect, condition on state). Runtime instances in `instances.go`.
 - `engine.go`: executes runs; header comment documents the scheduling semantics. `runs.go` stores runs/steps.
 - `reruns.go`: re-running an ended run from one of its processes as a new run on the board as it is: what came before the process is copied as a `copied` step, the process starts with what it took (editable in `RerunDialog.tsx`), and it and what follows run anew (`walk.resume` in `engine.go`), on a branch starting from the commit the run's branch was at as the process started.
@@ -20,6 +20,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 - `opl.go`: renders the board as OPL sentences, shown in the UI and given to agents.
 - `assistant.go`: each flow's assistant, a chat at the bottom right of the board (`Assistant.tsx`). pi in the worker, run without tools and kept to the flow by its prompt, replies with the flow as a setup file, which is imported through `setup_import.go` (saving a version first); it may change only that flow.
 - `mcp.go`: MCP servers via OAuth, proxied per agent step at `/mcp/{id}`. Admins configure servers; each person connects them for themselves (`mcp_tokens`), and an agent step uses the connections of whoever its run is for (`runUser`). Their tokens, like model keys, are sealed with `SECRET_KEY` (`secrets.go`), rotated through `SECRET_KEY_SECONDARY` and `webapp seal-secrets` (`docs/SECRETS.md`); either key can come from a `_FILE`.
+- `connectors.go`: services built into the webapp, each a set of operations (`github.go`), listed in the settings' Connectors directory beside curated remote MCP servers. Installed as an MCP server taking a token an admin sets (`mcp_servers.auth`, `connector`; the token is user 0's `mcp_tokens` row); the proxy answers agents' MCP requests for it itself, and a connector process carries out one operation as a step. `mcp_tools.go`: an agent process's picked tools of each server (`mcpTools`), which the proxy holds it to, filtering `tools/list` and refusing other calls; without picking, all of an MCP server's tools and a connector's that only read. New connectors are code here, never plugins.
 - `model_keys.go`: model providers' API keys, set by admins, by the environment variable pi reads each from; the worker says which variables its models read (`worker/keys.go`, from `models.json`) and gets the saved keys per agent step.
 - `users.go`: people sign in over OpenID Connect, with the company's provider, Google or both (off without `OIDC_ISSUER` and `GOOGLE_CLIENT_ID`), the same user with either (`user_identities`); every `/api/` request then needs a session, and runs and human decisions record who. `user_roles.go`: a user's roles name the human objects whose processes they decide ("Finance handles Approve payment"), checked when a review is decided. Not to be confused with a link's role (instrument, consumption). Admins add, remove (soft: `removed_at`) and promote people in the settings (`#/settings`, `Settings.tsx`).
 - `teams.go`: teams of people, made by admins and team managers. `owners.go`: every flow, procedure and struct is global, a team's or a user's (its maker's by default); `guardFlows` turns away requests about flows the user doesn't see, finding the flow from the path, query and JSON body, so a new route with a new kind of id needs an entry there. Role holders see flows whose reviews they decide, read-only.

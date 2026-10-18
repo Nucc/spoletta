@@ -2,7 +2,7 @@
 
 A setup file describes everything built in the app as YAML. That covers the MCP servers, the structs, the procedures and the flows, with every board, process, object, link and schedule on them. You can keep it under version control, edit it by hand, or have an LLM write it, and then import it into any instance of the app.
 
-It leaves out what runs produce: runs, versions, undo history, and the values that persistent objects stored. MCP servers' sign-ins (tokens) stay out too, so after importing a server you sign in to it again.
+It leaves out what runs produce: runs, versions, undo history, and the values that persistent objects stored. MCP servers' sign-ins and tokens stay out too, so after importing a server you sign in to it again, or an admin sets its token.
 
 ## Exporting and importing
 
@@ -20,7 +20,7 @@ What importing does:
 - A struct, procedure or flow the app doesn't have yet is **created**.
 - One the app already has, by name, is **updated** to match the file. Anything on its boards that the file doesn't have is removed. Processes, objects, states and attributes that match by name, on the same board, keep their ids, so the flow's past runs and the values its persistent objects stored still point to them. The board is saved as a version first, and the import is one step of the board's undo history, so you can go back with Cmd-Z or from Versions. Going back restores the board only. The flow's repositories, branch prefix, schedules and whether it's a procedure stay as imported, and so do MCP servers.
 - Flows that the file doesn't mention stay as they are. Import never deletes a flow.
-- An MCP server is matched by name. Its URL and description are set from the file. A server whose URL changes is signed out.
+- An MCP server is matched by name. Its URL, description, auth and connector are set from the file. A server whose URL or auth changes is signed out, and loses its token.
 - A flow's schedules become the file's. Schedules the flow already has with the same cron and time zone are kept; others are removed.
 - The file is imported **whole or not at all**. If anything is wrong, the reply says what and where, and nothing changes. A flow that is running can't be updated.
 
@@ -45,7 +45,15 @@ mcpServers:
   - name: jira          # letters, digits, - and _
     url: https://jira.example.com/mcp
     description: Our Jira
+  - name: home
+    url: https://home.example.com/api/mcp
+    auth: token         # oauth (default): each person signs in; token: an admin sets one for everyone
+  - name: github
+    connector: github   # a connector built into the app; it takes a token an admin sets
+    url: https://ghe.example.com/api/v3   # its service's API; the connector's own if absent
 ```
+
+A connector is a service the app itself works with, such as GitHub. Agents use it as an MCP server, its operations being its tools, and a `connector` process carries out one of its operations as a step. The app has the connector `github`.
 
 ### Flows and procedures
 
@@ -72,13 +80,15 @@ Flows and procedures have the same shape:
 
 ```yaml
 - name: Fetch
-  kind: agent           # agent (default), script, human, flow, subflow or sentry
+  kind: agent           # agent (default), script, human, flow, subflow, sentry or connector
   prompt: |
     Fetch the newest ticket.
   script: echo hi       # for script processes
   model: anthropic/claude-sonnet   # agent: provider/id; the default if absent
   thinking: low         # off, minimal, low, medium, high, xhigh or max
   mcpServers: [jira]    # agent: the MCP servers it may use, by name
+  mcpTools:             # agent: the tools it keeps to of each, by server; all of an MCP server's,
+    jira: [search]      #   and a connector's that only read, for a server not named here
   repositories: [app]   # the flow's repositories it works on; all if absent, none if []
   rounds: 3             # agent deciding states: how many times it can send work back
   timeout: 600          # seconds
@@ -88,6 +98,10 @@ Flows and procedures have the same shape:
   recording: true       # flow process: each time it runs is a run of its own
   runs: Summarize       # subflow: the procedure it runs
   sentry: {organization: acme, project: web, query: "is:unresolved", sort: date, limit: 10}
+  connector:            # connector process: an operation of an installed connector
+    server: github
+    operation: add_comment
+    args: {owner: acme, repo: app, number: "{{Bug.number}}", body: "Looking at {{Bug.title}}"}
   takes: [...]          # links from objects it takes
   yields: [...]         # links to objects it generates
   next: [Review]        # the processes that run after it

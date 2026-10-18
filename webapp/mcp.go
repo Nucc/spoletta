@@ -34,15 +34,38 @@ import (
 // at /mcp/{id}, which puts the server's token on the request. The step's
 // token stops working when the step ends. The servers' tokens are sealed
 // with SECRET_KEY; see secrets.go.
+//
+// A server may instead take a token an admin sets, such as an API key: that
+// one connection is everyone's, and nobody signs in. The connectors built
+// into the webapp are such servers (see connectors.go): the proxy answers
+// their requests itself, from the connector's operations, which call the
+// connector's service with the token.
+//
+// An agent process may keep to some of a server's tools, which the proxy
+// holds it to: tools/list leaves out the others, and calling one is refused.
+// Unless it picks, it has all of an MCP server's tools, and of a connector
+// only those that change nothing.
 
 type mcpServer struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	URL         string `json:"url"`
 	Description string `json:"description"`
-	// Whether whoever asked connected it, so their agents can use it.
+	// How it is connected: authOAuth by each person signing in, authToken
+	// with the one token an admin sets.
+	Auth string `json:"auth"`
+	// The built-in connector it is, by name, if it is one; its URL is then
+	// where the connector reaches its service's API.
+	Connector string `json:"connector,omitempty"`
+	// Whether whoever asked connected it, so their agents can use it; for
+	// a server taking a token, whether its token is set.
 	Connected bool `json:"connected"`
 }
+
+const (
+	authOAuth = "oauth"
+	authToken = "token"
+)
 
 func migrateMCP(db *sql.DB) error {
 	stmts := []string{`CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -80,12 +103,21 @@ func migrateMCP(db *sql.DB) error {
 			return err
 		}
 	}
+	for _, c := range []struct{ name, def string }{
+		{"auth", "VARCHAR(16) NOT NULL DEFAULT 'oauth'"},
+		{"connector", "VARCHAR(64) NOT NULL DEFAULT ''"},
+	} {
+		if err := addColumn(db, "mcp_servers", c.name, c.def); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // A server's columns, for scanMCPServer, with whether the user whose id is
-// the first argument connected it.
-const mcpServerColumns = "id, name, url, description, EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.server_id = mcp_servers.id AND t.user_id = ?)"
+// the first argument connected it. The token of a server taking one is the
+// connection of the user 0, whom nobody is.
+const mcpServerColumns = "id, name, url, description, auth, connector, EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.server_id = mcp_servers.id AND t.user_id = IF(mcp_servers.auth = 'token', 0, ?))"
 
 // Whose connections a request is about: its user's, or without sign-in, everyone's.
 func tokenOwner(r *http.Request) int64 {
@@ -101,7 +133,7 @@ func refuseMCPConfig(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func scanMCPServer(row interface{ Scan(...any) error }, s *mcpServer) error {
-	return row.Scan(&s.ID, &s.Name, &s.URL, &s.Description, &s.Connected)
+	return row.Scan(&s.ID, &s.Name, &s.URL, &s.Description, &s.Auth, &s.Connector, &s.Connected)
 }
 
 // pi names tools mcp__<server>__<tool>, and takes server names that differ
@@ -117,6 +149,9 @@ func (s mcpServer) problem() string {
 	if !mcpNamePattern.MatchString(s.Name) {
 		return "the name may only have letters, digits, - and _, up to 64"
 	}
+	if s.Connector != "" && findConnector(s.Connector) == nil {
+		return fmt.Sprintf("there is no connector named %s", quote(s.Connector))
+	}
 	u, err := url.Parse(s.URL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || len(s.URL) > 2048 {
 		return "the URL must be an http or https address"
@@ -124,7 +159,32 @@ func (s mcpServer) problem() string {
 	if len(s.Description) > 1024 {
 		return "the description may be up to 1024 characters"
 	}
+	if s.Auth != authOAuth && s.Auth != authToken {
+		return "auth must be oauth or token"
+	}
+	if s.Connector != "" && s.Auth != authToken {
+		return "a connector takes a token"
+	}
 	return ""
+}
+
+// Fills in what a server added without saying takes: signing in, and for a
+// connector a token, its service's API and its description.
+func (s *mcpServer) defaults() {
+	if c := findConnector(s.Connector); c != nil {
+		if s.URL == "" {
+			s.URL = c.URL
+		}
+		if s.Description == "" {
+			s.Description = c.Description
+		}
+		if s.Auth == "" {
+			s.Auth = authToken
+		}
+	}
+	if s.Auth == "" {
+		s.Auth = authOAuth
+	}
 }
 
 // Whether another server has a name pi takes for the same one.
@@ -171,8 +231,9 @@ type mcpConnection struct {
 }
 
 type mcpGrant struct {
-	user    int64
-	servers map[int64]bool
+	user int64
+	// The tools the step has of each server it reaches; nil is all of them.
+	servers map[int64]toolFilter
 }
 
 type mcpSignIn struct {
@@ -237,6 +298,7 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			return
 		}
 		s.Name, s.URL, s.Description = strings.TrimSpace(s.Name), strings.TrimSpace(s.URL), strings.TrimSpace(s.Description)
+		s.defaults()
 		if msg := s.problem(); msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
@@ -248,7 +310,7 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			http.Error(w, "another server has that name", http.StatusConflict)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO mcp_servers (name, url, description) VALUES (?, ?, ?)", s.Name, s.URL, s.Description)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO mcp_servers (name, url, description, auth, connector) VALUES (?, ?, ?, ?, ?)", s.Name, s.URL, s.Description, s.Auth, s.Connector)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -380,6 +442,90 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// A server taking a token has it set by an admin, as everyone's
+	// connection; nobody sees it again.
+	mux.HandleFunc("PUT /api/mcp-servers/{id}/token", func(w http.ResponseWriter, r *http.Request) {
+		if refuseMCPConfig(w, r) {
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		token := strings.TrimSpace(body.Token)
+		if token == "" || len(token) > maxModelKey {
+			http.Error(w, fmt.Sprintf("the token must be from 1 to %d characters", maxModelKey), http.StatusBadRequest)
+			return
+		}
+		var auth string
+		if err := db.QueryRowContext(r.Context(), "SELECT auth FROM mcp_servers WHERE id = ?", id).Scan(&auth); errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "server not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			serverError(w, err)
+			return
+		}
+		if auth != authToken {
+			http.Error(w, "the server is connected by signing in to it, not with a token", http.StatusBadRequest)
+			return
+		}
+		sealed, err := secrets.seal(mcpTokenPlace("access_token", id, 0), token)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if _, err := db.ExecContext(r.Context(), `INSERT INTO mcp_tokens (server_id, user_id, access_token) VALUES (?, 0, ?)
+			ON DUPLICATE KEY UPDATE access_token = VALUES(access_token), refresh_token = NULL, expires_at = NULL`, id, sealed); err != nil {
+			serverError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("DELETE /api/mcp-servers/{id}/token", func(w http.ResponseWriter, r *http.Request) {
+		if refuseMCPConfig(w, r) {
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		if _, err := db.ExecContext(r.Context(), "DELETE FROM mcp_tokens WHERE server_id = ? AND user_id = 0", id); err != nil {
+			serverError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// The tools a server offers, for picking those an agent process uses.
+	mux.HandleFunc("GET /api/mcp-servers/{id}/tools", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		tools, err := b.tools(r.Context(), id, tokenOwner(r))
+		switch {
+		case errors.Is(err, errNotFound):
+			http.Error(w, "server not found", http.StatusNotFound)
+		case errors.Is(err, errMCPNotConnected):
+			http.Error(w, "connect the server to see its tools", http.StatusConflict)
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		default:
+			writeJSON(w, http.StatusOK, tools)
+		}
 	})
 
 	// Streamable HTTP uses these three.
@@ -554,14 +700,17 @@ func getJSON(ctx context.Context, u string, out any) error {
 // it isn't for this redirect yet, and returns where to send the browser to
 // connect the server for the user.
 func (b *mcpBroker) startSignIn(ctx context.Context, id, user int64, redirect string) (string, error) {
-	var serverURL, clientID, registeredRedirect string
-	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, redirect_uri FROM mcp_servers WHERE id = ?", id).
-		Scan(&serverURL, &clientID, &registeredRedirect)
+	var serverURL, clientID, registeredRedirect, auth string
+	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, redirect_uri, auth FROM mcp_servers WHERE id = ?", id).
+		Scan(&serverURL, &clientID, &registeredRedirect, &auth)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errors.New("the server doesn't exist")
 	}
 	if err != nil {
 		return "", err
+	}
+	if auth == authToken {
+		return "", errors.New("nobody signs in to this server: it takes the token an admin sets in Settings")
 	}
 	c, err := discoverOAuth(ctx, serverURL)
 	if err != nil {
@@ -744,6 +893,17 @@ func (b *mcpBroker) finishSignIn(ctx context.Context, q url.Values) (string, err
 // when it has expired or, with rejected set, when the server turned that
 // token away.
 func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected string) (string, error) {
+	var auth string
+	err := b.db.QueryRowContext(ctx, "SELECT auth FROM mcp_servers WHERE id = ?", id).Scan(&auth)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errors.New("the server was removed")
+	}
+	if err != nil {
+		return "", err
+	}
+	if auth == authToken {
+		return adminToken(ctx, b.db, id, rejected)
+	}
 	c := mcpConnection{id, user}
 	b.mu.Lock()
 	lock, ok := b.refreshing[c]
@@ -758,7 +918,7 @@ func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected st
 	var access, refresh sql.NullString
 	var expires sql.NullTime
 	var serverURL, clientID, tokenEndpoint string
-	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, token_endpoint FROM mcp_servers WHERE id = ?", id).
+	err = b.db.QueryRowContext(ctx, "SELECT url, client_id, token_endpoint FROM mcp_servers WHERE id = ?", id).
 		Scan(&serverURL, &clientID, &tokenEndpoint)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errors.New("the server was removed")
@@ -824,6 +984,29 @@ func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected st
 	return t.AccessToken, nil
 }
 
+// The token an admin set for a server taking one. It can't be refreshed, so
+// once the server turns it away, the admin sets a new one.
+func adminToken(ctx context.Context, db *sql.DB, id int64, rejected string) (string, error) {
+	var access sql.NullString
+	err := db.QueryRowContext(ctx, "SELECT access_token FROM mcp_tokens WHERE server_id = ? AND user_id = 0", id).Scan(&access)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !access.Valid) {
+		return "", errMCPNotConnected
+	}
+	if err != nil {
+		return "", err
+	}
+	token, err := secrets.open(mcpTokenPlace("access_token", id, 0), access.String)
+	if err != nil {
+		return "", err
+	}
+	if rejected != "" && token == rejected {
+		return "", errMCPTokenRejected
+	}
+	return token, nil
+}
+
+var errMCPTokenRejected = errors.New("the server turned its token away; an admin sets a new one in Settings, under MCP servers")
+
 // The user a run's agents work for, with their MCP connections: whoever
 // started it, or the run it is part of, else whoever made the schedule that
 // did, else the owner of the flow it runs; nil when none of them is anyone.
@@ -855,26 +1038,25 @@ type mcpRunServer struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Grants an agent step the servers it selects, with the connections of the
-// user it works for: nil is nobody, with no connections when people sign
-// in, and everyone's without. Checks each is connected and returns them
-// with the token that reaches them through the proxy, which revoke ends. A
+// Grants an agent step the servers its process selects, with the
+// connections of the user it works for: nil is nobody, with no connections
+// when people sign in, and everyone's without. A server taking a token has
+// the one an admin set whoever the run is for. Checks each is connected and
+// returns them with the token that reaches them through the proxy, which
+// revoke ends, and which reaches only the tools the process keeps to. A
 // server that is missing or signed out fails the step with a message
 // saying what to do; that is msg, err is for anything else.
-func (b *mcpBroker) grant(ctx context.Context, who *int64, ids []int64) (servers []mcpRunServer, token, msg string, err error) {
-	if len(ids) == 0 {
+func (b *mcpBroker) grant(ctx context.Context, who *int64, uses processSettings) (servers []mcpRunServer, token, msg string, err error) {
+	if len(uses.MCPServers) == 0 {
 		return nil, "", "", nil
 	}
 	var user int64
-	switch {
-	case who != nil:
+	if who != nil {
 		user = *who
-	case b.signIn:
-		return nil, "", "This run is for nobody, so it has no MCP connections: start it yourself, or have the schedule made again by someone who connected its MCP servers.", nil
 	}
-	allowed := map[int64]bool{}
-	for _, id := range ids {
-		if allowed[id] {
+	allowed := map[int64]toolFilter{}
+	for _, id := range uses.MCPServers {
+		if _, ok := allowed[id]; ok {
 			continue
 		}
 		var s mcpServer
@@ -885,15 +1067,21 @@ func (b *mcpBroker) grant(ctx context.Context, who *int64, ids []int64) (servers
 		if err != nil {
 			return nil, "", "", err
 		}
+		if s.Auth == authOAuth && who == nil && b.signIn {
+			return nil, "", "This run is for nobody, so it has no MCP connections: start it yourself, or have the schedule made again by someone who connected its MCP servers.", nil
+		}
 		if _, err := b.accessToken(ctx, id, user, ""); errors.Is(err, errMCPNotConnected) {
-			if b.signIn {
+			switch {
+			case s.Auth == authToken:
+				return nil, "", fmt.Sprintf("The MCP server %s has no token. An admin sets it in Settings, under MCP servers, then run again.", s.Name), nil
+			case b.signIn:
 				return nil, "", fmt.Sprintf("The MCP server %s isn't connected for %s. Connect it in Settings, under MCP servers, then run again.", s.Name, userLabel(ctx, b.db, user)), nil
 			}
 			return nil, "", fmt.Sprintf("The MCP server %s isn't connected. Connect it in Settings, under MCP servers, then run again.", s.Name), nil
 		} else if err != nil {
 			return nil, "", fmt.Sprintf("Couldn't get a token for the MCP server %s: %v", s.Name, err), nil
 		}
-		allowed[id] = true
+		allowed[id] = filterFor(s, uses.MCPTools[id])
 		servers = append(servers, mcpRunServer{
 			Name:        s.Name,
 			URL:         fmt.Sprintf("%s/mcp/%d", b.proxyURL, id),
@@ -924,9 +1112,11 @@ var mcpRequestHeaders = []string{"Accept", "Content-Type", "Mcp-Session-Id", "Mc
 const maxMCPRequestBytes = 10 << 20
 
 // Passes an agent's request on to the MCP server with the server's token,
-// streaming the response back. A request the server turns away gets one
-// retry with a refreshed token; nothing else is retried, since a tool call
-// may already have taken effect.
+// streaming the response back, or answers it from the connector the server
+// is. A request the server turns away gets one retry with a refreshed
+// token; nothing else is retried, since a tool call may already have taken
+// effect. A call of a tool the step doesn't have is refused without
+// reaching the server, and the tools it lists leave those out.
 func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -935,10 +1125,10 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	b.mu.Lock()
-	g := b.grants[token]
-	allowed := ok && g.servers[id]
+	g, granted := b.grants[token]
+	filter, allowed := g.servers[id]
 	b.mu.Unlock()
-	if !allowed {
+	if !ok || !granted || !allowed {
 		http.Error(w, "this MCP server isn't available to this step", http.StatusForbidden)
 		return
 	}
@@ -947,9 +1137,23 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	var serverURL, name string
-	if err := b.db.QueryRowContext(r.Context(), "SELECT url, name FROM mcp_servers WHERE id = ?", id).Scan(&serverURL, &name); err != nil {
+	var serverURL, name, connector string
+	if err := b.db.QueryRowContext(r.Context(), "SELECT url, name, connector FROM mcp_servers WHERE id = ?", id).Scan(&serverURL, &name, &connector); err != nil {
 		http.Error(w, "the MCP server was removed", http.StatusNotFound)
+		return
+	}
+	if c := findConnector(connector); c != nil {
+		access, err := b.accessToken(r.Context(), id, g.user, "")
+		if err != nil {
+			http.Error(w, "token for "+name+": "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		serveConnector(w, r, c, connectorClient{url: serverURL, token: access}, filter, body)
+		return
+	}
+	messages, _ := parseRPC(body)
+	if refusal := filter.refuse(messages); refusal != nil {
+		writeJSON(w, http.StatusOK, refusal)
 		return
 	}
 	if r.URL.RawQuery != "" {
@@ -1005,6 +1209,10 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		w.Header()[k] = v
 	}
 	w.WriteHeader(resp.StatusCode)
+	if filter != nil && listsTools(messages) {
+		filter.filterResponse(w, resp)
+		return
+	}
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32<<10)
 	for {

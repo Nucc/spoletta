@@ -75,6 +75,9 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 			for _, m := range p.Settings.MCPServers {
 				used[m] = true
 			}
+			if c := p.Settings.Connector; c != nil {
+				used[c.Server] = true
+			}
 		}
 		err := scanAll(ctx, tx, "SELECT cron, timezone, enabled FROM schedules WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 			var s setupSchedule
@@ -92,10 +95,19 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 	}
 
 	mcpNames := map[int64]string{}
-	err = scanAll(ctx, tx, "SELECT id, name, url, description FROM mcp_servers ORDER BY name", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, url, description, auth, connector FROM mcp_servers ORDER BY name", func(rows *sql.Rows) error {
 		var id int64
 		var s setupMCPServer
-		err := rows.Scan(&id, &s.Name, &s.URL, &s.Description)
+		err := rows.Scan(&id, &s.Name, &s.URL, &s.Description, &s.Auth, &s.Connector)
+		// What a server takes unless the file says is left out.
+		d := mcpServer{Connector: s.Connector}
+		d.defaults()
+		if s.Auth == d.Auth {
+			s.Auth = ""
+		}
+		if c := findConnector(s.Connector); c != nil && s.URL == c.URL {
+			s.URL = ""
+		}
 		mcpNames[id] = s.Name
 		if only == 0 || used[id] {
 			f.MCPServers = append(f.MCPServers, s)
@@ -278,6 +290,17 @@ func (x exporter) process(p process) setupProcess {
 		if n, ok := x.mcpNames[m]; ok {
 			sp.MCPServers = append(sp.MCPServers, n)
 		}
+	}
+	for m, tools := range st.MCPTools {
+		if n, ok := x.mcpNames[m]; ok {
+			if sp.MCPTools == nil {
+				sp.MCPTools = map[string][]string{}
+			}
+			sp.MCPTools[n] = tools
+		}
+	}
+	if c := st.Connector; c != nil {
+		sp.Connector = &setupConnector{Server: x.mcpNames[c.Server], Operation: c.Operation, Args: c.Args}
 	}
 	sp.Repositories = st.Repositories
 	if st.Sentry != nil {

@@ -1,11 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
+  clearMCPToken,
   connectMCPServer,
   createMCPServer,
   deleteMCPServer,
   disconnectMCPServer,
+  listMCPTools,
+  setMCPToken,
   updateMCPServer,
+  type MCPAuth,
   type MCPServer,
+  type MCPTool,
 } from './api'
 
 // What pi takes as a server name; it names the tools mcp__<name>__<tool>.
@@ -70,6 +75,7 @@ export function MCPServers({
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [description, setDescription] = useState('')
+  const [auth, setAuth] = useState<MCPAuth>('oauth')
   const [adding, setAdding] = useState(false)
   const nameOk = NAME_PATTERN.test(name.trim())
   const urlOk = /^https?:\/\/\S+$/.test(url.trim())
@@ -77,10 +83,11 @@ export function MCPServers({
   const add = async () => {
     setAdding(true)
     try {
-      await createMCPServer({ name: name.trim(), url: url.trim(), description: description.trim() })
+      await createMCPServer({ name: name.trim(), url: url.trim(), description: description.trim(), auth })
       setName('')
       setUrl('')
       setDescription('')
+      setAuth('oauth')
       onChanged()
     } catch (err) {
       onError(err)
@@ -94,8 +101,10 @@ export function MCPServers({
   return (
     <>
       <p className="panel-note">
-        Servers agents can use. Connect each by signing in; then pick, in an agent process's panel, the ones it may use.
+        Servers agents can use. Connect each by signing in, or for one taking a token, have an admin set it for
+        everyone; then pick, in an agent process's panel, the ones it may use and, if you like, which of their tools.
         Agents use none unless picked, and reach them as whoever their run is for, with that person's connection.
+        Built-in connectors, such as GitHub's, are added from Connectors.
       </p>
       {servers.length === 0 ? (
         <p className="panel-note">No servers yet.</p>
@@ -108,6 +117,8 @@ export function MCPServers({
               canConfigure={canConfigure}
               onConnect={() => connectMCPServer(s.id)}
               onDisconnect={() => act(() => disconnectMCPServer(s.id))}
+              onSetToken={(token) => act(() => setMCPToken(s.id, token))}
+              onClearToken={() => act(() => clearMCPToken(s.id))}
               onDescribe={(d) => act(() => updateMCPServer(s.id, { description: d }).then(() => undefined))}
               onRemove={() => act(() => deleteMCPServer(s.id))}
             />
@@ -150,6 +161,13 @@ export function MCPServers({
               onChange={(e) => setDescription(e.target.value)}
             />
           </label>
+          <label className="panel-field">
+            <span>Connected by</span>
+            <select value={auth} onChange={(e) => setAuth(e.target.value as MCPAuth)}>
+              <option value="oauth">Each person signing in</option>
+              <option value="token">A token an admin sets, such as an API key</option>
+            </select>
+          </label>
           <button className="panel-button" type="submit" disabled={!nameOk || !urlOk || adding}>
             Add
           </button>
@@ -164,6 +182,8 @@ function MCPServerItem({
   canConfigure,
   onConnect,
   onDisconnect,
+  onSetToken,
+  onClearToken,
   onDescribe,
   onRemove,
 }: {
@@ -171,17 +191,22 @@ function MCPServerItem({
   canConfigure: boolean
   onConnect: () => void
   onDisconnect: () => void
+  onSetToken: (token: string) => void
+  onClearToken: () => void
   onDescribe: (description: string) => void
   onRemove: () => void
 }) {
   const [description, setDescription] = useState(s.description)
+  const [token, setToken] = useState('')
   const save = () => description.trim() !== s.description && onDescribe(description.trim())
+  const takesToken = s.auth === 'token'
   return (
     <li className="mcp-item">
       <div className="mcp-item-head">
         <span className="mcp-item-name">{s.name}</span>
+        {s.connector && <span className="mcp-badge">Built-in connector</span>}
         <span className={`mcp-status${s.connected ? ' connected' : ''}`}>
-          {s.connected ? 'Connected' : 'Not connected'}
+          {takesToken ? (s.connected ? 'Token set' : 'No token') : s.connected ? 'Connected' : 'Not connected'}
         </span>
       </div>
       <span className="mcp-item-url" title={s.url}>
@@ -200,9 +225,38 @@ function MCPServerItem({
       ) : (
         s.description && <span className="mcp-item-description">{s.description}</span>
       )}
+      {takesToken && canConfigure && (
+        <form
+          className="mcp-token"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (token.trim() === '') return
+            onSetToken(token.trim())
+            setToken('')
+          }}
+        >
+          <input
+            type="password"
+            value={token}
+            autoComplete="off"
+            placeholder={s.connected ? 'Set a new token…' : 'Paste its token…'}
+            aria-label={`Token of ${s.name}`}
+            onChange={(e) => setToken(e.target.value)}
+          />
+          <button type="submit" disabled={token.trim() === ''}>
+            Set token
+          </button>
+        </form>
+      )}
+      {takesToken && !canConfigure && (
+        <small className="panel-note">
+          {s.connected ? 'Everyone uses the token an admin set.' : 'An admin sets its token for everyone.'}
+        </small>
+      )}
       <div className="mcp-item-actions">
-        <button onClick={onConnect}>{s.connected ? 'Sign in again' : 'Connect'}</button>
-        {s.connected && <button onClick={onDisconnect}>Disconnect</button>}
+        {!takesToken && <button onClick={onConnect}>{s.connected ? 'Sign in again' : 'Connect'}</button>}
+        {!takesToken && s.connected && <button onClick={onDisconnect}>Disconnect</button>}
+        {takesToken && canConfigure && s.connected && <button onClick={onClearToken}>Clear token</button>}
         {canConfigure && (
           <button className="danger" onClick={onRemove}>
             Remove
@@ -213,20 +267,31 @@ function MCPServerItem({
   )
 }
 
-// The servers an agent process may use, picked from those in the settings.
+// The servers an agent process may use, picked from those in the settings,
+// and of each, if it picks, the tools it keeps to.
 export function MCPServerPicker({
   servers,
   selected,
+  tools,
   readOnly,
   onChange,
+  onToolsChange,
   onOpenSettings,
 }: {
   servers: MCPServer[] | null
   selected: number[]
+  // The tools picked of each server, by id; a server not in it gives all
+  // its tools, a connector only those that read.
+  tools: Record<string, string[]>
   readOnly: boolean
   onChange: (ids: number[]) => void
+  onToolsChange: (tools: Record<string, string[]>) => void
   onOpenSettings: () => void
 }) {
+  const pickTools = (id: number, picked: string[] | undefined) => {
+    const { [String(id)]: _, ...rest } = tools
+    onToolsChange(picked === undefined ? rest : { ...rest, [String(id)]: picked })
+  }
   // Picked servers since removed from the settings stay listed, so they can be unpicked.
   const missing = servers ? selected.filter((id) => !servers.some((s) => s.id === id)) : []
   return (
@@ -249,19 +314,29 @@ export function MCPServerPicker({
                 type="checkbox"
                 checked={on}
                 disabled={readOnly}
-                onChange={(e) =>
+                onChange={(e) => {
+                  if (!e.target.checked) pickTools(s.id, undefined)
                   onChange(e.target.checked ? [...selected, s.id] : selected.filter((id) => id !== s.id))
-                }
+                }}
               />
               <span>{s.name}</span>
             </label>
-            {on && !s.connected && (
+            {on && !s.connected && s.auth === 'token' && <span className="mcp-status">No token yet</span>}
+            {on && !s.connected && s.auth !== 'token' && (
               <>
                 <span className="mcp-status">Not connected</span>
                 <button className="link-button" onClick={() => connectMCPServer(s.id)}>
                   Connect
                 </button>
               </>
+            )}
+            {on && (
+              <MCPToolPicker
+                server={s}
+                picked={tools[String(s.id)]}
+                readOnly={readOnly}
+                onChange={(picked) => pickTools(s.id, picked)}
+              />
             )}
           </div>
         )
@@ -282,5 +357,79 @@ export function MCPServerPicker({
         <small className="panel-note">The agent uses no MCP servers.</small>
       )}
     </fieldset>
+  )
+}
+
+// Which of a server's tools an agent process keeps to: all of an MCP
+// server's and a connector's that only read until it picks, and those it
+// picks once it does. The tools are asked of the server when opened.
+function MCPToolPicker({
+  server,
+  picked,
+  readOnly,
+  onChange,
+}: {
+  server: MCPServer
+  // undefined until it picks.
+  picked: string[] | undefined
+  readOnly: boolean
+  onChange: (picked: string[] | undefined) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [tools, setTools] = useState<MCPTool[] | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+  useEffect(() => {
+    if (!open || tools) return
+    listMCPTools(server.id).then(setTools, (err) => setProblem(err instanceof Error ? err.message : String(err)))
+  }, [open, tools, server.id])
+
+  const summary =
+    picked !== undefined
+      ? `${picked.length} ${picked.length === 1 ? 'tool' : 'tools'} picked`
+      : server.connector
+        ? 'Tools that only read'
+        : 'All its tools'
+  // Picking starts from what it has without picking.
+  const current = picked ?? tools?.filter((t) => !server.connector || t.readOnly).map((t) => t.name) ?? []
+  const toggle = (name: string, on: boolean) =>
+    onChange(on ? [...current.filter((n) => n !== name), name] : current.filter((n) => n !== name))
+
+  return (
+    <div className="mcp-tools">
+      <button className="link-button" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {summary}
+        {open ? ' ▾' : ' ▸'}
+      </button>
+      {open && problem && <small className="panel-warning">{problem}</small>}
+      {open && !problem && !tools && <small className="panel-note">Asking the server for its tools…</small>}
+      {open && tools && (
+        <ul className="mcp-tool-list">
+          {tools.map((t) => (
+            <li key={t.name}>
+              <label className="panel-check" title={t.description}>
+                <input
+                  type="checkbox"
+                  checked={current.includes(t.name)}
+                  disabled={readOnly}
+                  onChange={(e) => toggle(t.name, e.target.checked)}
+                />
+                <span>{t.title || t.name}</span>
+                {/* Only a connector says for each tool; an MCP server may say a tool only reads. */}
+                {server.connector
+                  ? !t.readOnly && <span className="mcp-badge write">changes things</span>
+                  : t.readOnly && <span className="mcp-badge">only reads</span>}
+              </label>
+            </li>
+          ))}
+          {picked !== undefined && !readOnly && (
+            <li>
+              <button className="link-button" onClick={() => onChange(undefined)}>
+                {server.connector ? 'Back to the tools that only read' : 'Back to all its tools'}
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
   )
 }

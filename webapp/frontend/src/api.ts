@@ -5,8 +5,19 @@
 // process runs another flow, so flows can reuse each other: the objects it
 // takes are given to the objects of the same names on that flow's top board,
 // and it generates what that flow's run leaves of the objects named like the
-// ones it generates. A Sentry process fetches issues from Sentry.
-export type ProcessKind = 'agent' | 'script' | 'human' | 'flow' | 'subflow' | 'sentry'
+// ones it generates. A Sentry process fetches issues from Sentry. A
+// connector process carries out an operation of a connector built into the
+// webapp, such as commenting on a GitHub issue.
+export type ProcessKind = 'agent' | 'script' | 'human' | 'flow' | 'subflow' | 'sentry' | 'connector'
+
+// The operation a connector process carries out, on a connector's installed
+// server. Its arguments are text in which {{Object}} and
+// {{Object.attribute}} stand for what the step takes.
+export type ConnectorSettings = {
+  server: number
+  operation: string
+  args?: Record<string, string>
+}
 
 // Which of Sentry's issues a Sentry process fetches.
 export type SentrySettings = {
@@ -34,6 +45,10 @@ export type ProcessSettings = {
   sentry?: SentrySettings
   // The MCP servers an agent process may use, by id; none when absent.
   mcpServers?: number[]
+  // The tools it keeps to of each, by server id. Without picking, it has
+  // all of an MCP server's tools and a connector's that only read.
+  mcpTools?: Record<string, string[]>
+  connector?: ConnectorSettings
   // The flow's repositories an agent or script process works on, by name;
   // all of them when absent, none when empty.
   repositories?: string[]
@@ -43,7 +58,7 @@ export type ProcessSettings = {
   // no longer send the object back to a process that ran; DEFAULT_ROUNDS
   // when absent.
   rounds?: number
-  // How long an agent, script or Sentry step may take, in seconds; the
+  // How long an agent, script, Sentry or connector step may take, in seconds; the
   // worker's own limit when absent.
   timeout?: number
   // How many more times a failed step is tried; none when absent.
@@ -701,20 +716,89 @@ export function listModels(): Promise<Models> {
 // An MCP server agents can use once it is connected, which signs in through
 // the browser; each agent process picks the ones it uses. With sign-in,
 // connected says whether whoever asked connected it for themselves.
+// A server taking a token, a connector among them, has one an admin sets
+// for everyone instead, and connected says whether it is set.
 export type MCPServer = {
   id: number
   name: string
   url: string
   description: string
+  auth: MCPAuth
+  // The built-in connector it is, if it is one; its URL is then its service's API.
+  connector?: string
   connected: boolean
 }
+
+export type MCPAuth = 'oauth' | 'token'
 
 export function listMCPServers(): Promise<MCPServer[]> {
   return request('/api/mcp-servers')
 }
 
-export function createMCPServer(s: Pick<MCPServer, 'name' | 'url' | 'description'>): Promise<MCPServer> {
+export function createMCPServer(
+  s: Pick<MCPServer, 'name' | 'url' | 'description'> & { auth?: MCPAuth; connector?: string },
+): Promise<MCPServer> {
   return request('/api/mcp-servers', { method: 'POST', body: JSON.stringify(s) })
+}
+
+// Sets the token of a server taking one, which nobody sees again.
+export function setMCPToken(id: number, token: string): Promise<void> {
+  return request(`/api/mcp-servers/${id}/token`, { method: 'PUT', body: JSON.stringify({ token }) })
+}
+
+export function clearMCPToken(id: number): Promise<void> {
+  return request(`/api/mcp-servers/${id}/token`, { method: 'DELETE' })
+}
+
+// A tool of a server, as an agent process picks those it uses.
+export type MCPTool = {
+  name: string
+  title?: string
+  description?: string
+  // Whether it changes nothing, as it says.
+  readOnly: boolean
+}
+
+export function listMCPTools(id: number): Promise<MCPTool[]> {
+  return request(`/api/mcp-servers/${id}/tools`)
+}
+
+// An entry of the settings' directory: a connector built into the webapp,
+// or an MCP server picked to go with them, either installed as an MCP server.
+export type DirectoryEntry = {
+  name: string
+  title: string
+  category: string
+  description: string
+  connector: boolean
+  url: string
+  auth: MCPAuth
+  tokenHelp?: string
+  docs?: string
+  operations?: ConnectorOperation[]
+  // The installed server, if any.
+  installed: number | null
+}
+
+export type ConnectorOperation = {
+  name: string
+  title: string
+  description: string
+  // Whether it changes something on the service.
+  write: boolean
+  params: ConnectorParam[]
+}
+
+export type ConnectorParam = {
+  name: string
+  description: string
+  type: 'string' | 'integer' | 'boolean' | 'strings'
+  required?: boolean
+  enum?: string[]
+}
+
+export function listDirectory(): Promise<DirectoryEntry[]> {
+  return request('/api/connectors')
 }
 
 export function updateMCPServer(id: number, patch: Partial<Pick<MCPServer, 'name' | 'url' | 'description'>>): Promise<MCPServer> {
@@ -1035,7 +1119,7 @@ export function stopRun(id: number): Promise<FlowRun> {
   return request(`/api/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'interrupted' }) })
 }
 
-// Stops an agent, script or Sentry step still going. It fails, which ends its
+// Stops an agent, script, Sentry or connector step still going. It fails, which ends its
 // branch; the rest of the run goes on.
 export function stopStep(run: number, id: number): Promise<void> {
   return request(`/api/runs/${run}/steps/${id}/stop`, { method: 'POST' })

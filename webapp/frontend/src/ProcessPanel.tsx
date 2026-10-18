@@ -25,6 +25,7 @@ import { Data } from './Data'
 import { quantityWords, type Quantity } from './quantity'
 import { fieldsOf, holdsFile, shapeOf, type Field } from './structure'
 import { MCPServerPicker } from './MCPSettings'
+import { ConnectorFields } from './ConnectorFields'
 import { RepositoryPicker } from './FlowSettings'
 import type { RunStatus } from './ProcessNode'
 
@@ -53,6 +54,7 @@ const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'flow', label: 'Flow' },
   { value: 'subflow', label: 'Procedure' },
   { value: 'sentry', label: 'Sentry' },
+  { value: 'connector', label: 'Connector' },
 ]
 
 // Sentry's orders for issues, before the limit applies.
@@ -281,6 +283,18 @@ export default function ProcessPanel({
           readOnly={readOnly}
           onChange={(sentry) => setSettings((s) => ({ ...s, sentry }))}
         />
+      ) : kind === 'connector' ? (
+        <ConnectorFields
+          key="connector"
+          servers={mcpServers}
+          settings={settings.connector}
+          takes={takes}
+          readOnly={readOnly}
+          onChange={(connector) =>
+            setSettings(({ connector: _, ...rest }) => (connector === undefined ? rest : { ...rest, connector }))
+          }
+          onError={onError}
+        />
       ) : kind === 'flow' ? (
         <div key="flow" className="panel-field">
           <p className="panel-note">
@@ -323,9 +337,13 @@ export default function ProcessPanel({
           <MCPServerPicker
             servers={mcpServers}
             selected={settings.mcpServers ?? []}
+            tools={settings.mcpTools ?? {}}
             readOnly={readOnly}
             onChange={(ids) =>
               setSettings(({ mcpServers: _, ...rest }) => (ids.length > 0 ? { ...rest, mcpServers: ids } : rest))
+            }
+            onToolsChange={(tools) =>
+              setSettings(({ mcpTools: _, ...rest }) => (Object.keys(tools).length > 0 ? { ...rest, mcpTools: tools } : rest))
             }
             onOpenSettings={onOpenMCPSettings}
           />
@@ -376,7 +394,7 @@ export default function ProcessPanel({
         </label>
       )}
       {kind === 'script' && repositoryPicker}
-      {(kind === 'agent' || kind === 'script' || kind === 'sentry') && (
+      {(kind === 'agent' || kind === 'script' || kind === 'sentry' || kind === 'connector') && (
         <div className="panel-row">
           {kind === 'agent' && (
             <NumberSetting

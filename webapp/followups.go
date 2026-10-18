@@ -132,7 +132,7 @@ func registerFollowUpRoutes(mux *http.ServeMux, db *sql.DB, workerURL string, mc
 			http.Error(w, "message is required", http.StatusBadRequest)
 			return
 		}
-		f, run, mcpServers, err := startFollowUp(r.Context(), db, runID, stepID, body.Message)
+		f, run, uses, err := startFollowUp(r.Context(), db, runID, stepID, body.Message)
 		if errors.Is(err, errNotFound) {
 			http.Error(w, "no agent step with that id in this run", http.StatusNotFound)
 			return
@@ -159,7 +159,7 @@ func registerFollowUpRoutes(mux *http.ServeMux, db *sql.DB, workerURL string, mc
 				fs.mu.Unlock()
 				cancel()
 			}()
-			res := runFollowUp(ctx, db, workerURL, mcp, who, run, mcpServers, stepID, f.Attempt)
+			res := runFollowUp(ctx, db, workerURL, mcp, who, run, uses, stepID, f.Attempt)
 			if err := finishFollowUp(db, f.ID, res); err != nil {
 				log.Printf("finish follow-up %d of step %d: %v", f.ID, stepID, err)
 			}
@@ -199,22 +199,22 @@ func (e conflictError) Error() string { return string(e) }
 // the MCP servers the step's process uses. A step carries on one follow-up at
 // a time, and only once the run's steps are all over: they'd share its
 // checkouts.
-func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message string) (followUp, agentRun, []int64, error) {
+func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message string) (followUp, agentRun, processSettings, error) {
 	f := followUp{Message: message, Status: stepActive, Commits: []repoCommits{}}
 	var run agentRun
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
 	defer tx.Rollback()
 	// Locking the run orders follow-ups of its steps against each other.
 	var locked int64
 	err = tx.QueryRowContext(ctx, "SELECT id FROM runs WHERE id = ? FOR UPDATE", runID).Scan(&locked)
 	if errors.Is(err, sql.ErrNoRows) {
-		return f, run, nil, errNotFound
+		return f, run, processSettings{}, errNotFound
 	}
 	if err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
 	var kind, status string
 	var processID *int64
@@ -223,17 +223,17 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 		"SELECT kind, status, process_id, process_name, model, thinking, session FROM run_steps WHERE id = ? AND run_id = ?", stepID, runID).
 		Scan(&kind, &status, &processID, &run.ProcessName, &run.Model, &run.Thinking, &session)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && kind != kindAgent {
-		return f, run, nil, errNotFound
+		return f, run, processSettings{}, errNotFound
 	}
 	if err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
 	if session == nil {
-		return f, run, nil, conflictError("the step's agent kept no session to carry on: only agents that work on repositories do, in runs started since sessions are kept")
+		return f, run, processSettings{}, conflictError("the step's agent kept no session to carry on: only agents that work on repositories do, in runs started since sessions are kept")
 	}
 	var s stepSession
 	if err := json.Unmarshal(session, &s); err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
 	var going int
 	err = tx.QueryRowContext(ctx,
@@ -241,10 +241,10 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 		+ (SELECT COUNT(*) FROM run_step_followups f JOIN run_steps s ON s.id = f.step_id WHERE s.run_id = ? AND f.status = ?)`,
 		runID, stepActive, runID, stepActive).Scan(&going)
 	if err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
 	if going > 0 {
-		return f, run, nil, conflictError("the run has a step or a follow-up still going, which works on the same branch; wait until it is over")
+		return f, run, processSettings{}, conflictError("the run has a step or a follow-up still going, which works on the same branch; wait until it is over")
 	}
 	// The next try of the step's conversation.
 	err = tx.QueryRowContext(ctx,
@@ -253,48 +253,47 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 			COALESCE((SELECT MAX(attempt) FROM run_step_followups WHERE step_id = ?), 1)) + 1`,
 		stepID, stepID).Scan(&f.Attempt)
 	if err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
 	res, err := tx.ExecContext(ctx,
 		"INSERT INTO run_step_followups (step_id, attempt, message, status, output, error) VALUES (?, ?, ?, ?, '', '')",
 		stepID, f.Attempt, message, stepActive)
 	if err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
 	if f.ID, err = res.LastInsertId(); err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
-	// The process's MCP servers as it has them now; one since deleted has none.
-	var mcpServers []int64
+	// The process's MCP servers and tools as it has them now; one since
+	// deleted has none.
+	var uses processSettings
 	if processID != nil {
-		var settings processSettings
-		err := tx.QueryRowContext(ctx, "SELECT settings FROM processes WHERE id = ?", *processID).Scan(&settings)
+		err := tx.QueryRowContext(ctx, "SELECT settings FROM processes WHERE id = ?", *processID).Scan(&uses)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return f, run, nil, err
+			return f, run, uses, err
 		}
-		mcpServers = settings.MCPServers
 		run.ProcessID = *processID
 	}
 	if err := tx.Commit(); err != nil {
-		return f, run, nil, err
+		return f, run, processSettings{}, err
 	}
 	f.StartedAt = time.Now()
 	run.Prompt = followUpPrompt(message)
 	run.Workspace = s.Workspace
 	run.SessionID = s.ID
 	run.Resume = true
-	return f, run, mcpServers, nil
+	return f, run, uses, nil
 }
 
 // Runs a follow-up in the worker for whoever asked for it, with their MCP
 // connections, recording its conversation as the step's.
-func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, who *int64, run agentRun, mcpServers []int64, stepID int64, attempt int) runResult {
+func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, who *int64, run agentRun, uses processSettings, stepID int64, attempt int) runResult {
 	var msg string
 	var err error
 	if run.Keys, err = modelKeys(ctx, db); err != nil {
 		return runResult{Error: err.Error()}
 	}
-	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, mcpServers)
+	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, uses)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}

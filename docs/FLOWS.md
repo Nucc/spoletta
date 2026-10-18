@@ -32,6 +32,7 @@ A process is carried out by one of these:
 | `script` | bash in the worker, with `curl` and `jq` | fetch from an API, run a build, transform JSON |
 | `human` | a person in the Spoletta UI | approve or send back work, fill in what a run starts from |
 | `sentry` | Spoletta itself, calling Sentry's issues API | fetch issues to process |
+| `connector` | Spoletta itself, carrying out an operation of a connector built into it, such as GitHub's, with the token an admin set | list issues, comment, label, open or merge a pull request |
 | `flow` | its own board of processes, zoomed into | group steps, run steps once per item of a list |
 | `subflow` | another flow (a procedure), run as a run of its own | reuse a flow across jobs |
 
@@ -182,10 +183,11 @@ A state can have a **rule** saying when an object is in it, such as
   `data contains "urgent"`;
 - the right side is a JSON value, and anything that isn't JSON is a string.
 
-When a script, an agent, a Sentry step or a person generates an object **in
-no state**, it comes out in the **first** of its states, in the order they
-are listed, whose rule holds. If none holds, it comes out in no state. Rules
-are how a script or a Sentry step (which can't decide states) still routes
+When a script, an agent, a Sentry or connector step or a person generates an
+object **in no state**, it comes out in the **first** of its states, in the
+order they are listed, whose rule holds. If none holds, it comes out in no
+state. Rules are how a script, a Sentry or a connector step (which can't
+decide states) still routes
 work, and how an agent's numeric judgement turns into a branch.
 
 Order states from most to least specific. A last state without a rule is not
@@ -206,7 +208,12 @@ by kind:
   `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, empty for the
   default.
 - `mcpServers`: names of MCP servers configured in the app that this agent
-  may use; none by default.
+  may use; none by default. An installed connector, such as GitHub's, is one
+  of them too, its operations being its tools.
+- `mcpTools`: of each of its `mcpServers`, by name, the tools it keeps to,
+  such as `{github: [list_issues, add_comment]}`. A server it names none for
+  gives it all its tools, but a connector only those that change nothing.
+  Pick write tools only for an agent meant to change things.
 - `repositories`: which of the flow's repositories it works in. All of them
   when absent; none when `[]`.
 - `describeFlow: true`: give it the flow's OPL.
@@ -232,6 +239,19 @@ by kind:
   defaults to 10.
 - It yields a list (section 5.5).
 
+**connector**
+- `connector: {server, operation, args}`. `server` names an installed
+  connector among the `mcpServers`, `operation` one of its operations, and
+  `args` its arguments as text, in which `{{Object}}` and
+  `{{Object.attribute}}` stand for what the step takes (section 5.6).
+- GitHub's operations that read: `list_issues`, `search_issues`,
+  `get_issue`, `list_comments`, `list_pull_requests`, `get_pull_request`,
+  `list_pull_request_files`, `get_file`. Those that change GitHub:
+  `create_issue`, `update_issue`, `add_comment`, `add_labels`,
+  `create_pull_request`, `review_pull_request`, `merge_pull_request`. Each
+  takes `owner` and `repo`, and one about an issue or pull request its
+  `number`.
+
 **flow**
 - `board:` an inner board with its own `start`, `processes` and `objects`.
 - `recording: true`: each time it runs (each item, for a list) is a run of
@@ -242,7 +262,7 @@ by kind:
 - `runs:` the name of a procedure. Its links name the procedure's top-board
   objects by name (section 3.8).
 
-Settings for agent, script and Sentry processes:
+Settings for agent, script, Sentry and connector processes:
 - `timeout` in seconds (1 to 86400): the step fails after it.
 - `retries` (0 to 5): how many more times a failed step is tried, each a
   step of its own.
@@ -253,7 +273,7 @@ Settings for any process:
   least 1).
 - `next:` processes that run right after it succeeds.
 - `onFailure:` processes that handle its failure. The source must be an
-  agent, script or Sentry process.
+  agent, script, Sentry or connector process.
 
 ### 3.4 Links
 
@@ -468,7 +488,7 @@ state they chose.
 
 ### 4.5 Failure
 
-- An agent, script or Sentry step fails on an error, a non-zero exit, a reply
+- An agent, script, Sentry or connector step fails on an error, a non-zero exit, a reply
   that doesn't match its contract after it was told so, its `timeout`, or a
   stop by a person.
 - `retries` tries it again, each try a step of its own. A stopped step isn't
@@ -591,6 +611,35 @@ named after: `id`, `shortId`, `title`, `culprit`, `level`, `status`,
 the fields above. It needs `SENTRY_AUTH_TOKEN` (with `event:read`) in the
 server's environment.
 
+### 5.6 A connector step
+
+It carries out its one operation with the token an admin set for the
+connector, and generates one object, what the service answered:
+- An object with attributes takes the answer's fields its attributes are
+  named after; a dotted name reaches into one. An attribute no result has a
+  field for fails the step, naming the fields there are.
+- A list gets an item per result of an operation that lists, such as
+  `list_issues`.
+- An object without attributes holds the whole answer under `data`.
+
+GitHub's issues and pull requests come as `key` (`owner/repo#number`, unique,
+so a shared struct can tell records apart by it), `repo`, `number`, `title`,
+`state` (`open`, `closed`, or for a pull request `merged`), `body`,
+`author`, `labels`, `url`, `createdAt` and `updatedAt`; an issue has
+`stateReason`, `assignees`, `comments`, `closedAt` and `pullRequest`, a pull
+request `draft`, `head`, `headSha`, `base`, `merged`, `mergeable` and
+`mergedAt`.
+
+`{{Object}}` in an argument is what the object holds, its value for one
+without attributes, and `{{Object.attribute}}` one of its attributes: a
+string as it is, anything else as JSON. A list of strings, such as
+`labels`, is JSON or separated by commas. A step that takes a list doesn't
+pick an item of it; put the connector process in a flow process that runs
+per item. An argument naming an object the step doesn't take fails it before
+anything reaches the service. A pull request is opened from a branch that is
+already on GitHub: runs' branches stay in the worker unless a step pushes
+them.
+
 ---
 
 ## 6. OPL, sentence by sentence
@@ -617,7 +666,7 @@ check that each one is what you meant.
 
 | Construct | Sentence |
 |---|---|
-| kind | `"Fix" is an agent process, which an AI agent carries out.` (also: a script process / a human process, which a person carries out / a flow process, made of processes of its own / a Sentry process, which fetches issues) |
+| kind | `"Fix" is an agent process, which an AI agent carries out.` (also: a script process / a human process, which a person carries out / a flow process, made of processes of its own / a Sentry process, which fetches issues / a connector process, which carries out an operation on a service such as GitHub) |
 | subflow | `"Triage" is a procedure, which runs the flow "Triage ticket".` |
 | agent link | `"Editor" handles "Review".` |
 | event | `"Post" entering "weak" triggers "Write".` |
@@ -662,7 +711,7 @@ the full reference; the essentials are below.
 
 ```yaml
 spoletta: 1              # the format's version, always first
-mcpServers: [...]        # name, url, description (sign-in happens in the app)
+mcpServers: [...]        # name, url, description, auth, connector (sign-in and tokens happen in the app)
 structs: [...]           # objects, each its own struct named as the object
 procedures: [...]        # flows other flows run through subflow processes
 flows: [...]             # job flows

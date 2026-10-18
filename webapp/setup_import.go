@@ -45,6 +45,8 @@ type importer struct {
 	tx  *sql.Tx
 	// MCP servers by mcpNameKey.
 	mcp map[string]int64
+	// The connector each MCP server is, by id, if it is one.
+	mcpConnectors map[int64]string
 	// The flows in the app before the import, by name.
 	existing map[string][]flowInfo
 	// The flows of the file imported so far, by name.
@@ -57,7 +59,7 @@ type importer struct {
 
 // Imports f in tx: what is wrong with it is a setupProblem, and changes nothing.
 func importSetup(ctx context.Context, tx *sql.Tx, f setupFile) (setupResult, error) {
-	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, existing: map[string][]flowInfo{},
+	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, existing: map[string][]flowInfo{},
 		imported: map[string]flowInfo{}, entries: map[string]*setupEntry{}, objects: map[int64]map[string]int64{},
 		res: setupResult{Flows: []importedFlow{}}}
 	var entries []*setupEntry
@@ -120,20 +122,22 @@ func importSetup(ctx context.Context, tx *sql.Tx, f setupFile) (setupResult, err
 }
 
 // Adds the file's MCP servers the app doesn't have, and gives the ones it
-// has by name the file's URL and description. One whose URL changes is
-// signed out, since its sign-in was for the old one.
+// has by name the file's URL, description, auth and connector. One whose
+// URL or auth changes is signed out, since its sign-ins or token were for
+// the old one. A file never holds tokens: an admin sets those.
 func (im *importer) mcpServers(servers []setupMCPServer) error {
 	type have struct {
-		id  int64
-		url string
+		id        int64
+		url, auth string
 	}
 	existing := map[string]have{}
-	err := scanAll(im.ctx, im.tx, "SELECT id, name, url FROM mcp_servers", func(rows *sql.Rows) error {
+	err := scanAll(im.ctx, im.tx, "SELECT id, name, url, auth, connector FROM mcp_servers", func(rows *sql.Rows) error {
 		var h have
-		var name string
-		err := rows.Scan(&h.id, &name, &h.url)
+		var name, connector string
+		err := rows.Scan(&h.id, &name, &h.url, &h.auth, &connector)
 		existing[mcpNameKey(name)] = h
 		im.mcp[mcpNameKey(name)] = h.id
+		im.mcpConnectors[h.id] = connector
 		return err
 	})
 	if err != nil {
@@ -141,7 +145,9 @@ func (im *importer) mcpServers(servers []setupMCPServer) error {
 	}
 	seen := map[string]bool{}
 	for _, sm := range servers {
-		s := mcpServer{Name: strings.TrimSpace(sm.Name), URL: strings.TrimSpace(sm.URL), Description: strings.TrimSpace(sm.Description)}
+		s := mcpServer{Name: strings.TrimSpace(sm.Name), URL: strings.TrimSpace(sm.URL), Description: strings.TrimSpace(sm.Description),
+			Auth: strings.TrimSpace(sm.Auth), Connector: strings.TrimSpace(sm.Connector)}
+		s.defaults()
 		if msg := s.problem(); msg != "" {
 			return problemf("MCP server %s: %s", quote(s.Name), msg)
 		}
@@ -152,22 +158,28 @@ func (im *importer) mcpServers(servers []setupMCPServer) error {
 		seen[k] = true
 		h, ok := existing[k]
 		if !ok {
-			res, err := im.tx.ExecContext(im.ctx, "INSERT INTO mcp_servers (name, url, description) VALUES (?, ?, ?)", s.Name, s.URL, s.Description)
+			res, err := im.tx.ExecContext(im.ctx, "INSERT INTO mcp_servers (name, url, description, auth, connector) VALUES (?, ?, ?, ?, ?)",
+				s.Name, s.URL, s.Description, s.Auth, s.Connector)
 			if err != nil {
 				return err
 			}
 			if im.mcp[k], err = res.LastInsertId(); err != nil {
 				return err
 			}
+			im.mcpConnectors[im.mcp[k]] = s.Connector
 			continue
 		}
-		q := "UPDATE mcp_servers SET name = ?, url = ?, description = ? WHERE id = ?"
-		if s.URL != h.url {
-			q = "UPDATE mcp_servers SET name = ?, url = ?, description = ?, client_id = '', redirect_uri = '', token_endpoint = '', access_token = NULL, refresh_token = NULL, expires_at = NULL WHERE id = ?"
+		q := "UPDATE mcp_servers SET name = ?, url = ?, description = ?, auth = ?, connector = ? WHERE id = ?"
+		if s.URL != h.url || s.Auth != h.auth {
+			q = "UPDATE mcp_servers SET name = ?, url = ?, description = ?, auth = ?, connector = ?, client_id = '', redirect_uri = '', token_endpoint = '', access_token = NULL, refresh_token = NULL, expires_at = NULL WHERE id = ?"
+			if _, err := im.tx.ExecContext(im.ctx, "DELETE FROM mcp_tokens WHERE server_id = ?", h.id); err != nil {
+				return err
+			}
 		}
-		if _, err := im.tx.ExecContext(im.ctx, q, s.Name, s.URL, s.Description, h.id); err != nil {
+		if _, err := im.tx.ExecContext(im.ctx, q, s.Name, s.URL, s.Description, s.Auth, s.Connector, h.id); err != nil {
 			return err
 		}
+		im.mcpConnectors[h.id] = s.Connector
 	}
 	return nil
 }
@@ -1125,6 +1137,39 @@ func (b *builder) resolveProcess(bp *bproc) error {
 			return problemf("%s: there is no MCP server named %s", at, quote(m))
 		}
 		s.MCPServers = append(s.MCPServers, id)
+	}
+	for m, tools := range p.MCPTools {
+		id, ok := b.mcp[mcpNameKey(m)]
+		if !ok || !slices.Contains(s.MCPServers, id) {
+			return problemf("%s: mcpTools names %s, which isn't one of its mcpServers", at, quote(m))
+		}
+		if s.MCPTools == nil {
+			s.MCPTools = map[int64][]string{}
+		}
+		s.MCPTools[id] = append([]string{}, tools...)
+	}
+	if pc := p.Connector; pc != nil {
+		if p.Kind != kindConnector {
+			return problemf("%s: only a connector process has connector settings", at)
+		}
+		id, ok := b.mcp[mcpNameKey(pc.Server)]
+		if !ok {
+			return problemf("%s: there is no connector named %s among the mcpServers; install it there, with connector set", at, quote(pc.Server))
+		}
+		c := findConnector(b.mcpConnectors[id])
+		if c == nil {
+			return problemf("%s: %s is an MCP server, not a connector", at, quote(pc.Server))
+		}
+		op := c.operation(pc.Operation)
+		if op == nil {
+			return problemf("%s: %s has no operation %s", at, c.Title, quote(pc.Operation))
+		}
+		for name := range pc.Args {
+			if op.param(name) == nil {
+				return problemf("%s: %s takes no argument %s", at, op.Name, quote(name))
+			}
+		}
+		s.Connector = &connectorSettings{Server: id, Operation: pc.Operation, Args: pc.Args}
 	}
 	if p.Runs != "" {
 		if p.Kind != kindSubflow {

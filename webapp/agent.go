@@ -21,10 +21,13 @@ import (
 // Agent processes run in the worker's pi harness, which takes its models,
 // defaults and credentials from the user's pi setup.
 
-// The models offered for agent processes: pi's enabledModels and its default.
+// The models offered for agent processes: pi's enabledModels and its default,
+// as the worker has them, with the model providers' (see model_providers.go)
+// and their names.
 type agentModels struct {
-	Default string   `json:"default"`
-	Models  []string `json:"models"`
+	Default   string            `json:"default"`
+	Models    []string          `json:"models"`
+	Providers map[string]string `json:"providers,omitempty"`
 }
 
 // An object a process takes as input, with the output of the process that
@@ -92,6 +95,8 @@ type agentRun struct {
 	// The instance's keys the agent reaches its model's provider with, by
 	// the environment variable pi reads each from; see model_keys.go.
 	Keys map[string]string `json:"keys,omitempty"`
+	// The model providers admins added; see model_providers.go.
+	Providers []runProvider `json:"providers,omitempty"`
 }
 
 // The pi session of a step that worked in a workspace, which follow-ups carry on.
@@ -139,10 +144,10 @@ func migrateAgent(db *sql.DB) error {
 	return err
 }
 
-func registerAgentRoutes(mux *http.ServeMux, workerURL string) {
+func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, r *http.Request) {
-		var models agentModels
-		if err := callWorker(r.Context(), http.MethodGet, workerURL+"/models", nil, &models); err != nil {
+		models, err := offeredModels(r.Context(), db, workerURL)
+		if err != nil {
 			http.Error(w, "worker unavailable: "+err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -192,6 +197,18 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		return res, err
 	}
 	started(stepID)
+	// A process without a model of its own takes the default, which its
+	// step keeps for follow-ups.
+	if run.Model == "" {
+		if run.Model, err = defaultModel(ctx, db); err != nil {
+			return res, err
+		}
+		if run.Model != "" {
+			if _, err := db.ExecContext(ctx, "UPDATE run_steps SET model = ? WHERE id = ?", run.Model, stepID); err != nil {
+				return res, err
+			}
+		}
+	}
 	if run.Workspace != nil {
 		run.Workspace.Step = stepID
 	}
@@ -212,7 +229,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	// connections. Its token reaches its MCP servers until the step ends,
 	// retry included.
 	if res.Error == "" {
-		if run.Keys, err = modelKeys(ctx, db); err != nil {
+		if err = run.withModelAccess(ctx, db); err != nil {
 			return res, err
 		}
 		who, err := runUser(ctx, db, runID)

@@ -80,6 +80,9 @@ type runRequest struct {
 	// The model providers' keys of whoever the run is for, by the
 	// environment variable pi reads each from, over the worker's own.
 	Keys map[string]string `json:"keys"`
+	// The model providers an admin added, which go over the host's
+	// models.json; see providers.go.
+	Providers []modelProvider `json:"providers"`
 	// Put the guide to authoring flows before the prompt, for an agent that
 	// can't read it itself.
 	Guide bool `json:"guide"`
@@ -210,6 +213,40 @@ func main() {
 	})
 	mux.HandleFunc("GET /keys", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, keys.report())
+	})
+	// The providers pi knows that the webapp's settings can add, with their
+	// models.
+	mux.HandleFunc("GET /catalog", func(w http.ResponseWriter, r *http.Request) {
+		c, err := loadCatalog()
+		if err != nil {
+			reply(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, c)
+	})
+	// Which of the variables named, ?name=A&name=B, the worker's environment
+	// has, for keys kept in a vault; never what they hold.
+	mux.HandleFunc("GET /env", func(w http.ResponseWriter, r *http.Request) {
+		set, err := envSet(r.URL.Query()["name"])
+		if err != nil {
+			reply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, set)
+	})
+	// The models a custom provider says it serves.
+	mux.HandleFunc("POST /provider-models", func(w http.ResponseWriter, r *http.Request) {
+		var req providerModelsRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
+			reply(w, http.StatusBadRequest, map[string]string{"error": "invalid request: " + err.Error()})
+			return
+		}
+		models, err := providerModels(r.Context(), req)
+		if err != nil {
+			reply(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, map[string][]string{"models": models})
 	})
 	mux.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
 		var run runRequest
@@ -390,6 +427,7 @@ func prepareAgentDir(hostDir, agentDir string) (agentModels, error) {
 	if err != nil {
 		return models, err
 	}
+	agentModelsFile.path, agentModelsFile.host, agentModelsFile.written = filepath.Join(agentDir, "models.json"), modelsJSON, modelsJSON
 	if modelsJSON != nil {
 		err = os.WriteFile(filepath.Join(agentDir, "models.json"), modelsJSON, 0o644)
 	} else {
@@ -457,6 +495,14 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 
 	// The specs and the result live outside the agent's working directory.
 	var resultFile string
+	for _, p := range run.Providers {
+		if err := p.check(); err != nil {
+			return runResult{Error: err.Error()}
+		}
+	}
+	if err := writeAgentModels(run.Providers); err != nil {
+		return runResult{Error: err.Error()}
+	}
 	env, err := run.withKeys(os.Environ())
 	if err != nil {
 		return runResult{Error: err.Error()}

@@ -97,6 +97,9 @@ func main() {
 	if err := migrateModelKeys(db); err != nil {
 		log.Fatal(err)
 	}
+	if err := migrateModelProviders(db); err != nil {
+		log.Fatal(err)
+	}
 	// seal-secrets seals the secrets with the key coming in, and ends,
 	// failing if some changed meanwhile, to be run again; see secrets.go.
 	sealSecrets := len(os.Args) > 1 && os.Args[1] == "seal-secrets"
@@ -120,6 +123,7 @@ func main() {
 	registerTeamRoutes(mux, db, auth)
 	registerOwnerRoutes(mux, db)
 	registerModelKeyRoutes(mux, db, workerURL)
+	registerModelProviderRoutes(mux, db, workerURL)
 	registerFlowListRoutes(mux, db, workerURL)
 	registerProcessRoutes(mux, db)
 	registerFlowRoutes(mux, db)
@@ -156,7 +160,7 @@ func main() {
 	registerOPLRoutes(mux, db)
 	registerSetupRoutes(mux, db)
 	registerAssistantRoutes(mux, db, workerURL)
-	registerAgentRoutes(mux, workerURL)
+	registerAgentRoutes(mux, db, workerURL)
 	registerFileRoutes(mux)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		var version string

@@ -204,7 +204,8 @@ by kind:
   output contract, any change request, and optionally the flow's OPL
   (section 5), so the prompt should say *what* to do and *how well*, not
   repeat the plumbing.
-- `model`: `"provider/id"`, empty for pi's default. `thinking`: one of
+- `model`: `"provider/id"`, empty for the default model the settings
+  keep, or pi's without one. `thinking`: one of
   `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, empty for the
   default.
 - `mcpServers`: names of MCP servers configured in the app that this agent

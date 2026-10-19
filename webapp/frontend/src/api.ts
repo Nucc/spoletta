@@ -229,7 +229,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys']
+const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default']
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<() => void>()
@@ -703,10 +703,13 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 export type Models = {
-  // pi's default model as provider/id, empty if pi picks one itself.
+  // The default model as provider/id: the one kept in the settings, or pi's;
+  // empty if pi picks one itself.
   default: string
-  // pi's enabledModels.
+  // The model providers' picked models, and pi's enabledModels of others.
   models: string[]
+  // The names of the providers added in the settings, by ID.
+  providers?: Record<string, string>
 }
 
 export function listModels(): Promise<Models> {
@@ -1430,6 +1433,94 @@ export function setModelKey(env: string, key: string): Promise<ModelKeys> {
 
 export function deleteModelKey(env: string): Promise<void> {
   return request(`/api/model-keys/${env}`, { method: 'DELETE' })
+}
+
+// Where a provider's key comes from: saved here, or the worker's environment,
+// where a vault puts it.
+export type KeySource = 'saved' | 'env'
+
+// A model provider admins added: one pi knows, or a custom one, such as an
+// AI gateway, at its URL and speaking its API. It reads its key from env;
+// a saved key shows only by its last four characters, and one in the
+// worker's environment by whether the worker has it.
+export type ModelProvider = {
+  id: string
+  name: string
+  api?: string
+  baseUrl?: string
+  keySource: KeySource
+  env: string
+  models: string[]
+  hint?: string
+  envSet?: boolean
+  updatedAt: string
+}
+
+// The providers, the default model kept, and why the worker didn't say
+// which keys its environment has, if it didn't.
+export type ModelProviders = { providers: ModelProvider[]; default: string; workerError: string }
+
+// A model of pi's catalog.
+export type CatalogModel = {
+  id: string
+  name: string
+  reasoning: boolean
+  input?: string[]
+  contextWindow: number
+  maxTokens: number
+}
+
+// A provider pi knows, with its models and the variable it reads its key from.
+export type CatalogProvider = { id: string; name: string; env: string; models: CatalogModel[] }
+
+// A provider as the settings send it: a known one by its ID, a custom one by
+// its name, API and URL. With a key saved already, no key keeps it.
+export type ProviderInput = {
+  id?: string
+  name?: string
+  api?: string
+  baseUrl?: string
+  keySource: KeySource
+  env?: string
+  key?: string
+  models: string[]
+}
+
+// The APIs a custom provider may speak, as pi names them.
+export const CUSTOM_APIS: { value: string; label: string }[] = [
+  { value: 'openai-completions', label: 'OpenAI-compatible (Chat Completions)' },
+  { value: 'openai-responses', label: 'OpenAI Responses' },
+  { value: 'anthropic-messages', label: 'Anthropic-compatible (Messages)' },
+  { value: 'bedrock-converse-stream', label: 'Amazon Bedrock (Converse)' },
+]
+
+export function listModelProviders(): Promise<ModelProviders> {
+  return request('/api/model-providers')
+}
+
+export function providerCatalog(): Promise<{ providers: CatalogProvider[] }> {
+  return request('/api/model-providers/catalog')
+}
+
+export function addModelProvider(input: ProviderInput): Promise<ModelProviders> {
+  return request('/api/model-providers', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function updateModelProvider(id: string, input: ProviderInput): Promise<ModelProviders> {
+  return request(`/api/model-providers/${id}`, { method: 'PUT', body: JSON.stringify(input) })
+}
+
+export function deleteModelProvider(id: string): Promise<ModelProviders> {
+  return request(`/api/model-providers/${id}`, { method: 'DELETE' })
+}
+
+export function setDefaultModel(model: string): Promise<ModelProviders> {
+  return request('/api/model-default', { method: 'PUT', body: JSON.stringify({ model }) })
+}
+
+// The models a custom provider says it serves.
+export function listProviderModels(input: ProviderInput): Promise<{ models: string[] }> {
+  return request('/api/model-providers/models', { method: 'POST', body: JSON.stringify(input) })
 }
 
 // The roles boards name and people hold, to pick from.

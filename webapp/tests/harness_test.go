@@ -558,6 +558,40 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			{"env": "OPENAI_API_KEY", "providers": []string{"openai"}, "set": false},
 		})
 	})
+	// pi knows Anthropic, Amazon Bedrock and OpenAI, with a model or two each.
+	mux.HandleFunc("GET /catalog", func(w http.ResponseWriter, r *http.Request) {
+		models := func(ids ...string) []map[string]any {
+			var ms []map[string]any
+			for _, id := range ids {
+				ms = append(ms, map[string]any{"id": id, "name": id})
+			}
+			return ms
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"providers": []map[string]any{
+			{"id": "anthropic", "name": "Anthropic", "env": "ANTHROPIC_API_KEY", "models": models("claude-a", "claude-b")},
+			{"id": "amazon-bedrock", "name": "Amazon Bedrock", "env": "AWS_BEARER_TOKEN_BEDROCK", "models": models("global.anthropic.claude-b")},
+			{"id": "openai", "name": "OpenAI", "env": "OPENAI_API_KEY", "models": models("gpt-x")},
+		}})
+	})
+	// Its environment has the variables a vault put there, VAULT_*.
+	mux.HandleFunc("GET /env", func(w http.ResponseWriter, r *http.Request) {
+		set := map[string]bool{}
+		for _, name := range r.URL.Query()["name"] {
+			set[name] = strings.HasPrefix(name, "VAULT_")
+		}
+		writeJSON(w, http.StatusOK, set)
+	})
+	// A custom provider speaking OpenAI's API serves two models to whoever
+	// has its key.
+	mux.HandleFunc("POST /provider-models", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]string
+		json.NewDecoder(r.Body).Decode(&req)
+		if req["api"] != "openai-completions" || req["key"] != "typed-key" && !strings.HasPrefix(req["env"], "VAULT_") {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the provider answered 401 Unauthorized"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string][]string{"models": {"gw-1", "gw-2"}})
+	})
 	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{})
 	})

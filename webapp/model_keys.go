@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -95,8 +96,10 @@ func workerKeys(ctx context.Context, workerURL string) ([]workerKey, error) {
 }
 
 // The keys the worker's models read, with those saved here; a key saved for
-// a variable no model reads any more shows too, to be removed. Says why the
-// worker couldn't say, if it couldn't.
+// a variable no model reads any more shows too, to be removed. The worker's
+// models of a provider added in the settings aren't offered, so their
+// providers' keys don't show. Says why the worker couldn't say, if it
+// couldn't.
 func listModelKeys(ctx context.Context, db *sql.DB, workerURL string) ([]modelKey, string, error) {
 	keys := []modelKey{}
 	reported, err := workerKeys(ctx, workerURL)
@@ -104,8 +107,17 @@ func listModelKeys(ctx context.Context, db *sql.DB, workerURL string) ([]modelKe
 	if err != nil {
 		workerError = "the worker didn't say which keys its models read: " + err.Error()
 	}
+	added, err := modelProviders(ctx, db)
+	if err != nil {
+		return nil, "", err
+	}
 	for _, k := range reported {
-		keys = append(keys, modelKey{workerKey: k})
+		k.Providers = slices.DeleteFunc(k.Providers, func(p string) bool {
+			return slices.ContainsFunc(added, func(a modelProvider) bool { return a.ID == p })
+		})
+		if len(k.Providers) > 0 {
+			keys = append(keys, modelKey{workerKey: k})
+		}
 	}
 	err = scanAll(ctx, db, "SELECT env, api_key, updated_at FROM model_keys ORDER BY env", func(rows *sql.Rows) error {
 		var env, stored string

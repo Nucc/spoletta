@@ -3568,6 +3568,7 @@ button.toolbar-link {
 /* A model key: its provider, whether it is set, and a field to set it. */
 .key-item {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3734,6 +3735,139 @@ select.flow-owner:disabled {
 
 .key-item .key-provider {
   width: 260px;
+}
+
+/* A model provider's row: what it is and where its key comes from, then its models. */
+.provider-models {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-actions {
+  display: flex;
+  margin-top: 12px;
+}
+
+.provider-add,
+.provider-models-label button {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.provider-add:hover,
+.provider-models-label button:hover:not(:disabled) {
+  background: #f6f8fa;
+}
+
+.provider-models-label button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.default-model {
+  max-width: 420px;
+  margin-top: 20px;
+}
+
+.default-model .flows-note {
+  font-weight: 400;
+}
+
+/* The worker's own pi config, below the providers added here. */
+.worker-keys {
+  margin-top: 28px;
+}
+
+.worker-keys h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+/* Adding or changing a provider: first which, then its key and models. */
+.provider-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.provider-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.provider-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  font: inherit;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.provider-choice:hover {
+  border-color: #0969da;
+  background: #f6f8fa;
+}
+
+.provider-models-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.provider-models-label button {
+  font-weight: 400;
+}
+
+.provider-model-list {
+  max-height: 260px;
+  margin: 0;
+  padding: 4px 8px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.provider-model-list li {
+  padding: 3px 0;
+}
+
+.provider-model-list .panel-check {
+  flex-wrap: wrap;
+  font-weight: 400;
+}
+
+.provider-model-name {
+  font-weight: 600;
+}
+
+.provider-dialog .panel-field textarea.provider-ids {
+  flex: none;
+  resize: vertical;
+  font-size: 13px;
+}
+
+.provider-dialog .panel-field > .flows-note {
+  font-weight: 400;
 }
 
 /* The steps of a process, or that made an object, double-clicked on the board while the run shows. */

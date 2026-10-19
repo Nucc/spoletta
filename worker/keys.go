@@ -123,15 +123,16 @@ func (keys modelKeys) report() modelKeys {
 }
 
 // The environment with the run's model keys in place of the worker's own.
-// Only the variables the offered models read are set; a key for another,
-// such as one a model no longer offered read, is left out. A provider's
+// Only the variables the offered models and the run's providers read are
+// set; a key for another, such as one a model no longer offered read, is
+// left out. A provider's
 // OAuth token, which pi prefers to its key, goes, so the key given is the
 // one used.
 func (run runRequest) withKeys(env []string) ([]string, error) {
 	keys := map[string]string{}
 	drop := map[string]bool{}
 	for name, key := range run.Keys {
-		if !keyNames[name] {
+		if !keyNames[name] && !run.providerReads(name) {
 			continue
 		}
 		if strings.ContainsAny(key, "\x00\n") {

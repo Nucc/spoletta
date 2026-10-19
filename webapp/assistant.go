@@ -414,11 +414,15 @@ func runAssistant(ctx context.Context, db *sql.DB, workerURL string, flow, reply
 	}
 	prompt := assistantPrompt(af, history)
 
-	keys, err := modelKeys(ctx, db)
+	run := agentRun{ProcessName: "Assistant", Prompt: prompt, NoTools: true, Guide: true}
+	if err := run.withModelAccess(ctx, db); err != nil {
+		return failed(err)
+	}
+	model, err := defaultModel(ctx, db)
 	if err != nil {
 		return failed(err)
 	}
-	run := agentRun{ProcessName: "Assistant", Prompt: prompt, NoTools: true, Guide: true, Keys: keys}
+	run.Model = model
 	for attempt := 0; ; attempt++ {
 		res := streamAgent(ctx, workerURL, run, func(json.RawMessage) {})
 		if ctx.Err() != nil {

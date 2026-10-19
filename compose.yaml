@@ -34,7 +34,8 @@ services:
       - PI_SKIP_VERSION_CHECK=1
       - PI_TELEMETRY=0
       # Passed through from the host when set. Add any other variables your
-      # models.json references.
+      # models.json references, and those the model providers added in the
+      # settings read their keys from when the keys are kept in a vault.
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
       - GEMINI_API_KEY

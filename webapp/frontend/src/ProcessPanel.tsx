@@ -27,6 +27,7 @@ import { fieldsOf, holdsFile, shapeOf, type Field } from './structure'
 import { MCPServerPicker } from './MCPSettings'
 import { ConnectorFields } from './ConnectorFields'
 import { RepositoryPicker } from './FlowSettings'
+import { ModelOptions } from './ModelProviders'
 import type { RunStatus } from './ProcessNode'
 
 type Fields = {
@@ -256,11 +257,7 @@ export default function ProcessPanel({
               <option value="">Default{models?.default ? ` (${models.default})` : ''}</option>
               {/* A model dropped from pi's list stays selectable so it isn't silently replaced. */}
               {model !== '' && !models?.models.includes(model) && <option value={model}>{model}</option>}
-              {models?.models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
+              {models && <ModelOptions models={models} />}
             </select>
           </label>
           <label className="panel-field">

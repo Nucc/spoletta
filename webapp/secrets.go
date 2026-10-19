@@ -159,6 +159,9 @@ func (s *sealer) openAged(where, stored string) (string, bool, error) {
 // says.
 func modelKeyPlace(env string) string { return "model_keys/" + env }
 
+// Where a model provider's key is kept.
+func modelProviderPlace(id string) string { return "model_providers/" + id }
+
 func mcpTokenPlace(column string, server, user int64) string {
 	return fmt.Sprintf("mcp_tokens/%s/%d/%d", column, server, user)
 }
@@ -199,6 +202,17 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 			return err
 		}
 		all = append(all, secret{"UPDATE model_keys SET api_key = ? WHERE env = ? AND api_key = ?", modelKeyPlace(env), key, []any{env, key}})
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	err = scanAll(ctx, db, "SELECT id, api_key FROM model_providers WHERE api_key <> ''", func(rows *sql.Rows) error {
+		var id, key string
+		if err := rows.Scan(&id, &key); err != nil {
+			return err
+		}
+		all = append(all, secret{"UPDATE model_providers SET api_key = ? WHERE id = ? AND api_key = ?", modelProviderPlace(id), key, []any{id, key}})
 		return nil
 	})
 	if err != nil {

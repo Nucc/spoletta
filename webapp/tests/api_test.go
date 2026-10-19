@@ -47,6 +47,8 @@ var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh"
 type agentModels struct {
 	Default string   `json:"default"`
 	Models  []string `json:"models"`
+	// The names of the model providers admins added, by ID.
+	Providers map[string]string `json:"providers,omitempty"`
 }
 
 // What the worker runs.
@@ -68,6 +70,8 @@ type agentRun struct {
 	MCPToken   string         `json:"mcpToken,omitempty"`
 	// The model keys of whoever the run is for, by environment variable.
 	Keys map[string]string `json:"keys,omitempty"`
+	// The model providers admins added, without their keys.
+	Providers []runProvider `json:"providers,omitempty"`
 	// The workspace it works in, if it works on repositories.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
 	// In a workspace, the pi session the worker keeps its conversation in, so
@@ -80,6 +84,16 @@ type agentRun struct {
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
 	NoTools   bool  `json:"noTools,omitempty"`
 	Guide     bool  `json:"guide,omitempty"`
+}
+
+// A model provider as the worker gets it.
+type runProvider struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name,omitempty"`
+	API     string   `json:"api,omitempty"`
+	BaseURL string   `json:"baseUrl,omitempty"`
+	Env     string   `json:"env"`
+	Models  []string `json:"models"`
 }
 
 // An attribute is something an OPM object exhibits, such as a ticket's

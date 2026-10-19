@@ -149,3 +149,20 @@ flows:
 		t.Errorf("the HTTP APIs: %+v %+v", servers["sc_api_one"], servers["sc_api_two"])
 	}
 }
+
+// The board offers Sentry processes once the webapp has Sentry's token.
+func TestSentryConfigured(t *testing.T) {
+	for _, c := range []struct {
+		env  []string
+		want bool
+	}{{nil, false}, {[]string{"SENTRY_AUTH_TOKEN=sntrys_abc"}, true}} {
+		a := startApp(t, newFakeWorker(t).url, c.env...)
+		var got struct {
+			Configured bool `json:"configured"`
+		}
+		a.call("GET", "/api/sentry", nil, http.StatusOK, &got)
+		if got.Configured != c.want {
+			t.Errorf("with %v, Sentry configured: %v", c.env, got.Configured)
+		}
+	}
+}

@@ -1,5 +1,5 @@
 import type { DragEvent, ReactNode } from 'react'
-import type { Flow, ProcessKind, ProcessSettings } from './api'
+import type { Flow, MCPServer, ProcessKind, ProcessSettings } from './api'
 import { ObjectIcon, SubflowIcon } from './icons'
 import { ServiceLogo } from './logos'
 
@@ -35,35 +35,54 @@ export const BUILDING_BLOCKS: Block[] = [
   },
 ]
 
-// A process carrying out an operation of a built-in connector, named as the
-// directory names it, so its tile has its logo.
-const connectorBlock = (id: string, label: string, title: string): Block & { logo: () => ReactNode } => ({
-  id,
-  label,
-  title,
-  type: 'process',
-  kind: 'connector',
-  name: label,
-  logo: () => <ServiceLogo name={id} title={label} size={32} />,
-})
+// A tile of the connectors, with its service's logo.
+export type ConnectorBlock = Block & { logo: () => ReactNode }
 
-// Each new service is one more entry, once the server runs processes of its kind.
-export const CONNECTORS: (Block & { logo: () => ReactNode })[] = [
-  {
-    id: 'sentry',
-    label: 'Sentry',
-    title: 'Fetches issues from Sentry as a list',
-    type: 'process',
-    kind: 'sentry',
-    logo: () => <ServiceLogo name="sentry" title="Sentry" size={32} />,
+// A Sentry process, offered once the webapp's environment gives it a token.
+export const SENTRY_BLOCK: ConnectorBlock = {
+  id: 'sentry',
+  label: 'Sentry',
+  title: 'Fetches issues from Sentry as a list',
+  type: 'process',
+  kind: 'sentry',
+  logo: () => <ServiceLogo name="sentry" title="Sentry" size={32} />,
+}
+
+// What the tile of each built-in connector says, by its name in the
+// directory. Each new connector is one more entry.
+const CONNECTOR_TILES: Record<string, { label: string; title: string }> = {
+  github: { label: 'GitHub', title: 'Carries out an operation on GitHub, such as listing issues, commenting or opening a pull request' },
+  slack: { label: 'Slack', title: 'Carries out an operation on Slack, such as posting a message or reading a channel' },
+  telegram: { label: 'Telegram', title: "Carries out an operation on Telegram as a bot, such as sending a message or reading the bot's" },
+  google: { label: 'Google', title: 'Carries out an operation on Google Sheets or Docs, such as reading rows or appending them' },
+  homeassistant: {
+    label: 'Home Assistant',
+    title: 'Carries out an operation on Home Assistant, such as reading a sensor or turning a light on',
   },
-  connectorBlock('github', 'GitHub', 'Carries out an operation on GitHub, such as listing issues, commenting or opening a pull request'),
-  connectorBlock('slack', 'Slack', 'Carries out an operation on Slack, such as posting a message or reading a channel'),
-  connectorBlock('telegram', 'Telegram', "Carries out an operation on Telegram as a bot, such as sending a message or reading the bot's"),
-  connectorBlock('google', 'Google', 'Carries out an operation on Google Sheets or Docs, such as reading rows or appending them'),
-  connectorBlock('homeassistant', 'Home Assistant', 'Carries out an operation on Home Assistant, such as reading a sensor or turning a light on'),
-  connectorBlock('http', 'HTTP API', 'Calls an HTTP API installed as a connector, such as getting what a path holds'),
-]
+  http: { label: 'HTTP API', title: 'Calls an HTTP API installed as a connector, such as getting what a path holds' },
+}
+
+// The installed connectors, each a process already set to carry out an
+// operation of it. One installed several times, such as the HTTP API for
+// each API, goes by the name each was installed as.
+export function connectorBlocks(servers: MCPServer[]): ConnectorBlock[] {
+  const installed = servers.filter((s) => s.connector)
+  return installed.map((s) => {
+    const tile = CONNECTOR_TILES[s.connector!]
+    const several = s.connector === 'http' || installed.filter((x) => x.connector === s.connector).length > 1
+    const label = tile && !several ? tile.label : s.name
+    return {
+      id: `connector-${s.id}`,
+      label,
+      title: tile?.title ?? `Carries out an operation of ${s.name}`,
+      type: 'process',
+      kind: 'connector',
+      name: label,
+      settings: { connector: { server: s.id, operation: '' } },
+      logo: () => <ServiceLogo name={s.connector!} title={label} size={32} />,
+    }
+  })
+}
 
 // A module, added as a process that runs it.
 export const flowBlock = (f: Flow): Block => ({
@@ -88,7 +107,7 @@ export const structBlock = (f: Flow): Block => ({
 // What a block dragged onto the board carries: its id.
 export const BLOCK_MIME = 'application/x-flow-block'
 
-export const findBlock = (id: string): Block | undefined => [...BUILDING_BLOCKS, ...CONNECTORS].find((b) => b.id === id)
+export const findBlock = (id: string): Block | undefined => BUILDING_BLOCKS.find((b) => b.id === id)
 
 // Blocks are dragged onto the board, or clicked to add one in the middle of it.
 export function BlockPalette({
@@ -113,16 +132,30 @@ export function BlockPalette({
   )
 }
 
+// The connectors installed, and Sentry once it is set up; installing more
+// is for admins, in the settings.
 export function ConnectorPalette({
+  blocks,
   disabled,
   onAdd,
 }: {
+  // Null while the installed connectors load.
+  blocks: ConnectorBlock[] | null
   disabled: boolean
   onAdd: (block: Block) => void
 }) {
+  if (blocks === null) return null
+  if (blocks.length === 0) {
+    return (
+      <p className="panel-note">
+        No connectors installed. An admin installs them, such as GitHub, in{' '}
+        <a href="#/settings/connectors">Settings, under Connectors</a>.
+      </p>
+    )
+  }
   return (
     <ul className="palette connectors">
-      {CONNECTORS.map((c) => (
+      {blocks.map((c) => (
         <li key={c.id}>
           <PaletteTile block={c} disabled={disabled} onAdd={onAdd}>
             {c.logo()}

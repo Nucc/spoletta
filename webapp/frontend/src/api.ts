@@ -806,6 +806,11 @@ export function listDirectory(): Promise<DirectoryEntry[]> {
   return request('/api/connectors')
 }
 
+// Whether the webapp has a token for Sentry, set in its environment.
+export function sentryConfigured(): Promise<boolean> {
+  return request<{ configured: boolean }>('/api/sentry').then((r) => r.configured)
+}
+
 export function updateMCPServer(id: number, patch: Partial<Pick<MCPServer, 'name' | 'url' | 'description'>>): Promise<MCPServer> {
   return request(`/api/mcp-servers/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }

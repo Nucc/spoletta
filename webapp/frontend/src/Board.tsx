@@ -61,11 +61,13 @@ import {
   BLOCK_MIME,
   BlockPalette,
   BUILDING_BLOCKS,
+  connectorBlocks,
   ConnectorPalette,
   findBlock,
   flowBlock,
   FlowPalette,
   structBlock,
+  SENTRY_BLOCK,
   StructPalette,
   type Block,
 } from './Palette'
@@ -110,6 +112,7 @@ import {
   listLinks,
   listModels,
   listMCPServers,
+  sentryConfigured,
   listBoards,
   listObjects,
   listProcesses,
@@ -385,6 +388,8 @@ export default function Board({
   // The teams, to give the flow to one; see Owner.tsx.
   const [teams, setTeams] = useState<Team[]>([])
   const [mcpServers, setMCPServers] = useState<MCPServer[] | null>(null)
+  // Whether Sentry is set up, offering Sentry processes.
+  const [sentry, setSentry] = useState(false)
   const [mcpOpen, setMCPOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [oplOpen, setOPLOpen] = useState(false)
@@ -735,6 +740,7 @@ export default function Board({
 
   useEffect(() => {
     listModels().then(setModels).catch(report)
+    sentryConfigured().then(setSentry).catch(report)
     listFlows()
       .then((fs) => setOtherFlows(fs.filter((f) => f.id !== flowId)))
       .catch(report)
@@ -1027,11 +1033,15 @@ export default function Board({
   // Only modules and structs are reused; the flows that run stay on the main page.
   const flowBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.module).map(flowBlock), [otherFlows])
   const structBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.struct).map(structBlock), [otherFlows])
+  const connectorTiles = useMemo(
+    () => (mcpServers === null ? null : [...(sentry ? [SENTRY_BLOCK] : []), ...connectorBlocks(mcpServers)]),
+    [mcpServers, sentry],
+  )
   const structFlows = useMemo(() => new Set((otherFlows ?? []).filter((f) => f.struct).map((f) => f.id)), [otherFlows])
 
   const onCanvasDrop = (e: DragEvent<HTMLDivElement>) => {
     const id = e.dataTransfer.getData(BLOCK_MIME)
-    const block = findBlock(id) ?? [...flowBlocks, ...structBlocks].find((b) => b.id === id)
+    const block = findBlock(id) ?? [...(connectorTiles ?? []), ...flowBlocks, ...structBlocks].find((b) => b.id === id)
     if (readOnly || !block || (structBoard && !objectBoard)) return
     e.preventDefault()
     addBlock(block, e.clientX, e.clientY)
@@ -2366,7 +2376,7 @@ export default function Board({
           {!objectBoard && !structBoard && (
             <>
               <SidebarGroup id="connectors" title="Connectors">
-                <ConnectorPalette disabled={readOnly} onAdd={addAtViewportCenter} />
+                <ConnectorPalette blocks={connectorTiles} disabled={readOnly} onAdd={addAtViewportCenter} />
               </SidebarGroup>
               <SidebarGroup id="flows" title="Procedures">
                 <FlowPalette blocks={flowBlocks} disabled={readOnly} onAdd={addAtViewportCenter} />

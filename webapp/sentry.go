@@ -45,6 +45,14 @@ type sentryConfig struct {
 	token string
 }
 
+// Whether the webapp has a token for Sentry; the board offers Sentry
+// processes only then.
+func registerSentryRoutes(mux *http.ServeMux, cfg sentryConfig) {
+	mux.HandleFunc("GET /api/sentry", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]bool{"configured": cfg.token != ""})
+	})
+}
+
 // The orders Sentry offers, "date" being the last seen first.
 var sentrySorts = []string{"date", "new", "freq", "user", "trends", "inbox", "recommended"}
 

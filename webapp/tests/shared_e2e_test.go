@@ -384,3 +384,90 @@ func TestSharedListDecidedByAnAgent(t *testing.T) {
 	work("failed")
 	want(map[string]string{"a": "completed/2", "b": "failed/2", "c": "new/1"})
 }
+
+// A person corrects a shared struct's records by hand: adds one a flow
+// missed, changes another's fields and state, a field taken out staying
+// out, and deletes them, one or many. A unique value another record holds
+// is refused, and a run generating an edited record later refreshes it.
+func TestSharedRecordsEditedByHand(t *testing.T) {
+	a := newApp(t)
+	var s structFlow
+	a.call("POST", "/api/flows", map[string]any{"name": "Bug", "struct": true}, http.StatusCreated, &s)
+	root := modObjects(a, s.ID)[0]
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", root.ID), map[string]any{"name": "id", "unique": true}, http.StatusCreated, nil)
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", root.ID), map[string]any{"name": "title"}, http.StatusCreated, nil)
+	a.newState(root.ID, "open")
+	a.newState(root.ID, "fixed")
+	records := fmt.Sprintf("/api/structs/%d/records", s.ID)
+
+	a.refused("POST", records, map[string]any{"content": map[string]any{"id": "B1"}}, http.StatusBadRequest, "isn't shared")
+	a.call("PATCH", fmt.Sprintf("/api/objects/%d", root.ID), map[string]any{"shared": true}, http.StatusOK, nil)
+
+	var added sharedRecord
+	a.call("POST", records, map[string]any{"content": map[string]any{"id": "B1", "title": "Crash"}, "state": "open"}, http.StatusCreated, &added)
+	a.call("POST", records, map[string]any{"content": map[string]any{"id": "B2", "title": "Hang", "note": "slow"}}, http.StatusCreated, nil)
+	a.refused("POST", records, map[string]any{"content": map[string]any{"id": "B1"}}, http.StatusConflict, "holds that id")
+	a.refused("POST", records, map[string]any{"content": "B3"}, http.StatusBadRequest, "JSON object")
+	a.refused("POST", records, map[string]any{"content": map[string]any{"id": "B3"}, "state": "gone"}, http.StatusBadRequest, "no state")
+
+	b2 := sharedRecords(a, s.ID)["B2"]
+	edit := fmt.Sprintf("%s/%d", records, b2.ID)
+	a.refused("PUT", edit, map[string]any{"content": map[string]any{"id": "B1"}}, http.StatusConflict, "holds that id")
+	a.call("PUT", edit, map[string]any{"content": map[string]any{"id": "B9", "title": "Hang on start"}, "state": "fixed"}, http.StatusOK, nil)
+	got := sharedRecords(a, s.ID)
+	if _, ok := got["B2"]; ok || len(got) != 2 {
+		t.Fatalf("records after renaming B2 to B9: %v", got)
+	}
+	if r := got["B9"]; r.State != "fixed" || strings.Contains(string(r.Content), "note") || !strings.Contains(string(r.Content), "Hang on start") {
+		t.Fatalf("B9 is %s %s, want fixed without its note", r.State, r.Content)
+	}
+	// B2 is free again, as a run would find it.
+	a.call("POST", records, map[string]any{"content": map[string]any{"id": "B2"}}, http.StatusCreated, nil)
+	a.refused("PUT", fmt.Sprintf("%s/%d", records, 1<<40), map[string]any{"content": map[string]any{"id": "B7"}}, http.StatusNotFound, "no such record")
+
+	// A run generating B9 refreshes the record edited by hand.
+	f := a.newFlow("Fetch bugs")
+	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", s.ID), map[string]any{"flow": f.ID, "x": 0, "y": 0}, http.StatusCreated, nil)
+	cp := modNamed(t, modObjects(a, f.ID), "Bug")
+	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindScript, "script": "fetch"})
+	a.output(fetch.ID, cp.ID)
+	a.startAt(f.ID, fetch.ID)
+	a.worker.onScript("Fetch", func(context.Context, scriptRun) runResult {
+		return runResult{OK: true, Output: `{"id": "B9", "title": "Hang on start up"}`}
+	})
+	if d := a.finish(a.startRun(f.ID).ID); d.Status != runDone {
+		t.Fatalf("fetching ended %s; steps %s", d.Status, describeSteps(d))
+	}
+	got = sharedRecords(a, s.ID)
+	if r := got["B9"]; len(got) != 3 || r.State != "fixed" || !strings.Contains(string(r.Content), "Hang on start up") {
+		t.Fatalf("after fetching B9 again: %v", got)
+	}
+
+	// Deleting one, then the rest at once; another struct's record stays.
+	var other structFlow
+	a.call("POST", "/api/flows", map[string]any{"name": "Task", "struct": true}, http.StatusCreated, &other)
+	otherRoot := modObjects(a, other.ID)[0]
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", otherRoot.ID), map[string]any{"name": "id", "unique": true}, http.StatusCreated, nil)
+	a.call("PATCH", fmt.Sprintf("/api/objects/%d", otherRoot.ID), map[string]any{"shared": true}, http.StatusOK, nil)
+	var task sharedRecord
+	a.call("POST", fmt.Sprintf("/api/structs/%d/records", other.ID), map[string]any{"content": map[string]any{"id": "T1"}}, http.StatusCreated, &task)
+
+	var deleted struct {
+		Deleted int `json:"deleted"`
+	}
+	a.call("POST", records+"/delete", map[string]any{"ids": []int64{added.ID}}, http.StatusOK, &deleted)
+	if deleted.Deleted != 1 || len(sharedRecords(a, s.ID)) != 2 {
+		t.Fatalf("deleted %d, left %v", deleted.Deleted, sharedRecords(a, s.ID))
+	}
+	var ids []int64
+	for _, r := range sharedRecords(a, s.ID) {
+		ids = append(ids, r.ID)
+	}
+	a.call("POST", records+"/delete", map[string]any{"ids": append(ids, task.ID)}, http.StatusOK, &deleted)
+	if deleted.Deleted != 2 || len(sharedRecords(a, s.ID)) != 0 || len(sharedRecords(a, other.ID)) != 1 {
+		t.Fatalf("deleted %d, left %v and %v", deleted.Deleted, sharedRecords(a, s.ID), sharedRecords(a, other.ID))
+	}
+	a.refused("POST", records+"/delete", map[string]any{"ids": []int64{}}, http.StatusBadRequest, "name the records")
+	// B1 is free again.
+	a.call("POST", records, map[string]any{"content": map[string]any{"id": "B1"}}, http.StatusCreated, nil)
+}

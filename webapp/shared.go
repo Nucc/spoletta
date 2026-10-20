@@ -33,6 +33,9 @@ import (
 // does later, and no run claims them, so two runs querying the same state
 // at once may both work on one record.
 //
+// People correct records by hand as well, adding, changing and deleting
+// them (records.go).
+//
 // Whether a struct's object is shared is its own, and each copy follows it,
 // as with what else it has (see modules.go): the copy's store is the
 // struct's object. A shared object isn't persistent too, which would store
@@ -246,7 +249,8 @@ func updateRecord(ctx context.Context, tx *sql.Tx, store, record, runID, stepID 
 	q := "UPDATE shared_records SET content = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?"
 	args := []any{content, record}
 	if affects {
-		q = "UPDATE shared_records SET content = ?, state = IF(? = '', state, ?), run_id = ?, step_id = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?"
+		q = `UPDATE shared_records SET content = ?, state = IF(? = '', state, ?), run_id = ?, step_id = ?, edited_by = NULL, edited_at = NULL,
+			updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?`
 		args = []any{content, state, state, runID, stepID, record}
 	}
 	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
@@ -358,6 +362,28 @@ type sharedRecord struct {
 	Run     *int64    `json:"run"`
 	RunFlow *int64    `json:"runFlow"`
 	Updated time.Time `json:"updated"`
+	// Whether a person corrected it since a run last moved it on, and who,
+	// by name, empty without sign-in; see records.go.
+	Edited   bool   `json:"edited"`
+	EditedBy string `json:"editedBy"`
+}
+
+// The columns sharedRecordFrom scans.
+const sharedRecordColumns = `sr.id, sr.content, sr.state, sr.run_id, ru.flow_id, sr.updated_at, sr.edited_at IS NOT NULL, COALESCE(NULLIF(eu.name, ''), eu.email, '')
+	FROM shared_records sr LEFT JOIN runs ru ON ru.id = sr.run_id LEFT JOIN users eu ON eu.id = sr.edited_by`
+
+// A record as sharedRecordColumns read it, with its content as stored.
+func sharedRecordFrom(rows interface{ Scan(...any) error }) (sharedRecord, string, error) {
+	var rec sharedRecord
+	var content string
+	err := rows.Scan(&rec.ID, &content, &rec.State, &rec.Run, &rec.RunFlow, &rec.Updated, &rec.Edited, &rec.EditedBy)
+	rec.Content = json.RawMessage(asItem(content))
+	return rec, content, err
+}
+
+func sharedRecordByID(ctx context.Context, db querier, id int64) (sharedRecord, error) {
+	rec, _, err := sharedRecordFrom(db.QueryRowContext(ctx, "SELECT "+sharedRecordColumns+" WHERE sr.id = ?", id))
+	return rec, err
 }
 
 // A shared struct's records, the latest written first or as sorted, with
@@ -366,7 +392,9 @@ type sharedRecord struct {
 // record does. A search (search.go) picks which, over every stored record:
 // by id, state, updated and run, and each field as @field.
 type sharedRecords struct {
-	Fields  []string       `json:"fields"`
+	Fields []string `json:"fields"`
+	// The states a record can be in, in the board's order.
+	States  []string       `json:"states"`
 	Records []sharedRecord `json:"records"`
 	// More records than these match.
 	More bool `json:"more"`
@@ -395,7 +423,18 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		out := sharedRecords{Fields: []string{}, Records: []sharedRecord{}, Facets: []facet{}}
+		out := sharedRecords{Fields: []string{}, States: []string{}, Records: []sharedRecord{}, Facets: []facet{}}
+		err = scanAll(ctx, db, "SELECT name FROM object_states WHERE object_id = ? ORDER BY id",
+			func(rows *sql.Rows) error {
+				var name string
+				err := rows.Scan(&name)
+				out.States = append(out.States, name)
+				return err
+			}, root)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		err = scanAll(ctx, db, `SELECT name FROM (
 				SELECT name, 0 AS kind, id FROM object_attributes WHERE object_id = ?
 				UNION ALL SELECT name, 1, id FROM objects WHERE owner_id = ?
@@ -424,16 +463,12 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 			field(f)
 		}
 		var records []sharedRecord
-		err = scanAll(ctx, db, `SELECT sr.id, sr.content, sr.state, sr.run_id, ru.flow_id, sr.updated_at
-			FROM shared_records sr LEFT JOIN runs ru ON ru.id = sr.run_id
-			WHERE sr.object_id = ? ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?`,
+		err = scanAll(ctx, db, "SELECT "+sharedRecordColumns+" WHERE sr.object_id = ? ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?",
 			func(rows *sql.Rows) error {
-				var rec sharedRecord
-				var content string
-				if err := rows.Scan(&rec.ID, &content, &rec.State, &rec.Run, &rec.RunFlow, &rec.Updated); err != nil {
+				rec, content, err := sharedRecordFrom(rows)
+				if err != nil {
 					return err
 				}
-				rec.Content = json.RawMessage(asItem(content))
 				records = append(records, rec)
 				if len(records) > searchedRows {
 					return nil

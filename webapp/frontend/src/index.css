@@ -3385,6 +3385,135 @@ button.toolbar-link {
   color: #0969da;
 }
 
+/* A column dragged to a width of its own: what its cells hold is cut to it. */
+.sized-content {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The handle on a header's right edge that drags its column's width. */
+.header-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 1;
+}
+
+.header-resizer:hover,
+.header-resizer:focus-visible {
+  background: #1f6feb;
+  outline: none;
+}
+
+.records-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.records-tick input {
+  margin: 0;
+}
+
+.records-edit {
+  font-size: 12px;
+  color: #656d76;
+}
+
+.data-table tbody tr.ticked td {
+  background: #ddf4ff;
+}
+
+/* What can be done with the records ticked. */
+.records-selection {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  background: #ddf4ff;
+  border: 1px solid #b6e3ff;
+  border-radius: 8px;
+}
+
+.record-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.record-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.record-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.record-field-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.record-field-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+input.record-field-name {
+  padding: 4px 6px;
+  font: inherit;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.record-field-json {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #656d76;
+}
+
+.record-field textarea {
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.record-add-field {
+  align-self: flex-start;
+}
+
+.review-actions button.record-delete {
+  margin-right: auto;
+  color: #cf222e;
+  border-color: #cf222e;
+}
+
+.review-actions button.record-delete:hover:not(:disabled) {
+  color: #fff;
+  background: #cf222e;
+  border-color: #cf222e;
+}
+
 /* What a run was given, such as the item it ran for, rather than generated. */
 .data-cell.given {
   font-style: italic;

@@ -134,6 +134,7 @@ func main() {
 	registerPasteRoutes(mux, db)
 	registerStructRoutes(mux, db)
 	registerSharedRoutes(mux, db)
+	registerRecordEditRoutes(mux, db)
 	registerObjectRoutes(mux, db)
 	registerQueryRoutes(mux, db)
 	registerStateRoutes(mux, db)

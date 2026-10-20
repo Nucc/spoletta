@@ -399,6 +399,9 @@ export type SharedRecord = {
   run: number | null
   runFlow: number | null
   updated: string
+  // Whether a person corrected it since a run last moved it on, and who.
+  edited: boolean
+  editedBy: string
 }
 
 // A column a table page's rows are searched by, as the server found it
@@ -437,12 +440,31 @@ const searchParams = (s: Search | undefined) => {
 
 // A shared struct's records, the latest written first or as sorted, with
 // the fields its object has in the board's order. more: more than these match.
-export type SharedRecords = { fields: string[]; records: SharedRecord[]; more: boolean } & SearchResult
+export type SharedRecords = { fields: string[]; states: string[]; records: SharedRecord[]; more: boolean } & SearchResult
+
+// What a person writes of a record: all its fields, replacing what it held,
+// and its state, one of the object's or none.
+export type RecordEdit = { content: Record<string, unknown>; state: string }
 
 // The struct's records the search matches, the latest written first.
 export function listSharedRecords(struct: number, search?: Search): Promise<SharedRecords> {
   const p = searchParams(search)
   return request(`/api/structs/${struct}/records${p ? '?' + p : ''}`)
+}
+
+// A record added by hand; a unique value another record holds is refused.
+export function addSharedRecord(struct: number, edit: RecordEdit): Promise<SharedRecord> {
+  return request(`/api/structs/${struct}/records`, { method: 'POST', body: JSON.stringify(edit) })
+}
+
+// A record corrected by hand, its fields replaced by these.
+export function updateSharedRecord(struct: number, record: number, edit: RecordEdit): Promise<SharedRecord> {
+  return request(`/api/structs/${struct}/records/${record}`, { method: 'PUT', body: JSON.stringify(edit) })
+}
+
+// Deletes the records, one or many at once.
+export function deleteSharedRecords(struct: number, ids: number[]): Promise<{ deleted: number }> {
+  return request(`/api/structs/${struct}/records/delete`, { method: 'POST', body: JSON.stringify({ ids }) })
 }
 
 // A module other flows run stays one.

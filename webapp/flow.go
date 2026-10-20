@@ -102,6 +102,9 @@ func migrateFlow(db *sql.DB) error {
 	if err := migrateShared(db); err != nil {
 		return err
 	}
+	if err := migrateRecordEdits(db); err != nil {
+		return err
+	}
 	if err := migrateHistory(db); err != nil {
 		return err
 	}

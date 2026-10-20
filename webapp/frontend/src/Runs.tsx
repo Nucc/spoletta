@@ -222,6 +222,7 @@ export function RunPanel({
       <p className="panel-note">
         Started {formatTime(run.startedAt)}
         {run.startedBy && ` by ${run.startedBy}`}
+        {run.apiKey && ` through the API key ${run.apiKey}`}
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
         {totalUsage(run.steps) && `; its agents used ${formatUsage(totalUsage(run.steps)!)}`}
       </p>
@@ -276,7 +277,7 @@ export function RunPanel({
 export const rerunnableFrom = (run: FlowRunDetail, s: RunStep) => run.status !== 'running' && s.process !== null && s.kind !== 'copied'
 
 // Agent, script, Sentry and connector steps can be stopped while they go.
-export const stoppable = (s: { kind: ProcessKind | 'copied'; status: StepStatus }) =>
+export const stoppable = (s: { kind: ProcessKind | 'copied' | 'input'; status: StepStatus }) =>
   s.status === 'active' && (s.kind === 'agent' || s.kind === 'script' || s.kind === 'sentry' || s.kind === 'connector')
 
 function Step({
@@ -302,7 +303,7 @@ function Step({
   busy: boolean
   onChanged: () => void
 }) {
-  if (s.kind === 'copied') return <CopiedStep step={s} focused={focused} objects={objects} />
+  if (s.kind === 'copied' || s.kind === 'input') return <CopiedStep step={s} focused={focused} objects={objects} />
   return (
     <details className={`step${focused ? ' focused' : ''}`} open={s.status !== 'done' || s.followUps.length > 0}>
       <summary>
@@ -476,7 +477,7 @@ function ObjectInRun({
         objects.map((o) => (
           <div key={o.id} className="run-focus-instance">
             <Block
-              label={`${o.state ? `${o.name} (${o.state})` : o.name} · ${stepOf(o.step)?.kind === 'copied' ? 'copied from the run re-run' : `made by ${stepOf(o.step)?.processName ?? 'a step'}`}`}
+              label={`${o.state ? `${o.name} (${o.state})` : o.name} · ${stepOf(o.step)?.kind === 'copied' ? 'copied from the run re-run' : stepOf(o.step)?.kind === 'input' ? 'given through the API' : `made by ${stepOf(o.step)?.processName ?? 'a step'}`}`}
               text={o.content}
               data
             />

@@ -100,6 +100,9 @@ func main() {
 	if err := migrateModelProviders(db); err != nil {
 		log.Fatal(err)
 	}
+	if err := migrateAPIKeys(db); err != nil {
+		log.Fatal(err)
+	}
 	// seal-secrets seals the secrets with the key coming in, and ends,
 	// failing if some changed meanwhile, to be run again; see secrets.go.
 	sealSecrets := len(os.Args) > 1 && os.Args[1] == "seal-secrets"
@@ -149,6 +152,7 @@ func main() {
 	eng := newEngine(db, workerURL, sentry, mcp, parallelSteps)
 	registerRunRoutes(mux, db, eng)
 	registerRerunRoutes(mux, db, eng)
+	registerAPIRoutes(mux, db, eng, auth != nil)
 	registerDataRoutes(mux, db)
 	registerScheduleRoutes(mux, db)
 	go runSchedules(context.Background(), db, eng, time.Second)

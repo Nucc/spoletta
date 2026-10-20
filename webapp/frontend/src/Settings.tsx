@@ -7,9 +7,10 @@ import { DirectorySection } from './Directory'
 import { PeopleSection } from './People'
 import { TeamsSection } from './Teams'
 import { ModelProvidersSection } from './ModelProviders'
+import { APIKeysSection } from './APIKeys'
 
 // The parts of the settings, each a tab: #/settings/<tab>.
-export type SettingsTab = 'account' | 'keys' | 'connectors' | 'mcp' | 'people' | 'teams'
+export type SettingsTab = 'account' | 'keys' | 'connectors' | 'mcp' | 'api' | 'people' | 'teams'
 
 // The tabs whoever is signed in sees: their own settings, and an admin's
 // over the instance. Without sign-in, there is only the instance's.
@@ -19,6 +20,7 @@ function tabsFor(me: Me): { id: SettingsTab; label: string }[] {
   if (configures(me)) tabs.push({ id: 'keys', label: 'Model providers' })
   tabs.push({ id: 'connectors', label: 'Connectors' })
   tabs.push({ id: 'mcp', label: 'MCP servers' })
+  tabs.push({ id: 'api', label: 'API keys' })
   if (me.user) tabs.push({ id: 'teams', label: 'Teams' })
   if (me.user?.admin) tabs.push({ id: 'people', label: 'People' })
   return tabs
@@ -76,6 +78,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
             {shown === 'keys' && <ModelProvidersSection onError={report} />}
             {shown === 'connectors' && <DirectorySection canConfigure={configures(me)} onError={report} />}
             {shown === 'mcp' && <MCPSection me={me} onError={report} />}
+            {shown === 'api' && <APIKeysSection onError={report} />}
             {shown === 'teams' && (
               <TeamsSection canManage={!!(me.user?.admin || me.user?.teamManager)} onError={report} />
             )}

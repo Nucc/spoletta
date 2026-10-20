@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import type { FlowSettings, Repository } from './api'
+import { FlowAPISection } from './APIKeys'
 
 // What a repository is called in the workspace, from its URL: the last part
 // of its path, without .git.
@@ -22,10 +23,11 @@ export function githubURL(v: string): string {
 // org/repository of a GitHub URL, or undefined for another host.
 const githubPath = (url: string) => /^https:\/\/github\.com\/([^/]+\/[^/]+?)(\.git)?$/.exec(url)?.[1]
 
-// The flow's settings: the repositories its agents and scripts work on, and
-// how its runs' branches are named. Each run checks the repositories out on
+// The flow's settings: the repositories its agents and scripts work on, how
+// its runs' branches are named, and how other systems start it. Each run checks the repositories out on
 // a branch of its own, which every process of the run works on.
 export function FlowSettingsPanel({
+  flowId,
   owner,
   settings,
   module,
@@ -37,6 +39,7 @@ export function FlowSettingsPanel({
   onClose,
   onError,
 }: {
+  flowId: number
   // Who sees it, to pick another; see Owner.tsx.
   owner?: ReactNode
   settings: FlowSettings
@@ -249,6 +252,7 @@ export function FlowSettingsPanel({
         />
         <small className="panel-note">Runs started from now on use it; runs going on keep their branch.</small>
       </label>
+      <FlowAPISection flowId={flowId} onError={onError} />
     </aside>
   )
 }

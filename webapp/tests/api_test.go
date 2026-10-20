@@ -21,6 +21,7 @@ const kindAgent = "agent"
 const kindConnector = "connector"
 const kindFlow = "flow"
 const kindHuman = "human"
+const kindInput = "input"
 const kindScript = "script"
 const kindSentry = "sentry"
 const kindSubflow = "subflow"
@@ -443,8 +444,10 @@ type run struct {
 	// item apart, its first unique attribute's value or its place in the list.
 	ItemKey string `json:"itemKey"`
 	// The schedule that started it, if one did; see schedules.go.
-	Schedule   *int64     `json:"schedule"`
-	StartedBy  string     `json:"startedBy"`
+	Schedule  *int64 `json:"schedule"`
+	StartedBy string `json:"startedBy"`
+	// The name of the API key that started it, if one did.
+	APIKey     string     `json:"apiKey"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
@@ -726,4 +729,53 @@ type workspaceSpec struct {
 	Run          int64        `json:"run,omitempty"`
 	Step         int64        `json:"step,omitempty"`
 	Repositories []repository `json:"repositories"`
+}
+
+// An API key as its owner sees it; the key itself only as it is made.
+type apiKey struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
+	Key        string     `json:"key,omitempty"`
+}
+
+// How a flow is started over the API.
+type flowAPI struct {
+	ID      int64          `json:"id"`
+	Name    string         `json:"name"`
+	URL     string         `json:"url"`
+	Inputs  []apiInput     `json:"inputs"`
+	Schema  map[string]any `json:"schema"`
+	Problem string         `json:"problem,omitempty"`
+}
+
+type apiInput struct {
+	Name   string         `json:"name"`
+	Many   bool           `json:"many"`
+	States []string       `json:"states"`
+	Schema map[string]any `json:"schema"`
+}
+
+// What a run came to, as the API shows it.
+type apiRun struct {
+	ID         int64                 `json:"id"`
+	Flow       int64                 `json:"flow"`
+	Status     string                `json:"status"`
+	URL        string                `json:"url"`
+	StartedAt  time.Time             `json:"startedAt"`
+	FinishedAt *time.Time            `json:"finishedAt"`
+	Outcomes   map[string]apiOutcome `json:"outcomes"`
+	Errors     []apiStepError        `json:"errors"`
+}
+
+type apiOutcome struct {
+	State string          `json:"state,omitempty"`
+	Value json.RawMessage `json:"value"`
+}
+
+type apiStepError struct {
+	Process string `json:"process"`
+	Error   string `json:"error"`
 }

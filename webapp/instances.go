@@ -300,7 +300,8 @@ func recordState(ctx context.Context, db *sql.DB, step, object int64, state stri
 // for something ready sooner may run on the old one.
 func (w *walk) carry() error {
 	for _, o := range w.fr.board.Objects {
-		if o.Parent != nil || o.Owner != nil || !o.Persistent || o.Many || !w.generated[o.ID] || !w.onlyAffected(o.ID) {
+		// One given from outside holds what it was given.
+		if o.Parent != nil || o.Owner != nil || !o.Persistent || o.Many || !w.generated[o.ID] || !w.onlyAffected(o.ID) || slices.Contains(w.given, o.ID) {
 			continue
 		}
 		var content, state string

@@ -229,7 +229,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default']
+const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default']
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<() => void>()
@@ -880,6 +880,8 @@ export type FlowRun = {
   schedule: number | null
   // Who started it, when people sign in; empty otherwise.
   startedBy: string
+  // The name of the API key that started it, if one did.
+  apiKey: string
   startedAt: string
   finishedAt: string | null
 }
@@ -910,8 +912,9 @@ export type RunStep = {
   process: number | null
   processName: string
   // A re-run's step holding what it copied from the run it re-runs has no
-  // process, and is of kind copied.
-  kind: ProcessKind | 'copied'
+  // process, and is of kind copied; so has the step holding what a run
+  // started over the API was given, of kind input.
+  kind: ProcessKind | 'copied' | 'input'
   model: string
   thinking: ThinkingLevel | ''
   // For agents, the prompt as sent, inputs and change request included.
@@ -1526,4 +1529,52 @@ export function listProviderModels(input: ProviderInput): Promise<{ models: stri
 // The roles boards name and people hold, to pick from.
 export function listRoles(): Promise<string[]> {
   return request('/api/roles')
+}
+
+// A key another system starts flows with, as its maker; the key itself only
+// as it is made, never again.
+export type APIKey = {
+  id: number
+  name: string
+  // Its first characters, to tell it apart.
+  prefix: string
+  createdAt: string
+  lastUsedAt: string | null
+  key?: string
+}
+
+export function listAPIKeys(): Promise<APIKey[]> {
+  return request('/api/api-keys')
+}
+
+export function createAPIKey(name: string): Promise<APIKey> {
+  return request('/api/api-keys', { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+export function deleteAPIKey(id: number): Promise<void> {
+  return request(`/api/api-keys/${id}`, { method: 'DELETE' })
+}
+
+// How a flow is started over the API: where to POST, and the objects it
+// starts from, each with a JSON Schema of what to give of it.
+export type FlowAPI = {
+  id: number
+  name: string
+  url: string
+  inputs: { name: string; many: boolean; states: string[]; schema: JSONSchema }[]
+  schema: JSONSchema
+  // Why it can't be started this way, if it can't.
+  problem?: string
+}
+
+export type JSONSchema = {
+  type?: string
+  description?: string
+  properties?: Record<string, JSONSchema>
+  items?: JSONSchema
+  required?: string[]
+}
+
+export function getFlowAPI(flow: number): Promise<FlowAPI> {
+  return request(`/api/flows/${flow}/api`)
 }

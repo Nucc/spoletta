@@ -39,12 +39,14 @@ type run struct {
 	// The schedule that started it, if one did; see schedules.go.
 	Schedule *int64 `json:"schedule"`
 	// Who started it, when someone did with everyone signing in; see users.go.
-	StartedBy  string     `json:"startedBy"`
+	StartedBy string `json:"startedBy"`
+	// The name of the API key that started it, if one did; see api.go.
+	APIKey     string     `json:"apiKey"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
 
-var runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", started_at, finished_at"
+var runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), started_at, finished_at"
 
 // The tokens a step's model calls took in and gave out, and what they cost
 // at the models' catalog prices, in dollars.
@@ -79,7 +81,7 @@ func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage,
 }
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -478,7 +480,7 @@ func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix)
+	eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix, nil)
 	return nr.id, nil
 }
 

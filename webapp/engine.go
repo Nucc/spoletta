@@ -132,16 +132,17 @@ func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker
 	return &engine{db: db, workerURL: workerURL, sentry: sentry, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{}}
 }
 
-// Executes a run of the whole flow, on the top board of version's board, in
-// the background, and ends it once nothing in it is left to run.
+// Executes a run of the whole flow, on the top board of version's board,
+// given what came from outside, if anything (see api.go), in the background,
+// and ends it once nothing in it is left to run.
 // Its agents and scripts work in a workspace with the repositories, on a
 // branch of the run's own, whose name starts with prefix.
-func (e *engine) start(id, flow, version int64, board snapshot, repos []repository, prefix string) {
+func (e *engine) start(id, flow, version int64, board snapshot, repos []repository, prefix string, given map[int64]value) {
 	ctx, cancel := context.WithCancel(context.Background())
 	lr := e.register(id, cancel)
 	go func() {
 		fr := newFlowRun(flow, version, board, repos, prefix)
-		w := newWalk(ctx, e, id, lr, fr, nil, nil, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
+		w := newWalk(ctx, e, id, lr, fr, nil, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
 		if err := w.carry(); err != nil {
 			log.Printf("carry objects into run %d: %v", id, err)
 			w.fail()

@@ -438,11 +438,12 @@ This is the part that decides whether a flow works. The engine's own
 description is the header of `webapp/engine.go`; this section says the same
 in terms of what to draw.
 
-### 4.1 A run starts with nothing
+### 4.1 What a run starts with
 
-**A run takes no input.** Pressing Run starts at the board's start. An object
-that no process generates exists from the beginning, but **empty**. So
-whatever a flow works on has to come from inside the flow:
+**A run from the Run button or a schedule takes no input.** It starts at the
+board's start. An object that no process generates exists from the
+beginning, but **empty**. So whatever such a flow works on has to come from
+inside the flow:
 
 - a **human** process that has a person fill it in ("Which Jira ticket?"),
   the usual first step of a hand-started flow;
@@ -452,6 +453,20 @@ whatever a flow works on has to come from inside the flow:
 
 A first agent that "takes the request" when nothing produces the request
 gets an empty input. This is the most common authoring mistake.
+
+**A run started over the API is given its inputs.** Another system with an
+API key POSTs to `/v1/flows/<id>/runs` with `{"inputs": {"<object>": ...}}`,
+optionally with `"states": {"<object>": "<state>"}`. The inputs are the
+objects on the top board that some process takes and none generates, each
+required, holding what a person would enter of it: a JSON object with
+exactly its attributes, an array of them for a list, or text for an object
+without attributes. They are given as a subflow process gives its objects:
+the process the start points at takes them all, and the others taking them
+run once they exist. So a flow meant to be called this way has its first
+process take the request object, with nothing generating it. Connect to the
+end what the caller should get back: `GET /v1/runs/<id>` returns what the run
+left of those objects. A flow starting from a human or a fetching process
+takes no inputs.
 
 ### 4.2 Readiness
 
@@ -1451,8 +1466,9 @@ Check them before you import.
 - A file attribute can't be filled in by a person.
 
 **Common mistakes that import fine but don't work**
-1. A first agent taking an object nothing produces gets it **empty**
-   (section 4.1).
+1. A first agent taking an object nothing produces gets it **empty** when the
+   flow is run with the Run button or a schedule; only a run started over the
+   API is given it (section 4.1).
 2. A process taking the object it revises **plainly** (no state) waits for it
    before it ever writes it. Revisers take it **in the send-back state**.
    And a process with an event link runs only on its events (or from the

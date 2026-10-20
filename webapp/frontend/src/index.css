@@ -631,8 +631,10 @@ body {
   background: #fbefff;
 }
 
-/* What a re-run copied from the run it re-runs. */
-.process-kind.copied {
+/* What a re-run copied from the run it re-runs, and what a run started
+   over the API was given. */
+.process-kind.copied,
+.process-kind.input {
   color: #656d76;
   background: #f6f8fa;
 }
@@ -4805,4 +4807,61 @@ select.flow-owner:disabled {
 
 .link-button.danger {
   color: #cf222e;
+}
+
+/* A new API key, shown once as it is made. */
+.api-key-made {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px 16px;
+  background: #dafbe1;
+  border: 1px solid #aceebb;
+  border-radius: 10px;
+}
+
+.api-key-made p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.api-key-made code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.api-key-made button {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.api-key-used {
+  flex: 1;
+  min-width: 0;
+}
+
+/* How a flow is started over the API, in its settings. */
+.api-inputs {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.api-curl {
+  margin: 8px 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-size: 12px;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
 }

@@ -2590,6 +2590,7 @@ export default function Board({
         )}
         {!panelNode && !objectPanelNode && !mcpOpen && settingsOpen && (
           <FlowSettingsPanel
+            flowId={flowId}
             owner={
               <OwnerPicker
                 flow={flow}

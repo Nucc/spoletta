@@ -71,6 +71,8 @@ func newSandbox(kind string) (sandbox, error) {
 	switch kind {
 	case "", "process":
 		return processSandbox{}, nil
+	case "podman":
+		return newPodmanSandbox(context.Background())
 	}
 	return nil, fmt.Errorf("SANDBOX: no sandbox %q; process or podman", kind)
 }

@@ -181,6 +181,27 @@ var filesRoot = envOr("FILES_DIR", "/data/files")
 // own when steps run in containers, which must see them; see sandbox.go.
 var stepsRoot = envOr("STEPS_DIR", os.TempDir())
 
+// The prefixes of the directories steps get under stepsRoot.
+var stepDirPrefixes = []string{"private-", "script-private-", "run-", "script-"}
+
+// Removes the directories of steps a worker that stopped left behind, which
+// may hold their git tokens; steps remove their own as they end. Only in a
+// STEPS_DIR of the worker's own, never the system's temporary directory.
+func sweepStepDirs() {
+	if os.Getenv("STEPS_DIR") == "" {
+		return
+	}
+	entries, _ := os.ReadDir(stepsRoot)
+	for _, e := range entries {
+		for _, p := range stepDirPrefixes {
+			if e.IsDir() && strings.HasPrefix(e.Name(), p) {
+				os.RemoveAll(filepath.Join(stepsRoot, e.Name()))
+				break
+			}
+		}
+	}
+}
+
 // Makes a directory for a step, which only the worker's user reads.
 func makeStepDir(prefix string) (string, error) {
 	if err := os.MkdirAll(stepsRoot, 0o700); err != nil {
@@ -235,6 +256,7 @@ func main() {
 		log.Fatalf("worker: %v", err)
 	}
 
+	sweepStepDirs()
 	if steps, err = newSandbox(os.Getenv("SANDBOX")); err != nil {
 		log.Fatalf("worker: %v", err)
 	}

@@ -57,6 +57,36 @@ var testDB struct {
 	skip, fail string
 }
 
+// A model provider every provider of the tests' webapps is reached at,
+// /<provider>/ for each, which answers with the key it was reached with, and
+// says what the call took.
+// A custom provider there lists two models, /gateway/v1/models, to whoever
+// has its key, typed or in the vault.
+var testProvider = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	key := r.Header.Get("X-Api-Key")
+	if key == "" {
+		key = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	}
+	if r.URL.Path == "/gateway/v1/models" {
+		if key != "typed-key" && key != "gw-from-vault" {
+			http.Error(w, "who are you", http.StatusUnauthorized)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]string{{"id": "gw-2"}, {"id": "gw-1"}}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"key": key, "path": r.URL.Path, "usage": map[string]int{"input_tokens": 30, "output_tokens": 7}})
+}))
+
+// Where the webapps reach providers pi knows: the test provider.
+func testUpstreams() string {
+	var pairs []string
+	for _, id := range []string{"anthropic", "openai", "amazon-bedrock", "openrouter"} {
+		pairs = append(pairs, id+"="+testProvider.URL+"/"+id)
+	}
+	return strings.Join(pairs, ",")
+}
+
 func TestMain(m *testing.M) {
 	cleanup := setUp()
 	code := m.Run()
@@ -232,6 +262,12 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 		"SECRET_KEY=" + testSecretKey,
 		// What the fake worker takes requests with.
 		"WORKER_TOKEN=" + testWorkerToken,
+		// Providers are reached at the test provider; the webapp's
+		// environment has the key the worker's gateway providers read,
+		// and the vault's, VAULT_*.
+		"LLM_UPSTREAMS=" + testUpstreams(),
+		"GATEWAY_KEY=gw-from-env",
+		"VAULT_GATEWAY_KEY=gw-from-vault",
 	}
 	w.cmd.Env = append(w.cmd.Env, extra...)
 	w.cmd.Stdout, w.cmd.Stderr = w.log, w.log
@@ -559,11 +595,13 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, agentModels{Default: "fake/model", Models: []string{"fake/model"}})
 	})
-	// Its models read OpenAI's key and a gateway's, which the worker has.
-	mux.HandleFunc("GET /keys", func(w http.ResponseWriter, r *http.Request) {
+	// Its models read OpenAI's key and a gateway's, reached at the test
+	// provider as its models.json says.
+	mux.HandleFunc("GET /host-providers", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []map[string]any{
-			{"env": "GATEWAY_KEY", "providers": []string{"amazon-bedrock", "fireworks"}, "set": true},
-			{"env": "OPENAI_API_KEY", "providers": []string{"openai"}, "set": false},
+			{"id": "amazon-bedrock", "env": "GATEWAY_KEY", "baseUrl": testProvider.URL + "/gateway-bedrock"},
+			{"id": "fireworks", "env": "GATEWAY_KEY", "baseUrl": testProvider.URL + "/gateway-fireworks"},
+			{"id": "openai", "env": "OPENAI_API_KEY", "baseUrl": testProvider.URL + "/gateway-openai"},
 		})
 	})
 	// pi knows Anthropic, Amazon Bedrock and OpenAI, with a model or two each.
@@ -580,25 +618,6 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			{"id": "amazon-bedrock", "name": "Amazon Bedrock", "env": "AWS_BEARER_TOKEN_BEDROCK", "models": models("global.anthropic.claude-b")},
 			{"id": "openai", "name": "OpenAI", "env": "OPENAI_API_KEY", "models": models("gpt-x")},
 		}})
-	})
-	// Its environment has the variables a vault put there, VAULT_*.
-	mux.HandleFunc("GET /env", func(w http.ResponseWriter, r *http.Request) {
-		set := map[string]bool{}
-		for _, name := range r.URL.Query()["name"] {
-			set[name] = strings.HasPrefix(name, "VAULT_")
-		}
-		writeJSON(w, http.StatusOK, set)
-	})
-	// A custom provider speaking OpenAI's API serves two models to whoever
-	// has its key.
-	mux.HandleFunc("POST /provider-models", func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]string
-		json.NewDecoder(r.Body).Decode(&req)
-		if req["api"] != "openai-completions" || req["key"] != "typed-key" && !strings.HasPrefix(req["env"], "VAULT_") {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the provider answered 401 Unauthorized"})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string][]string{"models": {"gw-1", "gw-2"}})
 	})
 	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{})
@@ -620,10 +639,13 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 	// and a line it logs, then the result.
 	mux.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
 		var run agentRun
-		if err := json.NewDecoder(r.Body).Decode(&run); err != nil {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &run); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		run.Raw = string(body)
+		run.Reached = reachModels(run.LLM)
 		fw.mu.Lock()
 		fw.agentRuns = append(fw.agentRuns, run)
 		reply := fw.agents[run.ProcessName]
@@ -710,6 +732,39 @@ func (fw *fakeWorker) runsOf(process string) []agentRun {
 		}
 	}
 	return rs
+}
+
+// Reaches each provider the step may through the proxy, as an agent does
+// with its token, and returns the key each was reached with, by provider.
+func reachModels(llm *llmAccess) map[string]string {
+	reached := map[string]string{}
+	if llm == nil {
+		return reached
+	}
+	for _, id := range llm.Providers {
+		status, key := reachModel(llm, id)
+		if status == http.StatusOK {
+			reached[id] = key
+		}
+	}
+	return reached
+}
+
+// Reaches the provider through the proxy with the step's token, returning
+// the status and the key the provider was reached with.
+func reachModel(llm *llmAccess, provider string) (int, string) {
+	req, _ := http.NewRequest("POST", llm.URL+"/"+provider+"/v1/messages", strings.NewReader(`{"model": "fake-model"}`))
+	req.Header.Set("X-Api-Key", llm.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, ""
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Key string `json:"key"`
+	}
+	json.NewDecoder(resp.Body).Decode(&got)
+	return resp.StatusCode, got.Key
 }
 
 // An agent that hands in v through submit_output, every time.

@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -46,34 +44,48 @@ func TestReadCatalog(t *testing.T) {
 	}
 }
 
-// A provider goes over the host's entry for it, reading its key from its
-// variable; a custom one's models get what the catalog knows of their IDs.
+// A provider goes over the host's entry for it; a custom one's models get
+// what the catalog knows of their IDs. Every provider the step reaches
+// points at the proxy with the step's token, and no key the host's
+// models.json holds is left.
 func TestProvidersModels(t *testing.T) {
 	host := []byte(`{"providers": {
 		"openai": {"baseUrl": "https://gw/openai", "models": [{"id": "gpt-x"}]},
-		"fireworks": {"apiKey": "${OPENAI_API_KEY}"}
+		"fireworks": {"apiKey": "${OPENAI_API_KEY}", "baseUrl": "https://gw/fireworks/v1"},
+		"local": {"apiKey": "sk-literal", "baseUrl": "http://localhost:11434/v1"}
 	}}`)
 	known := map[string]catalogModel{"global.anthropic.claude-b": {ID: "global.anthropic.claude-b", Name: "Claude B", Reasoning: true, Input: []string{"text", "image"}, ContextWindow: 1000000, MaxTokens: 128000}}
+	llm := &llmAccess{URL: "http://webapp:8080/llm/", Token: "step-token-0123456789", Providers: []string{"openai", "fireworks", "company-gateway", "anthropic"}}
 	out, err := providersModels(host, []modelProvider{
 		{ID: "openai", Env: "OPENAI_API_KEY", Models: []string{"gpt-5"}},
 		{ID: "company-gateway", Name: "Company gateway", API: "bedrock-converse-stream", BaseURL: "https://gateway.example.com/bedrock", Env: "COMPANY_GATEWAY_API_KEY",
 			Models: []string{"global.anthropic.claude-b", "unknown-model"}},
-	}, known)
+	}, known, llm)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "sk-literal") || strings.Contains(string(out), "${") {
+		t.Errorf("a key is left: %s", out)
 	}
 	var got struct {
 		Providers map[string]map[string]any `json:"providers"`
 	}
 	json.Unmarshal(out, &got)
-	if openai := got.Providers["openai"]; len(openai) != 1 || openai["apiKey"] != "${OPENAI_API_KEY}" {
+	proxied := func(id string) bool {
+		e := got.Providers[id]
+		return e["baseUrl"] == "http://webapp:8080/llm/"+id && e["apiKey"] == "step-token-0123456789"
+	}
+	if openai := got.Providers["openai"]; len(openai) != 2 || !proxied("openai") {
 		t.Errorf("openai = %v", openai)
 	}
-	if got.Providers["fireworks"]["apiKey"] != "${OPENAI_API_KEY}" {
-		t.Errorf("fireworks = %v", got.Providers["fireworks"])
+	if !proxied("fireworks") || !proxied("anthropic") {
+		t.Errorf("fireworks = %v, anthropic = %v", got.Providers["fireworks"], got.Providers["anthropic"])
+	}
+	if local := got.Providers["local"]; local["apiKey"] != nil || local["baseUrl"] != "http://localhost:11434/v1" {
+		t.Errorf("a provider the step doesn't reach = %v", local)
 	}
 	gw := got.Providers["company-gateway"]
-	if gw["baseUrl"] != "https://gateway.example.com/bedrock" || gw["api"] != "bedrock-converse-stream" || gw["apiKey"] != "${COMPANY_GATEWAY_API_KEY}" || gw["name"] != "Company gateway" {
+	if !proxied("company-gateway") || gw["api"] != "bedrock-converse-stream" || gw["name"] != "Company gateway" {
 		t.Errorf("company-gateway = %v", gw)
 	}
 	models := gw["models"].([]any)
@@ -84,8 +96,11 @@ func TestProvidersModels(t *testing.T) {
 		t.Errorf("an unknown model = %v", m)
 	}
 
-	if out, err := providersModels(host, nil, known); err != nil || string(out) != string(host) {
-		t.Errorf("without providers: %s, %v", out, err)
+	if out, err := providersModels(nil, nil, known, nil); err != nil || out != nil {
+		t.Errorf("without anything: %s, %v", out, err)
+	}
+	if err := (&llmAccess{URL: "http://webapp/llm", Token: "$ANTHROPIC_API_KEY"}).check(); err == nil {
+		t.Error("a token pi would read as a variable passed the check")
 	}
 }
 
@@ -127,10 +142,10 @@ func TestWriteAgentDir(t *testing.T) {
 
 	providers := []modelProvider{{ID: "anthropic", Env: "ANTHROPIC_API_KEY", Models: []string{"claude-a"}}}
 	dir := filepath.Join(t.TempDir(), "agent")
-	if err := writeAgentDir(dir, providers); err != nil {
+	if err := writeAgentDir(dir, providers, nil); err != nil {
 		t.Fatal(err)
 	}
-	want, _ := providersModels(host, providers, nil)
+	want, _ := providersModels(host, providers, nil, nil)
 	if b, _ := os.ReadFile(filepath.Join(dir, "models.json")); string(b) != string(want) {
 		t.Errorf("with a provider, models.json = %s", b)
 	}
@@ -143,61 +158,10 @@ func TestWriteAgentDir(t *testing.T) {
 		t.Errorf("the agent directory's mode = %v; want only the worker's", fi.Mode())
 	}
 	other := filepath.Join(t.TempDir(), "agent")
-	if err := writeAgentDir(other, nil); err != nil {
+	if err := writeAgentDir(other, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(other, "models.json")); string(b) != string(host) {
+	if b, _ := os.ReadFile(filepath.Join(other, "models.json")); !json.Valid(b) || strings.Contains(string(b), "anthropic") {
 		t.Errorf("without, models.json = %s", b)
-	}
-}
-
-// A run's provider's key is set, as the offered models' are, and no other.
-func TestWithKeysOfProviders(t *testing.T) {
-	run := runRequest{
-		Keys:      map[string]string{"GW_API_KEY": "saved", "ELSEWHERE_KEY": "x"},
-		Providers: []modelProvider{{ID: "gw", Env: "GW_API_KEY"}},
-	}
-	t.Setenv("GW_API_KEY", "from-env")
-	env, err := run.withKeys([]string{"PATH=/bin"})
-	if err != nil || !slices.Contains(env, "GW_API_KEY=saved") || slices.Contains(env, "GW_API_KEY=from-env") || slices.Contains(env, "ELSEWHERE_KEY=x") {
-		t.Errorf("env = %v, %v", envNames(env), err)
-	}
-	t.Setenv("VAULT_KEY", "from-vault")
-	if set, err := envSet([]string{"VAULT_KEY", "MISSING_KEY"}); err != nil || !set["VAULT_KEY"] || set["MISSING_KEY"] {
-		t.Errorf("envSet = %v, %v", set, err)
-	}
-	if _, err := envSet([]string{"bad name"}); err == nil {
-		t.Error("envSet took a bad name")
-	}
-}
-
-// A custom provider's models come from its models endpoint, with its key.
-func TestProviderModels(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/models" && r.Header.Get("Authorization") == "Bearer from-vault":
-			w.Write([]byte(`{"data": [{"id": "b"}, {"id": "a"}, {"id": "a"}]}`))
-		case r.URL.Path == "/v1/models" && r.Header.Get("x-api-key") == "typed":
-			w.Write([]byte(`{"data": [{"id": "claude"}]}`))
-		default:
-			http.Error(w, "who are you", http.StatusUnauthorized)
-		}
-	}))
-	defer srv.Close()
-	t.Setenv("GW_API_KEY", "from-vault")
-
-	ids, err := providerModels(context.Background(), providerModelsRequest{BaseURL: srv.URL + "/v1/", API: "openai-completions", Env: "GW_API_KEY"})
-	if err != nil || !slices.Equal(ids, []string{"a", "b"}) {
-		t.Errorf("OpenAI's = %v, %v", ids, err)
-	}
-	ids, err = providerModels(context.Background(), providerModelsRequest{BaseURL: srv.URL, API: "anthropic-messages", Key: "typed"})
-	if err != nil || !slices.Equal(ids, []string{"claude"}) {
-		t.Errorf("Anthropic's = %v, %v", ids, err)
-	}
-	if _, err := providerModels(context.Background(), providerModelsRequest{BaseURL: srv.URL + "/v1", API: "openai-completions"}); err == nil {
-		t.Error("got models without the key")
-	}
-	if _, err := providerModels(context.Background(), providerModelsRequest{BaseURL: srv.URL, API: "bedrock-converse-stream"}); err == nil {
-		t.Error("got Bedrock's models")
 	}
 }

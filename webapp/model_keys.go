@@ -4,17 +4,20 @@ package main
 // They are the instance's: an admin sets them in the settings, as they
 // choose the models agents may use, and everyone's agents use them. pi reads
 // each provider's key from an environment variable, which several providers
-// may share, as a gateway's do; the worker says which variables the models
-// it offers read, and which it has in its own environment (see the worker's
-// keys.go). A key saved here goes to the worker for each agent step, over
-// the worker's own, and isn't shown again: the settings show its last four
-// characters. Keys are sealed with SECRET_KEY; see secrets.go.
+// may share, as a gateway's do; the worker says which variables the
+// providers of the models it offers read (see the worker's
+// host_providers.go). A key saved here, or else the webapp's environment's
+// for the same variable, is what the model proxy reaches those providers
+// with (see llm.go); it never goes to the worker, and isn't shown again: the
+// settings show its last four characters. Keys are sealed with SECRET_KEY;
+// see secrets.go.
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -24,17 +27,17 @@ import (
 // The longest key taken.
 const maxModelKey = 4096
 
-// A variable the worker's models read a key from, as the worker says: the
-// providers reading it, and whether the worker's environment has it. With
-// no variable, the providers' keys are set up in the worker otherwise.
+// A variable the worker's models read a key from: the providers reading it,
+// and whether the webapp's environment has it. With no variable, the
+// providers' keys can't be had.
 type workerKey struct {
 	Env       string   `json:"env"`
 	Providers []string `json:"providers"`
 	Set       bool     `json:"set"`
 }
 
-// A key as the settings show it: what the worker says of its variable, and
-// whether one is saved here, by its last four characters.
+// A key as the settings show it: its variable, and whether one is saved
+// here, by its last four characters.
 type modelKey struct {
 	workerKey
 	Saved     bool       `json:"saved"`
@@ -45,11 +48,24 @@ type modelKey struct {
 // What pi takes as a variable's name.
 var envNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,254}$`)
 
-// The variables the worker's models read keys from.
-func workerKeys(ctx context.Context, workerURL string) ([]workerKey, error) {
+// The variables the worker's models read keys from, by the worker's
+// providers, with whether the webapp's environment has each.
+func workerKeys(ctx context.Context) ([]workerKey, error) {
+	host, err := llm.hostProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var keys []workerKey
-	err := callWorker(ctx, http.MethodGet, workerURL+"/keys", nil, &keys)
-	return keys, err
+	for _, p := range host {
+		i := slices.IndexFunc(keys, func(k workerKey) bool { return k.Env == p.Env })
+		if i < 0 {
+			keys = append(keys, workerKey{Env: p.Env, Providers: []string{}, Set: p.Env != "" && os.Getenv(p.Env) != ""})
+			i = len(keys) - 1
+		}
+		keys[i].Providers = append(keys[i].Providers, p.ID)
+	}
+	slices.SortFunc(keys, func(a, b workerKey) int { return strings.Compare(a.Env, b.Env) })
+	return keys, nil
 }
 
 // The keys the worker's models read, with those saved here; a key saved for
@@ -57,9 +73,9 @@ func workerKeys(ctx context.Context, workerURL string) ([]workerKey, error) {
 // models of a provider added in the settings aren't offered, so their
 // providers' keys don't show. Says why the worker couldn't say, if it
 // couldn't.
-func listModelKeys(ctx context.Context, db *sql.DB, workerURL string) ([]modelKey, string, error) {
+func listModelKeys(ctx context.Context, db *sql.DB) ([]modelKey, string, error) {
 	keys := []modelKey{}
-	reported, err := workerKeys(ctx, workerURL)
+	reported, err := workerKeys(ctx)
 	workerError := ""
 	if err != nil {
 		workerError = "the worker didn't say which keys its models read: " + err.Error()
@@ -125,9 +141,9 @@ func refuseKeys(w http.ResponseWriter, r *http.Request) bool {
 	return requestUser(r) != nil && refuseNonAdmin(w, r)
 }
 
-func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
+func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 	writeKeys := func(w http.ResponseWriter, r *http.Request) {
-		keys, workerError, err := listModelKeys(r.Context(), db, workerURL)
+		keys, workerError, err := listModelKeys(r.Context(), db)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -167,7 +183,7 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			http.Error(w, "that isn't a key", http.StatusBadRequest)
 			return
 		}
-		reported, err := workerKeys(r.Context(), workerURL)
+		reported, err := workerKeys(r.Context())
 		if err != nil {
 			http.Error(w, "the worker didn't say which keys its models read: "+err.Error(), http.StatusBadGateway)
 			return

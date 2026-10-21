@@ -1449,10 +1449,10 @@ export function deleteTeam(id: number): Promise<void> {
 }
 
 // A variable the worker's models read their provider's key from, as the
-// worker says: the providers reading it, whether the worker's environment
+// worker says: the providers reading it, whether the webapp's environment
 // has it, and whether one is saved here, of which only the last four
-// characters show. With no variable, the providers' keys are set up in the
-// worker otherwise, in its models.json or with cloud credentials.
+// characters show. With no variable, the providers' keys can't be had,
+// unless Bedrock's, which signs in with the worker's cloud credentials.
 export type ModelKey = {
   env: string
   providers: string[]
@@ -1478,14 +1478,14 @@ export function deleteModelKey(env: string): Promise<void> {
   return request(`/api/model-keys/${env}`, { method: 'DELETE' })
 }
 
-// Where a provider's key comes from: saved here, or the worker's environment,
+// Where a provider's key comes from: saved here, or the webapp's environment,
 // where a vault puts it.
 export type KeySource = 'saved' | 'env'
 
 // A model provider admins added: one pi knows, or a custom one, such as an
 // AI gateway, at its URL and speaking its API. It reads its key from env;
 // a saved key shows only by its last four characters, and one in the
-// worker's environment by whether the worker has it.
+// webapp's environment by whether the webapp has it.
 export type ModelProvider = {
   id: string
   name: string
@@ -1499,8 +1499,8 @@ export type ModelProvider = {
   updatedAt: string
 }
 
-// The providers, the default model kept, and why the worker didn't say
-// which keys its environment has, if it didn't.
+// The providers, the default model kept, and what went wrong asking the
+// worker, if anything.
 export type ModelProviders = { providers: ModelProvider[]; default: string; workerError: string }
 
 // A model of pi's catalog.

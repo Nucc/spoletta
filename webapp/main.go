@@ -102,7 +102,7 @@ func main() {
 	registerUserRoleRoutes(mux, db, auth)
 	registerTeamRoutes(mux, db, auth)
 	registerOwnerRoutes(mux, db)
-	registerModelKeyRoutes(mux, db, workerURL)
+	registerModelKeyRoutes(mux, db)
 	registerModelProviderRoutes(mux, db, workerURL)
 	registerFlowListRoutes(mux, db, workerURL)
 	registerProcessRoutes(mux, db)
@@ -122,9 +122,13 @@ func main() {
 		log.Fatalf("PARALLEL_STEPS must be a positive number")
 	}
 	log.Printf("runs up to %d agent, script and Sentry steps at once (PARALLEL_STEPS)", parallelSteps)
-	// Where the worker reaches this webapp's MCP proxy.
-	mcp := newMCPBroker(db, env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")), auth != nil)
+	// Where the worker reaches this webapp's proxies, for MCP servers and for
+	// models; MCP_PROXY_URL is its old name.
+	proxyURL := env("PROXY_URL", env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")))
+	mcp := newMCPBroker(db, proxyURL, auth != nil)
 	registerMCPRoutes(mux, db, mcp)
+	llm = newLLMBroker(db, workerURL, proxyURL)
+	registerLLMRoutes(mux, llm)
 	registerSkillRoutes(mux, db)
 	registerConnectorRoutes(mux, db)
 	sentry := sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}

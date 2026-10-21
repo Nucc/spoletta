@@ -5,8 +5,10 @@ package main
 // whole: that holds what compose passes through, such as tokens for the
 // webapp's Sentry or a git host, and whatever an agent or a script can see
 // it can print. What a step needs beyond the list is added by name where
-// the step starts: the model keys pi reads (see keys.go), and the git token
-// only for the git commands the worker runs itself (see workspace.go).
+// the step starts: the cloud credentials Bedrock signs in with, for pi
+// only (see host_providers.go), and the git token only for the git
+// commands the worker runs itself (see workspace.go). Model keys never
+// reach the worker; agents reach their models through the webapp.
 //
 // CHILD_ENV names further variables, comma-separated, that every agent and
 // script gets from the worker's environment, for an instance that wants

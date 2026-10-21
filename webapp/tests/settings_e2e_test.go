@@ -30,8 +30,9 @@ type settingsKeys struct {
 }
 
 // The keys are the variables the worker's models read; only an admin saves
-// one, which every agent gets, whoever started its run, over the worker's
-// own. Keys aren't shown again.
+// one, which every agent reaches its provider with through the proxy,
+// whoever started its run, over the webapp's environment's. Keys aren't
+// shown again.
 func TestSettingsModelKeys(t *testing.T) {
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
@@ -61,17 +62,17 @@ func TestSettingsModelKeys(t *testing.T) {
 	a.refused("DELETE", "/api/model-keys/OPENAI_API_KEY", nil, http.StatusForbidden, "only an admin")
 	a.finish(a.startRun(f.ID).ID)
 	runs := a.worker.runsOf("Write")
-	got := runs[len(runs)-1].Keys
-	if got["OPENAI_API_KEY"] != "sk-instance-openai" || got["GATEWAY_KEY"] != "gw-saved" {
-		t.Errorf("bob's agent got keys %v", got)
+	got := runs[len(runs)-1].Reached
+	if got["openai"] != "sk-instance-openai" || got["fireworks"] != "gw-saved" || got["amazon-bedrock"] != "gw-saved" {
+		t.Errorf("bob's agent reached %v", got)
 	}
 
 	usersSignIn(a, p, usersAda)
 	a.call("DELETE", "/api/model-keys/OPENAI_API_KEY", nil, http.StatusNoContent, nil)
 	a.finish(a.startRun(f.ID).ID)
 	runs = a.worker.runsOf("Write")
-	if got := runs[len(runs)-1].Keys; got["OPENAI_API_KEY"] != "" || got["GATEWAY_KEY"] == "" {
-		t.Errorf("after removing OpenAI's key, the agent got %v", got)
+	if got := runs[len(runs)-1].Reached; got["openai"] != "" || got["fireworks"] != "gw-saved" {
+		t.Errorf("after removing OpenAI's key, the agent reached %v", got)
 	}
 }
 

@@ -52,6 +52,13 @@ type agentModels struct {
 	Providers map[string]string `json:"providers,omitempty"`
 }
 
+// Where a step reaches its providers, as the worker gets it.
+type llmAccess struct {
+	URL       string   `json:"url"`
+	Token     string   `json:"token"`
+	Providers []string `json:"providers"`
+}
+
 // What the worker runs.
 type agentRun struct {
 	// Identify the process in the worker's logs.
@@ -69,10 +76,14 @@ type agentRun struct {
 	// with the step's token; pi gets no MCP servers without them.
 	MCPServers []mcpRunServer `json:"mcpServers,omitempty"`
 	MCPToken   string         `json:"mcpToken,omitempty"`
-	// The model keys of whoever the run is for, by environment variable.
-	Keys map[string]string `json:"keys,omitempty"`
 	// The model providers admins added, without their keys.
 	Providers []runProvider `json:"providers,omitempty"`
+	// Where the agent reaches its models' providers, the webapp's proxy.
+	LLM *llmAccess `json:"llm,omitempty"`
+	// What the fake worker got: the request as it came, and the key each
+	// provider the agent reached through the proxy was reached with.
+	Raw     string            `json:"-"`
+	Reached map[string]string `json:"-"`
 	// The workspace it works in, if it works on repositories.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
 	// In a workspace, the pi session the worker keeps its conversation in, so

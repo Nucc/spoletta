@@ -271,9 +271,10 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, who *int64, run agentRun, uses processSettings, stepID int64, attempt int) runResult {
 	var msg string
 	var err error
-	if err = run.withModelAccess(ctx, db); err != nil {
+	if err = run.withModelAccess(ctx, db, who, 0, stepID, time.Duration(run.TimeoutMS)*time.Millisecond); err != nil {
 		return runResult{Error: err.Error()}
 	}
+	defer llm.revoke(run.LLM)
 	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, uses)
 	if err != nil {
 		return runResult{Error: err.Error()}

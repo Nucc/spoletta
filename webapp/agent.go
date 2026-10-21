@@ -92,11 +92,11 @@ type agentRun struct {
 	NoTools bool `json:"noTools,omitempty"`
 	// Has the worker put the guide to authoring flows before the prompt.
 	Guide bool `json:"guide,omitempty"`
-	// The instance's keys the agent reaches its model's provider with, by
-	// the environment variable pi reads each from; see model_keys.go.
-	Keys map[string]string `json:"keys,omitempty"`
 	// The model providers admins added; see model_providers.go.
 	Providers []runProvider `json:"providers,omitempty"`
+	// Where the agent reaches its models' providers, the webapp's proxy,
+	// with the step's token; never their keys. See llm.go.
+	LLM *llmAccess `json:"llm,omitempty"`
 	// The skills the process picked, which the worker hands pi; see skills.go.
 	Skills []runSkill `json:"skills,omitempty"`
 }
@@ -239,16 +239,18 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		}
 	}
 	// The step works for whoever the run is for, with their MCP
-	// connections. Its token reaches its MCP servers until the step ends,
-	// retry included.
+	// connections. Its tokens reach its models and MCP servers until the
+	// step ends, retry included.
 	if res.Error == "" {
-		if err = run.withModelAccess(ctx, db); err != nil {
-			return res, err
-		}
 		who, err := runUser(ctx, db, runID)
 		if err != nil {
 			return res, err
 		}
+		// A step that isn't handed in gets a second try, in the same time.
+		if err = run.withModelAccess(ctx, db, who, runID, stepID, 2*settings.timeout()); err != nil {
+			return res, err
+		}
+		defer llm.revoke(run.LLM)
 		var msg string
 		run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, settings)
 		if err != nil {

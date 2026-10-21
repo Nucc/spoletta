@@ -77,12 +77,12 @@ type runRequest struct {
 	// extensions, skills and context files that could bring some back, so
 	// it can't read the worker's files or secrets, or run anything.
 	NoTools bool `json:"noTools"`
-	// The model providers' keys of whoever the run is for, by the
-	// environment variable pi reads each from, over the worker's own.
-	Keys map[string]string `json:"keys"`
 	// The model providers an admin added, which go over the host's
 	// models.json; see providers.go.
 	Providers []modelProvider `json:"providers"`
+	// Where the step reaches its models' providers, the webapp's proxy,
+	// with its token; the worker has no keys of its own.
+	LLM *llmAccess `json:"llm"`
 	// Put the guide to authoring flows before the prompt, for an agent that
 	// can't read it itself.
 	Guide bool `json:"guide"`
@@ -215,7 +215,7 @@ func main() {
 		def = "(pi default)"
 	}
 	log.Printf("worker: %d enabled models, default %s", len(models.Models), def)
-	keys, err := modelKeysOf(hostConfigDir, models)
+	hostProviders, err := hostProvidersOf(hostConfigDir, models)
 	if err != nil {
 		log.Fatalf("worker: %v", err)
 	}
@@ -235,8 +235,10 @@ func main() {
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, models)
 	})
-	mux.HandleFunc("GET /keys", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, http.StatusOK, keys.report())
+	// The providers of the worker's pi config, which the webapp reaches for
+	// agents; see host_providers.go.
+	mux.HandleFunc("GET /host-providers", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, http.StatusOK, hostProviders)
 	})
 	// The providers pi knows that the webapp's settings can add, with their
 	// models.
@@ -247,30 +249,6 @@ func main() {
 			return
 		}
 		reply(w, http.StatusOK, c)
-	})
-	// Which of the variables named, ?name=A&name=B, the worker's environment
-	// has, for keys kept in a vault; never what they hold.
-	mux.HandleFunc("GET /env", func(w http.ResponseWriter, r *http.Request) {
-		set, err := envSet(r.URL.Query()["name"])
-		if err != nil {
-			reply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		reply(w, http.StatusOK, set)
-	})
-	// The models a custom provider says it serves.
-	mux.HandleFunc("POST /provider-models", func(w http.ResponseWriter, r *http.Request) {
-		var req providerModelsRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
-			reply(w, http.StatusBadRequest, map[string]string{"error": "invalid request: " + err.Error()})
-			return
-		}
-		models, err := providerModels(r.Context(), req)
-		if err != nil {
-			reply(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		reply(w, http.StatusOK, map[string][]string{"models": models})
 	})
 	mux.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
 		var run runRequest
@@ -523,13 +501,10 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	}
 	defer os.RemoveAll(private)
 	agentDir := filepath.Join(private, "agent")
-	if err := writeAgentDir(agentDir, run.Providers); err != nil {
+	if err := writeAgentDir(agentDir, run.Providers, run.LLM); err != nil {
 		return runResult{Error: err.Error()}
 	}
-	env, err := run.withKeys(childEnv("PI_CODING_AGENT_DIR=" + agentDir))
-	if err != nil {
-		return runResult{Error: err.Error()}
-	}
+	env := withCloudCredentials(childEnv("PI_CODING_AGENT_DIR=" + agentDir))
 	if len(run.MCPServers) > 0 {
 		b, err := json.Marshal(map[string]any{"servers": run.MCPServers, "token": run.MCPToken})
 		if err == nil {
@@ -593,7 +568,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	cmd.Stdout = events
 	cmd.Stderr = &stderr
 
-	// The prompt goes on stdin and the keys in the environment, so the
+	// The prompt goes on stdin and the token in models.json, so the
 	// arguments hold neither.
 	l.infof("pi %s", strings.Join(args, " "))
 	if err := cmd.Start(); err != nil {

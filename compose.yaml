@@ -22,8 +22,8 @@ services:
   # Runs pi agent harnesses for agent processes, and bash for script
   # processes. Only the webapp reaches it, so its port isn't published. It
   # uses the models and model settings from your pi config (PI_CONFIG_DIR,
-  # ~/.pi/agent by default) and credentials from the environment `podman
-  # compose up` runs in; restart it after changing either.
+  # ~/.pi/agent by default), never its keys: agents reach their models
+  # through the webapp, which has the keys. Restart it after changing it.
   worker:
     # Built from the top, since the image takes the guide in docs/ too.
     build:
@@ -38,15 +38,8 @@ services:
       - WORKER_TOKEN=${WORKER_TOKEN:-}
       - PI_SKIP_VERSION_CHECK=1
       - PI_TELEMETRY=0
-      # Passed through from the host when set. Add any other variables your
-      # models.json references, and those the model providers added in the
-      # settings read their keys from when the keys are kept in a vault.
-      # Only pi gets them, by the variables its models read; a script never
-      # does. See worker/env.go.
-      - OPENAI_API_KEY
-      - ANTHROPIC_API_KEY
-      - GEMINI_API_KEY
-      - OPENROUTER_API_KEY
+      # Bedrock without a key signs in with AWS credentials: pass AWS_* here
+      # for it, which only pi gets. Model keys go to the webapp, below.
       # Steps get only the variables they need from the worker's
       # environment, never its secrets. To hand every script (and agent)
       # more, such as a token for curl -H "Authorization: Bearer
@@ -94,8 +87,18 @@ services:
       WORKER_URL: http://worker:8090
       # The worker's token; see the worker's.
       WORKER_TOKEN: ${WORKER_TOKEN:-}
-      # Where the worker reaches the proxy agents use MCP servers through.
-      MCP_PROXY_URL: http://webapp:8080
+      # Where the worker reaches the proxies agents use their models and MCP
+      # servers through.
+      PROXY_URL: http://webapp:8080
+      # Model keys, passed through from the host when set: what the models
+      # of your pi config read (its models.json may name others; add them),
+      # and those the model providers added in the settings read when kept
+      # in a vault. The webapp reaches the providers with them for agents,
+      # which never see them; a key saved in the settings goes over these.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # For Sentry processes: a token with event:read, and the address of a
       # self-hosted Sentry if not sentry.io.
       SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}

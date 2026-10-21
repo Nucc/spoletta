@@ -9,36 +9,40 @@ package main
 //
 // Each reads its key from an environment variable. The key is saved here,
 // sealed with SECRET_KEY like the model keys and shown only by its last four
-// characters, and goes to the worker in a variable of the provider's own,
-// MODEL_PROVIDER_<ID>_KEY, so it can't reach what the worker's pi config
-// reads from the provider's usual variable, as a gateway's providers may.
-// Or it is kept in a vault that puts it in the worker's environment, under
-// the provider's usual variable or one the admin names, never coming here:
-// the settings then show only the variable to set and whether the worker
-// has it.
+// characters, under a variable of the provider's own,
+// MODEL_PROVIDER_<ID>_KEY, so it can't be taken for what the worker's pi
+// config reads from the provider's usual variable, as a gateway's providers
+// may. Or it is kept in a vault that puts it in the webapp's environment,
+// under the provider's usual variable or one the admin names, never coming
+// here: the settings then show only the variable to set and whether the
+// webapp has it.
 //
-// Every agent step gets the providers, which the worker writes into pi's
-// models.json over the host's entries for the same providers (see the
-// worker's providers.go), and the saved keys with the model keys. The models
-// offered are the providers' picked ones and the worker's own of other
-// providers. The default model, which a process without a model of its own
-// uses, is kept here once a provider is added: the first provider's first
-// model, until an admin picks another.
+// Every agent step gets the providers, without their keys, which the
+// worker writes into pi's models.json over the host's entries for the same
+// providers (see the worker's providers.go), pointed at the model proxy,
+// which reaches them with their keys (see llm.go). The models offered are
+// the providers' picked ones and the worker's own of other providers. The
+// default model, which a process without a model of its own uses, is kept
+// here once a provider is added: the first provider's first model, until
+// an admin picks another.
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 )
 
-// Where a provider's key comes from: saved here, or the worker's environment.
+// Where a provider's key comes from: saved here, or the webapp's environment.
 const (
 	keySaved = "saved"
 	keyEnv   = "env"
@@ -58,7 +62,7 @@ type modelProvider struct {
 	Models    []string `json:"models"`
 	// The saved key's last four characters.
 	Hint string `json:"hint,omitempty"`
-	// With the key in the worker's environment: whether it has it, if the
+	// With the key in the webapp's environment: whether it has it, if the
 	// worker said.
 	EnvSet    *bool     `json:"envSet,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -105,36 +109,6 @@ func modelProviders(ctx context.Context, db rowsQuerier) ([]modelProvider, error
 		return nil
 	})
 	return providers, err
-}
-
-// What an agent step reaches its model with: the model keys, the providers,
-// and their saved keys. A key kept in a vault is the worker's, over any
-// saved for its variable.
-func (run *agentRun) withModelAccess(ctx context.Context, db *sql.DB) error {
-	keys, err := modelKeys(ctx, db)
-	if err != nil {
-		return err
-	}
-	providers, err := modelProviders(ctx, db)
-	if err != nil {
-		return err
-	}
-	for _, p := range providers {
-		if p.KeySource == keyEnv {
-			delete(keys, p.Env)
-		}
-	}
-	for _, p := range providers {
-		if p.KeySource == keySaved && p.key != "" {
-			if keys == nil {
-				keys = map[string]string{}
-			}
-			keys[p.Env] = p.key
-		}
-		run.Providers = append(run.Providers, runProvider{ID: p.ID, Name: p.Name, API: p.API, BaseURL: p.BaseURL, Env: p.Env, Models: p.Models})
-	}
-	run.Keys = keys
-	return nil
 }
 
 // The default model kept here; "" leaves it to the worker's pi config.
@@ -361,7 +335,7 @@ func (in providerInput) provider(catalog []catalogProvider, existing *modelProvi
 	default:
 		return p, "say where the key comes from"
 	}
-	// A key saved for a variable goes over the worker's own, so two
+	// A key saved for a variable goes over the environment's, so two
 	// providers can't read one saved and another from the vault.
 	for _, o := range others {
 		if o.ID != p.ID && o.Env == p.Env && (o.KeySource == keySaved || p.KeySource == keySaved) {
@@ -397,24 +371,13 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			serverError(w, err)
 			return
 		}
-		var names []string
-		for _, p := range providers {
+		for i, p := range providers {
 			if p.KeySource == keyEnv {
-				names = append(names, p.Env)
+				set := os.Getenv(p.Env) != ""
+				providers[i].EnvSet = &set
 			}
 		}
 		workerError := ""
-		if len(names) > 0 {
-			var set map[string]bool
-			if err := callWorker(r.Context(), http.MethodGet, workerURL+"/env?"+url.Values{"name": names}.Encode(), nil, &set); err != nil {
-				workerError = "the worker didn't say which keys its environment has: " + workerMessage(err)
-			}
-			for i, p := range providers {
-				if v, ok := set[p.Env]; ok && p.KeySource == keyEnv {
-					providers[i].EnvSet = &v
-				}
-			}
-		}
 		writeJSON(w, http.StatusOK, map[string]any{"providers": providers, "default": def, "workerError": workerError})
 	}
 
@@ -579,7 +542,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 	})
 
 	// The models a custom provider says it serves, asked with the key typed,
-	// the one saved for it, or the one in the worker's environment.
+	// the one saved for it, or the one in the webapp's environment.
 	mux.HandleFunc("POST /api/model-providers/models", func(w http.ResponseWriter, r *http.Request) {
 		if refuseKeys(w, r) {
 			return
@@ -594,29 +557,98 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		req := map[string]string{"baseUrl": in.BaseURL, "api": in.API, "key": strings.TrimSpace(in.Key)}
+		key := strings.TrimSpace(in.Key)
 		switch {
 		case in.KeySource == keyEnv:
-			req["key"], req["env"] = "", strings.TrimSpace(in.Env)
-		case req["key"] == "" && in.ID != "":
+			env := strings.TrimSpace(in.Env)
+			if !envNamePattern.MatchString(env) {
+				http.Error(w, "that isn't a variable's name", http.StatusBadRequest)
+				return
+			}
+			key = os.Getenv(env)
+		case key == "" && in.ID != "":
 			providers, err := modelProviders(r.Context(), db)
 			if err != nil {
 				serverError(w, err)
 				return
 			}
 			if i := slices.IndexFunc(providers, func(p modelProvider) bool { return p.ID == in.ID }); i >= 0 {
-				req["key"] = providers[i].key
+				key = providers[i].key
 			}
 		}
-		var out struct {
-			Models []string `json:"models"`
-		}
-		if err := callWorker(r.Context(), http.MethodPost, workerURL+"/provider-models", req, &out); err != nil {
-			http.Error(w, workerMessage(err), http.StatusBadGateway)
+		models, err := providerModels(r.Context(), in.BaseURL, in.API, key)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, map[string][]string{"models": models})
 	})
+}
+
+// The models a custom provider says it serves, by their IDs, from its
+// models endpoint, asked with its key: OpenAI's and Anthropic's APIs have
+// one.
+func providerModels(ctx context.Context, baseURL, api, key string) ([]string, error) {
+	if strings.ContainsAny(key, "\x00\r\n") {
+		return nil, errors.New("invalid key")
+	}
+	base := strings.TrimSuffix(baseURL, "/")
+	var target string
+	header := http.Header{}
+	switch api {
+	case "openai-completions", "openai-responses":
+		target = base + "/models"
+		if key != "" {
+			header.Set("Authorization", "Bearer "+key)
+		}
+	case "anthropic-messages":
+		target = base + "/v1/models"
+		header.Set("anthropic-version", "2023-06-01")
+		if key != "" {
+			header.Set("x-api-key", key)
+		}
+	default:
+		return nil, errors.New("this API doesn't list its models; enter their IDs")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	r.Header = header
+	res, err := http.DefaultClient.Do(r)
+	if err != nil {
+		return nil, fmt.Errorf("ask the provider for its models: %w", err)
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 300 {
+			msg = msg[:300] + "…"
+		}
+		return nil, fmt.Errorf("the provider answered %s: %s", res.Status, msg)
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, errors.New("the provider's answer isn't a list of models")
+	}
+	ids := []string{}
+	for _, m := range list.Data {
+		if m.ID != "" && !slices.Contains(ids, m.ID) {
+			ids = append(ids, m.ID)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // What the worker said went wrong: its error, without how it said it.

@@ -25,8 +25,9 @@ import { formatTime } from './Runs'
 
 // Where agents' models come from, which admins set up: the providers added
 // here, each with the models picked of it and its key, saved here or kept
-// in a vault that puts it in the worker's environment; the default model;
-// and the keys of the worker's own pi config.
+// in a vault that puts it in the webapp's environment; the default model;
+// and the keys of the worker's own pi config. Agents never get the keys:
+// they reach their models through the webapp, which holds them.
 export function ModelProvidersSection({ onError }: { onError: (err: unknown) => void }) {
   const [providers, setProviders] = useState<ModelProviders | null>(null)
   const [models, setModels] = useState<Models | null>(null)
@@ -64,7 +65,8 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
       <h2>Model providers</h2>
       <p className="flows-note">
         Where agents' models come from. Add a provider with its key, or your own AI gateway as a custom provider; its
-        key is saved here, or kept in a vault that puts it in the worker's environment, and never shows again.
+        key is saved here, or kept in a vault that puts it in the webapp's environment, and never shows again. Agents
+        reach their models through the webapp and never see a key.
       </p>
       {providers?.workerError && <p className="panel-warning">{providers.workerError}</p>}
       {providers === null ? (
@@ -146,9 +148,9 @@ function providerKeyStatus(p: ModelProvider): { text: string; missing: boolean }
     return { text: `Key saved here, …${p.hint ?? ''} · ${formatTime(p.updatedAt)}`, missing: false }
   }
   if (p.envSet === false) {
-    return { text: `Set ${p.env} in the worker’s environment: its models fail until then`, missing: true }
+    return { text: `Set ${p.env} in the webapp’s environment: its models fail until then`, missing: true }
   }
-  return { text: `Key from ${p.env} in the worker’s environment`, missing: false }
+  return { text: `Key from ${p.env} in the webapp’s environment`, missing: false }
 }
 
 function ProviderItem({ provider: p, onEdit, onRemove }: { provider: ModelProvider; onEdit: () => void; onRemove: () => void }) {
@@ -197,7 +199,7 @@ function formatTokens(n: number): string {
 }
 
 // Adding a provider, picking which first, or changing one: its key, saved
-// or from the worker's environment, and its models, picked from pi's
+// or from the webapp's environment, and its models, picked from pi's
 // catalog or, for a custom provider, listed by their IDs. Adding one pi
 // knows replaces the worker's own models of it, which it says.
 function ProviderDialog({
@@ -400,12 +402,12 @@ function ProviderDialog({
                   onChange={(e) => setEnv(e.target.value.toUpperCase())}
                 />
                 <span className="flows-note">
-                  Set <code>{env.trim() || defaultEnv || 'the variable'}</code> in the worker's environment, from your vault
+                  Set <code>{env.trim() || defaultEnv || 'the variable'}</code> in the webapp's environment, from your vault
                   or secret store; the key never comes here.
                   {provider?.keySource === 'env' &&
                     (env.trim() || defaultEnv) === provider.env &&
                     provider.envSet !== undefined &&
-                    (provider.envSet ? ' The worker has it.' : ' The worker doesn’t have it yet.')}
+                    (provider.envSet ? ' The webapp has it.' : ' The webapp doesn’t have it yet.')}
                 </span>
               </>
             )}
@@ -496,9 +498,9 @@ function ModelPicker({ models, picked, onChange }: { models: CatalogModel[]; pic
   )
 }
 
-// The keys of the worker's own pi config, which admins may save here over
-// the worker's: one for each variable its models read a key from, which
-// several providers may share, as a gateway's do.
+// The keys of the worker's own pi config, which admins save here or set in
+// the webapp's environment: one for each variable its models read a key
+// from, which several providers may share, as a gateway's do.
 function WorkerKeys({ onError }: { onError: (err: unknown) => void }) {
   const [keys, setKeys] = useState<ModelKeys | null>(null)
   const refresh = useCallback(() => listModelKeys().then(setKeys, onError), [onError])
@@ -532,7 +534,7 @@ function WorkerKeys({ onError }: { onError: (err: unknown) => void }) {
       <h3>From the worker's pi config</h3>
       <p className="flows-note">
         The models of the worker's own models.json and settings.json, of providers not added above, and the keys they
-        read. A key saved here goes over the worker's own.
+        read, which agents reach them with through the webapp. A key saved here goes over the webapp's environment's.
       </p>
       {keys.workerError && <p className="panel-warning">{keys.workerError}</p>}
       {settable.length > 0 && (
@@ -544,8 +546,9 @@ function WorkerKeys({ onError }: { onError: (err: unknown) => void }) {
       )}
       {elsewhere.length > 0 && (
         <p className="flows-note">
-          {elsewhere.join(', ')} {elsewhere.length === 1 ? 'gets its key' : 'get their keys'} in the worker itself: from
-          its models.json, or its cloud credentials.
+          {elsewhere.join(', ')} {elsewhere.length === 1 ? 'reads its key' : 'read their keys'} from no variable, so
+          agents can't reach {elsewhere.length === 1 ? 'it' : 'them'}: add {elsewhere.length === 1 ? 'it' : 'them'} above
+          with a key. Amazon Bedrock without a key signs in with the worker's cloud credentials.
         </p>
       )}
     </div>
@@ -555,7 +558,7 @@ function WorkerKeys({ onError }: { onError: (err: unknown) => void }) {
 // Where a key comes from, said on its row.
 function keyStatus(k: ModelKey): string {
   if (k.saved) return `Saved here, …${k.hint ?? ''}${k.updatedAt ? ` · ${formatTime(k.updatedAt)}` : ''}`
-  if (k.set) return 'From the worker’s environment'
+  if (k.set) return 'From the webapp’s environment'
   return 'Not set: models of these providers fail'
 }
 

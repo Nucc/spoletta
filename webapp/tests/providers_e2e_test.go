@@ -2,11 +2,13 @@ package tests
 
 // Model providers admins add in the settings: one pi knows, reached with its
 // key, or a custom one, such as a company's AI gateway, at its URL; the key
-// saved here or kept in a vault, in the worker's environment.
+// saved here or kept in a vault, in the webapp's environment. Agents reach
+// them through the webapp's proxy, never with their keys.
 
 import (
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -29,8 +31,9 @@ type settingsProviders struct {
 }
 
 // Adding a provider offers the models picked of it, the first of the first
-// becoming the default; every agent gets the providers, and the keys saved
-// here, never the ones a vault keeps. Only an admin sees and changes them.
+// becoming the default; every agent gets the providers, never their keys,
+// and reaches them through the proxy with the keys saved here or the
+// vault's. Only an admin sees and changes them.
 func TestModelProviders(t *testing.T) {
 	db := secretsDB(t)
 	t.Cleanup(func() {
@@ -63,7 +66,7 @@ func TestModelProviders(t *testing.T) {
 
 	// A gateway of the company's own, its key in a vault.
 	ps = providers("POST", "/api/model-providers", map[string]any{
-		"name": "Company gateway", "api": "bedrock-converse-stream", "baseUrl": "https://gateway.example.com/bedrock",
+		"name": "Company gateway", "api": "bedrock-converse-stream", "baseUrl": testProvider.URL + "/gateway/bedrock",
 		"keySource": "env", "env": "VAULT_GATEWAY_KEY", "models": []string{"global.anthropic.claude-b", " "},
 	})
 	gw := ps.Providers[1]
@@ -100,7 +103,8 @@ func TestModelProviders(t *testing.T) {
 	}
 
 	// An agent of no model of its own takes the default, and gets the
-	// providers, with the saved key and not the vault's.
+	// providers, reaching them with the saved key and the vault's, which
+	// it is never given.
 	f := a.newFlow("Providers")
 	usersShare(a, f.ID)
 	a.startAt(f.ID, a.agent(f.ID, "Write", "Write.").ID)
@@ -118,9 +122,14 @@ func TestModelProviders(t *testing.T) {
 		return runs[len(runs)-1]
 	}
 	run := last()
-	if run.Model != "anthropic/claude-a" || len(run.Providers) != 2 || run.Providers[1].BaseURL != "https://gateway.example.com/bedrock" ||
-		run.Keys["MODEL_PROVIDER_ANTHROPIC_KEY"] != "sk-ant-1234" || run.Keys["ANTHROPIC_API_KEY"] != "" || run.Keys["VAULT_GATEWAY_KEY"] != "" {
+	if run.Model != "anthropic/claude-a" || len(run.Providers) != 2 || run.Providers[1].BaseURL != testProvider.URL+"/gateway/bedrock" ||
+		run.Reached["anthropic"] != "sk-ant-1234" || run.Reached["company-gateway"] != "gw-from-vault" || run.Reached["fireworks"] != "gw-from-env" {
 		t.Errorf("bob's agent got %+v", run)
+	}
+	for _, key := range []string{"sk-ant-1234", "gw-from-vault", "gw-from-env"} {
+		if strings.Contains(run.Raw, key) {
+			t.Errorf("the worker got the key %s", key)
+		}
 	}
 
 	usersSignIn(a, p, usersAda)
@@ -136,28 +145,28 @@ func TestModelProviders(t *testing.T) {
 		t.Errorf("anthropic from the vault: %+v", an)
 	}
 	a.finish(a.startRun(f.ID).ID)
-	if run := last(); run.Model != "company-gateway/global.anthropic.claude-b" || run.Keys["MODEL_PROVIDER_ANTHROPIC_KEY"] != "" || run.Keys["ANTHROPIC_API_KEY"] != "" {
+	if run := last(); run.Model != "company-gateway/global.anthropic.claude-b" || run.Reached["anthropic"] != "" || slices.Contains(run.LLM.Providers, "anthropic") {
 		t.Errorf("then the agent got %+v", run)
 	}
 	// Changing its URL alone, a saved key stays.
 	providers("PUT", "/api/model-providers/company-gateway", map[string]any{
-		"name": "Company gateway", "api": "bedrock-converse-stream", "baseUrl": "https://gateway.example.com/v2/bedrock",
+		"name": "Company gateway", "api": "bedrock-converse-stream", "baseUrl": testProvider.URL + "/gateway/v2/bedrock",
 		"keySource": "saved", "key": "gw-key-5678", "models": []string{"global.anthropic.claude-b"},
 	})
 	ps = providers("PUT", "/api/model-providers/company-gateway", map[string]any{
-		"name": "Company gateway", "api": "bedrock-converse-stream", "baseUrl": "https://gateway.example.com/v3/bedrock",
+		"name": "Company gateway", "api": "bedrock-converse-stream", "baseUrl": testProvider.URL + "/gateway/v3/bedrock",
 		"keySource": "saved", "models": []string{"global.anthropic.claude-b"},
 	})
-	if gw := ps.Providers[1]; gw.Hint != "5678" || gw.BaseURL != "https://gateway.example.com/v3/bedrock" {
+	if gw := ps.Providers[1]; gw.Hint != "5678" || gw.BaseURL != testProvider.URL+"/gateway/v3/bedrock" {
 		t.Errorf("the gateway with a new URL: %+v", gw)
 	}
 
-	// A key saved for a provider goes in a variable of its own, never one
-	// the worker's pi config reads, such as a gateway's OPENAI_API_KEY.
+	// A provider pi knows, added, is reached with its own key where pi
+	// knows it, over the worker's own config of it, a gateway's.
 	providers("POST", "/api/model-providers", map[string]any{"id": "openai", "keySource": "saved", "key": "sk-openai", "models": []string{"gpt-x"}})
 	a.finish(a.startRun(f.ID).ID)
-	if run := last(); run.Keys["MODEL_PROVIDER_OPENAI_KEY"] != "sk-openai" || run.Keys["OPENAI_API_KEY"] != "" {
-		t.Errorf("with OpenAI's key saved, the agent got keys %v", run.Keys)
+	if run := last(); run.Reached["openai"] != "sk-openai" || run.Reached["company-gateway"] != "gw-key-5678" {
+		t.Errorf("with OpenAI's key saved, the agent reached %v", run.Reached)
 	}
 	providers("DELETE", "/api/model-providers/openai", nil)
 
@@ -174,11 +183,16 @@ func TestModelProviders(t *testing.T) {
 	var listed struct {
 		Models []string `json:"models"`
 	}
-	a.call("POST", "/api/model-providers/models", map[string]any{"baseUrl": "https://gateway.example.com/v1", "api": "openai-completions", "keySource": "saved", "key": "typed-key"}, http.StatusOK, &listed)
+	a.call("POST", "/api/model-providers/models", map[string]any{"baseUrl": testProvider.URL + "/gateway/v1", "api": "openai-completions", "keySource": "saved", "key": "typed-key"}, http.StatusOK, &listed)
 	if !slices.Equal(listed.Models, []string{"gw-1", "gw-2"}) {
 		t.Errorf("listed %v", listed.Models)
 	}
-	a.refused("POST", "/api/model-providers/models", map[string]any{"baseUrl": "https://gateway.example.com/v1", "api": "openai-completions", "keySource": "saved", "key": "wrong"}, http.StatusBadGateway, "401 Unauthorized")
+	a.refused("POST", "/api/model-providers/models", map[string]any{"baseUrl": testProvider.URL + "/gateway/v1", "api": "openai-completions", "keySource": "saved", "key": "wrong"}, http.StatusBadGateway, "401 Unauthorized")
+	// The vault's key is the webapp's.
+	a.call("POST", "/api/model-providers/models", map[string]any{"baseUrl": testProvider.URL + "/gateway/v1", "api": "openai-completions", "keySource": "env", "env": "VAULT_GATEWAY_KEY"}, http.StatusOK, &listed)
+	if !slices.Equal(listed.Models, []string{"gw-1", "gw-2"}) {
+		t.Errorf("listed with the vault's key %v", listed.Models)
+	}
 
 	// Removing the default's provider makes the first one's first model
 	// the default; removing all, the worker's own is again.

@@ -2,28 +2,29 @@ package main
 
 // Model providers an admin adds in the webapp's settings, each giving agents
 // the models picked of it: one pi knows, such as Anthropic or OpenRouter,
-// reached with its key, or a custom one, such as a company's own AI gateway,
-// by its URL, the API it speaks and its models' IDs. The webapp sends them
-// with each agent step without their keys: a key saved in the webapp goes
-// with the model keys, by the variable its provider reads it from, and one
-// kept in a vault is in the worker's environment under that variable.
+// or a custom one, such as a company's own AI gateway, by its URL, the API
+// it speaks and its models' IDs. The webapp sends them with each agent step,
+// never with their keys.
 //
 // pi takes a provider's endpoint and models only from models.json, so the
-// worker writes the providers into the step's agent directory's models.json, over
-// the host's entries for the same providers: each reads its key from its
-// variable, and a custom one has its URL, API and models, which get what
-// pi's catalog knows of a model of the same ID (how much it takes in and
-// gives out, whether it thinks, whether it sees images). Each agent step
-// gets a models.json of its own, in its own agent directory.
+// worker writes the providers into the step's agent directory's models.json,
+// over the host's entries for the same providers; a custom one has its URL,
+// API and models, which get what pi's catalog knows of a model of the same
+// ID (how much it takes in and gives out, whether it thinks, whether it
+// sees images). Every provider the webapp reaches for the step, these and
+// the host's (see host_providers.go), points at the webapp's proxy, with
+// the step's token as its key; the proxy swaps it for the real one. pi
+// takes a provider-level baseUrl over its own for one it knows, and reads a
+// key that is neither a $variable nor a !command as it is, which the
+// token, made of letters, digits, - and _, never is. A key models.json
+// holds is dropped: no key is the worker's.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -231,11 +232,41 @@ func readCatalog(dir string) (*modelCatalog, error) {
 	return c, nil
 }
 
+// Where a step reaches its providers: the webapp's proxy, URL/<provider>
+// for each provider it reaches, with the step's token.
+type llmAccess struct {
+	URL       string   `json:"url"`
+	Token     string   `json:"token"`
+	Providers []string `json:"providers"`
+}
+
+// What a token can be, so pi takes it as it is.
+var llmToken = regexp.MustCompile(`^[A-Za-z0-9_-]{16,}$`)
+
+func (a *llmAccess) check() error {
+	if a == nil {
+		return nil
+	}
+	if !llmToken.MatchString(a.Token) {
+		return errors.New("invalid model proxy token")
+	}
+	if err := checkProviderURL(a.URL); err != nil {
+		return fmt.Errorf("model proxy: %w", err)
+	}
+	for _, id := range a.Providers {
+		if !providerIDPattern.MatchString(id) {
+			return fmt.Errorf("invalid model provider %q", id)
+		}
+	}
+	return nil
+}
+
 // The host's models.json with the providers over its entries for the same
-// ones; the host's own without any.
-func providersModels(host []byte, providers []modelProvider, known map[string]catalogModel) ([]byte, error) {
-	if len(providers) == 0 {
-		return host, nil
+// ones, and every provider the step reaches pointed at the proxy. Keys the
+// host's holds go.
+func providersModels(host []byte, providers []modelProvider, known map[string]catalogModel, llm *llmAccess) ([]byte, error) {
+	if len(providers) == 0 && llm == nil && host == nil {
+		return nil, nil
 	}
 	config := map[string]any{}
 	if host != nil {
@@ -248,8 +279,13 @@ func providersModels(host []byte, providers []modelProvider, known map[string]ca
 		entries = map[string]any{}
 		config["providers"] = entries
 	}
+	for _, e := range entries {
+		if entry, ok := e.(map[string]any); ok {
+			delete(entry, "apiKey")
+		}
+	}
 	for _, p := range providers {
-		entry := map[string]any{"apiKey": "${" + p.Env + "}"}
+		entry := map[string]any{}
 		if p.custom() {
 			entry["name"], entry["baseUrl"], entry["api"] = p.Name, p.BaseURL, p.API
 			models := []any{}
@@ -275,6 +311,17 @@ func providersModels(host []byte, providers []modelProvider, known map[string]ca
 		}
 		entries[p.ID] = entry
 	}
+	if llm != nil {
+		for _, id := range llm.Providers {
+			entry, _ := entries[id].(map[string]any)
+			if entry == nil {
+				entry = map[string]any{}
+				entries[id] = entry
+			}
+			entry["baseUrl"] = strings.TrimSuffix(llm.URL, "/") + "/" + id
+			entry["apiKey"] = llm.Token
+		}
+	}
 	return json.MarshalIndent(config, "", "  ")
 }
 
@@ -282,7 +329,10 @@ func providersModels(host []byte, providers []modelProvider, known map[string]ca
 // as credentials it is given and the models it finds, so no step sees
 // another's: the host's settings, and its models.json with the run's
 // providers over its entries for the same ones.
-func writeAgentDir(dir string, providers []modelProvider) error {
+func writeAgentDir(dir string, providers []modelProvider, llm *llmAccess) error {
+	if err := llm.check(); err != nil {
+		return err
+	}
 	var known map[string]catalogModel
 	if len(providers) > 0 {
 		// Without the catalog, custom providers' models take pi's defaults.
@@ -290,7 +340,7 @@ func writeAgentDir(dir string, providers []modelProvider) error {
 			known = c.byID
 		}
 	}
-	models, err := providersModels(agentConfig.models, providers, known)
+	models, err := providersModels(agentConfig.models, providers, known, llm)
 	if err != nil {
 		return err
 	}
@@ -306,105 +356,4 @@ func writeAgentDir(dir string, providers []modelProvider) error {
 		}
 	}
 	return nil
-}
-
-// Whether the run's providers read a key from the variable.
-func (run runRequest) providerReads(env string) bool {
-	return slices.ContainsFunc(run.Providers, func(p modelProvider) bool { return p.Env == env })
-}
-
-// Which of the variables the worker's environment has.
-func envSet(names []string) (map[string]bool, error) {
-	set := map[string]bool{}
-	for _, name := range names {
-		if !envName.MatchString(name) {
-			return nil, fmt.Errorf("invalid variable %q", name)
-		}
-		set[name] = os.Getenv(name) != ""
-	}
-	return set, nil
-}
-
-// What asks a custom provider which models it serves: its URL and API, and
-// its key, or the variable in the worker's environment holding it.
-type providerModelsRequest struct {
-	BaseURL string `json:"baseUrl"`
-	API     string `json:"api"`
-	Env     string `json:"env"`
-	Key     string `json:"key"`
-}
-
-// The models a custom provider says it serves, by their IDs, from its
-// models endpoint: OpenAI's and Anthropic's APIs have one.
-func providerModels(ctx context.Context, req providerModelsRequest) ([]string, error) {
-	if err := checkProviderURL(req.BaseURL); err != nil {
-		return nil, err
-	}
-	key := req.Key
-	if key == "" && req.Env != "" {
-		if !envName.MatchString(req.Env) {
-			return nil, fmt.Errorf("invalid variable %q", req.Env)
-		}
-		key = os.Getenv(req.Env)
-	}
-	if strings.ContainsAny(key, "\x00\r\n") {
-		return nil, errors.New("invalid key")
-	}
-	base := strings.TrimSuffix(req.BaseURL, "/")
-	var target string
-	header := http.Header{}
-	switch req.API {
-	case "openai-completions", "openai-responses":
-		target = base + "/models"
-		if key != "" {
-			header.Set("Authorization", "Bearer "+key)
-		}
-	case "anthropic-messages":
-		target = base + "/v1/models"
-		header.Set("anthropic-version", "2023-06-01")
-		if key != "" {
-			header.Set("x-api-key", key)
-		}
-	default:
-		return nil, errors.New("this API doesn't list its models; enter their IDs")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	r, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, err
-	}
-	r.Header = header
-	res, err := http.DefaultClient.Do(r)
-	if err != nil {
-		return nil, fmt.Errorf("ask the provider for its models: %w", err)
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if res.StatusCode != http.StatusOK {
-		msg := strings.TrimSpace(string(body))
-		if len(msg) > 300 {
-			msg = msg[:300] + "…"
-		}
-		return nil, fmt.Errorf("the provider answered %s: %s", res.Status, msg)
-	}
-	var list struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, errors.New("the provider's answer isn't a list of models")
-	}
-	ids := []string{}
-	for _, m := range list.Data {
-		if m.ID != "" && !slices.Contains(ids, m.ID) {
-			ids = append(ids, m.ID)
-		}
-	}
-	slices.Sort(ids)
-	return ids, nil
 }

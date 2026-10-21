@@ -141,6 +141,7 @@ func registerAssistantRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 
+		who := requestUserID(r)
 		ctx, cancel := context.WithCancel(context.Background())
 		as.mu.Lock()
 		as.going[id] = cancel
@@ -152,7 +153,7 @@ func registerAssistantRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 				as.mu.Unlock()
 				cancel()
 			}()
-			res := runAssistant(ctx, db, workerURL, id, reply)
+			res := runAssistant(ctx, db, workerURL, who, id, reply)
 			if err := finishAssistantReply(db, reply, res); err != nil {
 				log.Printf("finish assistant reply %d of flow %d: %v", reply, id, err)
 			}
@@ -380,7 +381,8 @@ func loadAssistantFlow(ctx context.Context, db *sql.DB, id int64) (assistantFlow
 
 // Has the agent reply to the person's latest message, and imports the setup
 // file it replies with, handing one the import refuses back to it to fix.
-func runAssistant(ctx context.Context, db *sql.DB, workerURL string, flow, reply int64) assistantResult {
+// It reaches its model for who, the person asking.
+func runAssistant(ctx context.Context, db *sql.DB, workerURL string, who *int64, flow, reply int64) assistantResult {
 	failed := func(err error) assistantResult {
 		if ctx.Err() != nil {
 			return assistantResult{err: "It was stopped."}
@@ -409,9 +411,10 @@ func runAssistant(ctx context.Context, db *sql.DB, workerURL string, flow, reply
 	prompt := assistantPrompt(af, history)
 
 	run := agentRun{ProcessName: "Assistant", Prompt: prompt, NoTools: true, Guide: true}
-	if err := run.withModelAccess(ctx, db); err != nil {
+	if err := run.withModelAccess(ctx, db, who, 0, 0, 0); err != nil {
 		return failed(err)
 	}
+	defer llm.revoke(run.LLM)
 	model, err := defaultModel(ctx, db)
 	if err != nil {
 		return failed(err)

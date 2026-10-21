@@ -65,8 +65,8 @@ func TestSecretsSealed(t *testing.T) {
 	a.startAt(f.ID, a.agent(f.ID, "Write", "Write.").ID)
 	a.worker.onAgent("Write", handsIn(data("done")))
 	a.finish(a.startRun(f.ID).ID)
-	if got := a.worker.runsOf("Write")[0].Keys; got["OPENAI_API_KEY"] != "sk-sealed-openai" {
-		t.Errorf("the agent got keys %v", got)
+	if got := a.worker.runsOf("Write")[0].Reached; got["openai"] != "sk-sealed-openai" {
+		t.Errorf("the agent reached %v", got)
 	}
 
 	// Secrets kept before SECRET_KEY was set are sealed when it is.
@@ -180,8 +180,8 @@ func TestSecretsRotate(t *testing.T) {
 	b.worker.onAgent("Write", handsIn(data("done")))
 	b.finish(b.startRun(f.ID).ID)
 	runs := b.worker.runsOf("Write")
-	if got := runs[len(runs)-1].Keys; got["OPENAI_API_KEY"] != "sk-rotated" {
-		t.Errorf("with the new key the agent got %v", got)
+	if got := runs[len(runs)-1].Reached; got["openai"] != "sk-rotated" {
+		t.Errorf("with the new key the agent reached %v", got)
 	}
 }
 

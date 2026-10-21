@@ -170,30 +170,35 @@ func TestStreamAgent(t *testing.T) {
 		messages    int
 		res         runResult
 	}{
-		{"result", `{"message":{"role":"user"}}` + "\n" + `{"message":{"role":"assistant"}}` + "\n" + `{"result":{"ok":true,"output":"done"}}` + "\n",
+		{"result", `{"message":{"role":"user"}}` + "\n" + `{"log":{"level":"info","message":"pi started"}}` + "\n" + `{"message":{"role":"assistant"}}` + "\n" + `{"result":{"ok":true,"output":"done"}}` + "\n",
 			2, runResult{OK: true, Output: "done"}},
 		{"failure", `{"result":{"ok":false,"error":"boom"}}`, 0, runResult{Error: "boom"}},
 		{"no result", `{"message":{"role":"user"}}` + "\n", 1, runResult{Error: "worker unavailable: it ended the run without a result"}},
 	} {
 		reply = c.reply
 		var messages int
-		res := streamAgent(context.Background(), srv.URL, agentRun{ProcessName: "Write", Prompt: "p"}, func(json.RawMessage) { messages++ })
+		var logged []string
+		res := streamAgent(context.Background(), srv.URL, agentRun{ProcessName: "Write", Prompt: "p"}, func(json.RawMessage) { messages++ },
+			func(l workerLogLine) { logged = append(logged, l.Message) })
 		if res.OK != c.res.OK || res.Output != c.res.Output || res.Error != c.res.Error || messages != c.messages {
 			t.Errorf("%s: streamAgent = %+v with %d messages, want %+v with %d", c.name, res, messages, c.res, c.messages)
+		}
+		if c.name == "result" && (len(logged) != 1 || logged[0] != "pi started") {
+			t.Errorf("%s: logged %q, want the worker's line", c.name, logged)
 		}
 		if got.ProcessName != "Write" || got.Prompt != "p" {
 			t.Errorf("%s: the worker got %+v", c.name, got)
 		}
 	}
 
-	res := streamAgent(context.Background(), srv.URL+"/nowhere", agentRun{}, func(json.RawMessage) {})
+	res := streamAgent(context.Background(), srv.URL+"/nowhere", agentRun{}, func(json.RawMessage) {}, nil)
 	if !strings.HasPrefix(res.Error, "worker unavailable: status 404") {
 		t.Errorf("streamAgent of a missing route = %+v", res)
 	}
 	// A stopped run says so rather than blaming the worker.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if res := streamAgent(ctx, srv.URL, agentRun{}, func(json.RawMessage) {}); res.Error != "it was stopped" {
+	if res := streamAgent(ctx, srv.URL, agentRun{}, func(json.RawMessage) {}, nil); res.Error != "it was stopped" {
 		t.Errorf("streamAgent of a stopped run = %+v", res)
 	}
 }

@@ -114,6 +114,8 @@ type takenWorkspace struct {
 	// process and, for an agent, its pi session.
 	process, session string
 	release          func()
+	// The step's log, for what goes wrong giving the workspace back.
+	log *stepLogger
 }
 
 // What a step did to a repository it worked on.
@@ -201,7 +203,7 @@ func (t *takenWorkspace) done(res *runResult) {
 			subject = "Commit what the step left uncommitted"
 		}
 		if err := commitLeftovers(ctx, dir, subject, t.trailers()); err != nil {
-			log.Printf("commit what was left uncommitted in %s: %v", dir, err)
+			t.log.errorf("commit what was left uncommitted in %s: %v", r.Name, err)
 		}
 		var err error
 		if c.After, err = gitOut(ctx, dir, "rev-parse", "HEAD"); err != nil {

@@ -18,6 +18,7 @@ import {
   type StepUsage,
 } from './api'
 import { ClockIcon } from './icons'
+import RunLogs from './RunLogs'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
@@ -183,6 +184,7 @@ export function RunPanel({
   const focused = (s: RunStep) =>
     focus?.kind === 'process' ? s.process === focus.id : focus?.kind === 'object' && focusedObjects.some((o) => o.step === s.id)
   const panel = useRef<HTMLElement>(null)
+  const [showLogs, setShowLogs] = useState(false)
   useEffect(() => {
     if (!focus || !panel.current) return
     const steps = [...panel.current.querySelectorAll<HTMLDetailsElement>('.step.focused')]
@@ -226,11 +228,17 @@ export function RunPanel({
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
         {totalUsage(run.steps) && `; its agents used ${formatUsage(totalUsage(run.steps)!)}`}
       </p>
-      {run.status === 'running' && (
-        <button className="run-stop" onClick={onStop} title="End the run where it is; steps still going are cancelled">
-          Stop run
+      <div className="run-actions">
+        <button className="run-logs-button" onClick={() => setShowLogs(true)} title="Read what happened in the run, step by step">
+          Logs
         </button>
-      )}
+        {run.status === 'running' && (
+          <button className="run-stop" onClick={onStop} title="End the run where it is; steps still going are cancelled">
+            Stop run
+          </button>
+        )}
+      </div>
+      {showLogs && <RunLogs run={run} onClose={() => setShowLogs(false)} />}
       <p className="panel-note">
         {run.version === null
           ? 'Ran before versions were kept, so the board shows it as the board is now.'

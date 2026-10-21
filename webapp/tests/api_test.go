@@ -529,6 +529,15 @@ type runResult struct {
 	// For a step in a workspace: what it did to each repository it worked
 	// on, as the worker saw it.
 	Commits []repoCommits `json:"commits,omitempty"`
+	// For a script: what the worker logged of running it.
+	Log []logLine `json:"log,omitempty"`
+}
+
+// A line the worker logs of a step, which goes in its run's log.
+type logLine struct {
+	Time    time.Time `json:"time"`
+	Level   string    `json:"level"`
+	Message string    `json:"message"`
 }
 
 type scriptInput struct {

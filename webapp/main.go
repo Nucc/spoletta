@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -31,12 +33,21 @@ func listenAddr(signIn bool) string {
 	return net.JoinHostPort(host, env("PORT", "8080"))
 }
 
+// As it starts, the webapp logs what it did, step by step, and stops with
+// what went wrong if one fails, naming the step; see logs.go for runs' logs.
 func main() {
+	migrating := len(os.Args) > 1 && os.Args[1] == "migrate"
+	if !migrating {
+		log.Printf("starting in the %s environment", appEnv())
+	}
 	db, err := openDB()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("couldn't open the database: %v", err)
 	}
 	defer db.Close()
+	if !migrating {
+		logDatabase(db)
+	}
 
 	// migrate status and migrate down-to look at or undo migrations, and
 	// end; see migrations.go.
@@ -48,17 +59,17 @@ func main() {
 		return
 	}
 	if err := migrateDatabase(context.Background(), db); err != nil {
-		log.Fatal(err)
+		log.Fatalf("couldn't migrate the database: %v", err)
 	}
 	if err := endInterrupted(db); err != nil {
-		log.Fatal(err)
+		log.Fatalf("couldn't end what the server left running when it stopped: %v", err)
 	}
 	// seal-secrets seals the secrets with the key coming in, and ends,
 	// failing if some changed meanwhile, to be run again; see secrets.go.
 	sealSecrets := len(os.Args) > 1 && os.Args[1] == "seal-secrets"
 	changed, err := setUpSecrets(db, sealSecrets)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("couldn't set up the secrets: %v", err)
 	}
 	if sealSecrets {
 		if changed > 0 {
@@ -71,6 +82,15 @@ func main() {
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))
 	workerURL := env("WORKER_URL", "http://127.0.0.1:8090")
 	auth := newAuth(db)
+	if auth != nil {
+		var with []string
+		for _, p := range auth.providers {
+			with = append(with, p.label)
+		}
+		log.Printf("people sign in with %s", strings.Join(with, " or "))
+	}
+	log.Printf("the worker is at %s", workerURL)
+	go checkWorker(workerURL)
 	registerAuthRoutes(mux, db, auth)
 	registerUserRoleRoutes(mux, db, auth)
 	registerTeamRoutes(mux, db, auth)
@@ -94,15 +114,20 @@ func main() {
 	if err != nil || parallelSteps < 1 {
 		log.Fatalf("PARALLEL_STEPS must be a positive number")
 	}
+	log.Printf("runs up to %d agent, script and Sentry steps at once (PARALLEL_STEPS)", parallelSteps)
 	// Where the worker reaches this webapp's MCP proxy.
 	mcp := newMCPBroker(db, env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")), auth != nil)
 	registerMCPRoutes(mux, db, mcp)
 	registerSkillRoutes(mux, db)
 	registerConnectorRoutes(mux, db)
 	sentry := sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}
+	if sentry.url != "" {
+		log.Printf("Sentry processes fetch from %s", sentry.url)
+	}
 	registerSentryRoutes(mux, sentry)
 	eng := newEngine(db, workerURL, sentry, mcp, parallelSteps)
 	registerRunRoutes(mux, db, eng)
+	registerLogRoutes(mux, db)
 	registerRerunRoutes(mux, db, eng)
 	registerAPIRoutes(mux, db, eng, auth != nil)
 	registerDataRoutes(mux, db)
@@ -128,6 +153,41 @@ func main() {
 	})
 
 	addr := listenAddr(auth != nil)
-	log.Printf("listening on %s", addr)
+	log.Printf("started; listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, auth.protect(guardFlows(db, mux))))
+}
+
+// Logs which database the webapp works on, never with its password.
+func logDatabase(db *sql.DB) {
+	var version string
+	if err := db.QueryRow("SELECT VERSION()").Scan(&version); err != nil {
+		log.Printf("WARNING: couldn't read the database's version: %v", err)
+	}
+	s, err := loadDBSettings()
+	if err != nil {
+		log.Printf("connected to MySQL %s", version)
+		return
+	}
+	log.Printf("connected to the database %s at %s as %s, MySQL %s", s.Database, net.JoinHostPort(s.Host, s.Port), s.User, version)
+}
+
+// Logs whether the worker answers, and the models it offers, or a warning if
+// it doesn't: agents and scripts fail until it does. The webapp starts all
+// the same, as the worker may start after it.
+func checkWorker(workerURL string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var models struct {
+		Default string   `json:"default"`
+		Models  []string `json:"models"`
+	}
+	if err := callWorker(ctx, http.MethodGet, workerURL+"/models", nil, &models); err != nil {
+		log.Printf("WARNING: the worker at %s doesn't answer, so agent and script steps fail until it does: %v", workerURL, err)
+		return
+	}
+	def := models.Default
+	if def == "" {
+		def = "none"
+	}
+	log.Printf("the worker answers, offering %d models, by default %s", len(models.Models), def)
 }

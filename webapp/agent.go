@@ -138,6 +138,9 @@ type runResult struct {
 	// For a step in a workspace: what it did to each repository it worked
 	// on, as the worker saw it.
 	Commits []repoCommits `json:"commits,omitempty"`
+	// For a script: the lines the worker logged of running it, which go in
+	// its run's log; see logs.go. An agent's come as it goes instead.
+	Log []workerLogLine `json:"log,omitempty"`
 }
 
 func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
@@ -327,18 +330,22 @@ func recordDecisions(ctx context.Context, db *sql.DB, stepID int64, decisions ma
 
 // Runs the agent in the worker, recording each message of its conversation
 // as the step's as it comes in, so what the agent does can be followed while
-// it goes. attempt counts the tries of the step, from 1.
+// it goes, and each line the worker logs of it in its run's log. attempt
+// counts the tries of the step, from 1.
 func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, stepID int64, attempt int) runResult {
 	return streamAgent(ctx, workerURL, run, func(m json.RawMessage) {
 		if err := recordMessage(ctx, db, stepID, attempt, m); err != nil && ctx.Err() == nil {
 			log.Printf("record message of step %d: %v", stepID, err)
 		}
+	}, func(l workerLogLine) {
+		recordWorkerLog(db, stepID, []workerLogLine{l})
 	})
 }
 
 // Runs the agent in the worker and waits for the result, handing each
-// message of its conversation to onMessage as it comes in.
-func streamAgent(ctx context.Context, workerURL string, run agentRun, onMessage func(json.RawMessage)) runResult {
+// message of its conversation to onMessage as it comes in, and each line
+// the worker logs of it to onLog, if not nil.
+func streamAgent(ctx context.Context, workerURL string, run agentRun, onMessage func(json.RawMessage), onLog func(workerLogLine)) runResult {
 	failed := func(err error) runResult {
 		if ctx.Err() != nil {
 			return runResult{Error: stopReason(ctx)}
@@ -355,6 +362,7 @@ func streamAgent(ctx context.Context, workerURL string, run agentRun, onMessage 
 	for {
 		var rec struct {
 			Message json.RawMessage `json:"message"`
+			Log     *workerLogLine  `json:"log"`
 			Result  *runResult      `json:"result"`
 		}
 		if err := dec.Decode(&rec); err != nil {
@@ -368,6 +376,9 @@ func streamAgent(ctx context.Context, workerURL string, run agentRun, onMessage 
 		}
 		if rec.Message != nil {
 			onMessage(rec.Message)
+		}
+		if rec.Log != nil && onLog != nil {
+			onLog(*rec.Log)
 		}
 	}
 }

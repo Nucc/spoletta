@@ -5164,3 +5164,119 @@ select.flow-owner:disabled {
   padding: 6px 10px;
   font-size: 13px;
 }
+
+/* A run's log, nearly as large as the screen; see RunLogs. */
+.review-dialog.run-logs {
+  width: min(1200px, calc(100vw - 32px));
+  height: calc(100vh - 64px);
+}
+
+.run-logs-live {
+  font-size: 13px;
+  font-weight: normal;
+  color: #57606a;
+}
+
+.run-logs-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.run-logs-tools label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.run-logs-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.run-logs-body > .panel-note {
+  padding: 0 12px;
+}
+
+.run-log-line {
+  display: grid;
+  grid-template-columns: max-content 4.5em minmax(6em, 14em) 1fr;
+  gap: 12px;
+  padding: 1px 12px;
+}
+
+.run-log-line:hover {
+  background: #eaeef2;
+}
+
+.run-log-line time,
+.run-log-source {
+  color: #6e7781;
+}
+
+.run-log-step {
+  overflow: hidden;
+  color: #57606a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-log-message {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-log-line.error {
+  background: #fff5f5;
+}
+
+.run-log-line.error .run-log-message {
+  color: #cf222e;
+}
+
+@media (max-width: 640px) {
+  .run-log-line {
+    grid-template-columns: max-content 1fr;
+  }
+  .run-log-source {
+    display: none;
+  }
+  .run-log-message {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Opens a run's log; see RunLogs. */
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-logs-button {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  cursor: pointer;
+}
+
+.run-logs-button:hover {
+  background: #f6f8fa;
+}

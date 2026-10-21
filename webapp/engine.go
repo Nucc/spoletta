@@ -141,10 +141,11 @@ func (e *engine) start(id, flow, version int64, board snapshot, repos []reposito
 	ctx, cancel := context.WithCancel(context.Background())
 	lr := e.register(id, cancel)
 	go func() {
+		logRunStarted(e.db, id)
 		fr := newFlowRun(flow, version, board, repos, prefix)
 		w := newWalk(ctx, e, id, lr, fr, nil, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
 		if err := w.carry(); err != nil {
-			log.Printf("carry objects into run %d: %v", id, err)
+			runLog(e.db, id, 0, logError, "the objects it carries couldn't be carried in: %v", err)
 			w.fail()
 		} else {
 			w.enter()
@@ -161,6 +162,7 @@ func (e *engine) rerun(nr pendingRun, flow int64, board *int64, given map[int64]
 	ctx, cancel := context.WithCancel(context.Background())
 	lr := e.register(nr.id, cancel)
 	go func() {
+		logRunStarted(e.db, nr.id)
 		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
 		fr.starts = starts
 		w := newWalk(ctx, e, nr.id, lr, fr, board, given, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10)))
@@ -201,9 +203,10 @@ func (e *engine) finish(ctx context.Context, id int64, w *walk) string {
 		releaseWorkspaces(e.workerURL, []int64{id})
 	}
 	if err != nil {
-		log.Printf("end run %d: %v", id, err)
+		runLog(e.db, id, 0, logError, "couldn't be recorded as %s: %v", status, err)
 		return status
 	}
+	logRunFinished(e.db, rn)
 	return rn.Status
 }
 
@@ -259,7 +262,7 @@ func (e *engine) await(ctx context.Context, lr *liveRun, runID, processID int64,
 	e.mu.Unlock()
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Printf("record review of process %d in run %d: %v", processID, runID, err)
+			runLog(e.db, runID, 0, logError, "the review of process %d couldn't be recorded: %v", processID, err)
 		}
 		return 0, decision{}, false
 	}
@@ -901,7 +904,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 	if !human {
 		records, err := w.queried(id)
 		if err != nil {
-			log.Printf("query records for process %d in run %d: %v", id, w.run, err)
+			runLog(w.e.db, w.run, 0, logError, "the records for process %d couldn't be queried: %v", id, err)
 			w.note(id, stepError, "Its query couldn't read the records.")
 			w.fail()
 			return
@@ -1026,7 +1029,7 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 		var err error
 		if callee, msg, err = w.fr.call(w.ctx, w.e.db, w.settings[id].Flow); err != nil || msg != "" {
 			if err != nil {
-				log.Printf("run the flow of process %d in run %d: %v", id, w.run, err)
+				runLog(w.e.db, w.run, 0, logError, "the flow of process %d couldn't run: %v", id, err)
 				msg = "The flow it runs couldn't start."
 			}
 			w.note(id, stepError, msg)
@@ -1110,7 +1113,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 	stepID, err := startStep(w.ctx, db, w.run, id, stepActive, "", inputs, nil)
 	if err != nil {
 		if w.ctx.Err() == nil {
-			log.Printf("record process %d in run %d: %v", id, w.run, err)
+			runLog(w.e.db, w.run, 0, logError, "process %d couldn't be recorded: %v", id, err)
 		}
 		w.fail()
 		return nil, runFailed, nil
@@ -1129,7 +1132,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 			fr, board = callee, nil
 		}
 		if run, err = startChildRun(w.ctx, db, fr.flow, fr.version, w.run, board, w.names[id], key, stepID); err != nil {
-			log.Printf("start run of process %d in run %d: %v", id, w.run, err)
+			runLog(db, w.run, stepID, logError, "the run of process %d couldn't start: %v", id, err)
 			w.endStep(stepID, stepError, "Its run couldn't start.")
 			w.fail()
 			return nil, runFailed, nil
@@ -1145,7 +1148,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 					log.Printf("drop step %d: %v", stepID, err)
 				}
 				if err != nil {
-					log.Printf("claim item %s in run %d: %v", it.key, run, err)
+					runLog(db, w.run, 0, logError, "item %s couldn't be claimed: %v", it.key, err)
 					w.fail()
 					return nil, runFailed, nil
 				}
@@ -1155,6 +1158,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(w.reviews)
 		lr = w.e.register(run, cancel)
+		logRunStarted(db, run)
 	}
 	// An item works on a branch of its own, so items running at once don't
 	// meet; otherwise the board goes on with this run's.
@@ -1364,7 +1368,7 @@ func notIn(n int) string {
 func (w *walk) note(id int64, status, msg string) {
 	stepID, err := startStep(w.ctx, w.e.db, w.run, id, stepActive, "", []runInput{}, nil)
 	if err != nil {
-		log.Printf("record process %d in run %d: %v", id, w.run, err)
+		runLog(w.e.db, w.run, 0, logError, "process %d couldn't be recorded: %v", id, err)
 		return
 	}
 	w.endStep(stepID, status, msg)
@@ -1544,7 +1548,7 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 	<-w.e.slots
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Printf("run process %d in run %d: %v", id, w.run, err)
+			runLog(w.e.db, w.run, stepID, logError, "process %d couldn't run: %v", id, err)
 		}
 		return res, false, stop.Err() != nil, stepID
 	}

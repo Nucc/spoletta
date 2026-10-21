@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -173,21 +174,46 @@ func validStepStatus(s string) bool {
 // continue, so it ends as the server starts. Open steps end first, while
 // their runs still read as running; then the runs, whose stored values are
 // released; then the assistant's replies and step follow-ups under way.
+// Each run ended so says so in its log, and what was ended is logged.
 func endInterrupted(db *sql.DB) error {
-	for _, s := range []string{
-		`UPDATE run_steps s JOIN runs r ON r.id = s.run_id
-		SET s.status = 'error', s.error = 'The run ended before this step finished.', s.finished_at = CURRENT_TIMESTAMP(3)
-		WHERE r.status = 'running' AND s.status IN ('active', 'waiting')`,
-		"UPDATE runs SET status = 'interrupted', finished_at = CURRENT_TIMESTAMP(3) WHERE status = 'running'",
-		`DELETE i FROM object_instances i JOIN runs r ON r.id = i.run_id WHERE r.status <> 'done'`,
-		`UPDATE assistant_messages SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
-		WHERE status = 'active'`,
-		`UPDATE run_step_followups SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
-		WHERE status = 'active'`,
-	} {
-		if _, err := db.Exec(s); err != nil {
+	var runs []int64
+	rows, err := db.Query("SELECT id FROM runs WHERE status = 'running'")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			return err
 		}
+		runs = append(runs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, s := range []struct{ query, what string }{
+		{`UPDATE run_steps s JOIN runs r ON r.id = s.run_id
+		SET s.status = 'error', s.error = 'The run ended before this step finished.', s.finished_at = CURRENT_TIMESTAMP(3)
+		WHERE r.status = 'running' AND s.status IN ('active', 'waiting')`, "steps"},
+		{"UPDATE runs SET status = 'interrupted', finished_at = CURRENT_TIMESTAMP(3) WHERE status = 'running'", "runs"},
+		{`DELETE i FROM object_instances i JOIN runs r ON r.id = i.run_id WHERE r.status <> 'done'`, ""},
+		{`UPDATE assistant_messages SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
+		WHERE status = 'active'`, "assistant's replies"},
+		{`UPDATE run_step_followups SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
+		WHERE status = 'active'`, "follow-ups"},
+	} {
+		res, err := db.Exec(s.query)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err == nil && n > 0 && s.what != "" {
+			log.Printf("ended %d %s the server left going when it stopped", n, s.what)
+		}
+	}
+	for _, id := range runs {
+		runLog(db, id, 0, logError, "interrupted: the server stopped while it ran")
 	}
 	return nil
 }
@@ -220,7 +246,11 @@ func startStep(ctx context.Context, db *sql.DB, runID, processID int64, status, 
 		}
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err == nil {
+		logStepStarted(db, id, status)
+	}
+	return id, err
 }
 
 var errNotFound = errors.New("not found")
@@ -238,6 +268,11 @@ func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, e
 	for attempt := 1; ; attempt++ {
 		dup, err := finishStepOnce(ctx, db, stepID, status, output, errMsg, contents)
 		if !mysqlErrorIs(err, mysqlErrDeadlock) || attempt == 3 {
+			if err != nil {
+				stepLog(db, stepID, logError, "step %d couldn't be recorded as ended: %v", stepID, err)
+			} else {
+				logStepFinished(db, stepID, false)
+			}
 			return dup, err
 		}
 	}
@@ -755,6 +790,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			http.Error(w, "no review waiting with that id in this run", http.StatusConflict)
 			return
 		}
+		logStepFinished(db, id, true)
 		// The run records the object in the state set, with the content it has there.
 		eng.decide(runID, id, decision{state: patch.State, instructions: patch.Instructions, output: output, entries: contents})
 		w.WriteHeader(http.StatusNoContent)

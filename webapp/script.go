@@ -102,6 +102,7 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 				res.Error = stopReason(ctx)
 			}
 		}
+		recordWorkerLog(db, stepID, res.Log)
 		if err := recordCommits(context.Background(), db, stepID, res.Commits); err != nil {
 			log.Printf("record commits of step %d: %v", stepID, err)
 		}

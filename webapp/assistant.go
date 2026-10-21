@@ -418,7 +418,7 @@ func runAssistant(ctx context.Context, db *sql.DB, workerURL string, flow, reply
 	}
 	run.Model = model
 	for attempt := 0; ; attempt++ {
-		res := streamAgent(ctx, workerURL, run, func(json.RawMessage) {})
+		res := streamAgent(ctx, workerURL, run, func(json.RawMessage) {}, nil)
 		if ctx.Err() != nil {
 			return assistantResult{err: "It was stopped."}
 		}

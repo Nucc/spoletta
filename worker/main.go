@@ -166,6 +166,9 @@ type runResult struct {
 	Submitted bool `json:"submitted"`
 	// For a step in a workspace: what it did to each repository it worked on.
 	Commits []repoCommits `json:"commits,omitempty"`
+	// For a script: what the worker logged of running it; see logs.go. An
+	// agent's lines are streamed instead.
+	Log []logLine `json:"log,omitempty"`
 }
 
 // Where files that runs generate are kept, a volume the webapp serves them from.
@@ -286,7 +289,8 @@ func main() {
 		}
 
 		// The reply is a JSON record per line: {"message": ...} for each message
-		// of the conversation as it ends, then {"result": ...} with the outcome.
+		// of the conversation as it ends, {"log": ...} for each line the worker
+		// logs of the run, then {"result": ...} with the outcome.
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
 		rc := http.NewResponseController(w)
@@ -300,10 +304,13 @@ func main() {
 		}
 
 		started := time.Now()
-		res := runPi(r.Context(), run, limit(run.TimeoutMS, timeout), func(m json.RawMessage) {
+		l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), func(line logLine) {
+			send(map[string]logLine{"log": line})
+		})
+		res := runPi(r.Context(), run, limit(run.TimeoutMS, timeout), l, func(m json.RawMessage) {
 			send(map[string]json.RawMessage{"message": m})
 		})
-		logRun(run, res, time.Since(started))
+		logRun(l, run, res, time.Since(started))
 		if r.Context().Err() == nil {
 			send(map[string]runResult{"result": res})
 		}
@@ -328,8 +335,10 @@ func main() {
 		}
 
 		started := time.Now()
-		res := runScript(r.Context(), run, limit(run.TimeoutMS, timeout))
-		logOutcome(processLabel(run.ProcessID, run.ProcessName), "bash", res, time.Since(started))
+		l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), nil)
+		res := runScript(r.Context(), run, limit(run.TimeoutMS, timeout), l)
+		logOutcome(l, "bash", res, time.Since(started))
+		res.Log = l.kept()
 		if r.Context().Err() == nil {
 			reply(w, http.StatusOK, res)
 		}
@@ -487,12 +496,12 @@ func modelArgs(model string) []string {
 // Returns the run outcome; a client that disconnects (ctx is cancelled) or a
 // run that exceeds the timeout kills pi. emit gets each message of the
 // conversation as it ends.
-func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func(json.RawMessage)) (res runResult) {
+func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLogger, emit func(json.RawMessage)) (res runResult) {
 	session, err := sessionArgs(run)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
-	cwd, ws, err := workDir(ctx, run.Workspace, "run-")
+	cwd, ws, err := workDir(ctx, run.Workspace, "run-", l)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
@@ -590,11 +599,18 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 	cmd.Stdout = events
 	cmd.Stderr = &stderr
 
+	// The prompt goes on stdin and the keys in the environment, so the
+	// arguments hold neither.
+	l.infof("pi %s", strings.Join(args, " "))
 	if err := cmd.Start(); err != nil {
 		return runResult{Error: "failed to start pi: " + err.Error()}
 	}
 	err = cmd.Wait()
 	output, failure := events.outcome()
+	// A failure's error is what it printed to stderr already.
+	if err == nil {
+		l.stderr("pi", stderr.String())
+	}
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
 		return runResult{Output: output, Error: "timed out after " + timeout.String()}
@@ -748,18 +764,30 @@ func recreatedNote(repos []string) string {
 // done: its run's workspace, ready and taken, or a scratch directory deleted
 // afterwards. Getting the workspace ready doesn't count towards the step's
 // timeout.
-func workDir(ctx context.Context, ws *workspaceSpec, scratch string) (string, *takenWorkspace, error) {
+func workDir(ctx context.Context, ws *workspaceSpec, scratch string, l *stepLogger) (string, *takenWorkspace, error) {
 	if ws != nil {
+		started := time.Now()
 		t, err := takeWorkspace(ctx, ws)
 		if err != nil {
 			return "", nil, errors.New("prepare workspace: " + err.Error())
 		}
+		t.log = l
+		names := make([]string, len(t.repos))
+		for i, r := range t.repos {
+			names[i] = r.Name
+		}
+		msg := fmt.Sprintf("working in the workspace %s on the branch %s, with %s, ready in %dms", ws.ID, ws.Branch, strings.Join(names, ", "), time.Since(started).Milliseconds())
+		if len(t.recreated) > 0 {
+			msg += "; the checkouts of " + strings.Join(t.recreated, ", ") + " were made again from the branch"
+		}
+		l.infof("%s", msg)
 		return t.dir, t, nil
 	}
 	dir, err := os.MkdirTemp("", scratch)
 	if err != nil {
 		return "", nil, errors.New("create scratch directory: " + err.Error())
 	}
+	l.infof("working in a scratch directory")
 	return dir, &takenWorkspace{release: func() { os.RemoveAll(dir) }}, nil
 }
 
@@ -778,8 +806,8 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // the script prints is its output; a non-zero exit fails it, with what it
 // printed to stderr as the error. Like pi, it runs in a process group of its own,
 // which a cancelled request or the timeout kills.
-func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) (res runResult) {
-	cwd, ws, err := workDir(ctx, run.Workspace, "script-")
+func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l *stepLogger) (res runResult) {
+	cwd, ws, err := workDir(ctx, run.Workspace, "script-", l)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
@@ -834,11 +862,24 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration) (r
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
+	if len(run.Inputs) > 0 {
+		names := make([]string, len(run.Inputs))
+		for i, in := range run.Inputs {
+			names[i] = in.Name
+		}
+		l.infof("bash, given %s", strings.Join(names, ", "))
+	} else {
+		l.infof("bash, given nothing")
+	}
 	if err := cmd.Start(); err != nil {
 		return runResult{Error: "failed to start bash: " + err.Error()}
 	}
 	err = cmd.Wait()
 	output := strings.TrimSpace(stdout.String())
+	// A failure's error is what it printed to stderr already.
+	if err == nil {
+		l.stderr("the script", stderr.String())
+	}
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
 		return runResult{Output: output, Error: "timed out after " + timeout.String()}
@@ -888,26 +929,33 @@ func processLabel(id int64, name string) string {
 
 // Logs the outcome followed by the agent's output (or error), each line
 // prefixed so multi-line output stays attributable when runs interleave.
-func logRun(run runRequest, res runResult, d time.Duration) {
+func logRun(l *stepLogger, run runRequest, res runResult, d time.Duration) {
 	model := run.Model
 	if model == "" {
 		model = "default model"
 	}
-	logOutcome(processLabel(run.ProcessID, run.ProcessName), model, res, d)
+	logOutcome(l, model, res, d)
 }
 
-func logOutcome(label, with string, res runResult, d time.Duration) {
-	outcome := "failed"
-	if res.OK {
-		outcome = "succeeded"
-	}
-	log.Printf("worker: %s with %s %s in %dms", label, with, outcome, d.Milliseconds())
-	for _, s := range []struct{ name, text string }{{"output", res.Output}, {"error", res.Error}} {
-		if s.text == "" {
-			continue
+// The outcome, with what went wrong and what the step committed, goes in the
+// step's log too; its output, which the step keeps anyway, only here.
+func logOutcome(l *stepLogger, with string, res runResult, d time.Duration) {
+	for _, c := range res.Commits {
+		switch {
+		case len(c.Commits) > 0:
+			l.infof("%s: %d commits, %s", c.Name, len(c.Commits), strings.Join(c.Commits, "; "))
+		case c.Uncommitted:
+			l.infof("%s: nothing committed, changes left uncommitted", c.Name)
 		}
-		for _, line := range strings.Split(s.text, "\n") {
-			log.Printf("worker: %s %s| %s", label, s.name, line)
+	}
+	if res.OK {
+		l.infof("%s succeeded in %dms", with, d.Milliseconds())
+	} else {
+		l.errorf("%s failed in %dms: %s", with, d.Milliseconds(), res.Error)
+	}
+	for _, line := range strings.Split(res.Output, "\n") {
+		if res.Output != "" {
+			log.Printf("worker: %s output| %s", l.label, line)
 		}
 	}
 }

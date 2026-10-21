@@ -1116,6 +1116,22 @@ export function getRun(id: number): Promise<FlowRunDetail> {
   return request(`/api/runs/${id}`)
 }
 
+// A line of a run's log: the webapp's about the run and its steps, or one the
+// worker logged of a step it ran; see logs.go.
+export type RunLogLine = {
+  id: number
+  step: number | null
+  source: 'webapp' | 'worker'
+  level: 'info' | 'error'
+  message: string
+  time: string
+}
+
+// The run's log, oldest first; after gives only the lines past that id.
+export function getRunLogs(id: number, after = 0): Promise<RunLogLine[]> {
+  return request(`/api/runs/${id}/logs?after=${after}`)
+}
+
 // A content block of a message of an agent's conversation, as pi has it.
 // Images come without their data.
 export type MessageBlock =

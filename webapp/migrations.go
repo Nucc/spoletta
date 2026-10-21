@@ -67,6 +67,9 @@ func migrateDatabase(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if len(results) == 0 {
+		log.Printf("the database is at version %d, with nothing to migrate", at)
+	}
 	sources := provider.ListSources()
 	if known := sources[len(sources)-1].Version; at > known {
 		log.Printf("WARNING: the database is at version %d, past this webapp's last migration, %d; migrate it down with the webapp that migrated it (`webapp migrate down-to %d`)", at, known, known)

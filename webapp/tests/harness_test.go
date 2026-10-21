@@ -608,8 +608,8 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 		fw.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string][]string{"released": {}})
 	})
-	// As the real one: a record per line, each message of the conversation,
-	// then the result.
+	// As the real one: a record per line, each message of the conversation
+	// and a line it logs, then the result.
 	mux.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
 		var run agentRun
 		if err := json.NewDecoder(r.Body).Decode(&run); err != nil {
@@ -628,6 +628,7 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			t.Errorf("fake worker: no agent for %q", run.ProcessName)
 		}
 		enc := json.NewEncoder(w)
+		enc.Encode(map[string]any{"log": logLine{Time: time.Now(), Level: "info", Message: "fake pi runs " + run.ProcessName}})
 		if messages == nil {
 			messages = []map[string]any{{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "working on " + run.ProcessName}}}}
 		}
@@ -652,6 +653,7 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 		} else {
 			t.Errorf("fake worker: no script for %q", run.ProcessName)
 		}
+		res.Log = append([]logLine{{Time: time.Now(), Level: "info", Message: "fake bash runs " + run.ProcessName}}, res.Log...)
 		writeJSON(w, http.StatusOK, res)
 	})
 	srv := httptest.NewServer(mux)

@@ -68,6 +68,9 @@ services:
   webapp:
     build: ./webapp
     environment:
+      # Where the database is, unless config/database.yaml, mounted below,
+      # says otherwise; its environments can read these too. APP_ENV picks
+      # one (development by default); see webapp/database.go.
       DB_HOST: mysql
       DB_PORT: "3306"
       DB_NAME: ${MYSQL_DATABASE:-app}
@@ -116,6 +119,9 @@ services:
     volumes:
       # Read-only: the webapp checks and serves files; the worker writes them.
       - files:/data/files:ro
+      # config/database.yaml, when made from config/database.yaml.example,
+      # read again whenever the webapp connects.
+      - ./config:/config:ro
     # Published on the host's loopback only, since while nobody signs in
     # anyone reaching the webapp can do anything, running bash on the worker
     # included. Once people sign in, set PUBLISH_HOST=0.0.0.0 in .env to

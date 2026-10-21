@@ -4,3 +4,6 @@
 
 # Tokens compose passes to the services; never committed.
 .env
+
+# The database configuration, made from config/database.yaml.example.
+/config/database.yaml

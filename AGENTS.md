@@ -29,6 +29,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 - `docs/FLOWS.md`: how to author flows for a user (OPM, run semantics, step contracts, worked setup-file examples). Read it before generating a flow.
 
 ## Database
+- `database.go`: where the database is, per environment (development, staging, production, picked by `APP_ENV`), in the file `DB_CONFIG` names, else `config/database.yaml` (gitignored; copied from `config/database.yaml.example`, looked for in the working directory and the one above), else the `DB_*` variables. Each value is a `text/template` taking `{{ env "NAME" "fallback" }}` and `{{ file "/path" }}`; the file is read and filled in again for every connection opened, never kept, so a password rotated in its file is used without a restart (connections live 5 minutes).
 - No migration files. Each domain file has `migrateX(db)` with `CREATE TABLE IF NOT EXISTS` plus `addColumn(...)` for new columns; called at startup from `main.go`. Changes must work on existing databases.
 
 ## Build & test

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"net"
@@ -10,8 +9,6 @@ import (
 	"os"
 	"strconv"
 	"time"
-
-	"github.com/go-sql-driver/mysql"
 )
 
 func env(key, fallback string) string {
@@ -32,35 +29,6 @@ func listenAddr(signIn bool) string {
 		host = "127.0.0.1"
 	}
 	return net.JoinHostPort(host, env("PORT", "8080"))
-}
-
-func openDB() (*sql.DB, error) {
-	cfg := mysql.NewConfig()
-	cfg.Net = "tcp"
-	cfg.Addr = net.JoinHostPort(env("DB_HOST", "127.0.0.1"), env("DB_PORT", "3306"))
-	cfg.DBName = env("DB_NAME", "app")
-	cfg.User = env("DB_USER", "app")
-	cfg.Passwd = env("DB_PASSWORD", "apppass")
-	cfg.ParseTime = true
-
-	db, err := sql.Open("mysql", cfg.FormatDSN())
-	if err != nil {
-		return nil, err
-	}
-
-	// MySQL can take a while to accept connections on first start.
-	for attempt := 1; attempt <= 30; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		err = db.PingContext(ctx)
-		cancel()
-		if err == nil {
-			return db, nil
-		}
-		log.Printf("waiting for database (attempt %d): %v", attempt, err)
-		time.Sleep(2 * time.Second)
-	}
-	db.Close()
-	return nil, fmt.Errorf("database not reachable: %w", err)
 }
 
 func main() {

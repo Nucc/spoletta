@@ -1,0 +1,36 @@
+# The database of each environment the webapp runs in, APP_ENV picking
+# which (development by default); see webapp/database.go. Copy this file to
+# config/database.yaml, which isn't committed, and change it there; or name
+# a file anywhere with DB_CONFIG. Without either the webapp connects as the
+# DB_* variables say.
+#
+# Each value is a template filled in whenever the webapp connects:
+# {{ env "NAME" "fallback" }} gives an environment variable,
+# {{ file "/path" }} a file's content without its trailing newline; a value
+# holding {{ itself writes it as {{ "{{" }}.
+
+# On this machine or in compose, with compose's defaults.
+development:
+  host: '{{ env "DB_HOST" "127.0.0.1" }}'
+  port: '{{ env "DB_PORT" "3306" }}'
+  database: '{{ env "DB_NAME" "app" }}'
+  user: '{{ env "DB_USER" "app" }}'
+  password: '{{ env "DB_PASSWORD" "apppass" }}'
+
+# The password is read from a file a secret store mounts, again on every
+# connection, so rotating it there needs no restart.
+staging:
+  host: '{{ env "DB_HOST" }}'
+  port: '{{ env "DB_PORT" "3306" }}'
+  database: '{{ env "DB_NAME" "spoletta" }}'
+  user: '{{ env "DB_USER" "spoletta" }}'
+  password: '{{ file (env "DB_PASSWORD_FILE" "/run/secrets/db_password") }}'
+  tls: '{{ env "DB_TLS" "true" }}'
+
+production:
+  host: '{{ env "DB_HOST" }}'
+  port: '{{ env "DB_PORT" "3306" }}'
+  database: '{{ env "DB_NAME" "spoletta" }}'
+  user: '{{ env "DB_USER" "spoletta" }}'
+  password: '{{ file (env "DB_PASSWORD_FILE" "/run/secrets/db_password") }}'
+  tls: '{{ env "DB_TLS" "true" }}'

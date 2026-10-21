@@ -24,7 +24,7 @@ import (
 // proxies and certificates for reaching out, and who commits.
 var childVars = []string{
 	"PATH", "HOME", "LANG", "LC_ALL", "TERM", "TZ",
-	"PI_CODING_AGENT_DIR", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY",
+	"PI_SKIP_VERSION_CHECK", "PI_TELEMETRY",
 	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 	"SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
 	"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",

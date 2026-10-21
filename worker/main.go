@@ -201,12 +201,12 @@ func main() {
 		timeout = time.Duration(ms) * time.Millisecond
 	}
 	// The user's pi config, mounted read-only. Only models.json and
-	// settings.json are used; credentials come from the environment.
+	// settings.json are used; credentials come from the environment. Each
+	// agent step gets an agent directory of its own made from them; see
+	// writeAgentDir.
 	hostConfigDir := envOr("PI_HOST_CONFIG_DIR", "/pi-host")
-	// pi writes to its agent directory, so it gets a writable one built from the host config.
-	agentDir := envOr("PI_CODING_AGENT_DIR", "/home/flow/.pi/agent")
 
-	models, err := prepareAgentDir(hostConfigDir, agentDir)
+	models, err := readAgentConfig(hostConfigDir)
 	if err != nil {
 		log.Fatalf("worker: %v", err)
 	}
@@ -422,13 +422,16 @@ func readHostJSON(dir, name string) ([]byte, error) {
 	return b, nil
 }
 
-// Builds the agent directory once at startup; restart the worker to pick up config changes.
-func prepareAgentDir(hostDir, agentDir string) (agentModels, error) {
-	var models agentModels
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		return models, err
-	}
+// What every step's agent directory starts from: the host's settings,
+// trimmed to those choosing models, and its models.json, if any. Read once
+// at startup; restart the worker to pick up config changes.
+var agentConfig struct {
+	settings, models []byte
+}
 
+// Reads the host's pi config into agentConfig, returning the models offered.
+func readAgentConfig(hostDir string) (agentModels, error) {
+	var models agentModels
 	raw, err := readHostJSON(hostDir, "settings.json")
 	if err != nil {
 		return models, err
@@ -445,28 +448,10 @@ func prepareAgentDir(hostDir, agentDir string) (agentModels, error) {
 			trimmed[k] = v
 		}
 	}
-	out, err := json.MarshalIndent(trimmed, "", "  ")
-	if err != nil {
+	if agentConfig.settings, err = json.MarshalIndent(trimmed, "", "  "); err != nil {
 		return models, err
 	}
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), out, 0o644); err != nil {
-		return models, err
-	}
-
-	modelsJSON, err := readHostJSON(hostDir, "models.json")
-	if err != nil {
-		return models, err
-	}
-	agentModelsFile.path, agentModelsFile.host, agentModelsFile.written = filepath.Join(agentDir, "models.json"), modelsJSON, modelsJSON
-	if modelsJSON != nil {
-		err = os.WriteFile(filepath.Join(agentDir, "models.json"), modelsJSON, 0o644)
-	} else {
-		err = os.Remove(filepath.Join(agentDir, "models.json"))
-		if errors.Is(err, fs.ErrNotExist) {
-			err = nil
-		}
-	}
-	if err != nil {
+	if agentConfig.models, err = readHostJSON(hostDir, "models.json"); err != nil {
 		return models, err
 	}
 
@@ -523,51 +508,51 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 		args = append(args, "--thinking", run.Thinking)
 	}
 
-	// The specs and the result live outside the agent's working directory.
+	// The specs, the result and pi's agent directory live outside the
+	// agent's working directory, in a directory of the step's own.
 	var resultFile string
 	for _, p := range run.Providers {
 		if err := p.check(); err != nil {
 			return runResult{Error: err.Error()}
 		}
 	}
-	if err := writeAgentModels(run.Providers); err != nil {
+	private, err := os.MkdirTemp("", "private-")
+	if err != nil {
+		return runResult{Error: "create private directory: " + err.Error()}
+	}
+	defer os.RemoveAll(private)
+	agentDir := filepath.Join(private, "agent")
+	if err := writeAgentDir(agentDir, run.Providers); err != nil {
 		return runResult{Error: err.Error()}
 	}
-	env, err := run.withKeys(childEnv())
+	env, err := run.withKeys(childEnv("PI_CODING_AGENT_DIR=" + agentDir))
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
-	if len(run.MCPServers) > 0 || run.Output != nil || (len(run.Skills) > 0 && !run.NoTools) {
-		private, err := os.MkdirTemp("", "private-")
+	if len(run.MCPServers) > 0 {
+		b, err := json.Marshal(map[string]any{"servers": run.MCPServers, "token": run.MCPToken})
+		if err == nil {
+			err = os.WriteFile(filepath.Join(private, "mcp.json"), b, 0o600)
+		}
 		if err != nil {
-			return runResult{Error: "create private directory: " + err.Error()}
+			return runResult{Error: "write MCP servers: " + err.Error()}
 		}
-		defer os.RemoveAll(private)
-		if len(run.MCPServers) > 0 {
-			b, err := json.Marshal(map[string]any{"servers": run.MCPServers, "token": run.MCPToken})
-			if err == nil {
-				err = os.WriteFile(filepath.Join(private, "mcp.json"), b, 0o600)
-			}
-			if err != nil {
-				return runResult{Error: "write MCP servers: " + err.Error()}
-			}
-			args = append(args, "-e", mcpExtension)
-			env = append(env, "FLOW_MCP_SERVERS="+filepath.Join(private, "mcp.json"))
+		args = append(args, "-e", mcpExtension)
+		env = append(env, "FLOW_MCP_SERVERS="+filepath.Join(private, "mcp.json"))
+	}
+	if run.Output != nil {
+		if resultFile, err = writeOutputSpec(private, run); err != nil {
+			return runResult{Error: "write output spec: " + err.Error()}
 		}
-		if run.Output != nil {
-			if resultFile, err = writeOutputSpec(private, run); err != nil {
-				return runResult{Error: "write output spec: " + err.Error()}
-			}
-			args = append(args, "-e", outputExtension)
-			env = append(env, "FLOW_OUTPUT_SPEC="+filepath.Join(private, "spec.json"))
+		args = append(args, "-e", outputExtension)
+		env = append(env, "FLOW_OUTPUT_SPEC="+filepath.Join(private, "spec.json"))
+	}
+	if len(run.Skills) > 0 && !run.NoTools {
+		skills, err := writeSkills(private, run.Skills)
+		if err != nil {
+			return runResult{Error: "write skills: " + err.Error()}
 		}
-		if len(run.Skills) > 0 && !run.NoTools {
-			skills, err := writeSkills(private, run.Skills)
-			if err != nil {
-				return runResult{Error: "write skills: " + err.Error()}
-			}
-			args = append(args, skills...)
-		}
+		args = append(args, skills...)
 	}
 	if len(run.MCPServers) == 0 {
 		args = append(args, "--no-mcp")

@@ -117,29 +117,34 @@ func TestProviderCheck(t *testing.T) {
 	}
 }
 
-// The agent directory's models.json holds the run's providers, and is the
-// host's own again once a run comes without.
-func TestWriteAgentModels(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "models.json")
+// A step's agent directory holds the host's settings, and its models.json
+// with the run's providers over the host's; the host's own without any.
+func TestWriteAgentDir(t *testing.T) {
 	host := []byte(`{"providers": {}}`)
-	os.WriteFile(path, host, 0o644)
-	agentModelsFile.path, agentModelsFile.host, agentModelsFile.written = path, host, host
-	t.Cleanup(func() { agentModelsFile.path, agentModelsFile.host, agentModelsFile.written = "", nil, nil })
+	agentConfig.settings, agentConfig.models = []byte(`{"defaultModel": "a"}`), host
+	t.Cleanup(func() { agentConfig.settings, agentConfig.models = nil, nil })
 	t.Setenv("PI_MODEL_CATALOG", t.TempDir())
 
 	providers := []modelProvider{{ID: "anthropic", Env: "ANTHROPIC_API_KEY", Models: []string{"claude-a"}}}
-	if err := writeAgentModels(providers); err != nil {
+	dir := filepath.Join(t.TempDir(), "agent")
+	if err := writeAgentDir(dir, providers); err != nil {
 		t.Fatal(err)
 	}
 	want, _ := providersModels(host, providers, nil)
-	if b, _ := os.ReadFile(path); string(b) != string(want) {
+	if b, _ := os.ReadFile(filepath.Join(dir, "models.json")); string(b) != string(want) {
 		t.Errorf("with a provider, models.json = %s", b)
 	}
-	if err := writeAgentModels(nil); err != nil {
+	if b, _ := os.ReadFile(filepath.Join(dir, "settings.json")); string(b) != `{"defaultModel": "a"}` {
+		t.Errorf("settings.json = %s", b)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the agent directory = %v, %v; want only the worker's", fi.Mode(), err)
+	}
+	other := filepath.Join(t.TempDir(), "agent")
+	if err := writeAgentDir(other, nil); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(path); string(b) != string(host) {
+	if b, _ := os.ReadFile(filepath.Join(other, "models.json")); string(b) != string(host) {
 		t.Errorf("without, models.json = %s", b)
 	}
 }

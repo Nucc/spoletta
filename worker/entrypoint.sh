@@ -6,7 +6,7 @@
 # drops to flow.
 set -e
 if [ "$(id -u)" = 0 ]; then
-	for dir in /data/files /data/workspaces /home/flow/.pi; do
+	for dir in /data/files /data/workspaces; do
 		mkdir -p "$dir"
 		[ "$(stat -c %u "$dir")" = 1000 ] || chown -R flow:flow "$dir"
 	done

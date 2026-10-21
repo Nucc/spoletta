@@ -9,16 +9,14 @@ package main
 // kept in a vault is in the worker's environment under that variable.
 //
 // pi takes a provider's endpoint and models only from models.json, so the
-// worker writes the providers into the agent directory's models.json, over
+// worker writes the providers into the step's agent directory's models.json, over
 // the host's entries for the same providers: each reads its key from its
 // variable, and a custom one has its URL, API and models, which get what
 // pi's catalog knows of a model of the same ID (how much it takes in and
-// gives out, whether it thinks, whether it sees images). The file is
-// written again only when what it holds changes, which a run starting just
-// as it does may miss.
+// gives out, whether it thinks, whether it sees images). Each agent step
+// gets a models.json of its own, in its own agent directory.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -280,17 +278,11 @@ func providersModels(host []byte, providers []modelProvider, known map[string]ca
 	return json.MarshalIndent(config, "", "  ")
 }
 
-// The agent directory's models.json: where it is, the host's, and what was
-// last written.
-var agentModelsFile struct {
-	sync.Mutex
-	path    string
-	host    []byte
-	written []byte
-}
-
-// Has the agent directory's models.json hold the providers over the host's.
-func writeAgentModels(providers []modelProvider) error {
+// Makes a step's agent directory, which pi keeps what it writes in, such
+// as credentials it is given and the models it finds, so no step sees
+// another's: the host's settings, and its models.json with the run's
+// providers over its entries for the same ones.
+func writeAgentDir(dir string, providers []modelProvider) error {
 	var known map[string]catalogModel
 	if len(providers) > 0 {
 		// Without the catalog, custom providers' models take pi's defaults.
@@ -298,36 +290,21 @@ func writeAgentModels(providers []modelProvider) error {
 			known = c.byID
 		}
 	}
-	f := &agentModelsFile
-	f.Lock()
-	defer f.Unlock()
-	if f.path == "" {
-		return nil
-	}
-	content, err := providersModels(f.host, providers, known)
+	models, err := providersModels(agentConfig.models, providers, known)
 	if err != nil {
 		return err
 	}
-	if bytes.Equal(content, f.written) {
-		return nil
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return fmt.Errorf("create the agent directory: %w", err)
 	}
-	// Written beside it and moved in place, so a pi starting meanwhile reads
-	// one or the other whole.
-	if content == nil {
-		err = os.Remove(f.path)
-		if errors.Is(err, os.ErrNotExist) {
-			err = nil
-		}
-	} else {
-		tmp := filepath.Join(filepath.Dir(f.path), ".models.json.tmp")
-		if err = os.WriteFile(tmp, content, 0o644); err == nil {
-			err = os.Rename(tmp, f.path)
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), agentConfig.settings, 0o600); err != nil {
+		return fmt.Errorf("write settings.json: %w", err)
+	}
+	if models != nil {
+		if err := os.WriteFile(filepath.Join(dir, "models.json"), models, 0o600); err != nil {
+			return fmt.Errorf("write models.json: %w", err)
 		}
 	}
-	if err != nil {
-		return fmt.Errorf("write models.json: %w", err)
-	}
-	f.written = content
 	return nil
 }
 

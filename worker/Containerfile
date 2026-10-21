@@ -31,10 +31,9 @@ RUN git config --system credential.helper /opt/flow/git-credential.sh \
 # the extensions the next one runs.
 RUN deluser --remove-home node \
  && adduser -D -u 1000 -h /home/flow flow \
- && mkdir -p /data/files /data/workspaces /home/flow/.pi/agent \
+ && mkdir -p /data/files /data/workspaces \
  && chown -R flow:flow /data /home/flow
 COPY --chmod=755 worker/entrypoint.sh /opt/flow/entrypoint.sh
-ENV PI_CODING_AGENT_DIR=/home/flow/.pi/agent
 
 EXPOSE 8090
 ENTRYPOINT ["/opt/flow/entrypoint.sh"]

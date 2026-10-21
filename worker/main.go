@@ -16,13 +16,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -179,6 +177,18 @@ type runResult struct {
 // Where files that runs generate are kept, a volume the webapp serves them from.
 var filesRoot = envOr("FILES_DIR", "/data/files")
 
+// Where steps' private and scratch directories are made: a volume of its
+// own when steps run in containers, which must see them; see sandbox.go.
+var stepsRoot = envOr("STEPS_DIR", os.TempDir())
+
+// Makes a directory for a step, which only the worker's user reads.
+func makeStepDir(prefix string) (string, error) {
+	if err := os.MkdirAll(stepsRoot, 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(stepsRoot, prefix)
+}
+
 // The submit_output extension, which the image puts here.
 var outputExtension = envOr("OUTPUT_EXTENSION", "/opt/flow/submit-output.ts")
 
@@ -225,6 +235,9 @@ func main() {
 		log.Fatalf("worker: %v", err)
 	}
 
+	if steps, err = newSandbox(os.Getenv("SANDBOX")); err != nil {
+		log.Fatalf("worker: %v", err)
+	}
 	token, err := workerToken()
 	if err != nil {
 		log.Fatalf("worker: %v", err)
@@ -480,7 +493,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	// The specs, the result, the git token and pi's agent directory live
 	// outside the agent's working directory, in a directory of the step's
 	// own, which only the worker's user reads, as every file in it.
-	private, err := os.MkdirTemp("", "private-")
+	private, err := makeStepDir("private-")
 	if err != nil {
 		return runResult{Error: "create private directory: " + err.Error()}
 	}
@@ -510,6 +523,9 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 		}
 	}
 	agentDir := filepath.Join(private, "agent")
+	if err := os.Mkdir(filepath.Join(private, "out"), 0o700); err != nil {
+		return runResult{Error: "create private directory: " + err.Error()}
+	}
 	if err := writeAgentDir(agentDir, run.Providers, run.LLM); err != nil {
 		return runResult{Error: err.Error()}
 	}
@@ -557,33 +573,38 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 		prompt = "<flows_guide>\n" + string(guide) + "\n</flows_guide>\n\n" + prompt
 	}
 
-	timeout, short := untilTokenEnds(timeout, run.Git)
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, "pi", args...)
-	cmd.Dir = cwd
-	cmd.Env = env
-	// pi gets its own process group so stopping it also stops the tools it started.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
-	// Don't wait forever on a pi that ignores SIGTERM or leaves children holding its output.
-	cmd.WaitDelay = 10 * time.Second
 	// The prompt goes in on stdin: as an argument, a leading @ or - would be
 	// parsed as a file reference or an option. pi may exit before reading it,
 	// e.g. on a bad model; that's reported by its exit status.
-	cmd.Stdin = strings.NewReader(prompt)
+	promptFile := filepath.Join(private, "prompt")
+	if err := os.WriteFile(promptFile, []byte(prompt), 0o600); err != nil {
+		return runResult{Error: "write the prompt: " + err.Error()}
+	}
+	spec := sandboxSpec{
+		Cmd: append([]string{"pi"}, args...), Stdin: promptFile, Dir: cwd, Env: env, Graceful: true,
+		// What the agent writes, besides its working directory: pi's agent
+		// directory, its result, its files and its session.
+		Mounts: []mount{{Path: cwd}, {Path: private, ReadOnly: true}, {Path: agentDir}, {Path: filepath.Join(private, "out")}},
+	}
+	if run.FilesDir != "" {
+		spec.Mounts = append(spec.Mounts, mount{Path: run.FilesDir})
+	}
+	if run.SessionID != "" {
+		spec.Mounts = append(spec.Mounts, mount{Path: sessionsDir(run.Workspace.ID)})
+	}
+
+	timeout, short := untilTokenEnds(timeout, run.Git)
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	events := &eventStream{emit: emit}
 	var stderr bytes.Buffer
-	cmd.Stdout = events
-	cmd.Stderr = &stderr
-
 	// The prompt goes on stdin and the token in models.json, so the
 	// arguments hold neither.
 	l.infof("pi %s", strings.Join(args, " "))
-	if err := cmd.Start(); err != nil {
+	err = steps.run(runCtx, spec, events, &stderr)
+	if notStarted(err) && runCtx.Err() == nil {
 		return runResult{Error: "failed to start pi: " + err.Error()}
 	}
-	err = cmd.Wait()
 	output, failure := events.outcome()
 	// A failure's error is what it printed to stderr already.
 	if err == nil {
@@ -605,8 +626,9 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 		return runResult{Output: output, Error: failure}
 	}
 	if resultFile != "" {
-		// Missing if the agent never called submit_output, or the extension failed to load.
-		if b, err := os.ReadFile(resultFile); err == nil {
+		// Missing if the agent never called submit_output, or the extension
+		// failed to load. The agent could have left a link to another file.
+		if b, err := readNoFollow(resultFile); err == nil {
 			return runResult{OK: true, Output: string(b), Submitted: true}
 		}
 	}
@@ -642,7 +664,7 @@ func writeSkills(dir string, skills []skill) ([]string, error) {
 func writeOutputSpec(dir string, run runRequest) (string, error) {
 	spec := *run.Output
 	spec.FilesDir = run.FilesDir
-	spec.ResultFile = filepath.Join(dir, "result.json")
+	spec.ResultFile = filepath.Join(dir, "out", "result.json")
 	b, err := json.Marshal(spec)
 	if err != nil {
 		return "", err
@@ -761,7 +783,7 @@ func workDir(ctx context.Context, ws *workspaceSpec, scratch string, l *stepLogg
 		l.infof("%s", msg)
 		return t.dir, t, nil
 	}
-	dir, err := os.MkdirTemp("", scratch)
+	dir, err := makeStepDir(scratch)
 	if err != nil {
 		return "", nil, errors.New("create scratch directory: " + err.Error())
 	}
@@ -788,7 +810,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	// The inputs, the script and the git token stay out of the working
 	// directory, which a workspace shares with other steps, readable only
 	// by the worker's user.
-	private, err := os.MkdirTemp("", "script-private-")
+	private, err := makeStepDir("script-private-")
 	if err != nil {
 		return runResult{Error: "create private directory: " + err.Error()}
 	}
@@ -821,30 +843,26 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		return runResult{Error: "write script: " + err.Error()}
 	}
 
-	timeout, short := untilTokenEnds(timeout, run.Git)
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, "bash", script)
-	cmd.Dir = cwd
 	// Set even when empty, so nothing else can stand in.
 	since := ""
 	if run.Since != nil {
 		since = strconv.FormatInt(*run.Since, 10)
 	}
-	cmd.Env = childEnv(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)...)
+	spec := sandboxSpec{Cmd: []string{"bash", script}, Dir: cwd, Mounts: []mount{{Path: cwd}, {Path: private, ReadOnly: true}}}
+	spec.Env = childEnv(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)...)
 	if run.Workspace != nil {
-		cmd.Env = append(cmd.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
+		spec.Env = append(spec.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
 	}
 	if run.FilesDir != "" {
-		cmd.Env = append(cmd.Env, "OUTPUTS="+run.FilesDir)
+		spec.Env = append(spec.Env, "OUTPUTS="+run.FilesDir)
+		spec.Mounts = append(spec.Mounts, mount{Path: run.FilesDir})
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = 10 * time.Second
 	stdout := &cappedBuffer{max: maxScriptBytes}
 	stderr := &cappedBuffer{max: 64 << 10}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+
+	timeout, short := untilTokenEnds(timeout, run.Git)
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	if len(run.Inputs) > 0 {
 		names := make([]string, len(run.Inputs))
@@ -855,10 +873,10 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	} else {
 		l.infof("bash, given nothing")
 	}
-	if err := cmd.Start(); err != nil {
+	err = steps.run(runCtx, spec, stdout, stderr)
+	if notStarted(err) && runCtx.Err() == nil {
 		return runResult{Error: "failed to start bash: " + err.Error()}
 	}
-	err = cmd.Wait()
 	output := strings.TrimSpace(stdout.String())
 	// A failure's error is what it printed to stderr already.
 	if err == nil {
@@ -875,8 +893,8 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = "the script failed: " + err.Error()
-		} else if exit, ok := err.(*exec.ExitError); ok {
-			msg += fmt.Sprintf("\n(exit status %d)", exit.ExitCode())
+		} else if exit, ok := err.(exitError); ok {
+			msg += fmt.Sprintf("\n(exit status %d)", int(exit))
 		}
 		return runResult{Output: output, Error: msg}
 	}

@@ -1686,3 +1686,20 @@ export function setSkillOwner(
 ): Promise<Skill> {
   return request(`${skillRoute(kind)}/${id}/owner`, { method: 'PUT', body: JSON.stringify(owner) })
 }
+
+// An internet host an admin allows steps in containers of their own to
+// reach through the webapp's egress proxy: a name, *.name for its
+// subdomains, with :port for a port other than 80 and 443.
+export type EgressHost = { host: string; note: string; createdAt: string }
+
+export function listEgressHosts(): Promise<EgressHost[]> {
+  return request('/api/egress-hosts')
+}
+
+export function allowEgressHost(host: string, note: string): Promise<EgressHost[]> {
+  return request('/api/egress-hosts', { method: 'POST', body: JSON.stringify({ host, note }) })
+}
+
+export function removeEgressHost(host: string): Promise<void> {
+  return request(`/api/egress-hosts/${encodeURIComponent(host)}`, { method: 'DELETE' })
+}

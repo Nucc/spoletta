@@ -630,6 +630,11 @@ definitions do that.
   passes it to every script with `CHILD_ENV`; for a service built in, use a
   connector or a Sentry step instead. In a workspace, its git (as an agent's)
   has a token for the run's repositories, which can push.
+- Where steps run in containers of their own, a script (as an agent's
+  tools) reaches the internet only at the hosts an admin allowed in the
+  settings, under Internet access, and its repositories' hosts: a script
+  calling an API, or installing packages, needs its host allowed, which
+  belongs in what you tell the user.
 - A script can't decide states. Route its output with state rules.
 
 ```bash

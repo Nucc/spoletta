@@ -100,6 +100,9 @@ type agentRun struct {
 	// Where the agent reaches its models' providers, the webapp's proxy,
 	// with the step's token; never their keys. See llm.go.
 	LLM *llmAccess `json:"llm,omitempty"`
+	// Where the agent's container reaches the internet hosts it may; see
+	// egress.go.
+	Egress *egressAccess `json:"egress,omitempty"`
 	// The skills the process picked, which the worker hands pi; see skills.go.
 	Skills []runSkill `json:"skills,omitempty"`
 }
@@ -254,6 +257,8 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 			return res, err
 		}
 		defer llm.revoke(run.LLM)
+		run.Egress = egress.grant(who, runID, stepID, run.Workspace, 2*settings.timeout())
+		defer egress.revoke(run.Egress)
 		var msg string
 		run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, settings)
 		if err != nil {

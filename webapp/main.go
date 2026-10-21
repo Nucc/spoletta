@@ -134,6 +134,8 @@ func main() {
 	registerMCPRoutes(mux, db, mcp)
 	llm = newLLMBroker(db, workerURL, proxyURL)
 	registerLLMRoutes(mux, llm)
+	egress = newEgressBroker(db, proxyURL)
+	registerEgressRoutes(mux, db)
 	registerSkillRoutes(mux, db)
 	registerConnectorRoutes(mux, db)
 	sentry := sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}
@@ -170,7 +172,7 @@ func main() {
 
 	addr := listenAddr(auth != nil)
 	log.Printf("started; listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, auth.protect(guardFlows(db, mux))))
+	log.Fatal(http.ListenAndServe(addr, egress.wrap(auth.protect(guardFlows(db, mux)))))
 }
 
 // Logs which database the webapp works on, never with its password.

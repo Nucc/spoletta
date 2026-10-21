@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,6 +53,25 @@ type sandboxSpec struct {
 	Graceful bool
 	// Whether it reaches nothing over the network, not even the webapp.
 	Offline bool
+	// The proxy a sandbox whose network reaches only the webapp reaches
+	// the internet through, with the step's credentials; see the webapp's
+	// egress.go. A process reaches it itself.
+	Egress string
+}
+
+// What the webapp says a step reaches the internet through.
+type egressAccess struct {
+	URL string `json:"url"`
+}
+
+func (a *egressAccess) proxy() string {
+	if a == nil {
+		return ""
+	}
+	if u, err := url.Parse(a.URL); err != nil || u.Scheme != "http" || u.Host == "" {
+		return ""
+	}
+	return a.URL
 }
 
 type mount struct {

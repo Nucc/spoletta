@@ -84,6 +84,9 @@ type runRequest struct {
 	// Where the step reaches its models' providers, the webapp's proxy,
 	// with its token; the worker has no keys of its own.
 	LLM *llmAccess `json:"llm"`
+	// Where a step in a container reaches the internet hosts it may: the
+	// webapp's proxy, with the step's token as its credentials.
+	Egress *egressAccess `json:"egress"`
 	// Put the guide to authoring flows before the prompt, for an agent that
 	// can't read it itself.
 	Guide bool `json:"guide"`
@@ -135,6 +138,8 @@ type scriptRequest struct {
 	Workspace *workspaceSpec `json:"workspace"`
 	// The token its git reaches the workspace's repositories with, if any.
 	Git *gitCredentials `json:"git"`
+	// Where a script in a container reaches the internet hosts it may.
+	Egress *egressAccess `json:"egress"`
 	// How long the script may take, if not the worker's own limit.
 	TimeoutMS int64 `json:"timeoutMs"`
 	// When its schedule's last run that got through started, in seconds
@@ -603,7 +608,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 		return runResult{Error: "write the prompt: " + err.Error()}
 	}
 	spec := sandboxSpec{
-		Cmd: append([]string{"pi"}, args...), Stdin: promptFile, Dir: cwd, Env: env, Graceful: true,
+		Cmd: append([]string{"pi"}, args...), Stdin: promptFile, Dir: cwd, Env: env, Graceful: true, Egress: run.Egress.proxy(),
 		// What the agent writes, besides its working directory: pi's agent
 		// directory, its result, its files and its session.
 		Mounts: []mount{{Path: cwd}, {Path: private, ReadOnly: true}, {Path: agentDir}, {Path: filepath.Join(private, "out")}},
@@ -870,7 +875,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	if run.Since != nil {
 		since = strconv.FormatInt(*run.Since, 10)
 	}
-	spec := sandboxSpec{Cmd: []string{"bash", script}, Dir: cwd, Mounts: []mount{{Path: cwd}, {Path: private, ReadOnly: true}}}
+	spec := sandboxSpec{Cmd: []string{"bash", script}, Dir: cwd, Mounts: []mount{{Path: cwd}, {Path: private, ReadOnly: true}}, Egress: run.Egress.proxy()}
 	spec.Env = childEnv(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)...)
 	if run.Workspace != nil {
 		spec.Env = append(spec.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)

@@ -221,6 +221,17 @@ func (s *podmanSandbox) containerSpec(spec sandboxSpec) (map[string]any, error) 
 		env[k] = v
 	}
 	env["HOME"] = "/tmp"
+	// The internet through the webapp's proxy, which curl, git and npm
+	// take; the webapp itself, models and MCP servers, directly.
+	if spec.Egress != "" {
+		for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+			env[k] = spec.Egress
+		}
+		if u, err := url.Parse(spec.Egress); err == nil {
+			env["NO_PROXY"] = u.Hostname() + ",localhost,127.0.0.1"
+			env["no_proxy"] = env["NO_PROXY"]
+		}
+	}
 	cmd := spec.Cmd
 	if spec.Stdin != "" {
 		cmd = append([]string{"/bin/sh", "-c", `exec "$@" < "$0"`, spec.Stdin}, cmd...)

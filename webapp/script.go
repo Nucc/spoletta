@@ -34,6 +34,9 @@ type scriptRun struct {
 	// The token the step's git reaches its repositories with; see
 	// git_tokens.go.
 	Git *gitCredentials `json:"git,omitempty"`
+	// Where the script's container reaches the internet hosts it may; see
+	// egress.go.
+	Egress *egressAccess `json:"egress,omitempty"`
 	// How long the script may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
@@ -104,6 +107,12 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 		}
 	}
 	if res.Error == "" {
+		who, err := runUser(ctx, db, runID)
+		if err != nil {
+			return res, err
+		}
+		run.Egress = egress.grant(who, runID, stepID, run.Workspace, settings.timeout())
+		defer egress.revoke(run.Egress)
 		if err := callWorker(ctx, http.MethodPost, workerURL+"/script", run, &res); err != nil {
 			res = runResult{Error: "worker unavailable: " + err.Error()}
 			if ctx.Err() != nil {

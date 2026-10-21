@@ -52,6 +52,11 @@ type agentModels struct {
 	Providers map[string]string `json:"providers,omitempty"`
 }
 
+// Where a step's container reaches the internet.
+type egressAccess struct {
+	URL string `json:"url"`
+}
+
 // What a step's git is given.
 type gitCredentials struct {
 	Username string     `json:"username"`
@@ -87,6 +92,8 @@ type agentRun struct {
 	Providers []runProvider `json:"providers,omitempty"`
 	// Where the agent reaches its models' providers, the webapp's proxy.
 	LLM *llmAccess `json:"llm,omitempty"`
+	// Where its container reaches the internet, the webapp's egress proxy.
+	Egress *egressAccess `json:"egress,omitempty"`
 	// What the fake worker got: the request as it came, and the key each
 	// provider the agent reached through the proxy was reached with.
 	Raw     string            `json:"-"`
@@ -579,6 +586,8 @@ type scriptRun struct {
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
 	// The token its git reaches the repositories with.
 	Git *gitCredentials `json:"git,omitempty"`
+	// Where its container reaches the internet, the webapp's egress proxy.
+	Egress *egressAccess `json:"egress,omitempty"`
 	// How long the script may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`

@@ -278,6 +278,8 @@ func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBrok
 	if run.Git, err = gitTokens.forWorkspace(ctx, run.Workspace); err != nil {
 		return runResult{Error: err.Error()}
 	}
+	run.Egress = egress.grant(who, 0, stepID, run.Workspace, time.Duration(run.TimeoutMS)*time.Millisecond)
+	defer egress.revoke(run.Egress)
 	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, uses)
 	if err != nil {
 		return runResult{Error: err.Error()}

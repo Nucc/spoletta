@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -48,6 +50,8 @@ type sandboxSpec struct {
 	// Whether stopping it may let it tidy up first, as pi stops the tools it
 	// started, or kills it at once.
 	Graceful bool
+	// Whether it reaches nothing over the network, not even the webapp.
+	Offline bool
 }
 
 type mount struct {
@@ -122,4 +126,26 @@ func readNoFollow(path string) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(io.LimitReader(f, maxScriptBytes))
+}
+
+// The user a sandbox's program runs as, uid and gid, when it isn't the
+// worker's own: what the worker makes for a step is that user's, so the
+// step can write it. -1 when steps run as the worker.
+var sandboxOwner = -1
+
+// Hands the directory, and with tree everything in it, to the sandbox's
+// user, if it isn't the worker's.
+func ownForSandbox(path string, tree bool) error {
+	if sandboxOwner < 0 {
+		return nil
+	}
+	if !tree {
+		return os.Lchown(path, sandboxOwner, sandboxOwner)
+	}
+	return filepath.WalkDir(path, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Lchown(p, sandboxOwner, sandboxOwner)
+	})
 }

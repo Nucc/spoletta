@@ -36,19 +36,26 @@ services:
       # Passed through from the host when set. Add any other variables your
       # models.json references, and those the model providers added in the
       # settings read their keys from when the keys are kept in a vault.
+      # Only pi gets them, by the variables its models read; a script never
+      # does. See worker/env.go.
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
       - GEMINI_API_KEY
       - OPENROUTER_API_KEY
-      # For script processes calling APIs, e.g. curl -H "Authorization:
-      # Bearer $SENTRY_AUTH_TOKEN". Agents can read them too.
-      - SENTRY_AUTH_TOKEN
-      - SENTRY_URL
+      # Steps get only the variables they need from the worker's
+      # environment, never its secrets. To hand every script (and agent)
+      # more, such as a token for curl -H "Authorization: Bearer
+      # $JIRA_API_TOKEN", name them here, comma-separated, and pass them
+      # through below; agents can read them then.
+      - CHILD_ENV=${CHILD_ENV:-}
       - JIRA_URL
       - JIRA_EMAIL
       - JIRA_API_TOKEN
       # For flows with repositories: a token that can clone them over https,
-      # such as a GitHub token with contents:read. Agents can read it too.
+      # such as a GitHub token with contents:read. Only the git the worker
+      # runs itself (fetching, checking out, committing what a step left)
+      # gets it, never an agent or a script, so an agent can't push or
+      # fetch a private repository itself.
       # GIT_USERNAME defaults to x-access-token, which GitHub takes. Set
       # here rather than passed through, so a .env file next to this one
       # works too: podman-compose reads .env only for ${...}.

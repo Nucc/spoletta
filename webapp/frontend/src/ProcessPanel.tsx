@@ -45,7 +45,8 @@ type Fields = {
 
 const SAVE_DELAY_MS = 500
 
-const SCRIPT_PLACEHOLDER = `# e.g. the latest unresolved issues in Sentry:
+const SCRIPT_PLACEHOLDER = `# e.g. the latest unresolved issues in Sentry, with a token
+# the instance passes to scripts with CHILD_ENV:
 curl -sf -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \\
   "https://sentry.io/api/0/organizations/my-org/issues/?query=is:unresolved&limit=10" |
   jq '[.[] | {id: .shortId, title, permalink}]'`

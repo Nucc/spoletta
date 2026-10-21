@@ -625,10 +625,15 @@ definitions do that.
   For a cursor of your own, such as the newest `updated_at` seen, carry a
   persistent object over instead (see 3.1).
 - A non-zero exit fails it, with stderr as the error.
+- It gets none of the worker's secrets: no model keys, no git token, no
+  Sentry or Jira token. A variable such as `$JIRA_TOKEN` is there only if the
+  instance passes it to every script with `CHILD_ENV`; for a service built
+  in, use a connector or a Sentry step instead.
 - A script can't decide states. Route its output with state rules.
 
 ```bash
-# Prints {"data": ...} for an object without attributes.
+# Prints {"data": ...} for an object without attributes. $JIRA_TOKEN is
+# one the instance passes to scripts with CHILD_ENV.
 key=$(jq -r .data "$INPUTS/Ticket_key")
 curl -fsS "https://jira.example.com/rest/api/2/issue/$key" \
   -H "Authorization: Bearer $JIRA_TOKEN" |

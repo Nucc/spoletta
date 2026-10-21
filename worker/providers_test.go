@@ -150,9 +150,10 @@ func TestWithKeysOfProviders(t *testing.T) {
 		Keys:      map[string]string{"GW_API_KEY": "saved", "ELSEWHERE_KEY": "x"},
 		Providers: []modelProvider{{ID: "gw", Env: "GW_API_KEY"}},
 	}
-	env, err := run.withKeys([]string{"GW_API_KEY=from-env", "PATH=/bin"})
+	t.Setenv("GW_API_KEY", "from-env")
+	env, err := run.withKeys([]string{"PATH=/bin"})
 	if err != nil || !slices.Contains(env, "GW_API_KEY=saved") || slices.Contains(env, "GW_API_KEY=from-env") || slices.Contains(env, "ELSEWHERE_KEY=x") {
-		t.Errorf("env = %v, %v", env, err)
+		t.Errorf("env = %v, %v", envNames(env), err)
 	}
 	t.Setenv("VAULT_KEY", "from-vault")
 	if set, err := envSet([]string{"VAULT_KEY", "MISSING_KEY"}); err != nil || !set["VAULT_KEY"] || set["MISSING_KEY"] {

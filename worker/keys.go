@@ -14,6 +14,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -122,38 +123,40 @@ func (keys modelKeys) report() modelKeys {
 	return out
 }
 
-// The environment with the run's model keys in place of the worker's own.
-// Only the variables the offered models and the run's providers read are
-// set; a key for another, such as one a model no longer offered read, is
-// left out. A provider's
-// OAuth token, which pi prefers to its key, goes, so the key given is the
-// one used.
+// The environment with the model keys pi reads added: for each variable
+// the offered models and the run's providers read, the run's key, else the
+// worker's own, kept in a vault or passed through by compose; a key for
+// another variable, such as one a model no longer offered read, is left
+// out. A provider's OAuth token, which pi would prefer to its key, is never
+// passed on, so the key given is the one used. Bedrock signs in with the
+// worker's AWS credentials, which pi gets too, and only pi: never a script.
 func (run runRequest) withKeys(env []string) ([]string, error) {
-	keys := map[string]string{}
-	drop := map[string]bool{}
+	names := map[string]bool{}
+	for name := range keyNames {
+		names[name] = true
+	}
+	for _, p := range run.Providers {
+		names[p.Env] = true
+	}
 	for name, key := range run.Keys {
-		if !keyNames[name] && !run.providerReads(name) {
-			continue
-		}
-		if strings.ContainsAny(key, "\x00\n") {
+		if names[name] && strings.ContainsAny(key, "\x00\n") {
 			return nil, fmt.Errorf("invalid model key %s", name)
 		}
-		keys[name] = key
-		drop[name] = true
-		drop[strings.TrimSuffix(name, "_API_KEY")+"_OAUTH_TOKEN"] = true
 	}
-	if len(keys) == 0 {
-		return env, nil
-	}
-	out := make([]string, 0, len(env)+len(keys))
-	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		if !drop[name] {
-			out = append(out, kv)
+	out := slices.Clone(env)
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		key := run.Keys[name]
+		if key == "" {
+			key = os.Getenv(name)
+		}
+		if key != "" {
+			out = append(out, name+"="+key)
 		}
 	}
-	for name, key := range keys {
-		out = append(out, name+"="+key)
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "AWS_") && !names[name] {
+			out = append(out, kv)
+		}
 	}
 	return out, nil
 }

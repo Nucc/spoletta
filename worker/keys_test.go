@@ -39,8 +39,12 @@ func TestModelKeysOf(t *testing.T) {
 		t.Errorf("report = %+v", r)
 	}
 	run := runRequest{Keys: map[string]string{"GATEWAY_KEY": "saved", "UNOFFERED_API_KEY": "x"}}
-	env, err := run.withKeys([]string{"GATEWAY_KEY=from-env", "PATH=/bin"})
+	env, err := run.withKeys([]string{"PATH=/bin"})
 	if err != nil || !slices.Contains(env, "GATEWAY_KEY=saved") || slices.Contains(env, "GATEWAY_KEY=from-env") || slices.ContainsFunc(env, func(kv string) bool { return kv[:9] == "UNOFFERED" }) {
-		t.Errorf("env = %v, %v", env, err)
+		t.Errorf("env = %v, %v", envNames(env), err)
+	}
+	// Without a key of the run's, the worker's own is used.
+	if env, err := (runRequest{}).withKeys(nil); err != nil || !slices.Contains(env, "GATEWAY_KEY=from-env") {
+		t.Errorf("env without saved keys = %v, %v", envNames(env), err)
 	}
 }

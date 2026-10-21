@@ -525,7 +525,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	if err := writeAgentModels(run.Providers); err != nil {
 		return runResult{Error: err.Error()}
 	}
-	env, err := run.withKeys(os.Environ())
+	env, err := run.withKeys(childEnv())
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
@@ -842,12 +842,12 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "bash", script)
 	cmd.Dir = cwd
-	// Set even when empty, so the worker's own environment can't stand in.
+	// Set even when empty, so nothing else can stand in.
 	since := ""
 	if run.Since != nil {
 		since = strconv.FormatInt(*run.Since, 10)
 	}
-	cmd.Env = append(os.Environ(), "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)
+	cmd.Env = childEnv("INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)
 	if run.Workspace != nil {
 		cmd.Env = append(cmd.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
 	}

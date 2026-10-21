@@ -9,8 +9,8 @@ RUN CGO_ENABLED=0 go build -o /out/worker .
 FROM docker.io/library/node:22-alpine
 
 # git and bash give the agent's tools something to work with, and scripts
-# get curl and jq to call APIs.
-RUN apk add --no-cache bash curl git jq
+# get curl and jq to call APIs. su-exec drops root as the worker starts.
+RUN apk add --no-cache bash curl git jq su-exec
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 
 COPY --from=build /out/worker /usr/local/bin/worker
@@ -25,5 +25,17 @@ RUN git config --system credential.helper /opt/flow/git-credential.sh \
  && git config --system user.name "Flow agent" \
  && git config --system user.email "flow-agent@localhost"
 
+# Everything runs as flow, uid 1000, in place of the image's node user;
+# see entrypoint.sh. The volumes are flow's when made from the image;
+# what the image puts in /opt/flow stays root's, so no step can change
+# the extensions the next one runs.
+RUN deluser --remove-home node \
+ && adduser -D -u 1000 -h /home/flow flow \
+ && mkdir -p /data/files /data/workspaces /home/flow/.pi/agent \
+ && chown -R flow:flow /data /home/flow
+COPY --chmod=755 worker/entrypoint.sh /opt/flow/entrypoint.sh
+ENV PI_CODING_AGENT_DIR=/home/flow/.pi/agent
+
 EXPOSE 8090
+ENTRYPOINT ["/opt/flow/entrypoint.sh"]
 CMD ["worker"]

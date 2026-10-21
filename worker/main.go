@@ -204,7 +204,7 @@ func main() {
 	// settings.json are used; credentials come from the environment.
 	hostConfigDir := envOr("PI_HOST_CONFIG_DIR", "/pi-host")
 	// pi writes to its agent directory, so it gets a writable one built from the host config.
-	agentDir := envOr("PI_CODING_AGENT_DIR", "/root/.pi/agent")
+	agentDir := envOr("PI_CODING_AGENT_DIR", "/home/flow/.pi/agent")
 
 	models, err := prepareAgentDir(hostConfigDir, agentDir)
 	if err != nil {

@@ -186,7 +186,7 @@ func makeFilesDir(dir string) error {
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
 		return fmt.Errorf("files directory %q isn't inside %s", dir, filesRoot)
 	}
-	return os.MkdirAll(dir, 0o777)
+	return os.MkdirAll(dir, 0o755)
 }
 
 func main() {
@@ -509,7 +509,8 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	}
 
 	// The specs, the result and pi's agent directory live outside the
-	// agent's working directory, in a directory of the step's own.
+	// agent's working directory, in a directory of the step's own, which
+	// only the worker's user reads, as every file in it.
 	var resultFile string
 	for _, p := range run.Providers {
 		if err := p.check(); err != nil {
@@ -639,13 +640,13 @@ func writeSkills(dir string, skills []skill) ([]string, error) {
 			return nil, fmt.Errorf("invalid skill name %q", s.Name)
 		}
 		d := filepath.Join(dir, "skills", s.Name)
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
 		name, _ := json.Marshal(s.Name)
 		description, _ := json.Marshal(s.Description)
 		md := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n%s\n", name, description, s.Content)
-		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(md), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(md), 0o600); err != nil {
 			return nil, err
 		}
 		args = append(args, "--skill", d)
@@ -662,7 +663,7 @@ func writeOutputSpec(dir string, run runRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return spec.ResultFile, os.WriteFile(filepath.Join(dir, "spec.json"), b, 0o644)
+	return spec.ResultFile, os.WriteFile(filepath.Join(dir, "spec.json"), b, 0o600)
 }
 
 // Reads pi's JSON event stream (docs/json.md in pi): a JSON record per line,
@@ -807,14 +808,14 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	ws.process = run.ProcessName
 	defer ws.done(&res)
 	// The inputs and the script stay out of the working directory, which a
-	// workspace shares with other steps.
+	// workspace shares with other steps, readable only by the worker's user.
 	private, err := os.MkdirTemp("", "script-private-")
 	if err != nil {
 		return runResult{Error: "create private directory: " + err.Error()}
 	}
 	defer os.RemoveAll(private)
 	inputs := filepath.Join(private, "inputs")
-	if err := os.Mkdir(inputs, 0o755); err != nil {
+	if err := os.Mkdir(inputs, 0o700); err != nil {
 		return runResult{Error: "create inputs directory: " + err.Error()}
 	}
 	for _, in := range run.Inputs {
@@ -822,12 +823,12 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		if name == "" {
 			name = "input"
 		}
-		if err := os.WriteFile(filepath.Join(inputs, name), []byte(in.Content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(inputs, name), []byte(in.Content), 0o600); err != nil {
 			return runResult{Error: "write input " + in.Name + ": " + err.Error()}
 		}
 	}
 	script := filepath.Join(private, "script")
-	if err := os.WriteFile(script, []byte(run.Script), 0o644); err != nil {
+	if err := os.WriteFile(script, []byte(run.Script), 0o600); err != nil {
 		return runResult{Error: "write script: " + err.Error()}
 	}
 

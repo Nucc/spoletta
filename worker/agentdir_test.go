@@ -54,3 +54,26 @@ func TestEachStepGetsItsOwnAgentDirectory(t *testing.T) {
 		t.Errorf("both steps had the agent directory %v", dirs)
 	}
 }
+
+// What the worker writes for a step only its own user reads.
+func TestStepFilesAreTheWorkersOnly(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := writeSkills(dir, []skill{{Name: "review", Description: "d", Content: "c"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeOutputSpec(dir, runRequest{Output: &outputSpec{Shape: "object"}}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		"skills/review":          0o700,
+		"skills/review/SKILL.md": 0o600,
+		"spec.json":              0o600,
+	} {
+		fi, err := os.Stat(filepath.Join(dir, path))
+		if err != nil {
+			t.Error(err)
+		} else if fi.Mode().Perm() != want {
+			t.Errorf("%s: %v, want %v", path, fi.Mode().Perm(), want)
+		}
+	}
+}

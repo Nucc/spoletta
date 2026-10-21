@@ -137,8 +137,10 @@ func TestWriteAgentDir(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(dir, "settings.json")); string(b) != `{"defaultModel": "a"}` {
 		t.Errorf("settings.json = %s", b)
 	}
-	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Errorf("the agent directory = %v, %v; want only the worker's", fi.Mode(), err)
+	if fi, err := os.Stat(dir); err != nil {
+		t.Error(err)
+	} else if fi.Mode().Perm() != 0o700 {
+		t.Errorf("the agent directory's mode = %v; want only the worker's", fi.Mode())
 	}
 	other := filepath.Join(t.TempDir(), "agent")
 	if err := writeAgentDir(other, nil); err != nil {

@@ -161,7 +161,7 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec) (*takenWorkspace, err
 	}
 	dir := filepath.Join(workspacesRoot, ws.ID)
 	unlock := lockPath(dir)
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		unlock()
 		return nil, err
 	}
@@ -292,7 +292,7 @@ func checkout(ctx context.Context, dir, branch string, r repository) (bool, erro
 	if err := gitOK(ctx, repo, "worktree", "prune"); err != nil {
 		return false, err
 	}
-	if err := os.MkdirAll(adding, 0o777); err != nil {
+	if err := os.MkdirAll(adding, 0o700); err != nil {
 		return false, err
 	}
 	defer os.Remove(adding)
@@ -360,7 +360,7 @@ func fetchShared(ctx context.Context, repo, url, base string) (string, error) {
 
 // Makes the shared repository, beside its place and moved in once ready.
 func makeShared(ctx context.Context, repo, url string) error {
-	if err := os.MkdirAll(filepath.Dir(repo), 0o777); err != nil {
+	if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.MkdirTemp(filepath.Dir(repo), ".repo-")
@@ -456,7 +456,7 @@ func sessionArgs(run runRequest) ([]string, error) {
 		if len(matches) == 0 {
 			return nil, errors.New("the agent's session is gone, so it can't be carried on")
 		}
-	} else if err := os.MkdirAll(dir, 0o777); err != nil {
+	} else if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	return []string{"--session-dir", dir, "--session-id", run.SessionID}, nil

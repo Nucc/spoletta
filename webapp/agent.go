@@ -511,9 +511,13 @@ func callWorker(ctx context.Context, method, url string, in, out any) error {
 	return nil
 }
 
-// Sends a request to the worker; the reply is the caller's to read and close
-// if it succeeded. No client timeout: agent runs can take minutes, and the
-// worker enforces its own limit.
+// The token the worker takes requests with, WORKER_TOKEN, so nothing but
+// the webapp can have it run anything; empty for a worker that needs none.
+var workerToken string
+
+// Sends a request to the worker with its token; the reply is the caller's
+// to read and close if it succeeded. No client timeout: agent runs can take
+// minutes, and the worker enforces its own limit.
 func requestWorker(ctx context.Context, method, url string, in any) (*http.Response, error) {
 	var body io.Reader
 	if in != nil {
@@ -528,6 +532,9 @@ func requestWorker(ctx context.Context, method, url string, in any) (*http.Respo
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if workerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+workerToken)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

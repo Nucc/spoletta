@@ -220,6 +220,14 @@ func main() {
 		log.Fatalf("worker: %v", err)
 	}
 
+	token, err := workerToken()
+	if err != nil {
+		log.Fatalf("worker: %v", err)
+	}
+	if token == "" {
+		log.Printf("worker: WARNING: WORKER_TOKEN isn't set, so anyone reaching port %s can run bash here", port)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, map[string]bool{"ok": true})
@@ -382,7 +390,7 @@ func main() {
 	})
 
 	log.Printf("worker: listening on %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	log.Fatal(http.ListenAndServe(":"+port, requireToken(token, mux)))
 }
 
 func envOr(key, def string) string {

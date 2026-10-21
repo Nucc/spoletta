@@ -31,6 +31,11 @@ services:
       dockerfile: worker/Containerfile
     environment:
       - PORT=8090
+      # The token only the webapp asks the worker with, the same in both;
+      # without one the worker answers anyone reaching it, and runs their
+      # bash. Make one with `openssl rand -hex 32` and set it in .env. Or
+      # mount a file and name it in WORKER_TOKEN_FILE, in both.
+      - WORKER_TOKEN=${WORKER_TOKEN:-}
       - PI_SKIP_VERSION_CHECK=1
       - PI_TELEMETRY=0
       # Passed through from the host when set. Add any other variables your
@@ -87,6 +92,8 @@ services:
       # Inside the container; the port is published below.
       HOST: 0.0.0.0
       WORKER_URL: http://worker:8090
+      # The worker's token; see the worker's.
+      WORKER_TOKEN: ${WORKER_TOKEN:-}
       # Where the worker reaches the proxy agents use MCP servers through.
       MCP_PROXY_URL: http://webapp:8080
       # For Sentry processes: a token with event:read, and the address of a

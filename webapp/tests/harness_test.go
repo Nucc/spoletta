@@ -45,6 +45,10 @@ var raceEnabled bool
 // The SECRET_KEY webapps start with, unless a test gives another.
 const testSecretKey = "e2e-secret-key-0123456789abcdef0123"
 
+// The token the webapp asks the worker with, which the fake worker checks
+// on every request, as the real one does.
+const testWorkerToken = "e2e-worker-token"
+
 var testDB struct {
 	// Where the webapp finds its database, and the webapp built.
 	host, port, name, user, password string
@@ -226,6 +230,8 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 		"STATIC_DIR=" + static,
 		// Seals the secrets it keeps; see secrets_e2e_test.go.
 		"SECRET_KEY=" + testSecretKey,
+		// What the fake worker takes requests with.
+		"WORKER_TOKEN=" + testWorkerToken,
 	}
 	w.cmd.Env = append(w.cmd.Env, extra...)
 	w.cmd.Stdout, w.cmd.Stderr = w.log, w.log
@@ -543,6 +549,8 @@ type fakeWorker struct {
 	scriptRuns []scriptRun
 	// The runs whose workspaces the webapp asked to release, in the order asked.
 	released []int64
+	// How many requests came without the worker's token.
+	refused int
 }
 
 func newFakeWorker(t *testing.T) *fakeWorker {
@@ -656,7 +664,17 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 		res.Log = append([]logLine{{Time: time.Now(), Level: "info", Message: "fake bash runs " + run.ProcessName}}, res.Log...)
 		writeJSON(w, http.StatusOK, res)
 	})
-	srv := httptest.NewServer(mux)
+	// As the real one with WORKER_TOKEN set: nothing gets through without it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testWorkerToken {
+			fw.mu.Lock()
+			fw.refused++
+			fw.mu.Unlock()
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "the worker takes requests only from the webapp, with WORKER_TOKEN"})
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	fw.url = srv.URL
 	return fw

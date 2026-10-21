@@ -89,7 +89,14 @@ func main() {
 		}
 		log.Printf("people sign in with %s", strings.Join(with, " or "))
 	}
-	log.Printf("the worker is at %s", workerURL)
+	if workerToken, err = secretKeyFromEnv("WORKER_TOKEN"); err != nil {
+		log.Fatalf("%v", err)
+	}
+	if workerToken == "" {
+		log.Printf("the worker is at %s; WARNING: WORKER_TOKEN isn't set, so the worker answers anyone reaching it", workerURL)
+	} else {
+		log.Printf("the worker is at %s, asked with WORKER_TOKEN", workerURL)
+	}
 	go checkWorker(workerURL)
 	registerAuthRoutes(mux, db, auth)
 	registerUserRoleRoutes(mux, db, auth)

@@ -275,6 +275,9 @@ func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBrok
 		return runResult{Error: err.Error()}
 	}
 	defer llm.revoke(run.LLM)
+	if run.Git, err = gitTokens.forWorkspace(ctx, run.Workspace); err != nil {
+		return runResult{Error: err.Error()}
+	}
 	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, uses)
 	if err != nil {
 		return runResult{Error: err.Error()}

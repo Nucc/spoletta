@@ -625,10 +625,11 @@ definitions do that.
   For a cursor of your own, such as the newest `updated_at` seen, carry a
   persistent object over instead (see 3.1).
 - A non-zero exit fails it, with stderr as the error.
-- It gets none of the worker's secrets: no model keys, no git token, no
-  Sentry or Jira token. A variable such as `$JIRA_TOKEN` is there only if the
-  instance passes it to every script with `CHILD_ENV`; for a service built
-  in, use a connector or a Sentry step instead.
+- It gets none of the instance's secrets: no model keys, no Sentry or Jira
+  token. A variable such as `$JIRA_TOKEN` is there only if the instance
+  passes it to every script with `CHILD_ENV`; for a service built in, use a
+  connector or a Sentry step instead. In a workspace, its git (as an agent's)
+  has a token for the run's repositories, which can push.
 - A script can't decide states. Route its output with state rules.
 
 ```bash

@@ -66,6 +66,9 @@ type runRequest struct {
 	MCPToken   string      `json:"mcpToken"`
 	// The workspace it works in, if the flow has repositories.
 	Workspace *workspaceSpec `json:"workspace"`
+	// The token its git reaches the workspace's repositories with, if any;
+	// see git_credentials.go.
+	Git *gitCredentials `json:"git"`
 	// In a workspace: the pi session the conversation is kept in, so a person
 	// can carry it on later. Resume says the session must exist already,
 	// which a step's first run creates.
@@ -132,6 +135,8 @@ type scriptRequest struct {
 	FilesDir string `json:"filesDir"`
 	// The workspace it works in, if the flow has repositories.
 	Workspace *workspaceSpec `json:"workspace"`
+	// The token its git reaches the workspace's repositories with, if any.
+	Git *gitCredentials `json:"git"`
 	// How long the script may take, if not the worker's own limit.
 	TimeoutMS int64 `json:"timeoutMs"`
 	// When its schedule's last run that got through started, in seconds
@@ -472,6 +477,18 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
+	// The specs, the result, the git token and pi's agent directory live
+	// outside the agent's working directory, in a directory of the step's
+	// own, which only the worker's user reads, as every file in it.
+	private, err := os.MkdirTemp("", "private-")
+	if err != nil {
+		return runResult{Error: "create private directory: " + err.Error()}
+	}
+	defer os.RemoveAll(private)
+	ctx, gitEnv, err := writeGitCredentials(ctx, private, run.Git)
+	if err != nil {
+		return runResult{Error: err.Error()}
+	}
 	cwd, ws, err := workDir(ctx, run.Workspace, "run-", l)
 	if err != nil {
 		return runResult{Error: err.Error()}
@@ -486,25 +503,17 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 		args = append(args, "--thinking", run.Thinking)
 	}
 
-	// The specs, the result and pi's agent directory live outside the
-	// agent's working directory, in a directory of the step's own, which
-	// only the worker's user reads, as every file in it.
 	var resultFile string
 	for _, p := range run.Providers {
 		if err := p.check(); err != nil {
 			return runResult{Error: err.Error()}
 		}
 	}
-	private, err := os.MkdirTemp("", "private-")
-	if err != nil {
-		return runResult{Error: "create private directory: " + err.Error()}
-	}
-	defer os.RemoveAll(private)
 	agentDir := filepath.Join(private, "agent")
 	if err := writeAgentDir(agentDir, run.Providers, run.LLM); err != nil {
 		return runResult{Error: err.Error()}
 	}
-	env := withCloudCredentials(childEnv("PI_CODING_AGENT_DIR=" + agentDir))
+	env := withCloudCredentials(childEnv(append(gitEnv, "PI_CODING_AGENT_DIR="+agentDir)...))
 	if len(run.MCPServers) > 0 {
 		b, err := json.Marshal(map[string]any{"servers": run.MCPServers, "token": run.MCPToken})
 		if err == nil {
@@ -548,8 +557,8 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 		prompt = "<flows_guide>\n" + string(guide) + "\n</flows_guide>\n\n" + prompt
 	}
 
+	timeout, short := untilTokenEnds(timeout, run.Git)
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
-
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "pi", args...)
 	cmd.Dir = cwd
@@ -582,7 +591,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	}
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
-		return runResult{Output: output, Error: "timed out after " + timeout.String()}
+		return runResult{Output: output, Error: timedOut(timeout, short, run.Git)}
 	case ctx.Err() != nil:
 		return runResult{Output: output, Error: "cancelled"}
 	case err != nil:
@@ -776,19 +785,24 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // printed to stderr as the error. Like pi, it runs in a process group of its own,
 // which a cancelled request or the timeout kills.
 func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l *stepLogger) (res runResult) {
+	// The inputs, the script and the git token stay out of the working
+	// directory, which a workspace shares with other steps, readable only
+	// by the worker's user.
+	private, err := os.MkdirTemp("", "script-private-")
+	if err != nil {
+		return runResult{Error: "create private directory: " + err.Error()}
+	}
+	defer os.RemoveAll(private)
+	ctx, gitEnv, err := writeGitCredentials(ctx, private, run.Git)
+	if err != nil {
+		return runResult{Error: err.Error()}
+	}
 	cwd, ws, err := workDir(ctx, run.Workspace, "script-", l)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
 	ws.process = run.ProcessName
 	defer ws.done(&res)
-	// The inputs and the script stay out of the working directory, which a
-	// workspace shares with other steps, readable only by the worker's user.
-	private, err := os.MkdirTemp("", "script-private-")
-	if err != nil {
-		return runResult{Error: "create private directory: " + err.Error()}
-	}
-	defer os.RemoveAll(private)
 	inputs := filepath.Join(private, "inputs")
 	if err := os.Mkdir(inputs, 0o700); err != nil {
 		return runResult{Error: "create inputs directory: " + err.Error()}
@@ -807,6 +821,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		return runResult{Error: "write script: " + err.Error()}
 	}
 
+	timeout, short := untilTokenEnds(timeout, run.Git)
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "bash", script)
@@ -816,7 +831,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	if run.Since != nil {
 		since = strconv.FormatInt(*run.Since, 10)
 	}
-	cmd.Env = childEnv("INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)
+	cmd.Env = childEnv(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)...)
 	if run.Workspace != nil {
 		cmd.Env = append(cmd.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
 	}
@@ -851,7 +866,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	}
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
-		return runResult{Output: output, Error: "timed out after " + timeout.String()}
+		return runResult{Output: output, Error: timedOut(timeout, short, run.Git)}
 	case ctx.Err() != nil:
 		return runResult{Output: output, Error: "cancelled"}
 	case stdout.over:
@@ -866,6 +881,15 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		return runResult{Output: output, Error: msg}
 	}
 	return runResult{OK: true, Output: output}
+}
+
+// Why a step that ran out of time failed: its timeout, or its git token
+// ending first.
+func timedOut(timeout time.Duration, short bool, git *gitCredentials) string {
+	if !short {
+		return "timed out after " + timeout.String()
+	}
+	return fmt.Sprintf("stopped after %s, as its git token ends at %s and the step would have outlived it", timeout.Round(time.Second), git.Expires.Format(time.RFC3339))
 }
 
 // Keeps the last max bytes written to it, which for errors hold the lines

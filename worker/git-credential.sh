@@ -1,8 +1,7 @@
 #!/bin/sh
-# Hands git the token in $GIT_TOKEN for https remotes, so cloning private
-# repositories works without storing it anywhere. Without a token, git goes
-# on without credentials and public repositories still clone.
+# Hands git the step's token, which the worker writes to the file
+# $FLOW_GIT_CREDENTIALS names for the step; see git_credentials.go. Without
+# one, git goes on without credentials and public repositories still clone.
 [ "$1" = get ] || exit 0
-[ -n "$GIT_TOKEN" ] || exit 0
-echo "username=${GIT_USERNAME:-x-access-token}"
-echo "password=$GIT_TOKEN"
+[ -n "$FLOW_GIT_CREDENTIALS" ] && [ -r "$FLOW_GIT_CREDENTIALS" ] || exit 0
+cat "$FLOW_GIT_CREDENTIALS"

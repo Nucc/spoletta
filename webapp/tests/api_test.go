@@ -52,6 +52,13 @@ type agentModels struct {
 	Providers map[string]string `json:"providers,omitempty"`
 }
 
+// What a step's git is given.
+type gitCredentials struct {
+	Username string     `json:"username"`
+	Token    string     `json:"token"`
+	Expires  *time.Time `json:"expires,omitempty"`
+}
+
 // Where a step reaches its providers, as the worker gets it.
 type llmAccess struct {
 	URL       string   `json:"url"`
@@ -86,6 +93,8 @@ type agentRun struct {
 	Reached map[string]string `json:"-"`
 	// The workspace it works in, if it works on repositories.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// The token its git reaches the repositories with.
+	Git *gitCredentials `json:"git,omitempty"`
 	// In a workspace, the pi session the worker keeps its conversation in, so
 	// a person can carry it on once the step is over; see followups.go.
 	// Resume carries on one that exists.
@@ -568,6 +577,8 @@ type scriptRun struct {
 	// The workspace it works in, its working directory, if it works on
 	// repositories; $WORKSPACE and $BRANCH say where and on which branch.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// The token its git reaches the repositories with.
+	Git *gitCredentials `json:"git,omitempty"`
 	// How long the script may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`

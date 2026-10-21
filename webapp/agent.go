@@ -79,6 +79,9 @@ type agentRun struct {
 	MCPToken   string         `json:"mcpToken,omitempty"`
 	// The workspace it works in, if it works on repositories.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// The token the step's git reaches its repositories with; see
+	// git_tokens.go. Beside the workspace, which is kept, as it never is.
+	Git *gitCredentials `json:"git,omitempty"`
 	// In a workspace, the pi session the worker keeps its conversation in, so
 	// a person can carry it on once the step is over; see followups.go.
 	// Resume carries on one that exists.
@@ -269,6 +272,11 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		}
 		if _, err := db.ExecContext(ctx, "UPDATE run_steps SET session = ? WHERE id = ?", b, stepID); err != nil {
 			return res, err
+		}
+	}
+	if res.Error == "" && run.Workspace != nil {
+		if run.Git, err = gitTokens.forWorkspace(ctx, run.Workspace); err != nil {
+			res.Error = err.Error()
 		}
 	}
 	if res.Error == "" {

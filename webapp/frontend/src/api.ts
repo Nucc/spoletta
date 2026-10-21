@@ -334,6 +334,16 @@ export type FlowSettings = {
   branchPrefix: string
 }
 
+// Where the git tokens steps reach repositories with come from: a GitHub
+// App's, for the run's repositories and lasting an hour; the instance's
+// GIT_TOKEN, which isn't short-lived; or none. otherHosts says GIT_TOKEN
+// covers repositories off the app's GitHub.
+export type GitAccess = { source: 'app' | 'token' | 'none'; otherHosts: boolean }
+
+export function getGitAccess(): Promise<GitAccess> {
+  return request('/api/git-access')
+}
+
 // The prefix runs' branches get when the flow sets none.
 export const defaultBranchPrefix = (flowName: string) =>
   'flow/' + (flowName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'flow')

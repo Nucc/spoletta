@@ -98,6 +98,11 @@ func main() {
 		log.Printf("the worker is at %s, asked with WORKER_TOKEN", workerURL)
 	}
 	go checkWorker(workerURL)
+	if gitTokens, err = newGitTokenSource(); err != nil {
+		log.Fatalf("%v", err)
+	}
+	logGitTokens()
+	registerGitTokenRoutes(mux)
 	registerAuthRoutes(mux, db, auth)
 	registerUserRoleRoutes(mux, db, auth)
 	registerTeamRoutes(mux, db, auth)

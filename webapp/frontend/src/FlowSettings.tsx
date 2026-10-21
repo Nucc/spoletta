@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react'
-import type { FlowSettings, Repository } from './api'
+import { useEffect, useState, type ReactNode } from 'react'
+import { getGitAccess, type FlowSettings, type GitAccess, type Repository } from './api'
 import { FlowAPISection } from './APIKeys'
 
 // What a repository is called in the workspace, from its URL: the last part
@@ -54,6 +54,10 @@ export function FlowSettingsPanel({
   onClose: () => void
   onError: (err: unknown) => void
 }) {
+  const [gitAccess, setGitAccess] = useState<GitAccess | null>(null)
+  useEffect(() => {
+    getGitAccess().then(setGitAccess, () => setGitAccess(null))
+  }, [])
   const [host, setHost] = useState<'github' | 'other'>('github')
   // org/repository on GitHub, the whole URL otherwise.
   const [where, setWhere] = useState('')
@@ -135,6 +139,7 @@ export function FlowSettingsPanel({
         <code>{branchPrefix}/run-&lt;id&gt;</code>, and every process of the run works on that branch. Each item of a list
         gets a branch of its own. Pick in a process's panel which of them it works on.
       </p>
+      {gitAccess && <GitAccessNote access={gitAccess} />}
       {settings.repositories.length === 0 ? (
         <p className="panel-note">None yet; agents and scripts run in an empty directory.</p>
       ) : (
@@ -333,4 +338,29 @@ export function RepositoryPicker({
       )}
     </fieldset>
   )
+}
+
+// How a step's git reaches the repositories: only a GitHub App's tokens are
+// for the run's repositories alone and end within the hour.
+function GitAccessNote({ access }: { access: GitAccess }) {
+  switch (access.source) {
+    case 'app':
+      return (
+        <p className="panel-note">
+          Each step gets a GitHub App's token for the run's repositories alone, which ends within the hour.
+          {access.otherHosts &&
+            ' Repositories elsewhere than its GitHub get the instance’s GIT_TOKEN instead, which isn’t short-lived.'}
+        </p>
+      )
+    case 'token':
+      return (
+        <p className="panel-warning">
+          Each step gets the instance’s GIT_TOKEN, which isn’t short-lived and reaches whatever it reaches, and agents
+          can read it while they work. A GitHub App’s tokens are made for the run’s repositories alone and end within
+          the hour.
+        </p>
+      )
+    default:
+      return <p className="panel-note">The instance has no git token, so only public repositories clone.</p>
+  }
 }

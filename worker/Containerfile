@@ -20,9 +20,9 @@ COPY --chmod=755 worker/git-credential.sh /opt/flow/git-credential.sh
 # The guide to authoring flows, which flows' assistants read.
 COPY docs/FLOWS.md /opt/flow/docs/FLOWS.md
 # Agents commit to their run's branch as this, unless GIT_AUTHOR_NAME and
-# the like say otherwise.
-RUN git config --system credential.helper /opt/flow/git-credential.sh \
- && git config --system user.name "Flow agent" \
+# the like say otherwise. No credential helper is configured: each step's
+# environment names git-credential.sh with the step's own token.
+RUN git config --system user.name "Flow agent" \
  && git config --system user.email "flow-agent@localhost"
 
 # Everything runs as flow, uid 1000, in place of the image's node user;

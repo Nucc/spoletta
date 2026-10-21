@@ -43,22 +43,9 @@ services:
       # Steps get only the variables they need from the worker's
       # environment, never its secrets. To hand every script (and agent)
       # more, such as a token for curl -H "Authorization: Bearer
-      # $JIRA_API_TOKEN", name them here, comma-separated, and pass them
-      # through below; agents can read them then.
+      # $JIRA_API_TOKEN", name them here, comma-separated, and pass each
+      # through, such as `- JIRA_API_TOKEN`; agents can read them then.
       - CHILD_ENV=${CHILD_ENV:-}
-      - JIRA_URL
-      - JIRA_EMAIL
-      - JIRA_API_TOKEN
-      # For flows with repositories: a token that can clone them over https,
-      # such as a GitHub token with contents:read. Only the git the worker
-      # runs itself (fetching, checking out, committing what a step left)
-      # gets it, never an agent or a script, so an agent can't push or
-      # fetch a private repository itself.
-      # GIT_USERNAME defaults to x-access-token, which GitHub takes. Set
-      # here rather than passed through, so a .env file next to this one
-      # works too: podman-compose reads .env only for ${...}.
-      - GIT_TOKEN=${GIT_TOKEN:-}
-      - GIT_USERNAME=${GIT_USERNAME:-}
     volumes:
       # Only these two files: the agent can read anything mounted, and the
       # rest of the directory holds sessions and OAuth tokens.
@@ -87,6 +74,21 @@ services:
       WORKER_URL: http://worker:8090
       # The worker's token; see the worker's.
       WORKER_TOKEN: ${WORKER_TOKEN:-}
+      # For flows with repositories: each step working on them gets a token
+      # for them, handed to its git and nothing else. With a GitHub App
+      # installed on the repositories (contents: read and write), a token
+      # of the app's, for the run's repositories only, lasting an hour:
+      # its ID, its installation's ID, and its private key, or a file
+      # holding it named by GITHUB_APP_PRIVATE_KEY_FILE; GITHUB_API_URL for
+      # GitHub Enterprise. Otherwise GIT_TOKEN, such as a GitHub token with
+      # contents:read, handed to every step as it is, which isn't
+      # short-lived; GIT_USERNAME defaults to x-access-token, which GitHub
+      # takes. See webapp/git_tokens.go.
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GIT_TOKEN: ${GIT_TOKEN:-}
+      GIT_USERNAME: ${GIT_USERNAME:-}
       # Where the worker reaches the proxies agents use their models and MCP
       # servers through.
       PROXY_URL: http://webapp:8080

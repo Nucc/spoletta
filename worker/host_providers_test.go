@@ -37,8 +37,7 @@ func TestHostProvidersOf(t *testing.T) {
 	}
 }
 
-// pi gets the worker's AWS credentials, and still no other variable; the
-// git token goes only to the worker's own git.
+// pi gets the worker's AWS credentials, and still no other variable.
 func TestAgentsGetCloudCredentialsButNotTheGitToken(t *testing.T) {
 	t.Setenv("GIT_TOKEN", "secret-git")
 	t.Setenv("ANTHROPIC_API_KEY", "secret-model")
@@ -46,8 +45,5 @@ func TestAgentsGetCloudCredentialsButNotTheGitToken(t *testing.T) {
 	env := withCloudCredentials(childEnv())
 	if !slices.Contains(env, "AWS_REGION=eu-central-1") || slices.Contains(env, "GIT_TOKEN=secret-git") || slices.Contains(env, "ANTHROPIC_API_KEY=secret-model") {
 		t.Errorf("pi's environment = %v", envNames(env))
-	}
-	if git := childEnv(gitCredentials()...); !slices.Contains(git, "GIT_TOKEN=secret-git") {
-		t.Errorf("git's environment = %v", envNames(git))
 	}
 }

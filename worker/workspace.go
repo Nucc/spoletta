@@ -384,9 +384,8 @@ func makeShared(ctx context.Context, repo, url string) error {
 }
 
 // Runs git, failing with what it printed to stderr. It never asks for
-// credentials: the token comes from the credential helper or not at all.
-// Only the git the worker runs itself gets the token, never an agent's or
-// a script's.
+// credentials: the step's token comes from the credential helper, if ctx
+// carries one (see git_credentials.go), or not at all.
 func gitOK(ctx context.Context, dir string, args ...string) error {
 	_, err := gitOut(ctx, dir, args...)
 	return err
@@ -396,7 +395,7 @@ func gitOK(ctx context.Context, dir string, args ...string) error {
 func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = childEnv(gitCredentials()...)
+	cmd.Env = childEnv(gitCredentialEnv(ctx)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -407,17 +406,6 @@ func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %w", args[0], err)
 	}
 	return strings.TrimSpace(stdout.String()), nil
-}
-
-// The variables git-credential.sh reads the token from, as the worker has them.
-func gitCredentials() []string {
-	var env []string
-	for _, name := range []string{"GIT_TOKEN", "GIT_USERNAME"} {
-		if v := os.Getenv(name); v != "" {
-			env = append(env, name+"="+v)
-		}
-	}
-	return env
 }
 
 // The pi sessions of a workspace's steps are kept beside it, out of the

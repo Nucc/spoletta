@@ -31,6 +31,9 @@ type scriptRun struct {
 	// The workspace it works in, its working directory, if it works on
 	// repositories; $WORKSPACE and $BRANCH say where and on which branch.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// The token the step's git reaches its repositories with; see
+	// git_tokens.go.
+	Git *gitCredentials `json:"git,omitempty"`
 	// How long the script may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
@@ -94,6 +97,11 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 	if contract != nil {
 		contract.filesDir = stepFilesDir(runID, stepID)
 		run.FilesDir = contract.filesDir
+	}
+	if res.Error == "" && run.Workspace != nil {
+		if run.Git, err = gitTokens.forWorkspace(ctx, run.Workspace); err != nil {
+			res.Error = err.Error()
+		}
 	}
 	if res.Error == "" {
 		if err := callWorker(ctx, http.MethodPost, workerURL+"/script", run, &res); err != nil {

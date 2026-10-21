@@ -235,57 +235,6 @@ func validModel(m string) bool {
 	return !strings.HasPrefix(m, "-") && len(m) <= 255
 }
 
-func migrate(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS processes (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY,
-		name VARCHAR(255) NOT NULL,
-		kind VARCHAR(16) NOT NULL DEFAULT 'agent',
-		prompt TEXT NOT NULL,
-		script TEXT NOT NULL,
-		model VARCHAR(255) NOT NULL DEFAULT '',
-		thinking VARCHAR(16) NOT NULL DEFAULT '',
-		x DOUBLE NOT NULL DEFAULT 0,
-		y DOUBLE NOT NULL DEFAULT 0,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`)
-	if err != nil {
-		return err
-	}
-	for _, c := range []struct{ name, def string }{
-		{"prompt", "TEXT NOT NULL AFTER name"},
-		{"kind", "VARCHAR(16) NOT NULL DEFAULT 'agent' AFTER name"},
-		{"script", "TEXT NOT NULL AFTER prompt"},
-		{"model", "VARCHAR(255) NOT NULL DEFAULT '' AFTER script"},
-		{"thinking", "VARCHAR(16) NOT NULL DEFAULT '' AFTER model"},
-		{"width", "DOUBLE NULL AFTER y"},
-		{"settings", "JSON NULL"},
-	} {
-		if err := addColumn(db, "processes", c.name, c.def); err != nil {
-			return err
-		}
-	}
-	return migrateFlow(db)
-}
-
-// Tables created by older versions lack later columns; MySQL has no ADD COLUMN IF NOT EXISTS.
-func addColumn(db *sql.DB, table, name, def string) error {
-	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS
-		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, table, name).Scan(&n)
-	if err != nil || n > 0 {
-		return err
-	}
-	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + name + " " + def)
-	return err
-}
-
-func hasIndex(db *sql.DB, table, name string) (bool, error) {
-	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.STATISTICS
-		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`, table, name).Scan(&n)
-	return n > 0, err
-}
-
 func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/processes", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)

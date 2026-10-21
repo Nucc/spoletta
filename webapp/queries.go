@@ -39,10 +39,6 @@ const (
 	maxQueryLimit = 100
 )
 
-func migrateQueries(db *sql.DB) error {
-	return addColumn(db, "object_links", "query", "JSON NULL")
-}
-
 func (q *linkQuery) limit() int {
 	if q.Limit == 0 {
 		return defaultQueryLimit

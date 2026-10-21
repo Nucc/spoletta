@@ -22,13 +22,6 @@ import (
 // doesn't undo the correction (recordSharedState); it keeps its run, and
 // who edited it and when, until a run moves it on again.
 
-func migrateRecordEdits(db *sql.DB) error {
-	if err := addColumn(db, "shared_records", "edited_by", "BIGINT NULL"); err != nil {
-		return err
-	}
-	return addColumn(db, "shared_records", "edited_at", "TIMESTAMP(3) NULL")
-}
-
 // What a person writes of a record: its fields, as a JSON object, and its
 // state, one of the object's or none.
 type recordEdit struct {

@@ -38,40 +38,19 @@ func main() {
 	}
 	defer db.Close()
 
-	if err := migrate(db); err != nil {
+	// migrate status and migrate down-to look at or undo migrations, and
+	// end; see migrations.go.
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		if err := migrateCommand(context.Background(), db, os.Args[2:], os.Stdout); err != nil {
+			db.Close()
+			log.Fatal(err)
+		}
+		return
+	}
+	if err := migrateDatabase(context.Background(), db); err != nil {
 		log.Fatal(err)
 	}
-	if err := migrateMCP(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateSchedules(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateAssistant(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateUsers(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateUserRoles(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateTeams(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateOwners(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateModelKeys(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateModelProviders(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateAPIKeys(db); err != nil {
-		log.Fatal(err)
-	}
-	if err := migrateSkills(db); err != nil {
+	if err := endInterrupted(db); err != nil {
 		log.Fatal(err)
 	}
 	// seal-secrets seals the secrets with the key coming in, and ends,

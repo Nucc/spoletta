@@ -67,53 +67,6 @@ const (
 	authToken = "token"
 )
 
-func migrateMCP(db *sql.DB) error {
-	stmts := []string{`CREATE TABLE IF NOT EXISTS mcp_servers (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY,
-		name VARCHAR(64) NOT NULL UNIQUE,
-		url VARCHAR(2048) NOT NULL,
-		description VARCHAR(1024) NOT NULL DEFAULT '',
-		client_id VARCHAR(255) NOT NULL DEFAULT '',
-		redirect_uri VARCHAR(2048) NOT NULL DEFAULT '',
-		token_endpoint VARCHAR(2048) NOT NULL DEFAULT '',
-		access_token TEXT NULL,
-		refresh_token TEXT NULL,
-		expires_at DATETIME NULL,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`,
-		// Each person's connection to a server; the user 0, whom nobody is,
-		// holds the one everyone uses without sign-in.
-		`CREATE TABLE IF NOT EXISTS mcp_tokens (
-			server_id BIGINT NOT NULL,
-			user_id BIGINT NOT NULL,
-			access_token TEXT NULL,
-			refresh_token TEXT NULL,
-			expires_at DATETIME NULL,
-			PRIMARY KEY (server_id, user_id),
-			FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
-		)`,
-		// Servers held their one connection themselves before people
-		// connected their own; it becomes the one without sign-in.
-		`INSERT IGNORE INTO mcp_tokens (server_id, user_id, access_token, refresh_token, expires_at)
-			SELECT id, 0, access_token, refresh_token, expires_at FROM mcp_servers WHERE access_token IS NOT NULL OR refresh_token IS NOT NULL`,
-		`UPDATE mcp_servers SET access_token = NULL, refresh_token = NULL, expires_at = NULL WHERE access_token IS NOT NULL OR refresh_token IS NOT NULL`,
-	}
-	for _, q := range stmts {
-		if _, err := db.Exec(q); err != nil {
-			return err
-		}
-	}
-	for _, c := range []struct{ name, def string }{
-		{"auth", "VARCHAR(16) NOT NULL DEFAULT 'oauth'"},
-		{"connector", "VARCHAR(64) NOT NULL DEFAULT ''"},
-	} {
-		if err := addColumn(db, "mcp_servers", c.name, c.def); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // A server's columns, for scanMCPServer, with whether the user whose id is
 // the first argument connected it. The token of a server taking one is the
 // connection of the user 0, whom nobody is.

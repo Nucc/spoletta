@@ -94,23 +94,6 @@ type snapshot struct {
 	Boards []innerBoard `json:"boards"`
 }
 
-func migrateVersions(db *sql.DB) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS flow_versions (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			based_on BIGINT NULL,
-			snapshot JSON NOT NULL,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-		)`,
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Scans every row of query with scan, which reads the current row.
 func scanAll(ctx context.Context, tx rowsQuerier, query string, scan func(*sql.Rows) error, args ...any) error {
 	rows, err := tx.QueryContext(ctx, query, args...)

@@ -169,99 +169,21 @@ func validStepStatus(s string) bool {
 	return s == stepActive || s == stepWaiting || s == stepDone || s == stepError || s == stepSkipped
 }
 
-// Processes and objects can be deleted later; their history stays.
-func migrateRuns(db *sql.DB) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS runs (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			status VARCHAR(16) NOT NULL,
-			started_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			finished_at TIMESTAMP(3) NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS run_steps (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			run_id BIGINT NOT NULL,
-			process_id BIGINT NULL,
-			process_name VARCHAR(255) NOT NULL,
-			kind VARCHAR(16) NOT NULL,
-			model VARCHAR(255) NOT NULL DEFAULT '',
-			thinking VARCHAR(16) NOT NULL DEFAULT '',
-			prompt LONGTEXT NOT NULL,
-			inputs JSON NOT NULL,
-			change_request JSON NULL,
-			status VARCHAR(16) NOT NULL,
-			output LONGTEXT NOT NULL,
-			error TEXT NOT NULL,
-			outcome VARCHAR(255) NOT NULL DEFAULT '',
-			instructions TEXT NOT NULL,
-			started_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			finished_at TIMESTAMP(3) NULL,
-			FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE,
-			FOREIGN KEY (process_id) REFERENCES processes(id) ON DELETE SET NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS run_objects (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			run_id BIGINT NOT NULL,
-			step_id BIGINT NOT NULL,
-			object_id BIGINT NULL,
-			name VARCHAR(255) NOT NULL,
-			state VARCHAR(255) NOT NULL DEFAULT '',
-			content LONGTEXT NOT NULL,
-			FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE,
-			FOREIGN KEY (step_id) REFERENCES run_steps(id) ON DELETE CASCADE,
-			FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE SET NULL
-		)`,
-		// The conversation of an agent step, a message per row; see messages.go.
-		`CREATE TABLE IF NOT EXISTS run_step_messages (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			step_id BIGINT NOT NULL,
-			attempt INT NOT NULL,
-			message JSON NOT NULL,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			FOREIGN KEY (step_id) REFERENCES run_steps(id) ON DELETE CASCADE
-		)`,
-		// Outcomes used to be approved or changes; now they name states.
-		"ALTER TABLE run_steps MODIFY outcome VARCHAR(255) NOT NULL DEFAULT ''",
-		// Runs execute in the server; whatever was in flight when it went down
-		// can't continue. Their open steps end first, while the runs
-		// still read as running.
+// Runs execute in the server; whatever was in flight when it went down can't
+// continue, so it ends as the server starts. Open steps end first, while
+// their runs still read as running; then the runs, whose stored values are
+// released; then the assistant's replies and step follow-ups under way.
+func endInterrupted(db *sql.DB) error {
+	for _, s := range []string{
 		`UPDATE run_steps s JOIN runs r ON r.id = s.run_id
 		SET s.status = 'error', s.error = 'The run ended before this step finished.', s.finished_at = CURRENT_TIMESTAMP(3)
 		WHERE r.status = 'running' AND s.status IN ('active', 'waiting')`,
 		"UPDATE runs SET status = 'interrupted', finished_at = CURRENT_TIMESTAMP(3) WHERE status = 'running'",
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	for _, c := range []struct{ table, name, def string }{
-		{"run_objects", "state", "VARCHAR(255) NOT NULL DEFAULT '' AFTER name"},
-		{"runs", "version_id", "BIGINT NULL AFTER status"},
-		// Ids that outlive the process or object: deleting it, or jumping to a
-		// version without it, nulls the foreign keys, yet the run's version
-		// still has it.
-		{"run_steps", "process_ref", "BIGINT NULL AFTER process_id"},
-		{"run_objects", "object_ref", "BIGINT NULL AFTER object_id"},
-		{"runs", "parent_run_id", "BIGINT NULL AFTER version_id"},
-		{"runs", "process_ref", "BIGINT NULL AFTER parent_run_id"},
-		{"runs", "process_name", "VARCHAR(255) NOT NULL DEFAULT '' AFTER process_ref"},
-		{"runs", "item_key", "VARCHAR(255) NOT NULL DEFAULT '' AFTER process_name"},
-		{"run_steps", "child_run_id", "BIGINT NULL AFTER instructions"},
-		{"runs", "schedule_id", "BIGINT NULL AFTER item_key"},
-		{"runs", "rerun_of", "BIGINT NULL AFTER process_name"},
-		{"runs", "rerun_from", "BIGINT NULL AFTER rerun_of"},
-		{"runs", "rerun_from_name", "VARCHAR(255) NOT NULL DEFAULT '' AFTER rerun_from"},
-		// For a re-run: the commit each repository's branch started from.
-		{"runs", "starts", "JSON NULL AFTER rerun_from_name"},
-	} {
-		if err := addColumn(db, c.table, c.name, c.def); err != nil {
-			return err
-		}
-	}
-	for _, s := range []string{
-		"UPDATE run_steps SET process_ref = process_id WHERE process_ref IS NULL AND process_id IS NOT NULL",
-		"UPDATE run_objects SET object_ref = object_id WHERE object_ref IS NULL AND object_id IS NOT NULL",
+		`DELETE i FROM object_instances i JOIN runs r ON r.id = i.run_id WHERE r.status <> 'done'`,
+		`UPDATE assistant_messages SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
+		WHERE status = 'active'`,
+		`UPDATE run_step_followups SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
+		WHERE status = 'active'`,
 	} {
 		if _, err := db.Exec(s); err != nil {
 			return err

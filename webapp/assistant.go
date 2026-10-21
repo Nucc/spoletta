@@ -70,31 +70,6 @@ const assistantRetries = 2
 //go:embed SETUP.md
 var setupFormat string
 
-func migrateAssistant(db *sql.DB) error {
-	for _, s := range []string{
-		`CREATE TABLE IF NOT EXISTS assistant_messages (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			flow_id BIGINT NOT NULL,
-			role VARCHAR(16) NOT NULL,
-			content LONGTEXT NOT NULL,
-			status VARCHAR(16) NOT NULL,
-			error TEXT NOT NULL,
-			applied BOOLEAN NOT NULL DEFAULT FALSE,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			finished_at TIMESTAMP(3) NULL,
-			FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE
-		)`,
-		// Replies go on in the server; what was in flight when it went down can't continue.
-		`UPDATE assistant_messages SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
-		WHERE status = 'active'`,
-	} {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func assistantMessages(ctx context.Context, q rowsQuerier, flow int64) ([]assistantMessage, error) {
 	msgs := []assistantMessage{}
 	err := scanAll(ctx, q, `SELECT id, role, content, status, error, applied, created_at, finished_at

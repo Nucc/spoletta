@@ -64,38 +64,6 @@ type apiKey struct {
 	Key        string     `json:"key,omitempty"`
 }
 
-func migrateAPIKeys(db *sql.DB) error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS api_keys (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY,
-		user_id BIGINT NULL,
-		name VARCHAR(255) NOT NULL,
-		prefix VARCHAR(16) NOT NULL,
-		token_hash CHAR(64) NOT NULL,
-		created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-		last_used_at TIMESTAMP(3) NULL,
-		UNIQUE KEY api_keys_token (token_hash),
-		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-	)`); err != nil {
-		return err
-	}
-	// The key that started a run, and what its caller called the request,
-	// so a request sent again starts no second run.
-	for _, c := range []struct{ name, def string }{
-		{"api_key_id", "BIGINT NULL"},
-		{"idempotency_key", "VARCHAR(255) NULL"},
-	} {
-		if err := addColumn(db, "runs", c.name, c.def); err != nil {
-			return err
-		}
-	}
-	ok, err := hasIndex(db, "runs", "runs_idempotency")
-	if err != nil || ok {
-		return err
-	}
-	_, err = db.Exec("CREATE UNIQUE INDEX runs_idempotency ON runs (api_key_id, idempotency_key)")
-	return err
-}
-
 // The keys of the user, or nobody's without sign-in.
 const ownKeys = "user_id <=> ?"
 

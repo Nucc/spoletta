@@ -34,22 +34,6 @@ type attribute struct {
 	Source *int64 `json:"source,omitempty"`
 }
 
-func migrateAttributes(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS object_attributes (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY,
-		object_id BIGINT NOT NULL,
-		name VARCHAR(255) NOT NULL,
-		definition TEXT NOT NULL,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE KEY object_name (object_id, name),
-		FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE CASCADE
-	)`)
-	if err != nil {
-		return err
-	}
-	return addColumn(db, "object_attributes", "is_file", "BOOLEAN NOT NULL DEFAULT FALSE")
-}
-
 func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/objects/{id}/attributes", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

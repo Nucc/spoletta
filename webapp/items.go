@@ -28,14 +28,6 @@ import (
 // have that many; a list a flow process collects from its items' runs has
 // as many as ran.
 
-func migrateItems(db *sql.DB) error {
-	if err := addColumn(db, "objects", "min_items", "INT NOT NULL DEFAULT 0 AFTER many"); err != nil {
-		return err
-	}
-	// Null for no most.
-	return addColumn(db, "objects", "max_items", "INT NULL AFTER min_items")
-}
-
 // How many items a list holds: at least min, and at most max unless it is nil.
 type quantity struct {
 	min int

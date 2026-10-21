@@ -45,36 +45,6 @@ type schedule struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// Times are kept as UTC, in DATETIME so MySQL's session time zone doesn't
-// move them.
-func migrateSchedules(db *sql.DB) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS schedules (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			flow_id BIGINT NOT NULL,
-			cron VARCHAR(255) NOT NULL,
-			timezone VARCHAR(64) NOT NULL,
-			enabled BOOLEAN NOT NULL DEFAULT TRUE,
-			next_run_at DATETIME(3) NULL,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE,
-			INDEX schedules_due (enabled, next_run_at)
-		)`,
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	// Each run started by a schedule says which one.
-	has, err := hasIndex(db, "runs", "runs_schedule")
-	if err != nil || has {
-		return err
-	}
-	_, err = db.Exec("ALTER TABLE runs ADD CONSTRAINT runs_schedule FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE SET NULL")
-	return err
-}
-
 // Schedules run a minute apart at the least. The tests' webapps set
 // SCHEDULE_SECONDS, which takes a sixth field, for seconds, first, so their
 // schedules come round in seconds rather than minutes.

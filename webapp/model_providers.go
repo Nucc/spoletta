@@ -38,32 +38,6 @@ import (
 	"time"
 )
 
-func migrateModelProviders(db *sql.DB) error {
-	for _, q := range []string{
-		`CREATE TABLE IF NOT EXISTS model_providers (
-			id VARCHAR(64) NOT NULL PRIMARY KEY,
-			name VARCHAR(255) NOT NULL,
-			api VARCHAR(64) NOT NULL DEFAULT '',
-			base_url TEXT NOT NULL,
-			key_source VARCHAR(8) NOT NULL,
-			env VARCHAR(255) NOT NULL,
-			api_key TEXT NOT NULL,
-			models JSON NOT NULL,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
-		)`,
-		`CREATE TABLE IF NOT EXISTS model_default (
-			id TINYINT NOT NULL PRIMARY KEY,
-			model VARCHAR(512) NOT NULL
-		)`,
-	} {
-		if _, err := db.Exec(q); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Where a provider's key comes from: saved here, or the worker's environment.
 const (
 	keySaved = "saved"

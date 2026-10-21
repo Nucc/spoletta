@@ -103,7 +103,9 @@ cd webapp && go test -race ./tests      # e2e, needs `podman compose up -d mysql
 cd webapp/frontend && npm run build     # or npm run dev, proxying /api to :8080
 ```
 
-[AGENTS.md](AGENTS.md) maps the code and its conventions.
+The webapp migrates its database as it starts; [docs/MIGRATIONS.md](docs/MIGRATIONS.md)
+says how to write a migration and how to migrate down to run an older
+version. [AGENTS.md](AGENTS.md) maps the code and its conventions.
 
 ## License
 

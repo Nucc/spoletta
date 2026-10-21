@@ -41,31 +41,6 @@ type teamRef struct {
 	Name string `json:"name"`
 }
 
-func migrateTeams(db *sql.DB) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS teams (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			name VARCHAR(255) NOT NULL,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			UNIQUE KEY teams_name (name)
-		)`,
-		`CREATE TABLE IF NOT EXISTS team_members (
-			team_id BIGINT NOT NULL,
-			user_id BIGINT NOT NULL,
-			PRIMARY KEY (team_id, user_id),
-			KEY team_members_user (user_id),
-			FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-		)`,
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	return addColumn(db, "users", "team_manager", "BOOLEAN NOT NULL DEFAULT FALSE AFTER admin")
-}
-
 // The teams the user is in, by name.
 func userTeams(ctx context.Context, db rowsQuerier, id int64) ([]teamRef, error) {
 	teams := []teamRef{}

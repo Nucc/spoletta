@@ -24,49 +24,6 @@ import (
 // The longest key taken.
 const maxModelKey = 4096
 
-func migrateModelKeys(db *sql.DB) error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS model_keys (
-		env VARCHAR(255) NOT NULL PRIMARY KEY,
-		api_key TEXT NOT NULL,
-		updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
-	)`); err != nil {
-		return err
-	}
-	// People once kept keys of their own beside the instance's, which were
-	// the user 0's; only the instance's stay.
-	personal, err := hasColumn(db, "model_keys", "user_id")
-	if err != nil {
-		return err
-	}
-	if personal {
-		for _, q := range []string{
-			"DELETE FROM model_keys WHERE user_id <> 0",
-			"ALTER TABLE model_keys DROP PRIMARY KEY, DROP COLUMN user_id, ADD PRIMARY KEY (provider)",
-		} {
-			if _, err := db.Exec(q); err != nil {
-				return err
-			}
-		}
-	}
-	// Keys were once kept by provider, from a list of the ones pi knows;
-	// they are kept by the variable it reads them from now.
-	byProvider, err := hasColumn(db, "model_keys", "provider")
-	if err != nil || !byProvider {
-		return err
-	}
-	for provider, env := range map[string]string{
-		"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY",
-		"openrouter": "OPENROUTER_API_KEY", "mistral": "MISTRAL_API_KEY", "groq": "GROQ_API_KEY",
-		"xai": "XAI_API_KEY", "cerebras": "CEREBRAS_API_KEY", "zai": "ZAI_API_KEY",
-	} {
-		if _, err := db.Exec("UPDATE model_keys SET provider = ? WHERE provider = ?", env, provider); err != nil {
-			return err
-		}
-	}
-	_, err = db.Exec("ALTER TABLE model_keys CHANGE provider env VARCHAR(255) NOT NULL")
-	return err
-}
-
 // A variable the worker's models read a key from, as the worker says: the
 // providers reading it, and whether the worker's environment has it. With
 // no variable, the providers' keys are set up in the worker otherwise.

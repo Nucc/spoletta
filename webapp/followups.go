@@ -36,35 +36,6 @@ type followUp struct {
 
 const maxFollowUpBytes = 100 << 10
 
-func migrateFollowUps(db *sql.DB) error {
-	if err := addColumn(db, "run_steps", "session", "JSON NULL"); err != nil {
-		return err
-	}
-	for _, s := range []string{
-		`CREATE TABLE IF NOT EXISTS run_step_followups (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			step_id BIGINT NOT NULL,
-			attempt INT NOT NULL,
-			message TEXT NOT NULL,
-			status VARCHAR(16) NOT NULL,
-			output LONGTEXT NOT NULL,
-			error TEXT NOT NULL,
-			commits JSON NULL,
-			started_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			finished_at TIMESTAMP(3) NULL,
-			FOREIGN KEY (step_id) REFERENCES run_steps(id) ON DELETE CASCADE
-		)`,
-		// Follow-ups go on in the server; what was in flight when it went down can't continue.
-		`UPDATE run_step_followups SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
-		WHERE status = 'active'`,
-	} {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // The follow-ups of a run's steps, by step id.
 func runFollowUps(ctx context.Context, db *sql.DB, runID int64) (map[int64][]followUp, error) {
 	rows, err := db.QueryContext(ctx,

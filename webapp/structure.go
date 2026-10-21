@@ -27,35 +27,6 @@ const (
 	relationAggregation = "aggregation"
 )
 
-func migrateStructure(db *sql.DB) error {
-	for _, c := range []struct{ name, def string }{
-		{"owner_id", "BIGINT NULL"},
-		{"general_id", "BIGINT NULL"},
-		// How an owned object makes up its owner: an attribute it exhibits or a
-		// part it aggregates. Empty for other objects.
-		{"relation", "VARCHAR(16) NOT NULL DEFAULT ''"},
-	} {
-		if err := addColumn(db, "objects", c.name, c.def); err != nil {
-			return err
-		}
-	}
-	for _, c := range []struct{ name, def string }{
-		{"objects_owner", "FOREIGN KEY (owner_id) REFERENCES objects(id) ON DELETE CASCADE"},
-		{"objects_general", "FOREIGN KEY (general_id) REFERENCES objects(id) ON DELETE SET NULL"},
-	} {
-		ok, err := hasConstraint(db, "objects", c.name)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			if _, err := db.Exec("ALTER TABLE objects ADD CONSTRAINT " + c.name + " " + c.def); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // One object as its structure needs it.
 type structObject struct {
 	id       int64

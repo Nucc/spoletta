@@ -51,52 +51,6 @@ const (
 	stepDuplicate = "duplicate"
 )
 
-// Unique values are stored as a hash in instance_keys, whose primary key
-// lets only one instance hold each; the value itself is kept to say what
-// collided.
-func migrateInstances(db *sql.DB) error {
-	if err := addColumn(db, "objects", "persistent", "BOOLEAN NOT NULL DEFAULT FALSE AFTER width"); err != nil {
-		return err
-	}
-	if err := addColumn(db, "objects", "many", "BOOLEAN NOT NULL DEFAULT FALSE AFTER persistent"); err != nil {
-		return err
-	}
-	if err := addColumn(db, "object_attributes", "is_unique", "BOOLEAN NOT NULL DEFAULT FALSE AFTER definition"); err != nil {
-		return err
-	}
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS object_instances (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			object_id BIGINT NOT NULL,
-			run_id BIGINT NOT NULL,
-			step_id BIGINT NOT NULL,
-			content LONGTEXT NOT NULL,
-			state VARCHAR(255) NOT NULL DEFAULT '',
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			UNIQUE KEY object_run (object_id, run_id),
-			FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE,
-			FOREIGN KEY (step_id) REFERENCES run_steps(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS instance_keys (
-			object_id BIGINT NOT NULL,
-			attribute_id BIGINT NOT NULL,
-			value_hash CHAR(64) NOT NULL,
-			value TEXT NOT NULL,
-			instance_id BIGINT NOT NULL,
-			PRIMARY KEY (object_id, attribute_id, value_hash),
-			FOREIGN KEY (instance_id) REFERENCES object_instances(id) ON DELETE CASCADE
-		)`,
-		// Runs the server marked interrupted on startup release their values.
-		`DELETE i FROM object_instances i JOIN runs r ON r.id = i.run_id WHERE r.status <> 'done'`,
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Releases the values a run stored; their keys go with them.
 func releaseRun(ctx context.Context, db interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)

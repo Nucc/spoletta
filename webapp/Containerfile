@@ -13,6 +13,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 # SETUP.md goes into the assistant's prompt.
 COPY *.go SETUP.md ./
+# The migrations are embedded in the binary.
+COPY migrations ./migrations
 RUN CGO_ENABLED=0 go build -o /out/webapp .
 
 FROM docker.io/library/alpine:3.20

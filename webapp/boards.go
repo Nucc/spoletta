@@ -39,46 +39,6 @@ type innerBoard struct {
 	End     boardEnd  `json:"end"`
 }
 
-func migrateBoards(db *sql.DB) error {
-	for _, t := range []string{"processes", "objects"} {
-		if err := addColumn(db, t, "parent_id", "BIGINT NULL"); err != nil {
-			return err
-		}
-		ok, err := hasConstraint(db, t, t+"_parent")
-		if err != nil {
-			return err
-		}
-		if !ok {
-			_, err := db.Exec("ALTER TABLE " + t + " ADD CONSTRAINT " + t + "_parent FOREIGN KEY (parent_id) REFERENCES processes(id) ON DELETE CASCADE")
-			if err != nil {
-				return err
-			}
-		}
-	}
-	if err := addColumn(db, "processes", "recording", "BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
-		return err
-	}
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS inner_boards (
-		process_id BIGINT PRIMARY KEY,
-		x DOUBLE NOT NULL DEFAULT 0,
-		y DOUBLE NOT NULL DEFAULT 0,
-		target_id BIGINT NULL,
-		route JSON NULL,
-		end_x DOUBLE NOT NULL DEFAULT 0,
-		end_y DOUBLE NOT NULL DEFAULT 0,
-		FOREIGN KEY (process_id) REFERENCES processes(id) ON DELETE CASCADE,
-		FOREIGN KEY (target_id) REFERENCES processes(id) ON DELETE SET NULL
-	)`)
-	return err
-}
-
-func hasConstraint(db *sql.DB, table, name string) (bool, error) {
-	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
-		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?`, table, name).Scan(&n)
-	return n > 0, err
-}
-
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }

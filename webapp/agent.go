@@ -140,12 +140,6 @@ type runResult struct {
 	Commits []repoCommits `json:"commits,omitempty"`
 }
 
-func migrateAgent(db *sql.DB) error {
-	// Agent settings used to live here, API key included; pi's config replaced them.
-	_, err := db.Exec("DROP TABLE IF EXISTS agent_settings")
-	return err
-}
-
 func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, r *http.Request) {
 		models, err := offeredModels(r.Context(), db, workerURL)

@@ -73,24 +73,6 @@ const (
 
 var skillName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-func migrateSkills(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS skills (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY,
-		kind VARCHAR(16) NOT NULL,
-		name VARCHAR(64) NOT NULL,
-		description TEXT NOT NULL,
-		argument_hint VARCHAR(255) NOT NULL DEFAULT '',
-		content MEDIUMTEXT NOT NULL,
-		owner_user_id BIGINT NULL,
-		owner_team_id BIGINT NULL,
-		updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-		UNIQUE KEY skills_name (kind, name),
-		FOREIGN KEY (owner_user_id) REFERENCES users(id),
-		FOREIGN KEY (owner_team_id) REFERENCES teams(id)
-	)`)
-	return err
-}
-
 // The columns of a skill s, for scanSkill.
 var skillColumns = "s.id, s.kind, s.name, s.description, s.argument_hint, s.content, s.updated_at, " + ownerColumnsOf("s")
 

@@ -71,37 +71,6 @@ func scanOwner(user, team sql.NullInt64, name string) flowOwner {
 	return flowOwner{Kind: ownerGlobal}
 }
 
-func migrateOwners(db *sql.DB) error {
-	for _, c := range []struct{ table, name, def string }{
-		{"flows", "owner_user_id", "BIGINT NULL"},
-		{"flows", "owner_team_id", "BIGINT NULL"},
-		// Whose schedule it is: its runs use their model keys and MCP
-		// connections; see runUser.
-		{"schedules", "created_by", "BIGINT NULL"},
-	} {
-		if err := addColumn(db, c.table, c.name, c.def); err != nil {
-			return err
-		}
-	}
-	// A team or someone that owns flows can't go without them going elsewhere
-	// first; see teams.go and user_roles.go.
-	for _, c := range []struct{ name, def string }{
-		{"flows_owner_user", "FOREIGN KEY (owner_user_id) REFERENCES users(id)"},
-		{"flows_owner_team", "FOREIGN KEY (owner_team_id) REFERENCES teams(id)"},
-	} {
-		ok, err := hasConstraint(db, "flows", c.name)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			if _, err := db.Exec("ALTER TABLE flows ADD CONSTRAINT " + c.name + " " + c.def); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // How far someone may go with a flow.
 const (
 	// Change it and run it.

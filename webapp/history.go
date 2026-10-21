@@ -26,18 +26,6 @@ type historyState struct {
 	Changed bool `json:"changed"`
 }
 
-func migrateHistory(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS flow_history (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY,
-		flow_id BIGINT NOT NULL,
-		snapshot JSON NOT NULL,
-		undone BOOLEAN NOT NULL DEFAULT FALSE,
-		INDEX flow_history_steps (flow_id, undone, id),
-		FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE
-	)`)
-	return err
-}
-
 // The step the board is on, the newest not undone; 0 with none.
 func currentStep(ctx context.Context, tx *sql.Tx, flow int64) (int64, []byte, error) {
 	var id int64

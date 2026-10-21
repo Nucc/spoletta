@@ -17,10 +17,6 @@ import (
 // struct, and wherever it is copied with it. The struct and its object share
 // a name, and renaming either renames both.
 
-func migrateStructs(db *sql.DB) error {
-	return addColumn(db, "flows", "is_struct", "BOOLEAN NOT NULL DEFAULT FALSE")
-}
-
 const notInStruct = "a struct holds a single object and nothing else; use it in a flow or a procedure instead"
 
 // Whether a flow is a struct.

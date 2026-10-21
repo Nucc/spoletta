@@ -83,69 +83,6 @@ func userLabelColumn(col string) string {
 	return "COALESCE((SELECT COALESCE(NULLIF(u.name, ''), u.email) FROM users u WHERE u.id = " + col + "), '')"
 }
 
-func migrateUsers(db *sql.DB) error {
-	stmts := []string{
-		// Someone an admin added has no subject until they first sign in.
-		`CREATE TABLE IF NOT EXISTS users (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			email VARCHAR(320) NOT NULL,
-			issuer VARCHAR(255) NOT NULL DEFAULT '',
-			subject VARCHAR(255) NULL,
-			name VARCHAR(255) NOT NULL DEFAULT '',
-			admin BOOLEAN NOT NULL DEFAULT FALSE,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			signed_in_at TIMESTAMP(3) NULL,
-			UNIQUE KEY users_email (email),
-			UNIQUE KEY users_subject (issuer, subject)
-		)`,
-		// A session is known by its token's hash, so the table doesn't hold
-		// what signs anyone in.
-		`CREATE TABLE IF NOT EXISTS sessions (
-			token_hash CHAR(64) PRIMARY KEY,
-			user_id BIGINT NOT NULL,
-			expires_at TIMESTAMP(3) NOT NULL,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			KEY sessions_expiry (expires_at),
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-		)`,
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	for _, c := range []struct{ table, name, def string }{
-		{"runs", "started_by", "BIGINT NULL AFTER schedule_id"},
-		{"run_steps", "decided_by", "BIGINT NULL AFTER instructions"},
-		// Someone an admin removed; see user_roles.go.
-		{"users", "removed_at", "TIMESTAMP(3) NULL"},
-	} {
-		if err := addColumn(db, c.table, c.name, c.def); err != nil {
-			return err
-		}
-	}
-	// Who a user is to each provider they signed in with. Users once had one
-	// provider, in their issuer and subject, which are now only read here.
-	for _, s := range []string{
-		`CREATE TABLE IF NOT EXISTS user_identities (
-			issuer VARCHAR(255) NOT NULL,
-			subject VARCHAR(255) NOT NULL,
-			user_id BIGINT NOT NULL,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			PRIMARY KEY (issuer, subject),
-			KEY user_identities_user (user_id),
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-		)`,
-		`INSERT IGNORE INTO user_identities (issuer, subject, user_id)
-			SELECT issuer, subject, id FROM users WHERE subject IS NOT NULL AND issuer <> ''`,
-	} {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Signing in, as the environment sets it up; nil when nobody signs in.
 type auth struct {
 	db        *sql.DB

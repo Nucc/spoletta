@@ -30,16 +30,6 @@ import (
 // The longest role name, as an object's name.
 const maxRoleName = 255
 
-func migrateUserRoles(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS user_roles (
-		user_id BIGINT NOT NULL,
-		name VARCHAR(255) NOT NULL,
-		PRIMARY KEY (user_id, name),
-		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-	)`)
-	return err
-}
-
 // The key a role name matches by.
 func roleKey(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))

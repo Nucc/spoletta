@@ -41,44 +41,6 @@ import (
 // struct's object. A shared object isn't persistent too, which would store
 // it in each flow's runs besides.
 
-func migrateShared(db *sql.DB) error {
-	// The shared object whose records this one reads and writes: a shared
-	// struct's own object for itself, and for its copies.
-	if err := addColumn(db, "objects", "store_id", "BIGINT NULL AFTER source_id"); err != nil {
-		return err
-	}
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS shared_records (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			object_id BIGINT NOT NULL,
-			content LONGTEXT NOT NULL,
-			state VARCHAR(255) NOT NULL DEFAULT '',
-			run_id BIGINT NULL,
-			step_id BIGINT NULL,
-			created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-			KEY object_updated (object_id, updated_at),
-			KEY step (step_id),
-			FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE SET NULL,
-			FOREIGN KEY (step_id) REFERENCES run_steps(id) ON DELETE SET NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS shared_keys (
-			object_id BIGINT NOT NULL,
-			attribute_id BIGINT NOT NULL,
-			value_hash CHAR(64) NOT NULL,
-			record_id BIGINT NOT NULL,
-			PRIMARY KEY (object_id, attribute_id, value_hash),
-			FOREIGN KEY (record_id) REFERENCES shared_records(id) ON DELETE CASCADE
-		)`,
-	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // What's wrong with sharing a struct's object, if anything: records are
 // told apart by a unique attribute, and a copy already stored in its runs
 // would be stored twice.

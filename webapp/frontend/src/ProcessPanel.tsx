@@ -12,6 +12,7 @@ import {
   type EntryValue,
   type Flow,
   type MCPServer,
+  type Skill,
   type Repository,
   type Models,
   type ProcessKind,
@@ -25,6 +26,7 @@ import { Data } from './Data'
 import { quantityWords, type Quantity } from './quantity'
 import { fieldsOf, holdsFile, shapeOf, type Field } from './structure'
 import { MCPServerPicker } from './MCPSettings'
+import { PromptEditor, SkillPicker } from './Skills'
 import { ConnectorFields } from './ConnectorFields'
 import { RepositoryPicker } from './FlowSettings'
 import { ModelOptions } from './ModelProviders'
@@ -101,6 +103,8 @@ export default function ProcessPanel({
   initial,
   models,
   mcpServers,
+  skills,
+  commands,
   readOnly = false,
   run,
   review,
@@ -125,6 +129,10 @@ export default function ProcessPanel({
   models: Models | null
   // The MCP servers agents can use, or null while they load.
   mcpServers: MCPServer[] | null
+  // The skills its agent may be given and the commands its prompt may name,
+  // those its flow may use, or null while they load.
+  skills: Skill[] | null
+  commands: Skill[] | null
   // Shows the process without letting it change, such as as a past run's version has it.
   readOnly?: boolean
   // How this process did in the latest flow run, if it has run.
@@ -323,14 +331,21 @@ export default function ProcessPanel({
         <>
           <label key="agent" className="panel-field panel-field-grow">
             <span>Prompt</span>
-            <textarea
-              ref={bodyRef}
+            <PromptEditor
+              textareaRef={bodyRef}
               readOnly={readOnly}
               value={prompt}
-              placeholder="Describe what this process should do…"
-              onChange={(e) => setPrompt(e.target.value)}
+              commands={commands}
+              placeholder={commands?.length ? 'Describe what this process should do… Type / for a command.' : 'Describe what this process should do…'}
+              onChange={setPrompt}
             />
           </label>
+          <SkillPicker
+            skills={skills}
+            selected={settings.skills ?? []}
+            readOnly={readOnly}
+            onChange={(ids) => setSettings(({ skills: _, ...rest }) => (ids.length > 0 ? { ...rest, skills: ids } : rest))}
+          />
           <MCPServerPicker
             servers={mcpServers}
             selected={settings.mcpServers ?? []}

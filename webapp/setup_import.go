@@ -47,6 +47,8 @@ type importer struct {
 	mcp map[string]int64
 	// The connector each MCP server is, by id, if it is one.
 	mcpConnectors map[int64]string
+	// Skills by name.
+	skills map[string]int64
 	// The flows in the app before the import, by name.
 	existing map[string][]flowInfo
 	// The flows of the file imported so far, by name.
@@ -59,7 +61,7 @@ type importer struct {
 
 // Imports f in tx: what is wrong with it is a setupProblem, and changes nothing.
 func importSetup(ctx context.Context, tx *sql.Tx, f setupFile) (setupResult, error) {
-	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, existing: map[string][]flowInfo{},
+	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, skills: map[string]int64{}, existing: map[string][]flowInfo{},
 		imported: map[string]flowInfo{}, entries: map[string]*setupEntry{}, objects: map[int64]map[string]int64{},
 		res: setupResult{Flows: []importedFlow{}}}
 	var entries []*setupEntry
@@ -102,6 +104,12 @@ func importSetup(ctx context.Context, tx *sql.Tx, f setupFile) (setupResult, err
 		return im.res, err
 	}
 	if err := im.mcpServers(f.MCPServers); err != nil {
+		return im.res, err
+	}
+	if err := im.skillsOf(kindSkill, f.Skills); err != nil {
+		return im.res, err
+	}
+	if err := im.skillsOf(kindCommand, f.Commands); err != nil {
 		return im.res, err
 	}
 	order, err := im.order(entries)
@@ -180,6 +188,58 @@ func (im *importer) mcpServers(servers []setupMCPServer) error {
 			return err
 		}
 		im.mcpConnectors[h.id] = s.Connector
+	}
+	return nil
+}
+
+// Adds the file's skills or commands of a kind the app doesn't have, as
+// everyone's, as a flow it adds is, and gives the ones it has by name the
+// file's description, arguments and content, leaving whose they are. The
+// skills the app then has are kept for processes to name.
+func (im *importer) skillsOf(kind string, items []setupSkill) error {
+	existing := map[string]int64{}
+	err := scanAll(im.ctx, im.tx, "SELECT id, name FROM skills WHERE kind = ? FOR UPDATE", func(rows *sql.Rows) error {
+		var id int64
+		var name string
+		err := rows.Scan(&id, &name)
+		existing[name] = id
+		return err
+	}, kind)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, it := range items {
+		s := skillFields{Name: it.Name, Description: it.Description, ArgumentHint: it.Arguments, Content: it.Content}
+		if msg := s.check(kind); msg != "" {
+			return problemf("%s %s: %s", kind, quote(it.Name), msg)
+		}
+		if kind == kindSkill && s.ArgumentHint != "" {
+			return problemf("skill %s: only a command takes arguments", quote(s.Name))
+		}
+		if seen[s.Name] {
+			return problemf("the file has more than one %s named %s", kind, quote(s.Name))
+		}
+		seen[s.Name] = true
+		if id, ok := existing[s.Name]; ok {
+			_, err := im.tx.ExecContext(im.ctx, "UPDATE skills SET description = ?, argument_hint = ?, content = ? WHERE id = ?",
+				s.Description, s.ArgumentHint, s.Content, id)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		res, err := im.tx.ExecContext(im.ctx, "INSERT INTO skills (kind, name, description, argument_hint, content) VALUES (?, ?, ?, ?, ?)",
+			kind, s.Name, s.Description, s.ArgumentHint, s.Content)
+		if err != nil {
+			return err
+		}
+		if existing[s.Name], err = res.LastInsertId(); err != nil {
+			return err
+		}
+	}
+	if kind == kindSkill {
+		im.skills = existing
 	}
 	return nil
 }
@@ -1137,6 +1197,15 @@ func (b *builder) resolveProcess(bp *bproc) error {
 			return problemf("%s: there is no MCP server named %s", at, quote(m))
 		}
 		s.MCPServers = append(s.MCPServers, id)
+	}
+	for _, name := range p.Skills {
+		id, ok := b.skills[strings.TrimPrefix(strings.TrimSpace(name), "/")]
+		if !ok {
+			return problemf("%s: there is no skill named %s; add it in the settings' skills first", at, quote(name))
+		}
+		if !slices.Contains(s.Skills, id) {
+			s.Skills = append(s.Skills, id)
+		}
 	}
 	for m, tools := range p.MCPTools {
 		id, ok := b.mcp[mcpNameKey(m)]

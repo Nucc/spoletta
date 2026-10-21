@@ -264,13 +264,23 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	if f.ID, err = res.LastInsertId(); err != nil {
 		return f, run, processSettings{}, err
 	}
-	// The process's MCP servers and tools as it has them now; one since
-	// deleted has none.
+	// The process's MCP servers, tools and skills as it has them now; one
+	// since deleted has none.
 	var uses processSettings
 	if processID != nil {
-		err := tx.QueryRowContext(ctx, "SELECT settings FROM processes WHERE id = ?", *processID).Scan(&uses)
+		var flow int64
+		err := tx.QueryRowContext(ctx, "SELECT flow_id, settings FROM processes WHERE id = ?", *processID).Scan(&flow, &uses)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return f, run, uses, err
+		}
+		if err == nil {
+			var msg string
+			if run.Skills, msg, err = stepSkills(ctx, tx, flow, uses.Skills); err != nil {
+				return f, run, uses, err
+			}
+			if msg != "" {
+				return f, run, uses, conflictError(msg)
+			}
 		}
 		run.ProcessID = *processID
 	}

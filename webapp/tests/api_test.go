@@ -85,6 +85,15 @@ type agentRun struct {
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
 	NoTools   bool  `json:"noTools,omitempty"`
 	Guide     bool  `json:"guide,omitempty"`
+	// The skills the process picked, which the worker hands pi.
+	Skills []runSkill `json:"skills,omitempty"`
+}
+
+// A skill as the worker gets it.
+type runSkill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Content     string `json:"content"`
 }
 
 // A model provider as the worker gets it.
@@ -365,6 +374,8 @@ type processSettings struct {
 	Sentry *sentrySettings `json:"sentry,omitempty"`
 	// The MCP servers an agent process may use, by id; none by default. See mcp.go.
 	MCPServers []int64 `json:"mcpServers,omitempty"`
+	// The skills an agent process is given, by id; see skills.go.
+	Skills []int64 `json:"skills,omitempty"`
 	// The flow's repositories an agent or script process works on, by name;
 	// all of them when absent, none when empty. See workspace.go.
 	Repositories *[]string `json:"repositories,omitempty"`

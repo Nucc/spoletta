@@ -1,5 +1,8 @@
 import type { Flow, FlowOwner, Me, Team } from './api'
 
+// What is owned as a flow is: a flow, or a skill or command.
+type Owned = Pick<Flow, 'name' | 'owner' | 'access'>
+
 // What an owner is called on a card: "Only you", a team's name, "Everyone",
 // or for an admin, whose it is.
 export function ownerLabel(owner: FlowOwner, me: Me | null): string {
@@ -20,7 +23,7 @@ const keyOf = (o: FlowOwner | Choice['owner']) => (o.kind === 'global' ? 'global
 // Who a flow can go to from whoever is signed in: themselves, their teams,
 // or everyone; an admin gives it to any team too. The owner it has now is
 // always among them.
-function choices(flow: Flow, me: Me, teams: Team[]): Choice[] {
+function choices(flow: Owned, me: Me, teams: Team[]): Choice[] {
   const user = me.user!
   const out: Choice[] = []
   const add = (c: Choice) => out.some((x) => x.key === c.key) || out.push(c)
@@ -44,7 +47,7 @@ function choices(flow: Flow, me: Me, teams: Team[]): Choice[] {
 // Whether whoever is signed in can give the flow away at all: its owner, a
 // member of the team owning it, or an admin; nobody but an admin takes a
 // global one back.
-function canGive(flow: Flow, me: Me): boolean {
+function canGive(flow: Owned, me: Me): boolean {
   const user = me.user!
   if (user.admin) return true
   switch (flow.owner.kind) {
@@ -67,7 +70,7 @@ export function OwnerPicker({
   compact,
   onChange,
 }: {
-  flow: Flow
+  flow: Owned
   me: Me | null
   teams: Team[]
   compact?: boolean

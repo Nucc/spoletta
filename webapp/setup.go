@@ -15,8 +15,8 @@ import (
 
 // A setup is everything built in the app, written out as a YAML file to keep
 // under version control, edit, or have an LLM write, and read back in: the
-// MCP servers, the structs, the procedures and the flows, with every board,
-// process, object, link and schedule on them. What runs leave behind, runs,
+// MCP servers, the skills and commands, the structs, the procedures and the
+// flows, with every board, process, object, link and schedule on them. What runs leave behind, runs,
 // versions, history and what persistent objects stored, stays out of it, as
 // do MCP servers' sign-ins. SETUP.md describes the format.
 //
@@ -39,6 +39,8 @@ const setupVersion = 1
 type setupFile struct {
 	Spoletta   int              `yaml:"spoletta"`
 	MCPServers []setupMCPServer `yaml:"mcpServers,omitempty"`
+	Skills     []setupSkill     `yaml:"skills,omitempty"`
+	Commands   []setupSkill     `yaml:"commands,omitempty"`
 	// Each struct is its object, which is named as the struct is.
 	Structs    []setupObject `yaml:"structs,omitempty"`
 	Procedures []setupFlow   `yaml:"procedures,omitempty"`
@@ -54,6 +56,16 @@ type setupMCPServer struct {
 	// The built-in connector it is, if any; its URL is then its service's
 	// API, the connector's own when absent.
 	Connector string `yaml:"connector,omitempty"`
+}
+
+// A skill or command, whole; see skills.go. Who it belongs to stays out,
+// as a flow's owner does.
+type setupSkill struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description,omitempty"`
+	// A command's: the arguments it takes, as the menu shows them.
+	Arguments string `yaml:"arguments,omitempty"`
+	Content   string `yaml:"content"`
 }
 
 type setupFlow struct {
@@ -110,6 +122,7 @@ type setupProcess struct {
 	MCPServers []string `yaml:"mcpServers,omitempty"`
 	// The tools it keeps to of its MCP servers, by server name.
 	MCPTools     map[string][]string `yaml:"mcpTools,omitempty"`
+	Skills       []string            `yaml:"skills,omitempty"`
 	Repositories *[]string           `yaml:"repositories,omitempty"`
 	Sentry       *setupSentry        `yaml:"sentry,omitempty"`
 	Connector    *setupConnector     `yaml:"connector,omitempty"`

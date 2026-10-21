@@ -47,6 +47,8 @@ type processSettings struct {
 	// names none for gives it all its tools, and a connector only those
 	// that change nothing; see toolFilter.
 	MCPTools map[int64][]string `json:"mcpTools,omitempty"`
+	// The skills an agent process is given, by id; see skills.go.
+	Skills []int64 `json:"skills,omitempty"`
 	// The operation a connector process carries out; see connectors.go.
 	Connector *connectorSettings `json:"connector,omitempty"`
 	// The flow's repositories an agent or script process works on, by name;

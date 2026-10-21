@@ -48,6 +48,8 @@ export type ProcessSettings = {
   // The tools it keeps to of each, by server id. Without picking, it has
   // all of an MCP server's tools and a connector's that only read.
   mcpTools?: Record<string, string[]>
+  // The skills an agent process is given, by id; none when absent.
+  skills?: number[]
   connector?: ConnectorSettings
   // The flow's repositories an agent or script process works on, by name;
   // all of them when absent, none when empty.
@@ -1599,4 +1601,62 @@ export type JSONSchema = {
 
 export function getFlowAPI(flow: number): Promise<FlowAPI> {
   return request(`/api/flows/${flow}/api`)
+}
+
+// A skill or a command, written in the settings for agents. A skill is a
+// name, a description saying when it applies, and instructions an agent
+// reads once its task calls for them; an agent process picks the ones it is
+// given. A command is a prompt kept under a name, which /name in an agent's
+// prompt stands for as the step runs, taking the rest of its line as
+// arguments where it has placeholders ($1, $@, ${1:-default}). Each is owned
+// as a flow is: its maker's until shared with a team or everyone.
+export type SkillKind = 'skill' | 'command'
+
+export type Skill = {
+  id: number
+  kind: SkillKind
+  name: string
+  description: string
+  // What a command takes, such as [focus] or <ticket>.
+  argumentHint: string
+  content: string
+  owner: FlowOwner
+  updatedAt: string
+}
+
+export type SkillFields = {
+  name: string
+  description: string
+  argumentHint: string
+  content: string
+  owner?: { kind: 'global' } | { kind: 'team' | 'user'; id: number }
+}
+
+const skillRoute = (kind: SkillKind) => (kind === 'skill' ? '/api/skills' : '/api/commands')
+
+// The skills or commands whoever is signed in sees; given a flow, only the
+// ones it may use, as its owner may.
+export function listSkills(kind: SkillKind, flow?: number): Promise<Skill[]> {
+  return request(flow === undefined ? skillRoute(kind) : `${skillRoute(kind)}?flow=${flow}`)
+}
+
+export function createSkill(kind: SkillKind, fields: SkillFields): Promise<Skill> {
+  return request(skillRoute(kind), { method: 'POST', body: JSON.stringify(fields) })
+}
+
+export function updateSkill(kind: SkillKind, id: number, fields: SkillFields): Promise<Skill> {
+  return request(`${skillRoute(kind)}/${id}`, { method: 'PUT', body: JSON.stringify(fields) })
+}
+
+export function deleteSkill(kind: SkillKind, id: number): Promise<void> {
+  return request(`${skillRoute(kind)}/${id}`, { method: 'DELETE' })
+}
+
+// Gives a skill or command to someone, a team, or everyone.
+export function setSkillOwner(
+  kind: SkillKind,
+  id: number,
+  owner: { kind: 'global' } | { kind: 'team' | 'user'; id: number },
+): Promise<Skill> {
+  return request(`${skillRoute(kind)}/${id}/owner`, { method: 'PUT', body: JSON.stringify(owner) })
 }

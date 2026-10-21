@@ -147,14 +147,14 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
             <button
               className="toolbar-link"
               onClick={onExport}
-              title="Download every flow, procedure, struct and MCP server as a YAML file"
+              title="Download every flow, procedure, struct, MCP server, skill and command as a YAML file"
             >
               <DownloadIcon /> Export
             </button>
             <button
               className="toolbar-link"
               onClick={() => picker.current?.click()}
-              title="Create or update flows, procedures, structs and MCP servers from a YAML file"
+              title="Create or update flows, procedures, structs, MCP servers, skills and commands from a YAML file"
             >
               <UploadIcon /> Import
             </button>

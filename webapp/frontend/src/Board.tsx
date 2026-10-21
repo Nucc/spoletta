@@ -112,6 +112,7 @@ import {
   listLinks,
   listModels,
   listMCPServers,
+  listSkills,
   sentryConfigured,
   listBoards,
   listObjects,
@@ -153,6 +154,7 @@ import {
   type FlowRun,
   type Versions,
   type MCPServer,
+  type Skill,
   type FlowRunDetail,
   type Link,
   type LinkQuery,
@@ -388,6 +390,9 @@ export default function Board({
   // The teams, to give the flow to one; see Owner.tsx.
   const [teams, setTeams] = useState<Team[]>([])
   const [mcpServers, setMCPServers] = useState<MCPServer[] | null>(null)
+  // The skills and commands the flow's agents may use; see Skills.tsx.
+  const [skills, setSkills] = useState<Skill[] | null>(null)
+  const [commands, setCommands] = useState<Skill[] | null>(null)
   // Whether Sentry is set up, offering Sentry processes.
   const [sentry, setSentry] = useState(false)
   const [mcpOpen, setMCPOpen] = useState(false)
@@ -722,6 +727,10 @@ export default function Board({
   reload.current = loadBoard
 
   const refreshMCPServers = useCallback(() => listMCPServers().then(setMCPServers).catch(report), [report])
+  const refreshSkills = useCallback(() => {
+    listSkills('skill', flowId).then(setSkills).catch(report)
+    listSkills('command', flowId).then(setCommands).catch(report)
+  }, [report, flowId])
 
   // A sign-in window says when it is done; coming back to this window after
   // one that couldn't say so shows the outcome too.
@@ -729,14 +738,18 @@ export default function Board({
     const onMessage = (e: MessageEvent) => {
       if (e.origin === window.location.origin && e.data?.type === 'mcp-sign-in') refreshMCPServers()
     }
-    const onFocus = () => refreshMCPServers()
+    // Skills and commands written in another tab show once back.
+    const onFocus = () => {
+      refreshMCPServers()
+      refreshSkills()
+    }
     window.addEventListener('message', onMessage)
     window.addEventListener('focus', onFocus)
     return () => {
       window.removeEventListener('message', onMessage)
       window.removeEventListener('focus', onFocus)
     }
-  }, [refreshMCPServers])
+  }, [refreshMCPServers, refreshSkills])
 
   useEffect(() => {
     listModels().then(setModels).catch(report)
@@ -745,13 +758,14 @@ export default function Board({
       .then((fs) => setOtherFlows(fs.filter((f) => f.id !== flowId)))
       .catch(report)
     refreshMCPServers()
+    refreshSkills()
     refreshRuns()
     refreshVersions()
     // The flow just loaded; show all of it once its nodes are measured.
     loadBoard()
       .then(() => window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS))
       .catch(report)
-  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, fitView, flowId])
+  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, refreshSkills, fitView, flowId])
 
   // The settings take the side panel; a node opened afterwards takes it back.
   const openMCPSettings = (open: boolean) => {
@@ -2518,6 +2532,8 @@ export default function Board({
             }}
             models={models}
             mcpServers={mcpServers}
+            skills={skills}
+            commands={commands}
             readOnly={readOnly}
             run={{ status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
             // The form shows in one place at a time.
@@ -2596,7 +2612,15 @@ export default function Board({
                 flow={flow}
                 me={me}
                 teams={teams}
-                onChange={(owner) => setFlowOwner(flowId, owner).then(onReload).catch(report)}
+                onChange={(owner) =>
+                  setFlowOwner(flowId, owner)
+                    .then(() => {
+                      onReload()
+                      // What the flow may use goes by its owner.
+                      refreshSkills()
+                    })
+                    .catch(report)
+                }
               />
             }
             settings={flow.settings}

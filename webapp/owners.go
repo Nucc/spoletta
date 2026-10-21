@@ -52,7 +52,14 @@ const (
 )
 
 // The columns of a flow's owner in flows f, for scanOwner.
-const ownerColumns = "f.owner_user_id, f.owner_team_id, COALESCE((SELECT COALESCE(NULLIF(u.name, ''), u.email) FROM users u WHERE u.id = f.owner_user_id), (SELECT t.name FROM teams t WHERE t.id = f.owner_team_id), '')"
+var ownerColumns = ownerColumnsOf("f")
+
+// The columns of the owner of a row of table t, which has owner_user_id
+// and owner_team_id as flows do, for scanOwner.
+func ownerColumnsOf(t string) string {
+	return t + ".owner_user_id, " + t + ".owner_team_id, COALESCE((SELECT COALESCE(NULLIF(u.name, ''), u.email) FROM users u WHERE u.id = " +
+		t + ".owner_user_id), (SELECT t.name FROM teams t WHERE t.id = " + t + ".owner_team_id), '')"
+}
 
 func scanOwner(user, team sql.NullInt64, name string) flowOwner {
 	switch {
@@ -106,11 +113,17 @@ const (
 // The condition on flows f that only the ones the user may change meet, and
 // its arguments; none for nobody signed in or an admin.
 func editableFlows(u *user) (string, []any) {
+	return ownedBy("f", u)
+}
+
+// The condition on rows of table t, owned as flows are, that only the ones
+// the user may change meet: everyone's, theirs and their teams'.
+func ownedBy(t string, u *user) (string, []any) {
 	if u == nil || u.Admin {
 		return "TRUE", nil
 	}
-	return `((f.owner_user_id IS NULL AND f.owner_team_id IS NULL) OR f.owner_user_id = ?
-		OR f.owner_team_id IN (SELECT team_id FROM team_members WHERE user_id = ?))`, []any{u.ID, u.ID}
+	return "((" + t + ".owner_user_id IS NULL AND " + t + ".owner_team_id IS NULL) OR " + t + `.owner_user_id = ?
+		OR ` + t + ".owner_team_id IN (SELECT team_id FROM team_members WHERE user_id = ?))", []any{u.ID, u.ID}
 }
 
 // The condition on flows f that only the ones the user sees meet: the ones
@@ -192,8 +205,8 @@ func newOwner(ctx context.Context, db *sql.DB, u *user, asked *flowOwner) (userI
 	return nil, nil, "", nil
 }
 
-// Why the user may not give the flow from its owner now to the one given, if
-// they may not.
+// Why the user may not give the flow, or anything owned as flows are, from
+// its owner now to the one given, if they may not.
 func refuseOwner(ctx context.Context, db querier, u *user, now, to flowOwner) (string, error) {
 	switch to.Kind {
 	case ownerGlobal, ownerUser, ownerTeam:
@@ -210,7 +223,7 @@ func refuseOwner(ctx context.Context, db querier, u *user, now, to flowOwner) (s
 	switch now.Kind {
 	case ownerGlobal:
 		if to.Kind != ownerGlobal {
-			return "only an admin takes a global flow back from everyone", nil
+			return "only an admin takes back what is everyone's", nil
 		}
 	case ownerUser:
 		if now.ID != u.ID {
@@ -220,7 +233,7 @@ func refuseOwner(ctx context.Context, db querier, u *user, now, to flowOwner) (s
 	switch to.Kind {
 	case ownerUser:
 		if to.ID != u.ID {
-			return "only an admin gives a flow to someone else", nil
+			return "only an admin gives it to someone else", nil
 		}
 	case ownerTeam:
 		in, err := inTeam(ctx, db, u.ID, to.ID)

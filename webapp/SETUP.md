@@ -1,8 +1,8 @@
 # Setup files
 
-A setup file describes everything built in the app as YAML. That covers the MCP servers, the structs, the procedures and the flows, with every board, process, object, link and schedule on them. You can keep it under version control, edit it by hand, or have an LLM write it, and then import it into any instance of the app.
+A setup file describes everything built in the app as YAML. That covers the MCP servers, the skills and commands, the structs, the procedures and the flows, with every board, process, object, link and schedule on them. You can keep it under version control, edit it by hand, or have an LLM write it, and then import it into any instance of the app.
 
-It leaves out what runs produce: runs, versions, undo history, and the values that persistent objects stored. MCP servers' sign-ins and tokens stay out too, so after importing a server you sign in to it again, or an admin sets its token.
+It leaves out what runs produce: runs, versions, undo history, and the values that persistent objects stored. MCP servers' sign-ins and tokens stay out too, so after importing a server you sign in to it again, or an admin sets its token. Who a flow, skill or command belongs to stays out as well.
 
 ## Exporting and importing
 
@@ -21,6 +21,7 @@ What importing does:
 - One the app already has, by name, is **updated** to match the file. Anything on its boards that the file doesn't have is removed. Processes, objects, states and attributes that match by name, on the same board, keep their ids, so the flow's past runs and the values its persistent objects stored still point to them. The board is saved as a version first, and the import is one step of the board's undo history, so you can go back with Cmd-Z or from Versions. Going back restores the board only. The flow's repositories, branch prefix, schedules and whether it's a procedure stay as imported, and so do MCP servers.
 - Flows that the file doesn't mention stay as they are. Import never deletes a flow.
 - An MCP server is matched by name. Its URL, description, auth and connector are set from the file. A server whose URL or auth changes is signed out, and loses its token.
+- A skill or command is matched by name. Its description, arguments and content are set from the file, and it keeps whoever it belongs to. One the app doesn't have is added as everyone's.
 - A flow's schedules become the file's. Schedules the flow already has with the same cron and time zone are kept; others are removed.
 - The file is imported **whole or not at all**. If anything is wrong, the reply says what and where, and nothing changes. A flow that is running can't be updated.
 
@@ -31,6 +32,8 @@ Exporting refuses while two flows share a name, since the file refers to flows b
 ```yaml
 spoletta: 1         # the format's version; required
 mcpServers: [...]
+skills: [...]       # what agents are given to know, picked per process
+commands: [...]     # what /name in an agent's prompt stands for
 structs: [...]      # objects defined once and used by flows
 procedures: [...]   # flows other flows run
 flows: [...]        # the jobs that run
@@ -54,6 +57,22 @@ mcpServers:
 ```
 
 A connector is a service the app itself works with, such as GitHub. Agents use it as an MCP server, its operations being its tools, and a `connector` process carries out one of its operations as a step. The app has the connectors `github`, `slack`, `telegram`, `google` (Sheets and Docs), `homeassistant` (whose `url` is the installation's, which it needs) and `http` (any JSON API, at its `url`, installed once for each under its own name). docs/FLOWS.md lists their operations.
+
+### Skills and commands
+
+```yaml
+skills:
+  - name: house-style   # lowercase letters, digits and single hyphens
+    description: How we write; use for anything a customer reads.   # required: the agent picks it by this
+    content: |
+      Short sentences. No jargon.
+commands:
+  - name: review
+    arguments: "[file]" # what it takes, as the / menu shows it
+    content: Review ${1:-the change} for bugs.
+```
+
+They are the settings' Skills & commands, written out whole. Processes name the skills they use, and a file may name ones it doesn't hold if the app it goes into has them.
 
 ### Flows and procedures
 
@@ -89,6 +108,7 @@ Flows and procedures have the same shape:
   mcpServers: [jira]    # agent: the MCP servers it may use, by name
   mcpTools:             # agent: the tools it keeps to of each, by server; all of an MCP server's,
     jira: [search]      #   and a connector's that only read, for a server not named here
+  skills: [release-notes]   # agent: the skills it is given, by name: the file's, or the app's
   repositories: [app]   # the flow's repositories it works on; all if absent, none if []
   rounds: 3             # agent deciding states: how many times it can send work back
   timeout: 600          # seconds

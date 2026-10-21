@@ -23,10 +23,10 @@ type exportedFlow struct {
 	schedules        []setupSchedule
 }
 
-// The setup as it is: every MCP server, struct, procedure and flow, by name,
-// or with only set, that flow and what it refers to: the procedures it runs,
-// the structs and procedures its copies follow, on down, and the MCP servers
-// its processes use. Two flows can't share a name in the file, since it names
+// The setup as it is: every MCP server, skill, command, struct, procedure and
+// flow, by name, or with only set, that flow and what it refers to: the
+// procedures it runs, the structs and procedures its copies follow, on down,
+// and the MCP servers its processes use. Two flows can't share a name in the file, since it names
 // them to refer to them; with two that do, it says so instead.
 func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error) {
 	f := setupFile{Spoletta: setupVersion}
@@ -117,13 +117,35 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 	if err != nil {
 		return f, err
 	}
+	// Skills and commands are written out with the whole setup only: a flow
+	// alone names the skills it uses, and its assistant is told them apart.
+	skillNames := map[int64]string{}
+	err = scanAll(ctx, tx, "SELECT id, kind, name, description, argument_hint, content FROM skills ORDER BY name", func(rows *sql.Rows) error {
+		var id int64
+		var kind string
+		var s setupSkill
+		err := rows.Scan(&id, &kind, &s.Name, &s.Description, &s.Arguments, &s.Content)
+		switch {
+		case kind == kindSkill:
+			skillNames[id] = s.Name
+			if only == 0 {
+				f.Skills = append(f.Skills, s)
+			}
+		case only == 0:
+			f.Commands = append(f.Commands, s)
+		}
+		return err
+	})
+	if err != nil {
+		return f, err
+	}
 	flowNames := map[int64]string{}
 	for _, e := range flows {
 		flowNames[e.id] = e.name
 	}
 
 	for _, e := range flows {
-		x := exporter{e: e, objectFlow: objectFlow, flowNames: flowNames, mcpNames: mcpNames}
+		x := exporter{e: e, objectFlow: objectFlow, flowNames: flowNames, mcpNames: mcpNames, skillNames: skillNames}
 		if e.isStruct {
 			for _, o := range e.s.Objects {
 				if o.Owner == nil && o.Parent == nil {
@@ -230,6 +252,7 @@ type exporter struct {
 	objectFlow map[int64]*exportedFlow
 	flowNames  map[int64]string
 	mcpNames   map[int64]string
+	skillNames map[int64]string
 }
 
 // The board of a flow process, or with none the flow's top board.
@@ -297,6 +320,11 @@ func (x exporter) process(p process) setupProcess {
 				sp.MCPTools = map[string][]string{}
 			}
 			sp.MCPTools[n] = tools
+		}
+	}
+	for _, s := range st.Skills {
+		if n, ok := x.skillNames[s]; ok {
+			sp.Skills = append(sp.Skills, n)
 		}
 	}
 	if c := st.Connector; c != nil {

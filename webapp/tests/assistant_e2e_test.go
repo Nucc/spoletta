@@ -260,7 +260,7 @@ flows:
 
 	// Its reply repeats the struct as the prompt showed it.
 	a.worker.onAgent("Assistant", func(_ context.Context, run agentRun) runResult {
-		ref := run.Prompt[strings.Index(run.Prompt, "<referred>")+len("<referred>") : strings.Index(run.Prompt, "</referred>")]
+		ref := run.Prompt[strings.Index(run.Prompt, "<referred>\n")+len("<referred>\n") : strings.Index(run.Prompt, "</referred>")]
 		var refs map[string]any
 		if err := yaml.Unmarshal([]byte(ref), &refs); err != nil {
 			t.Errorf("what the flow uses isn't a setup file: %v\n%s", err, ref)

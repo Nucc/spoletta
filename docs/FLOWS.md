@@ -215,6 +215,16 @@ by kind:
   such as `{github: [list_issues, add_comment]}`. A server it names none for
   gives it all its tools, but a connector only those that change nothing.
   Pick write tools only for an agent meant to change things.
+- `skills`: names of skills kept in the app's settings that this agent is
+  given: pi lists each by its description, and the agent reads its
+  instructions once its task calls for them. The flow may use only the
+  skills of its owner (theirs, their teams' and everyone's) or, for a team's
+  flow, the team's and everyone's.
+- In a prompt, `/name` at the start of a line or after a space stands for
+  the command of that name kept in the settings, spelled out as the step
+  runs. A command taking arguments (`$1`, `$@`, `${1:-default}`) takes the
+  rest of its line; others leave it be. Any other `/word`, such as a path
+  or a command the flow may not use, stays as it is.
 - `repositories`: which of the flow's repositories it works in. All of them
   when absent; none when `[]`.
 - `describeFlow: true`: give it the flow's OPL.

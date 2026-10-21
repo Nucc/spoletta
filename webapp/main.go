@@ -103,6 +103,9 @@ func main() {
 	if err := migrateAPIKeys(db); err != nil {
 		log.Fatal(err)
 	}
+	if err := migrateSkills(db); err != nil {
+		log.Fatal(err)
+	}
 	// seal-secrets seals the secrets with the key coming in, and ends,
 	// failing if some changed meanwhile, to be run again; see secrets.go.
 	sealSecrets := len(os.Args) > 1 && os.Args[1] == "seal-secrets"
@@ -147,6 +150,7 @@ func main() {
 	// Where the worker reaches this webapp's MCP proxy.
 	mcp := newMCPBroker(db, env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")), auth != nil)
 	registerMCPRoutes(mux, db, mcp)
+	registerSkillRoutes(mux, db)
 	registerConnectorRoutes(mux, db)
 	sentry := sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}
 	registerSentryRoutes(mux, sentry)

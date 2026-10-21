@@ -86,7 +86,20 @@ type runRequest struct {
 	// Put the guide to authoring flows before the prompt, for an agent that
 	// can't read it itself.
 	Guide bool `json:"guide"`
+	// The skills pi is given, each written as a SKILL.md of its own; see
+	// writeSkills.
+	Skills []skill `json:"skills"`
 }
+
+// A skill as the webapp sends it.
+type skill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Content     string `json:"content"`
+}
+
+// pi's rule for a skill's name, which is also its directory's.
+var skillName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // The guide to authoring flows, docs/FLOWS.md, where the image keeps it.
 const flowsGuide = "/opt/flow/docs/FLOWS.md"
@@ -507,7 +520,7 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
-	if len(run.MCPServers) > 0 || run.Output != nil {
+	if len(run.MCPServers) > 0 || run.Output != nil || (len(run.Skills) > 0 && !run.NoTools) {
 		private, err := os.MkdirTemp("", "private-")
 		if err != nil {
 			return runResult{Error: "create private directory: " + err.Error()}
@@ -530,6 +543,13 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 			}
 			args = append(args, "-e", outputExtension)
 			env = append(env, "FLOW_OUTPUT_SPEC="+filepath.Join(private, "spec.json"))
+		}
+		if len(run.Skills) > 0 && !run.NoTools {
+			skills, err := writeSkills(private, run.Skills)
+			if err != nil {
+				return runResult{Error: "write skills: " + err.Error()}
+			}
+			args = append(args, skills...)
 		}
 	}
 	if len(run.MCPServers) == 0 {
@@ -597,6 +617,31 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, emit func
 		}
 	}
 	return runResult{OK: true, Output: output}
+}
+
+// Writes each skill as pi reads one, a directory of its name holding its
+// SKILL.md, under dir, and returns the arguments giving them to pi. The
+// frontmatter's values are JSON strings, which YAML reads as they are, so a
+// description holding a colon or a line break can't break it.
+func writeSkills(dir string, skills []skill) ([]string, error) {
+	var args []string
+	for _, s := range skills {
+		if !skillName.MatchString(s.Name) {
+			return nil, fmt.Errorf("invalid skill name %q", s.Name)
+		}
+		d := filepath.Join(dir, "skills", s.Name)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return nil, err
+		}
+		name, _ := json.Marshal(s.Name)
+		description, _ := json.Marshal(s.Description)
+		md := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n%s\n", name, description, s.Content)
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(md), 0o644); err != nil {
+			return nil, err
+		}
+		args = append(args, "--skill", d)
+	}
+	return args, nil
 }
 
 // Writes the output spec submit-output.ts reads, returning where its result goes.

@@ -97,6 +97,8 @@ type agentRun struct {
 	Keys map[string]string `json:"keys,omitempty"`
 	// The model providers admins added; see model_providers.go.
 	Providers []runProvider `json:"providers,omitempty"`
+	// The skills the process picked, which the worker hands pi; see skills.go.
+	Skills []runSkill `json:"skills,omitempty"`
 }
 
 // The pi session of a step that worked in a workspace, which follow-ups carry on.
@@ -156,8 +158,9 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 }
 
 // Runs an agent process's prompt in the worker as a step of a run and waits
-// for the result. Its input objects and a human's change request are
-// appended to the prompt. Problems with the process itself are step
+// for the result. The commands its prompt names are spelled out (see
+// skills.go), and then its input objects and a human's change request are
+// appended to it. Problems with the process itself are step
 // failures, so they show up on the node like any other; the error is for
 // recording the step. about, if not empty, is the flow's OPL, which goes
 // before the inputs. started gets the step's id once it is recorded.
@@ -165,8 +168,9 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	var res runResult
 	run := agentRun{ProcessID: id}
 	var settings processSettings
-	err := db.QueryRowContext(ctx, "SELECT name, prompt, model, thinking, settings FROM processes WHERE id = ?", id).
-		Scan(&run.ProcessName, &run.Prompt, &run.Model, &run.Thinking, &settings)
+	var flow int64
+	err := db.QueryRowContext(ctx, "SELECT flow_id, name, prompt, model, thinking, settings FROM processes WHERE id = ?", id).
+		Scan(&flow, &run.ProcessName, &run.Prompt, &run.Model, &run.Thinking, &settings)
 	if errors.Is(err, sql.ErrNoRows) {
 		return res, errNotFound
 	}
@@ -180,6 +184,15 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	run.TimeoutMS = settings.timeout().Milliseconds()
 	// The prompt couldn't tell apart two inputs of one name.
 	clash := inputClash(run.ProcessName, inputs)
+	// Only the process's own prompt names commands, never what it is given.
+	expanded, err := expandCommands(ctx, db, flow, run.Prompt)
+	if err != nil {
+		return res, err
+	}
+	var skillsMsg string
+	if run.Skills, skillsMsg, err = stepSkills(ctx, db, flow, settings.Skills); err != nil {
+		return res, err
+	}
 	switch {
 	case strings.TrimSpace(run.Prompt) == "":
 		res.Error = "the process has no prompt"
@@ -187,7 +200,10 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		res.Error = msg
 	case clash != "":
 		res.Error = clash
+	case skillsMsg != "":
+		res.Error = skillsMsg
 	default:
+		run.Prompt = expanded
 		run.Workspace = ws.forProcess(settings)
 		run.Prompt = withChangeRequest(withInputs(withFlow(withWorkspace(run.Prompt, run.Workspace), run.ProcessName, about), inputs), cr)
 	}

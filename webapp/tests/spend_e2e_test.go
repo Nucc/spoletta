@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -208,4 +209,44 @@ func TestAPersonsMonthlyLimit(t *testing.T) {
 	if len(spending.People) != 1 || spending.People[0].Name != "Bob" || spending.People[0].Calls != 2 || spending.People[0].Spent != 2*callMicros/1e6 {
 		t.Errorf("Bob sees %+v", spending.People)
 	}
+}
+
+// A person's runs have no more steps going at once than an admin lets
+// them; the rest wait their turn, taking none of the engine's slots.
+func TestAPersonsStepsAtOnce(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	a.call("PUT", "/api/limits", map[string]any{"userParallelSteps": 1}, http.StatusOK, nil)
+	t.Cleanup(func() { secretsDB(t).Exec("DELETE FROM limits") })
+	bob := usersNewPerson("Bob")
+	usersAdd(a, bob.email)
+	usersSignIn(a, p, bob)
+	f := a.newFlow("Bob's two")
+	seed := a.agent(f.ID, "Seed", "Seed.")
+	s := a.newObject(f.ID, "S")
+	a.output(seed.ID, s.ID)
+	a.startAt(f.ID, seed.ID)
+	a.worker.onAgent("Seed", handsIn(data("seed")))
+	var mu sync.Mutex
+	going, most := 0, 0
+	for _, name := range []string{"W0", "W1"} {
+		w := a.agent(f.ID, name, "Work.")
+		a.input(w.ID, s.ID)
+		a.worker.onAgent(name, func(ctx context.Context, _ agentRun) runResult {
+			mu.Lock()
+			going++
+			most = max(most, going)
+			mu.Unlock()
+			time.Sleep(200 * time.Millisecond)
+			mu.Lock()
+			going--
+			mu.Unlock()
+			return runResult{OK: true, Output: "done"}
+		})
+	}
+	d := a.finish(a.startRun(f.ID).ID)
+	if d.Status != runDone || len(d.Steps) != 3 || most != 1 {
+		t.Fatalf("run %s with %d steps, at most %d at once; want 1: %s", d.Status, len(d.Steps), most, describeSteps(d))
+	}
+	logLineWith(t, a.runLogs(d.ID, 0), " waits: its person's runs have as many steps going as they may at once, 1")
 }

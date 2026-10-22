@@ -9,6 +9,7 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
   const [limits, setLimits] = useState<Limits | null>(null)
   const [runSpend, setRunSpend] = useState('')
   const [userSpend, setUserSpend] = useState('')
+  const [userSteps, setUserSteps] = useState('')
   const [saving, setSaving] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -17,6 +18,7 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
     setLimits(l)
     setRunSpend(l.runSpend ? String(l.runSpend) : '')
     setUserSpend(l.userMonthSpend ? String(l.userMonthSpend) : '')
+    setUserSteps(l.userParallelSteps ? String(l.userParallelSteps) : '')
   }, [])
   useEffect(() => {
     refresh().catch(onError)
@@ -26,12 +28,14 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
   const valid = (n: number) => Number.isFinite(n) && n >= 0
   const run = amount(runSpend)
   const user = amount(userSpend)
+  const steps = amount(userSteps)
+  const stepsOk = Number.isInteger(steps) && steps >= 0
 
   const onSave = async (e: FormEvent) => {
     e.preventDefault()
     setSaving(true)
     try {
-      setLimits(await saveLimits({ runSpend: run, userMonthSpend: user }))
+      setLimits(await saveLimits({ runSpend: run, userMonthSpend: user, userParallelSteps: steps }))
     } catch (err) {
       onError(err)
     } finally {
@@ -74,7 +78,20 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
               On their runs, follow-ups and flows' assistants. Past it their agents' calls are refused until next month.
             </small>
           </label>
-          <button type="submit" disabled={saving || !valid(run) || !valid(user)}>
+          <label className="panel-field">
+            <span>Steps a person's runs may have going at once</span>
+            <input
+              value={userSteps}
+              inputMode="numeric"
+              placeholder="No limit"
+              onChange={(e) => setUserSteps(e.target.value)}
+            />
+            <small className="panel-note">
+              Agent, script, Sentry and connector steps, of the instance's PARALLEL_STEPS, so one person's runs can't
+              take every slot; the rest wait their turn.
+            </small>
+          </label>
+          <button type="submit" disabled={saving || !valid(run) || !valid(user) || !stepsOk}>
             Save limits
           </button>
         </form>
@@ -82,7 +99,10 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
         limits && (
           <p className="flows-note">
             A run may spend {limits.runSpend ? `$${limits.runSpend}` : 'without a limit'}, and you{' '}
-            {limits.userMonthSpend ? `$${limits.userMonthSpend} a month` : 'without a limit'}.
+            {limits.userMonthSpend ? `$${limits.userMonthSpend} a month` : 'without a limit'}
+            {limits.userParallelSteps > 0 &&
+              `, with ${limits.userParallelSteps} steps of your runs going at once at most`}
+            .
           </p>
         )
       )}

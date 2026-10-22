@@ -117,6 +117,10 @@ type engine struct {
 	slots chan struct{}
 	mu    sync.Mutex
 	runs  map[int64]*liveRun
+	// How many steps each person's runs have going, and what is closed, and
+	// made again, as one ends; see personSlot.
+	personSteps map[int64]int64
+	stepEnded   chan struct{}
 }
 
 // A run in progress.
@@ -132,7 +136,8 @@ type liveRun struct {
 }
 
 func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker, parallelSteps int) *engine {
-	return &engine{db: db, workerURL: workerURL, sentry: sentry, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{}}
+	return &engine{db: db, workerURL: workerURL, sentry: sentry, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{},
+		personSteps: map[int64]int64{}, stepEnded: make(chan struct{})}
 }
 
 // Executes a run of the whole flow, on the top board of version's board,
@@ -1522,6 +1527,15 @@ func (w *walk) setState(id, stepID int64, d decision) []func() {
 // run. A step with a timeout fails once it runs out: the worker ends agents
 // and scripts then, and the engine a little later if the worker doesn't.
 func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool, bool, int64) {
+	who, err := runUser(w.ctx, w.e.db, w.run)
+	if err != nil {
+		runLog(w.e.db, w.run, 0, logError, "process %d couldn't run: whose run it is: %v", id, err)
+		return runResult{}, false, false, 0
+	}
+	if !w.e.personSlot(w.ctx, who, w.run, w.names[id]) {
+		return runResult{}, false, true, 0
+	}
+	defer w.e.endPersonSlot(who)
 	select {
 	case w.e.slots <- struct{}{}:
 	case <-w.ctx.Done():
@@ -1551,7 +1565,6 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 		w.e.mu.Unlock()
 	}()
 	var res runResult
-	var err error
 	switch w.kinds[id] {
 	case kindAgent:
 		var about string
@@ -1574,6 +1587,51 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 		return res, false, stop.Err() != nil, stepID
 	}
 	return res, res.OK || res.Duplicate != nil, stop.Err() != nil, stepID
+}
+
+// Waits until the person's runs have fewer steps going than they may
+// (limits.go), before the step takes one of the engine's slots, so one
+// waiting holds none of everyone's; false if the run ended meanwhile. A run
+// of nobody's isn't held to it. Its run's log says when a step waits.
+func (e *engine) personSlot(ctx context.Context, who *int64, run int64, process string) bool {
+	logged := false
+	for {
+		limit := currentLimits().UserSteps
+		e.mu.Lock()
+		if who == nil || limit <= 0 || e.personSteps[*who] < limit {
+			if who != nil {
+				e.personSteps[*who]++
+			}
+			e.mu.Unlock()
+			return true
+		}
+		ended := e.stepEnded
+		e.mu.Unlock()
+		if !logged {
+			runLog(e.db, run, 0, logInfo, "%s waits: its person's runs have as many steps going as they may at once, %d", process, limit)
+			logged = true
+		}
+		select {
+		case <-ended:
+		// The limit may have been raised.
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+func (e *engine) endPersonSlot(who *int64) {
+	if who == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.personSteps[*who]--; e.personSteps[*who] <= 0 {
+		delete(e.personSteps, *who)
+	}
+	close(e.stepEnded)
+	e.stepEnded = make(chan struct{})
 }
 
 // How long after its timeout the engine ends a step the worker didn't.

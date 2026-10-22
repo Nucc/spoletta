@@ -12,6 +12,11 @@ package main
 //   - user_month_spend: what a person's runs, follow-ups and assistant
 //     replies may spend in a calendar month (UTC), after which the proxy
 //     refuses their calls until the next.
+//   - user_parallel_steps: how many agent, script, Sentry and connector
+//     steps of a person's runs go at once, of the engine's PARALLEL_STEPS,
+//     so one person's runs can't take every slot; the rest wait their turn
+//     (engine.go's personSlot). Runs nobody started, without sign-in, have
+//     no person.
 //
 // Limits are read as the webapp starts and kept here; saving them takes
 // effect for steps started after.
@@ -29,6 +34,7 @@ import (
 type instanceLimits struct {
 	RunSpend       int64
 	UserMonthSpend int64
+	UserSteps      int64
 }
 
 var limits struct {
@@ -44,7 +50,7 @@ func currentLimits() instanceLimits {
 
 // The rows of limits by their names.
 func (l *instanceLimits) fields() map[string]*int64 {
-	return map[string]*int64{"run_spend": &l.RunSpend, "user_month_spend": &l.UserMonthSpend}
+	return map[string]*int64{"run_spend": &l.RunSpend, "user_month_spend": &l.UserMonthSpend, "user_parallel_steps": &l.UserSteps}
 }
 
 func loadLimits(ctx context.Context, db *sql.DB) error {
@@ -105,13 +111,17 @@ func formatDollars(micros int64) string {
 type limitsJSON struct {
 	RunSpend       float64 `json:"runSpend"`
 	UserMonthSpend float64 `json:"userMonthSpend"`
+	UserSteps      int64   `json:"userParallelSteps"`
+}
+
+func (l instanceLimits) json() limitsJSON {
+	return limitsJSON{RunSpend: dollars(l.RunSpend), UserMonthSpend: dollars(l.UserMonthSpend), UserSteps: l.UserSteps}
 }
 
 func registerLimitRoutes(mux *http.ServeMux, db *sql.DB) {
 	// Everyone may see what they may use.
 	mux.HandleFunc("GET /api/limits", func(w http.ResponseWriter, r *http.Request) {
-		l := currentLimits()
-		writeJSON(w, http.StatusOK, limitsJSON{RunSpend: dollars(l.RunSpend), UserMonthSpend: dollars(l.UserMonthSpend)})
+		writeJSON(w, http.StatusOK, currentLimits().json())
 	})
 	mux.HandleFunc("PUT /api/limits", func(w http.ResponseWriter, r *http.Request) {
 		if refuseKeys(w, r) {
@@ -132,10 +142,15 @@ func registerLimitRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "what a person may spend a month: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		if body.UserSteps < 0 || body.UserSteps > 10000 {
+			http.Error(w, "how many steps a person's runs may go at once isn't a number of steps", http.StatusBadRequest)
+			return
+		}
+		l.UserSteps = body.UserSteps
 		if err := saveLimits(r.Context(), db, l); err != nil {
 			serverError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, limitsJSON{RunSpend: dollars(l.RunSpend), UserMonthSpend: dollars(l.UserMonthSpend)})
+		writeJSON(w, http.StatusOK, l.json())
 	})
 }

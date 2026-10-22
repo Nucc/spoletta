@@ -26,6 +26,10 @@ type flowSettings struct {
 	Repositories []repository `json:"repositories"`
 	// Runs' branches are named <prefix>/run-<id>; empty uses flow/<the flow's name>.
 	BranchPrefix string `json:"branchPrefix"`
+	// The most, in dollars, a run of the flow may spend on its models, 0
+	// for the instance's limit; the instance's is kept to if lower. See
+	// limits.go.
+	RunSpendLimit float64 `json:"runSpendLimit,omitempty"`
 }
 
 type repository struct {
@@ -84,6 +88,9 @@ func nameFromURL(url string) string {
 // Tidies the settings, naming repositories after their URLs unless named,
 // and says what is wrong with them, if anything.
 func (s *flowSettings) check() string {
+	if _, err := dollarMicros(s.RunSpendLimit); err != nil {
+		return "what a run may spend: " + err.Error()
+	}
 	s.BranchPrefix = strings.Trim(strings.TrimSpace(s.BranchPrefix), "/")
 	if s.BranchPrefix != "" && !validBranch(s.BranchPrefix) {
 		return "the branch prefix isn't a valid branch name"

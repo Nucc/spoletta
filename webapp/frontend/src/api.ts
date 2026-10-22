@@ -332,6 +332,9 @@ export type FlowSettings = {
   repositories: Repository[]
   // Runs' branches are named <prefix>/run-<id>; empty uses flow/<the flow's name>.
   branchPrefix: string
+  // The most, in dollars, a run may spend on its models; none or 0 for the
+  // instance's limit, which is kept to if lower.
+  runSpendLimit?: number
 }
 
 // Where the git tokens steps reach repositories with come from: a GitHub
@@ -1016,7 +1019,9 @@ export type RunObject = {
 
 export const fileUrl = (path: string) => `/api/files?path=${encodeURIComponent(path)}`
 
-export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[] }
+// spent is what the run, with its subflows' and items' runs, spent on its
+// models, in dollars, and spendLimit the most it may, 0 for no limit.
+export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[]; spent: number; spendLimit: number }
 
 // Runs a flow on its own whenever its cron expression comes round, on the
 // board as it is, as the Run button does. A time that comes round while its
@@ -1702,4 +1707,31 @@ export function allowEgressHost(host: string, note: string): Promise<EgressHost[
 
 export function removeEgressHost(host: string): Promise<void> {
   return request(`/api/egress-hosts/${encodeURIComponent(host)}`, { method: 'DELETE' })
+}
+
+// What the instance lets runs and people spend on models, in dollars, 0 for
+// no limit: a run that spends its limit is stopped and fails; someone who
+// spends theirs in a month (UTC) has their agents' calls refused until the
+// next.
+export type Limits = { runSpend: number; userMonthSpend: number }
+
+export function getLimits(): Promise<Limits> {
+  return request('/api/limits')
+}
+
+export function saveLimits(l: Limits): Promise<Limits> {
+  return request('/api/limits', { method: 'PUT', body: JSON.stringify(l) })
+}
+
+// What was spent on models in a month: by each person (unpriced counts the
+// calls to models without a known price, counted at the largest models'),
+// and on the costliest runs. Others' spending is for admins.
+export type Spending = {
+  month: string
+  people: { user: number | null; name: string; spent: number; calls: number; unpriced: number }[]
+  runs: { run: number; flow: number; name: string; spent: number }[]
+}
+
+export function getSpending(month?: string): Promise<Spending> {
+  return request('/api/spending' + (month ? `?month=${encodeURIComponent(month)}` : ''))
 }

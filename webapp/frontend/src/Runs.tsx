@@ -228,6 +228,12 @@ export function RunPanel({
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
         {totalUsage(run.steps) && `; its agents used ${formatUsage(totalUsage(run.steps)!)}`}
       </p>
+      {(run.spent > 0 || run.spendLimit > 0) && (
+        <p className="panel-note">
+          It spent {formatDollars(run.spent)} on its models
+          {run.spendLimit > 0 && ` of the ${formatDollars(run.spendLimit)} it may; past that it is stopped`}.
+        </p>
+      )}
       <div className="run-actions">
         <button className="run-logs-button" onClick={() => setShowLogs(true)} title="Read what happened in the run, step by step">
           Logs
@@ -746,4 +752,9 @@ function Block({ label, text, failed, data }: { label: string; text: string; fai
       {data ? <Data text={text} /> : <pre className={failed ? 'failed' : undefined}>{text}</pre>}
     </div>
   )
+}
+
+// Dollars to the cent, or closer under a dime.
+function formatDollars(d: number): string {
+  return '$' + (d < 0.1 ? d.toFixed(4) : d.toFixed(2))
 }

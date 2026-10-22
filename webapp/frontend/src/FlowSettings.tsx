@@ -63,6 +63,7 @@ export function FlowSettingsPanel({
   const [where, setWhere] = useState('')
   const [base, setBase] = useState('')
   const [prefix, setPrefix] = useState(settings.branchPrefix)
+  const [spend, setSpend] = useState(settings.runSpendLimit ? String(settings.runSpendLimit) : '')
   const [saving, setSaving] = useState(false)
   const url = host === 'github' ? githubURL(where) : where.trim()
   const urlOk = /^https:\/\/\S+$/.test(url)
@@ -103,6 +104,12 @@ export function FlowSettingsPanel({
 
   const savePrefix = () => {
     if (prefix.trim() !== settings.branchPrefix) save({ ...settings, branchPrefix: prefix.trim() })
+  }
+
+  const spendLimit = spend.trim() === '' ? 0 : Number(spend)
+  const spendOk = Number.isFinite(spendLimit) && spendLimit >= 0
+  const saveSpend = () => {
+    if (spendOk && spendLimit !== (settings.runSpendLimit ?? 0)) save({ ...settings, runSpendLimit: spendLimit })
   }
 
   const branchPrefix = settings.branchPrefix || defaultPrefix
@@ -256,6 +263,24 @@ export function FlowSettingsPanel({
           onKeyDown={(e) => e.key === 'Enter' && savePrefix()}
         />
         <small className="panel-note">Runs started from now on use it; runs going on keep their branch.</small>
+      </label>
+      <h3 className="panel-subheading">Spending</h3>
+      <label className="panel-field">
+        <span>Most a run may spend ($)</span>
+        <input
+          value={spend}
+          readOnly={readOnly}
+          inputMode="decimal"
+          placeholder="The instance's limit"
+          onChange={(e) => setSpend(e.target.value)}
+          onBlur={saveSpend}
+          onKeyDown={(e) => e.key === 'Enter' && saveSpend()}
+        />
+        {!spendOk && <small className="panel-warning">Write it as an amount of dollars, such as 5 or 2.50.</small>}
+        <small className="panel-note">
+          On its models, with its subflows, items and follow-ups. A run that spends it is stopped and fails. The
+          instance's limit, set in the settings, holds if it is lower.
+        </small>
       </label>
       <FlowAPISection flowId={flowId} onError={onError} />
     </aside>

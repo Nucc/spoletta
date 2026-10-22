@@ -588,6 +588,9 @@ type fakeWorker struct {
 	released []int64
 	// How many requests came without the worker's token.
 	refused int
+	// Whether agents leave reaching their models to the test, rather than
+	// reaching every provider granted as they start.
+	quiet bool
 }
 
 func newFakeWorker(t *testing.T) *fakeWorker {
@@ -649,7 +652,12 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			return
 		}
 		run.Raw = string(body)
-		run.Reached = reachModels(run.LLM)
+		fw.mu.Lock()
+		quiet := fw.quiet
+		fw.mu.Unlock()
+		if !quiet {
+			run.Reached = reachModels(run.LLM)
+		}
 		fw.mu.Lock()
 		fw.agentRuns = append(fw.agentRuns, run)
 		reply := fw.agents[run.ProcessName]

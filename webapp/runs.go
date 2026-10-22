@@ -550,7 +550,16 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			run
 			Steps   []step      `json:"steps"`
 			Objects []runObject `json:"objects"`
+			// What it spent on its models through the model proxy, its
+			// subflows' and items' runs with it, and the most it may, 0
+			// for no limit, in dollars; see spend.go.
+			Spent      float64 `json:"spent"`
+			SpendLimit float64 `json:"spendLimit"`
 		}{run: rn, Steps: []step{}, Objects: []runObject{}}
+		if detail.Spent, detail.SpendLimit, err = runSpent(r.Context(), db, id); err != nil {
+			serverError(w, err)
+			return
+		}
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,

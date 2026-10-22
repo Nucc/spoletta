@@ -5280,3 +5280,34 @@ select.flow-owner:disabled {
 .run-logs-button:hover {
   background: #f6f8fa;
 }
+
+/* The settings' Spending tab: its limits and what was spent. */
+.limits-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 420px;
+}
+
+.limits-form button {
+  align-self: flex-start;
+}
+
+.spending-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-bottom: 16px;
+  min-width: 320px;
+}
+
+.spending-table th,
+.spending-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #eaeef2;
+  text-align: left;
+}
+
+.spending-table th {
+  font-weight: 600;
+  background: #f6f8fa;
+}

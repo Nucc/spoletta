@@ -122,6 +122,9 @@ type engine struct {
 // A run in progress.
 type liveRun struct {
 	cancel context.CancelFunc
+	// Why it was stopped as failed, rather than by a person: it spent what
+	// it may; see fail.
+	failure string
 	// The reviews waiting for a decision, by step id.
 	reviews map[int64]chan decision
 	// What stops each agent, script, Sentry or connector step going, by step id.
@@ -182,17 +185,23 @@ func (e *engine) register(id int64, cancel context.CancelFunc) *liveRun {
 // Ends a run whose walk is over, and returns how it ended: a run stopped or
 // terminated has ended already, and keeps how.
 func (e *engine) finish(ctx context.Context, id int64, w *walk) string {
+	e.mu.Lock()
+	lr := e.runs[id]
+	delete(e.runs, id)
+	failure := ""
+	if lr != nil {
+		failure = lr.failure
+	}
+	e.mu.Unlock()
 	status := runDone
 	switch {
+	case failure != "":
+		status = runFailed
 	case ctx.Err() != nil:
 		status = runInterrupted
 	case w.failed:
 		status = runFailed
 	}
-	e.mu.Lock()
-	lr := e.runs[id]
-	delete(e.runs, id)
-	e.mu.Unlock()
 	if lr != nil {
 		lr.cancel()
 	}
@@ -215,6 +224,18 @@ func (e *engine) stop(id int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if lr, ok := e.runs[id]; ok {
+		lr.cancel()
+	}
+}
+
+// Stops a run as stop does, but as failed, logging why; a run that is over
+// only has it logged.
+func (e *engine) fail(id int64, why string) {
+	runLog(e.db, id, 0, logError, "%s", why)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if lr, ok := e.runs[id]; ok {
+		lr.failure = why
 		lr.cancel()
 	}
 }

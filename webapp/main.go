@@ -134,6 +134,11 @@ func main() {
 	registerMCPRoutes(mux, db, mcp)
 	llm = newLLMBroker(db, workerURL, proxyURL)
 	registerLLMRoutes(mux, llm)
+	if err := loadLimits(context.Background(), db); err != nil {
+		log.Fatalf("read the limits: %v", err)
+	}
+	registerLimitRoutes(mux, db)
+	registerSpendingRoutes(mux, db)
 	egress = newEgressBroker(db, proxyURL)
 	registerEgressRoutes(mux, db)
 	registerSkillRoutes(mux, db)
@@ -144,6 +149,7 @@ func main() {
 	}
 	registerSentryRoutes(mux, sentry)
 	eng := newEngine(db, workerURL, sentry, mcp, parallelSteps)
+	llm.overspent = eng.fail
 	registerRunRoutes(mux, db, eng)
 	registerLogRoutes(mux, db)
 	registerRerunRoutes(mux, db, eng)

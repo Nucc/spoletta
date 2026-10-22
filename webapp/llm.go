@@ -30,7 +30,9 @@ package main
 //
 // What each call took and gave, as the provider's answer says, goes in
 // llm_usage, for whom and which step, with what it cost (spend.go);
-// reading it is best effort and never fails the call.
+// reading it is best effort and never fails the call. A run or a person
+// that has spent what the limits let them (limits.go) has its calls
+// refused, and a run is stopped as it gets there.
 
 import (
 	"bytes"
@@ -103,6 +105,10 @@ type llmGrant struct {
 	routes    map[string]llmRoute
 	issued    time.Time
 	expire    *time.Timer
+	// The run its run's spending counts toward, none for an assistant's,
+	// and the most it and its person may spend (spend.go), 0 for no limit.
+	root                int64
+	runLimit, userLimit int64
 }
 
 type llmBroker struct {
@@ -122,13 +128,20 @@ type llmBroker struct {
 	// pricesFor.
 	catalog   map[string]map[string]modelCost
 	catalogAt time.Time
+	// What runs, by the run their spending counts toward, and people have
+	// spent, while they have tokens; see spend.go.
+	runSpend  map[int64]*runSpend
+	userSpend map[int64]*userSpend
+	// Stops a run that spent what it may, saying why; set to the engine's.
+	overspent func(run int64, why string)
 }
 
 // The broker every agent run goes through; set as the webapp starts.
 var llm *llmBroker
 
 func newLLMBroker(db *sql.DB, workerURL, proxyURL string) *llmBroker {
-	return &llmBroker{db: db, workerURL: workerURL, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: map[string]*llmGrant{}, upstreams: upstreamOverrides()}
+	return &llmBroker{db: db, workerURL: workerURL, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: map[string]*llmGrant{}, upstreams: upstreamOverrides(),
+		runSpend: map[int64]*runSpend{}, userSpend: map[int64]*userSpend{}}
 }
 
 // A provider of the worker's pi config, as the worker says; see the
@@ -222,9 +235,9 @@ func (b *llmBroker) routes(ctx context.Context) (map[string]llmRoute, error) {
 	return routes, nil
 }
 
-// Grants a token reaching the providers for a step of the run, or for the
-// run's follow-up or a flow's assistant (step 0, run 0), done for who, and
-// ends it after ttl unless revoked first.
+// Grants a token reaching the providers for a step of the run or a
+// follow-up of it, or for a flow's assistant (step 0, run 0), done for
+// who, and ends it after ttl unless revoked first.
 func (b *llmBroker) grant(ctx context.Context, who *int64, run, step int64, ttl time.Duration) (*llmAccess, error) {
 	routes, err := b.routes(ctx)
 	if err != nil {
@@ -232,6 +245,9 @@ func (b *llmBroker) grant(ctx context.Context, who *int64, run, step int64, ttl 
 	}
 	token := randomToken()
 	g := &llmGrant{user: who, run: run, step: step, routes: routes, issued: time.Now()}
+	if err := b.trackSpend(ctx, g); err != nil {
+		return nil, err
+	}
 	g.expire = time.AfterFunc(ttl, func() { b.revokeToken(token) })
 	b.mu.Lock()
 	b.grants[token] = g
@@ -257,6 +273,7 @@ func (b *llmBroker) revokeToken(token string) {
 	if g, ok := b.grants[token]; ok {
 		g.expire.Stop()
 		delete(b.grants, token)
+		b.untrackSpend(g)
 	}
 	b.mu.Unlock()
 }
@@ -311,12 +328,22 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	g, granted := b.grants[token]
 	var route llmRoute
 	reaches := false
+	var refused string
 	if granted {
 		route, reaches = g.routes[provider]
+		refused = b.outOfBudget(g)
 	}
 	b.mu.Unlock()
 	if token == "" || !granted || !reaches {
 		http.Error(w, "the model provider "+provider+" isn't available to this step", http.StatusForbidden)
+		return
+	}
+	if refused != "" {
+		if g.run != 0 {
+			runLog(b.db, g.run, g.step, logError, "a call to the model provider %s was refused: %s", provider, refused)
+		}
+		// In the words of Anthropic's errors, which OpenAI's clients read too.
+		writeJSON(w, http.StatusForbidden, map[string]any{"type": "error", "error": map[string]string{"type": "out_of_budget", "message": refused}})
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLLMRequestBytes))
@@ -564,10 +591,16 @@ func (b *llmBroker) recordUsage(g *llmGrant, provider, model string, u llmUsage)
 	if !priced {
 		price = unknownModelCost
 	}
+	cost := price.micros(u)
+	b.spent(g, cost)
+	var root any
+	if g.root != 0 {
+		root = g.root
+	}
 	if _, err := b.db.ExecContext(ctx,
-		`INSERT INTO llm_usage (user_id, run_id, step_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, priced)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		g.user, run, step, provider, truncate(model, 255), u.input, u.output, u.cacheRead, u.cacheWrite, price.micros(u), priced); err != nil {
+		`INSERT INTO llm_usage (user_id, run_id, root_run_id, step_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, priced)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		g.user, run, root, step, provider, truncate(model, 255), u.input, u.output, u.cacheRead, u.cacheWrite, cost, priced); err != nil {
 		log.Printf("record the usage of %s: %v", provider, err)
 	}
 }

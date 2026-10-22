@@ -1,0 +1,60 @@
+# Runs each step in a container of its own, which sees only the step's
+# directories and reaches only the webapp, rather than as one of the
+# worker's processes; see docs/SANDBOX.md. Use it with compose.yaml:
+#
+#   podman compose -f compose.yaml -f compose.sandbox.yaml up --build
+#
+# It needs a rootless podman's API socket, whose user's containers the
+# worker can then manage: in production a user of its own that runs nothing
+# else, as the worker could control its other containers; on a Mac the
+# podman machine's user (`podman info --format '{{.Host.RemoteSocket.Path}}'`
+# says where its socket is, inside the machine).
+services:
+  worker:
+    environment:
+      - SANDBOX=podman
+      # Inside the worker; the host's is mounted here, below.
+      - PODMAN_SOCKET=/run/podman.sock
+      # The image steps run in, built by the sandbox-image service below,
+      # and the network they are on, which only the webapp is on besides.
+      - SANDBOX_IMAGE=localhost/spoletta-sandbox:latest
+      - SANDBOX_NETWORK=spoletta-sandbox
+      # Limits of each step's container, and another OCI runtime for it,
+      # such as runsc (gVisor), if the host has one.
+      - SANDBOX_MEMORY_MB=${SANDBOX_MEMORY_MB:-4096}
+      - SANDBOX_CPUS=${SANDBOX_CPUS:-2}
+      - SANDBOX_PIDS=${SANDBOX_PIDS:-1024}
+      - SANDBOX_RUNTIME=${SANDBOX_RUNTIME:-}
+    volumes:
+      - ${PODMAN_SOCKET_HOST:-/run/user/1000/podman/podman.sock}:/run/podman.sock
+    # SELinux would keep the worker from the socket.
+    security_opt:
+      - label=disable
+    depends_on:
+      - sandbox-image
+
+  webapp:
+    networks:
+      default:
+      # Where steps' containers reach it, by the name the worker gives them.
+      sandbox:
+        aliases:
+          - webapp
+
+  # Only builds the image steps run in, then ends.
+  sandbox-image:
+    build:
+      context: .
+      dockerfile: worker/sandbox.Containerfile
+    image: localhost/spoletta-sandbox:latest
+    command: ["true"]
+    restart: "no"
+
+networks:
+  default:
+  # Internal: it reaches nothing outside, and steps' containers on it only
+  # the webapp, whose proxies take them on to their models, MCP servers and
+  # the internet hosts allowed.
+  sandbox:
+    name: spoletta-sandbox
+    internal: true

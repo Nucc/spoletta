@@ -36,6 +36,11 @@ services:
       # bash. Make one with `openssl rand -hex 32` and set it in .env. Or
       # mount a file and name it in WORKER_TOKEN_FILE, in both.
       - WORKER_TOKEN=${WORKER_TOKEN:-}
+      # Where steps run: process, as the worker's own processes, which see
+      # what the worker sees; for a container per step, which sees only
+      # its own, run with compose.sandbox.yaml too. See docs/SANDBOX.md.
+      - SANDBOX=process
+      - STEPS_DIR=/data/steps
       - PI_SKIP_VERSION_CHECK=1
       - PI_TELEMETRY=0
       # Bedrock without a key signs in with AWS credentials: pass AWS_* here
@@ -55,6 +60,9 @@ services:
       - files:/data/files
       # The runs' git checkouts, kept between their steps.
       - workspaces:/data/workspaces
+      # Steps' private directories, which steps in containers of their own
+      # are given parts of; see compose.sandbox.yaml.
+      - steps:/data/steps
     restart: unless-stopped
 
   webapp:
@@ -158,3 +166,4 @@ volumes:
   mysql-data:
   files:
   workspaces:
+  steps:

@@ -9,12 +9,13 @@ package main
 //     group of its own that stopping the step kills. It sees what the
 //     worker sees, so it isolates nothing; it is for development and
 //     tests, and for a laptop without podman in podman.
-//   - podman: a container per step, made through a rootless podman's API,
-//     that sees only the step's own directories, on a network reaching
-//     only the webapp; see sandbox_podman.go.
+//   - podman and docker: a container per step, made through the engine's
+//     API, that sees only the step's own directories, on a network reaching
+//     only the webapp; see sandbox_engine.go.
+//   - kubernetes: a pod per step, beside the worker's, seeing only the
+//     step's own parts of the worker's volumes; see sandbox_kubernetes.go.
 //
-// Another, such as one starting a Kubernetes pod per step, goes behind the
-// same interface.
+// Another goes behind the same interface.
 
 import (
 	"context"
@@ -96,9 +97,13 @@ func newSandbox(kind string) (sandbox, error) {
 	case "", "process":
 		return processSandbox{}, nil
 	case "podman":
-		return newPodmanSandbox(context.Background())
+		return newEngineSandbox(context.Background(), libpodAPI)
+	case "docker":
+		return newEngineSandbox(context.Background(), dockerAPI)
+	case "kubernetes":
+		return newKubeSandbox(context.Background())
 	}
-	return nil, fmt.Errorf("SANDBOX: no sandbox %q; process or podman", kind)
+	return nil, fmt.Errorf("SANDBOX: no sandbox %q; process, podman, docker or kubernetes", kind)
 }
 
 // Runs the program as a process of the worker's.

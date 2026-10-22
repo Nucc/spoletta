@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -32,7 +33,7 @@ func TestPodmanSandbox(t *testing.T) {
 		t.Skip("SANDBOX_TEST isn't podman")
 	}
 	ctx := context.Background()
-	s, err := newPodmanSandbox(ctx)
+	s, err := newEngineSandbox(ctx, libpodAPI)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestPodmanScriptStepInItsWorkspace(t *testing.T) {
 	if os.Getenv("SANDBOX_TEST") != "podman" {
 		t.Skip("SANDBOX_TEST isn't podman")
 	}
-	s, err := newPodmanSandbox(context.Background())
+	s, err := newEngineSandbox(context.Background(), libpodAPI)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,5 +133,35 @@ func TestPodmanScriptStepInItsWorkspace(t *testing.T) {
 	}
 	if b, err := os.ReadFile(filepath.Join(runHome(31), "cache")); err != nil || string(b) != "cached\n" {
 		t.Errorf("the run's home holds %q, %v", b, err)
+	}
+}
+
+// The Docker Engine API gets a part of each volume, at the same path, with
+// the same limits and none of the worker's own environment.
+func TestDockerContainerSpec(t *testing.T) {
+	s := &engineSandbox{api: dockerAPI, containerConfig: containerConfig{image: "spoletta-sandbox", user: "1000:1000", network: "spoletta-sandbox", memoryMB: 512, cpus: 2, pids: 64},
+		volumes: map[string]string{"/data/workspaces": "flows_workspaces", "/data/steps": "flows_steps"}}
+	c, err := s.containerSpec(sandboxSpec{Cmd: []string{"bash", "s"}, Stdin: "/data/steps/private-1/prompt", Dir: "/data/workspaces/run-1", Env: []string{"PATH=/x", "A=1"},
+		Mounts: []mount{{Path: "/data/steps/private-1", ReadOnly: true}, {Path: "/data/workspaces/run-1"}}, Home: "/data/workspaces/.homes/run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(c)
+	for _, want := range []string{
+		`"Source":"flows_workspaces","Target":"/data/workspaces/run-1","Type":"volume","VolumeOptions":{"Subpath":"run-1"}`,
+		`"ReadOnly":true,"Source":"flows_steps","Target":"/data/steps/private-1","Type":"volume","VolumeOptions":{"Subpath":"private-1"}`,
+		`"NetworkMode":"spoletta-sandbox"`, `"ReadonlyRootfs":true`, `"CapDrop":["ALL"]`, `"SecurityOpt":["no-new-privileges"]`,
+		`"Memory":536870912`, `"NanoCpus":2000000000`, `"PidsLimit":64`, `"A=1"`, `"HOME=/data/workspaces/.homes/run-1"`, `"STEP_STDIN=/data/steps/private-1/prompt"`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("the container lacks %s: %s", want, b)
+		}
+	}
+	if strings.Contains(string(b), "PATH=/x") {
+		t.Errorf("the container got the worker's PATH: %s", b)
+	}
+	c, _ = s.containerSpec(sandboxSpec{Cmd: []string{"true"}, Offline: true})
+	if b, _ := json.Marshal(c); !strings.Contains(string(b), `"NetworkMode":"none"`) {
+		t.Errorf("offline: %s", b)
 	}
 }

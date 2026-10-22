@@ -10,7 +10,8 @@ Spoletta keeps that code from the instance's secrets and from other runs.
 4. [Podman and Docker](#podman-and-docker)
 5. [Kubernetes](#kubernetes)
 6. [Internet access](#internet-access)
-7. [Adding a sandbox](#adding-a-sandbox)
+7. [Limits and the audit log](#limits-and-the-audit-log)
+8. [Adding a sandbox](#adding-a-sandbox)
 
 ## The threat model
 
@@ -251,6 +252,46 @@ So under a sandbox, a script that calls an API or installs packages needs its
 host allowed. pi's own requests go to the webapp directly. Bedrock without a
 key, which signs in with the worker's AWS credentials, isn't supported in a
 container; give it a Bedrock API key in the settings instead.
+
+## Limits and the audit log
+
+Isolation keeps a step from what isn't its own; limits keep a run that
+goes wrong, or a person, from using up what is everyone's. Admins set them
+in the settings, under Spending & limits (`webapp/limits.go`), each off
+until set:
+
+- **What a run may spend on its models.** Every call goes through the
+  model proxy, which prices it as it is recorded, cache reads and writes
+  included, at the price of the worker's models.json or pi's catalog, and
+  a model without a known price at the largest models' (`webapp/spend.go`).
+  A run's subflows, list items and follow-ups count toward it. Once it has
+  spent its limit, the proxy refuses its calls, saying it is out of budget,
+  which pi doesn't try again, and the engine stops the run, which fails
+  saying what it spent. A flow may hold its runs to less in its settings.
+  Calls already going when a run passes its limit finish, so a run with
+  steps running at once spends a little more than its limit.
+- **What a person may spend a month**, UTC's, on their runs, follow-ups and
+  flows' assistants; past it their calls are refused until the next month.
+- **How many steps a person's runs may have going at once**, of the
+  instance's `PARALLEL_STEPS`, so one person's runs can't take every slot.
+  A step waiting for its person's turn holds none of the slots.
+- **How much disk a run may take**: its checkouts, sessions, home and
+  files, measured after each step by the blocks they take, each file once
+  however many links it has (`worker/disk.go`). A step that leaves its run
+  over it fails, its work committed as any step's. Engines can't hold part
+  of a volume to a size, so a step can still fill the volume while it runs;
+  give the workspaces' volume room, or a quota of its own.
+
+Bedrock without a key, which signs in with the worker's AWS credentials,
+doesn't go through the proxy, so no spending limit covers it.
+
+The audit log (`webapp/audit.go`, `#/audit` for admins) records each token
+a step is handed for its models, MCP servers, the internet and git, when
+the model and internet ones end, each internet connection, allowed or
+refused, calls the proxy refused, runs stopped for spending what they may,
+and the limits, internet hosts and model keys admins changed: who, which
+run and step, and what, never a token. What each model call took and cost
+is in `llm_usage`, shown in the Spending & limits tab and each run's panel.
 
 ## Adding a sandbox
 

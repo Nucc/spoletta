@@ -119,6 +119,17 @@ type catalogModel struct {
 	Input         []string `json:"input"`
 	ContextWindow int64    `json:"contextWindow"`
 	MaxTokens     int64    `json:"maxTokens"`
+	// What it costs, in dollars a million tokens, as pi's catalog says.
+	Cost *modelCost `json:"cost,omitempty"`
+}
+
+// A model's price: dollars a million tokens taken in, given out, read from
+// the provider's cache and written to it.
+type modelCost struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cacheRead"`
+	CacheWrite float64 `json:"cacheWrite"`
 }
 
 // A provider that can be added, with its models.
@@ -131,6 +142,11 @@ type catalogProvider struct {
 
 type modelCatalog struct {
 	Providers []catalogProvider `json:"providers"`
+	// The price of every model of every provider pi knows, by provider and
+	// model, which the webapp counts what agents spend by (see its
+	// spend.go), the providers that can't be added too: a gateway's models
+	// are often theirs.
+	Prices map[string]map[string]modelCost `json:"prices"`
 	// The models of every provider pi knows, by ID; the first of an ID,
 	// by the providers' names, when several have it.
 	byID map[string]catalogModel
@@ -192,7 +208,7 @@ func readCatalog(dir string) (*modelCatalog, error) {
 	}
 	slices.Sort(files)
 	byProvider := map[string][]catalogModel{}
-	c := &modelCatalog{byID: map[string]catalogModel{}}
+	c := &modelCatalog{byID: map[string]catalogModel{}, Prices: map[string]map[string]modelCost{}}
 	for _, f := range files {
 		// Beside the providers' files is a manifest of them.
 		if strings.HasPrefix(filepath.Base(f), ".") {
@@ -218,6 +234,12 @@ func readCatalog(dir string) (*modelCatalog, error) {
 					continue
 				}
 				byProvider[provider] = append(byProvider[provider], m)
+				if m.Cost != nil {
+					if c.Prices[provider] == nil {
+						c.Prices[provider] = map[string]modelCost{}
+					}
+					c.Prices[provider][m.ID] = *m.Cost
+				}
 				if _, ok := c.byID[m.ID]; !ok {
 					c.byID[m.ID] = m
 				}
@@ -303,6 +325,9 @@ func providersModels(host []byte, providers []modelProvider, known map[string]ca
 					}
 					if k.MaxTokens > 0 {
 						m["maxTokens"] = k.MaxTokens
+					}
+					if k.Cost != nil {
+						m["cost"] = k.Cost
 					}
 				}
 				models = append(models, m)

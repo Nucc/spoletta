@@ -29,8 +29,8 @@ package main
 // without them, so it isn't routed here.
 //
 // What each call took and gave, as the provider's answer says, goes in
-// llm_usage, for whom and which step; reading it is best effort and never
-// fails the call.
+// llm_usage, for whom and which step, with what it cost (spend.go);
+// reading it is best effort and never fails the call.
 
 import (
 	"bytes"
@@ -118,6 +118,10 @@ type llmBroker struct {
 	hostAt time.Time
 	// Where providers pi knows are reached instead of their own URLs.
 	upstreams map[string]string
+	// What models cost, as pi's catalog says, asked for at most every
+	// pricesFor.
+	catalog   map[string]map[string]modelCost
+	catalogAt time.Time
 }
 
 // The broker every agent run goes through; set as the webapp starts.
@@ -134,6 +138,11 @@ type hostProvider struct {
 	Env     string `json:"env"`
 	BaseURL string `json:"baseUrl,omitempty"`
 	API     string `json:"api,omitempty"`
+	// Its models models.json prices.
+	Models []struct {
+		ID   string    `json:"id"`
+		Cost modelCost `json:"cost"`
+	} `json:"models,omitempty"`
 }
 
 // The worker's providers, asked for again once a minute has passed; what
@@ -401,15 +410,18 @@ func modelOf(body []byte, path string) string {
 	return ""
 }
 
-// How many tokens a call took in and gave out.
+// How many tokens a call took in (besides what it read from the
+// provider's cache), gave out (thinking too), and read from and wrote to
+// the cache.
 type llmUsage struct {
-	input, output int64
+	input, output, cacheRead, cacheWrite int64
 }
 
 // Reads the usage from an answer as it streams past: each event of a
 // streamed one, which may say part of it (Anthropic's says what it took in
 // as it starts and what it gave out as it ends), or the whole of one that
-// isn't, up to a size.
+// isn't, up to a size. Bedrock streams AWS's binary events, whose usage is
+// found by its key among them.
 type usageReader struct {
 	line  []byte
 	whole bytes.Buffer
@@ -448,43 +460,84 @@ func (r *usageReader) event(line []byte) {
 }
 
 func (r *usageReader) usage() llmUsage {
-	if r.u == (llmUsage{}) {
-		var v map[string]any
-		if json.Unmarshal(r.whole.Bytes(), &v) == nil {
-			r.u.add(usageIn(v))
+	if r.u != (llmUsage{}) {
+		return r.u
+	}
+	whole := r.whole.Bytes()
+	var v map[string]any
+	if json.Unmarshal(whole, &v) == nil {
+		r.u.add(usageIn(v))
+		return r.u
+	}
+	for i := 0; ; {
+		at := bytes.Index(whole[i:], []byte(`"usage":`))
+		if at < 0 {
+			return r.u
+		}
+		i += at + len(`"usage":`)
+		var usage map[string]any
+		if json.NewDecoder(bytes.NewReader(whole[i:])).Decode(&usage) == nil {
+			r.u.add(usageOf(usage))
 		}
 	}
-	return r.u
 }
 
 // Keeps the most of each a part says.
 func (u *llmUsage) add(o llmUsage) {
 	u.input, u.output = max(u.input, o.input), max(u.output, o.output)
+	u.cacheRead, u.cacheWrite = max(u.cacheRead, o.cacheRead), max(u.cacheWrite, o.cacheWrite)
 }
 
-// The usage an answer or an event of one holds, in whichever API's words:
-// usage with input_tokens and output_tokens (Anthropic's, OpenAI's
-// responses) or prompt_tokens and completion_tokens (OpenAI's chat), at the
-// top or in its message or response, or Google's usageMetadata.
+// The usage an answer or an event of one holds, in whichever API's words,
+// at the top or in its message or response, or Google's usageMetadata.
 func usageIn(v map[string]any) llmUsage {
 	var u llmUsage
-	num := func(m map[string]any, keys ...string) int64 {
-		for _, k := range keys {
-			if f, ok := m[k].(float64); ok {
-				return int64(f)
-			}
-		}
-		return 0
-	}
 	for _, at := range []map[string]any{v, asMap(v["message"]), asMap(v["response"])} {
 		if usage := asMap(at["usage"]); usage != nil {
-			u.add(llmUsage{num(usage, "input_tokens", "prompt_tokens"), num(usage, "output_tokens", "completion_tokens")})
+			u.add(usageOf(usage))
 		}
 	}
 	if meta := asMap(v["usageMetadata"]); meta != nil {
-		u.add(llmUsage{num(meta, "promptTokenCount"), num(meta, "candidatesTokenCount")})
+		cached := tokens(meta, "cachedContentTokenCount")
+		u.add(llmUsage{
+			input:     max(tokens(meta, "promptTokenCount")-cached, 0),
+			output:    tokens(meta, "candidatesTokenCount") + tokens(meta, "thoughtsTokenCount"),
+			cacheRead: cached,
+		})
 	}
 	return u
+}
+
+// A usage block: Anthropic's, whose input_tokens leaves out what was read
+// from and written to the cache, which it counts apart; OpenAI's, whose
+// input (prompt_tokens in its chat API) holds what was read from the cache,
+// said in its details; Bedrock's, as Anthropic's in other words.
+func usageOf(m map[string]any) llmUsage {
+	details := asMap(m["prompt_tokens_details"])
+	if details == nil {
+		details = asMap(m["input_tokens_details"])
+	}
+	cached := tokens(details, "cached_tokens")
+	in := tokens(m, "input_tokens", "prompt_tokens", "inputTokens")
+	if details != nil {
+		in = max(in-cached, 0)
+	}
+	return llmUsage{
+		input:      in,
+		output:     tokens(m, "output_tokens", "completion_tokens", "outputTokens"),
+		cacheRead:  cached + tokens(m, "cache_read_input_tokens", "cacheReadInputTokens"),
+		cacheWrite: tokens(m, "cache_creation_input_tokens", "cacheWriteInputTokens"),
+	}
+}
+
+// The first of the keys m has as a number.
+func tokens(m map[string]any, keys ...string) int64 {
+	for _, k := range keys {
+		if f, ok := m[k].(float64); ok {
+			return int64(f)
+		}
+	}
+	return 0
 }
 
 func asMap(v any) map[string]any {
@@ -492,7 +545,8 @@ func asMap(v any) map[string]any {
 	return m
 }
 
-// Records what a call took and gave, unless the answer didn't say.
+// Records what a call took and gave and what it cost, unless the answer
+// didn't say.
 func (b *llmBroker) recordUsage(g *llmGrant, provider, model string, u llmUsage) {
 	if u == (llmUsage{}) || b.db == nil {
 		return
@@ -506,9 +560,14 @@ func (b *llmBroker) recordUsage(g *llmGrant, provider, model string, u llmUsage)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	price, priced := b.prices(ctx).of(provider, model)
+	if !priced {
+		price = unknownModelCost
+	}
 	if _, err := b.db.ExecContext(ctx,
-		"INSERT INTO llm_usage (user_id, run_id, step_id, provider, model, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		g.user, run, step, provider, truncate(model, 255), u.input, u.output); err != nil {
+		`INSERT INTO llm_usage (user_id, run_id, step_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, priced)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		g.user, run, step, provider, truncate(model, 255), u.input, u.output, u.cacheRead, u.cacheWrite, price.micros(u), priced); err != nil {
 		log.Printf("record the usage of %s: %v", provider, err)
 	}
 }

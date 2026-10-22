@@ -14,6 +14,9 @@ package main
 // step's models.json points them at the proxy (see providers.go). Bedrock
 // without a key signs in with the worker's AWS credentials instead, which
 // pi gets, and only pi.
+//
+// The prices models.json gives its models go to the webapp too, which
+// counts what agents spend by them before pi's catalog's.
 
 import (
 	"encoding/json"
@@ -54,6 +57,13 @@ type hostProvider struct {
 	Env     string `json:"env"`
 	BaseURL string `json:"baseUrl,omitempty"`
 	API     string `json:"api,omitempty"`
+	// Its models models.json prices.
+	Models []hostModel `json:"models,omitempty"`
+}
+
+type hostModel struct {
+	ID   string    `json:"id"`
+	Cost modelCost `json:"cost"`
 }
 
 // The providers of the offered models, from the models.json in hostDir.
@@ -67,6 +77,10 @@ func hostProvidersOf(hostDir string, models agentModels) ([]hostProvider, error)
 			APIKey  *string `json:"apiKey"`
 			BaseURL string  `json:"baseUrl"`
 			API     string  `json:"api"`
+			Models  []struct {
+				ID   string     `json:"id"`
+				Cost *modelCost `json:"cost"`
+			} `json:"models"`
 		} `json:"providers"`
 	}
 	if raw != nil {
@@ -86,6 +100,11 @@ func hostProvidersOf(hostDir string, models agentModels) ([]hostProvider, error)
 		p := hostProvider{ID: id, Env: builtinKeys[id]}
 		if c, ok := config.Providers[id]; ok {
 			p.BaseURL, p.API = c.BaseURL, c.API
+			for _, m := range c.Models {
+				if m.ID != "" && m.Cost != nil {
+					p.Models = append(p.Models, hostModel{ID: m.ID, Cost: *m.Cost})
+				}
+			}
 			if c.APIKey != nil {
 				switch k := *c.APIKey; {
 				case envReference.MatchString(k):

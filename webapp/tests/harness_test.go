@@ -75,7 +75,8 @@ var testProvider = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWrite
 		writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]string{{"id": "gw-2"}, {"id": "gw-1"}}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"key": key, "path": r.URL.Path, "usage": map[string]int{"input_tokens": 30, "output_tokens": 7}})
+	writeJSON(w, http.StatusOK, map[string]any{"key": key, "path": r.URL.Path, "usage": map[string]int{
+		"input_tokens": 30, "output_tokens": 7, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200}})
 }))
 
 // Where the webapps reach providers pi knows: the test provider.
@@ -604,7 +605,8 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			{"id": "openai", "env": "OPENAI_API_KEY", "baseUrl": testProvider.URL + "/gateway-openai"},
 		})
 	})
-	// pi knows Anthropic, Amazon Bedrock and OpenAI, with a model or two each.
+	// pi knows Anthropic, Amazon Bedrock and OpenAI, with a model or two
+	// each, and prices the model agents ask for at Anthropic's.
 	mux.HandleFunc("GET /catalog", func(w http.ResponseWriter, r *http.Request) {
 		models := func(ids ...string) []map[string]any {
 			var ms []map[string]any
@@ -617,6 +619,8 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			{"id": "anthropic", "name": "Anthropic", "env": "ANTHROPIC_API_KEY", "models": models("claude-a", "claude-b")},
 			{"id": "amazon-bedrock", "name": "Amazon Bedrock", "env": "AWS_BEARER_TOKEN_BEDROCK", "models": models("global.anthropic.claude-b")},
 			{"id": "openai", "name": "OpenAI", "env": "OPENAI_API_KEY", "models": models("gpt-x")},
+		}, "prices": map[string]any{
+			"anthropic": map[string]any{"fake-model": map[string]float64{"input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 3.75}},
 		}})
 	})
 	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {

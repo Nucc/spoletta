@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -16,7 +17,8 @@ func TestHostProvidersOf(t *testing.T) {
 		"openai": {"baseUrl": "https://gw/openai"},
 		"fireworks": {"apiKey": "${GATEWAY_KEY}", "baseUrl": "https://gw/fireworks/v1"},
 		"amazon-bedrock": {"apiKey": "GATEWAY_KEY"},
-		"local": {"apiKey": "!pass show local", "baseUrl": "http://localhost:11434/v1", "api": "openai-completions"}
+		"local": {"apiKey": "!pass show local", "baseUrl": "http://localhost:11434/v1", "api": "openai-completions",
+			"models": [{"id": "llama", "cost": {"input": 1, "output": 2}}, {"id": "free"}]}
 	}}`), 0o644)
 	got, err := hostProvidersOf(dir, agentModels{
 		Default: "fireworks/accounts/fireworks/models/kimi",
@@ -29,10 +31,10 @@ func TestHostProvidersOf(t *testing.T) {
 		{ID: "amazon-bedrock", Env: "GATEWAY_KEY"},
 		{ID: "anthropic", Env: "ANTHROPIC_API_KEY"},
 		{ID: "fireworks", Env: "GATEWAY_KEY", BaseURL: "https://gw/fireworks/v1"},
-		{ID: "local", BaseURL: "http://localhost:11434/v1", API: "openai-completions"},
+		{ID: "local", BaseURL: "http://localhost:11434/v1", API: "openai-completions", Models: []hostModel{{ID: "llama", Cost: modelCost{Input: 1, Output: 2}}}},
 		{ID: "openai", Env: "OPENAI_API_KEY", BaseURL: "https://gw/openai"},
 	}
-	if !slices.Equal(got, want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("host providers = %+v\nwant %+v", got, want)
 	}
 }

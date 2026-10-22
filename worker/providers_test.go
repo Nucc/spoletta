@@ -15,7 +15,7 @@ func TestReadCatalog(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "anthropic.json"), []byte(`{"anthropic-messages": {
 		"chat:claude-b": {"id": "claude-b", "name": "Claude B", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000},
-		"chat:claude-a": {"id": "claude-a", "name": "Claude A"},
+		"chat:claude-a": {"id": "claude-a", "name": "Claude A", "cost": {"input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 3.75}},
 		"image:painter": {"id": "painter"}
 	}}`), 0o644)
 	os.WriteFile(filepath.Join(dir, "amazon-bedrock.json"), []byte(`{"bedrock-converse-stream": {
@@ -41,6 +41,9 @@ func TestReadCatalog(t *testing.T) {
 	}
 	if m := c.byID["global.anthropic.claude-b"]; !m.Reasoning || c.byID["claude-b"].ContextWindow != 1000000 {
 		t.Errorf("by ID = %+v", c.byID)
+	}
+	if p := c.Prices["anthropic"]["claude-a"]; p != (modelCost{3, 15, 0.3, 3.75}) || len(c.Prices["anthropic"]) != 1 {
+		t.Errorf("prices = %+v", c.Prices)
 	}
 }
 

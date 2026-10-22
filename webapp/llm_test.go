@@ -163,27 +163,65 @@ func TestLLMProxyStreams(t *testing.T) {
 }
 
 // The usage is read from a streamed answer's events, the most each says,
-// and from a whole one in each API's words.
+// and from a whole one in each API's words, with what was read from the
+// cache apart from what was taken in.
 func TestUsageReader(t *testing.T) {
 	r := &usageReader{}
-	r.Write([]byte("data: {\"message\":{\"usage\":{\"input_tokens\":120,\"output_tokens\":1}}}\n\ndata: {\"usa"))
+	r.Write([]byte("data: {\"message\":{\"usage\":{\"input_tokens\":120,\"cache_read_input_tokens\":9000,\"cache_creation_input_tokens\":300,\"output_tokens\":1}}}\n\ndata: {\"usa"))
 	r.Write([]byte("ge\":{\"output_tokens\":42}}\n\ndata: [DONE]\n"))
-	if u := r.usage(); u != (llmUsage{120, 42}) {
+	if u := r.usage(); u != (llmUsage{120, 42, 9000, 300}) {
 		t.Errorf("Anthropic's stream = %+v", u)
 	}
 	for body, want := range map[string]llmUsage{
-		`{"usage": {"prompt_tokens": 10, "completion_tokens": 3}}`:                                       llmUsage{10, 3},
-		`{"type": "response.completed", "response": {"usage": {"input_tokens": 7, "output_tokens": 2}}}`: llmUsage{7, 2},
-		`{"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 9}}`:                          llmUsage{5, 9},
+		`{"usage": {"prompt_tokens": 10, "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 4}}}`:                                      {input: 6, output: 3, cacheRead: 4},
+		`{"type": "response.completed", "response": {"usage": {"input_tokens": 7, "output_tokens": 2, "input_tokens_details": {"cached_tokens": 0}}}}`: {input: 7, output: 2},
+		`{"usageMetadata": {"promptTokenCount": 5, "cachedContentTokenCount": 2, "candidatesTokenCount": 9, "thoughtsTokenCount": 4}}`:                 {input: 3, output: 13, cacheRead: 2},
+		// Bedrock's binary events, with the usage in the last.
+		"\x00\x00\x00\x9b:event-type\x07\x00\x08metadata{\"metrics\":{\"latencyMs\":5},\"usage\":{\"inputTokens\":11,\"outputTokens\":5,\"cacheReadInputTokens\":100}}\x8f\x12": {input: 11, output: 5, cacheRead: 100},
 		`{"error": "nope"}`: {},
 	} {
 		r := &usageReader{}
 		r.Write([]byte(body))
 		if u := r.usage(); u != want {
-			t.Errorf("%s = %+v, want %+v", body, u, want)
+			t.Errorf("%q = %+v, want %+v", body, u, want)
 		}
 	}
 	if m := modelOf(nil, "models/gemini-3:streamGenerateContent"); m != "gemini-3" {
 		t.Errorf("Google's model = %q", m)
+	}
+}
+
+// A call costs what its tokens of each kind cost at its model's price: the
+// worker's models.json's, the catalog's for its provider, or the catalog's
+// for its ID with any provider, without what comes before a slash too.
+func TestPrices(t *testing.T) {
+	p := priceBook{
+		host: map[string]map[string]modelCost{"gateway": {"house-model": {Input: 1}}},
+		catalog: map[string]map[string]modelCost{
+			"anthropic":  {"claude-x": {Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
+			"openrouter": {"anthropic/claude-x": {Input: 4}},
+		},
+	}
+	for _, c := range []struct {
+		provider, model string
+		want            float64
+		priced          bool
+	}{
+		{"gateway", "house-model", 1, true},
+		{"anthropic", "claude-x", 3, true},
+		{"openrouter", "anthropic/claude-x", 4, true},
+		{"gateway", "claude-x", 3, true},
+		{"gateway", "vendor/claude-x", 3, true},
+		{"gateway", "mystery", 0, false},
+	} {
+		got, ok := p.of(c.provider, c.model)
+		if got.Input != c.want || ok != c.priced {
+			t.Errorf("%s/%s = %+v, %v", c.provider, c.model, got, ok)
+		}
+	}
+	c, _ := p.of("anthropic", "claude-x")
+	// $3 a million taken in, $15 given out, $0.30 read and $3.75 written.
+	if m := c.micros(llmUsage{input: 1000, output: 100, cacheRead: 10000, cacheWrite: 2000}); m != 3000+1500+3000+7500 {
+		t.Errorf("cost = %d millionths", m)
 	}
 }

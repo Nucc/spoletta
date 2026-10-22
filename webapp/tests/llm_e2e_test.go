@@ -42,13 +42,20 @@ func TestAgentsReachTheirModelsThroughTheProxy(t *testing.T) {
 		t.Errorf("after the step, its token got %d %q", status, key)
 	}
 
-	// What each call took is recorded as the step's.
+	// What each call took and cost is recorded as the step's: the model's
+	// price is the catalog's, $3 a million taken in, $15 given out, $0.30
+	// read from the cache and $3.75 written to it.
 	step := onlyStep(t, d, "Write")
-	var calls, in, out int64
-	if err := db.QueryRow("SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM llm_usage WHERE step_id = ? AND run_id = ?", step.ID, d.ID).Scan(&calls, &in, &out); err != nil {
+	var calls, in, out, read, written, cost, priced int64
+	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(cache_write_tokens), 0), COALESCE(SUM(cost_micros), 0), COALESCE(SUM(priced), 0) FROM llm_usage WHERE step_id = ? AND run_id = ?`,
+		step.ID, d.ID).Scan(&calls, &in, &out, &read, &written, &cost, &priced); err != nil {
 		t.Fatal(err)
 	}
-	if want := int64(len(run.Reached)); calls != want || in != 30*want || out != 7*want {
-		t.Errorf("recorded %d calls taking %d and giving %d, want %d", calls, in, out, want)
+	if want := int64(len(run.Reached)); calls != want || in != 30*want || out != 7*want || read != 1000*want || written != 200*want || priced != want {
+		t.Errorf("recorded %d calls taking %d, giving %d, reading %d and writing %d, %d priced; want %d", calls, in, out, read, written, priced, want)
+	}
+	if want := int64(len(run.Reached)) * (30*3 + 7*15 + 1000*3/10 + 200*375/100); cost != want {
+		t.Errorf("the calls cost %d millionths of a dollar, want %d", cost, want)
 	}
 }

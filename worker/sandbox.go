@@ -26,6 +26,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -53,6 +55,8 @@ type sandboxSpec struct {
 	Graceful bool
 	// Whether it reaches nothing over the network, not even the webapp.
 	Offline bool
+	// The home directory the program gets, the run's; on the tmpfs without one.
+	Home string
 	// The proxy a sandbox whose network reaches only the webapp reaches
 	// the internet through, with the step's credentials; see the webapp's
 	// egress.go. A process reaches it itself.
@@ -104,6 +108,9 @@ func (processSandbox) run(ctx context.Context, spec sandboxSpec, stdout, stderr 
 	cmd := exec.CommandContext(ctx, spec.Cmd[0], spec.Cmd[1:]...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
+	if spec.Home != "" {
+		cmd.Env = append(slices.DeleteFunc(slices.Clone(spec.Env), func(kv string) bool { return strings.HasPrefix(kv, "HOME=") }), "HOME="+spec.Home)
+	}
 	if spec.Stdin != "" {
 		f, err := os.Open(spec.Stdin)
 		if err != nil {
@@ -170,4 +177,31 @@ func ownForSandbox(path string, tree bool) error {
 		}
 		return os.Lchown(p, sandboxOwner, sandboxOwner)
 	})
+}
+
+// Every step of a run gets the run's home: what it installs or caches
+// outside its checkouts, ~/.npm, ~/.cache, tools it put in ~/.local, and
+// its shell's setup, is there for the next step of the run and its
+// follow-ups, while each step still runs in a sandbox of its own. It lives
+// beside the workspaces, outside every checkout, and goes with the run's
+// workspaces when they are deleted; releasing them keeps it.
+func runHome(run int64) string {
+	return filepath.Join(workspacesRoot, ".homes", fmt.Sprintf("run-%d", run))
+}
+
+// Gives the program the run's home, made the first time, if it is of a run.
+func (spec *sandboxSpec) withHome(run int64) error {
+	if run <= 0 {
+		return nil
+	}
+	home := runHome(run)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	if err := ownForSandbox(home, false); err != nil {
+		return err
+	}
+	spec.Home = home
+	spec.Mounts = append(spec.Mounts, mount{Path: home})
+	return nil
 }

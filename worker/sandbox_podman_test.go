@@ -117,7 +117,8 @@ func TestPodmanScriptStepInItsWorkspace(t *testing.T) {
 	os.MkdirAll(filepath.Join(workspacesRoot, "run-32", "api"), 0o700)
 
 	res := runScript(context.Background(), scriptRequest{
-		Script:    "ls " + workspacesRoot + "; cd api && git log --oneline | wc -l && echo new > new.txt",
+		Run:       31,
+		Script:    "echo cached > $HOME/cache; ls " + workspacesRoot + "; cd api && git log --oneline | wc -l && echo new > new.txt",
 		Workspace: &workspaceSpec{ID: "run-31", Branch: branch, Run: 31, Step: 4, Repositories: []repository{{Name: "api", URL: url}}},
 	}, time.Minute, newStepLogger("test", nil))
 	if !res.OK {
@@ -128,5 +129,8 @@ func TestPodmanScriptStepInItsWorkspace(t *testing.T) {
 	}
 	if len(res.Commits) != 1 || len(res.Commits[0].Commits) != 1 || !strings.Contains(res.Commits[0].Commits[0], "left uncommitted") {
 		t.Errorf("commits = %+v", res.Commits)
+	}
+	if b, err := os.ReadFile(filepath.Join(runHome(31), "cache")); err != nil || string(b) != "cached\n" {
+		t.Errorf("the run's home holds %q, %v", b, err)
 	}
 }

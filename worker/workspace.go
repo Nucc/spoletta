@@ -638,7 +638,7 @@ func releaseWorkspace(dir string) (bool, error) {
 }
 
 // Deletes the workspaces of runs, run-<id> and the ones of its items,
-// run-<id>-*, with their branches and sessions.
+// run-<id>-*, with their branches, sessions and the run's home.
 func deleteWorkspaces(runs []int64) error {
 	for _, id := range runs {
 		for _, dir := range workspacesOf(id) {
@@ -651,6 +651,9 @@ func deleteWorkspaces(runs []int64) error {
 			if err != nil {
 				return err
 			}
+		}
+		if err := os.RemoveAll(runHome(id)); err != nil {
+			return err
 		}
 	}
 	return nil

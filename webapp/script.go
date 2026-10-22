@@ -21,6 +21,8 @@ import (
 
 // What the worker runs.
 type scriptRun struct {
+	// The run the step is of, whose home the worker gives every step of it.
+	Run int64 `json:"run,omitempty"`
 	// Identify the process in the worker's logs.
 	ProcessID   int64         `json:"processId"`
 	ProcessName string        `json:"processName"`
@@ -55,7 +57,7 @@ type scriptInput struct {
 // the step's id once it is recorded.
 func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWorkspace, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
 	var res runResult
-	run := scriptRun{ProcessID: id, Inputs: []scriptInput{}}
+	run := scriptRun{Run: runID, ProcessID: id, Inputs: []scriptInput{}}
 	var settings processSettings
 	err := db.QueryRowContext(ctx, "SELECT name, script, settings FROM processes WHERE id = ?", id).Scan(&run.ProcessName, &run.Script, &settings)
 	if errors.Is(err, sql.ErrNoRows) {

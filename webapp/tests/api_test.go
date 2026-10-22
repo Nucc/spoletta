@@ -73,6 +73,8 @@ type llmAccess struct {
 
 // What the worker runs.
 type agentRun struct {
+	// The run the step is of, whose home the worker gives its steps.
+	Run int64 `json:"run,omitempty"`
 	// Identify the process in the worker's logs.
 	ProcessID   int64  `json:"processId"`
 	ProcessName string `json:"processName"`
@@ -574,6 +576,8 @@ type scriptInput struct {
 
 // What the worker runs.
 type scriptRun struct {
+	// The run the step is of, whose home the worker gives its steps.
+	Run int64 `json:"run,omitempty"`
 	// Identify the process in the worker's logs.
 	ProcessID   int64         `json:"processId"`
 	ProcessName string        `json:"processName"`

@@ -41,3 +41,27 @@ func TestProcessSandbox(t *testing.T) {
 		t.Errorf("a missing program: %v", err)
 	}
 }
+
+// Every step of a run gets the run's home, which outlasts the step and
+// goes when the run's workspaces are deleted; another run has its own.
+func TestStepsOfARunShareItsHome(t *testing.T) {
+	workspacesRoot = t.TempDir()
+	step := func(run int64, script string) runResult {
+		return runScript(context.Background(), scriptRequest{Run: run, Script: script}, time.Minute, newStepLogger("test", nil))
+	}
+	if res := step(5, `echo cached > "$HOME/cache"; echo "$HOME"`); !res.OK || res.Output != runHome(5) {
+		t.Fatalf("the first step: %+v", res)
+	}
+	if res := step(5, `cat "$HOME/cache"`); res.Output != "cached" {
+		t.Errorf("the run's next step found %+v", res)
+	}
+	if res := step(6, `cat "$HOME/cache" 2>/dev/null || echo none`); res.Output != "none" {
+		t.Errorf("another run found %+v", res)
+	}
+	if err := deleteWorkspaces([]int64{5}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(runHome(5)); !os.IsNotExist(err) {
+		t.Errorf("the deleted run's home: %v", err)
+	}
+}

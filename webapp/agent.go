@@ -62,6 +62,9 @@ type changeRequest struct {
 
 // What the worker runs.
 type agentRun struct {
+	// The run the step is of, whose home the worker gives every step of it;
+	// 0 for none, as the assistant's.
+	Run int64 `json:"run,omitempty"`
 	// Identify the process in the worker's logs.
 	ProcessID   int64  `json:"processId"`
 	ProcessName string `json:"processName"`
@@ -169,7 +172,7 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 // before the inputs. started gets the step's id once it is recorded.
 func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, ws *runWorkspace, runID, id int64, inputs []runInput, cr *changeRequest, about string, started func(int64)) (runResult, error) {
 	var res runResult
-	run := agentRun{ProcessID: id}
+	run := agentRun{Run: runID, ProcessID: id}
 	var settings processSettings
 	var flow int64
 	err := db.QueryRowContext(ctx, "SELECT flow_id, name, prompt, model, thinking, settings FROM processes WHERE id = ?", id).

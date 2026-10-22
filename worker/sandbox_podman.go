@@ -214,13 +214,17 @@ func (s *podmanSandbox) containerSpec(spec sandboxSpec) (map[string]any, error) 
 	for _, kv := range spec.Env {
 		k, v, _ := strings.Cut(kv, "=")
 		switch k {
-		// The image's own, and a home on the tmpfs, the root being read-only.
+		// The image's own, and a home of the run's or on the tmpfs, the root
+		// being read-only.
 		case "PATH", "HOME", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy":
 			continue
 		}
 		env[k] = v
 	}
 	env["HOME"] = "/tmp"
+	if spec.Home != "" {
+		env["HOME"] = spec.Home
+	}
 	// The internet through the webapp's proxy, which curl, git and npm
 	// take; the webapp itself, models and MCP servers, directly.
 	if spec.Egress != "" {

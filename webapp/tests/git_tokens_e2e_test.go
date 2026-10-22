@@ -47,8 +47,13 @@ func TestStepsGetTheInstancesGitToken(t *testing.T) {
 	a := startApp(t, fw.url, "GIT_TOKEN=static-e2e-token")
 	a.worker = fw
 	fixes, plain := gitTokensFlows(a, "https://github.com/acme/api")
-	if d := a.finish(a.startRun(fixes.ID).ID); d.Status != runDone {
+	d := a.finish(a.startRun(fixes.ID).ID)
+	if d.Status != runDone {
 		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
+	}
+	// Each step says which run it is of, whose home it gets.
+	if fw.runsOf("Fix")[0].Run != d.ID || fw.scriptRuns[0].Run != d.ID {
+		t.Errorf("the steps were of runs %d and %d, want %d", fw.runsOf("Fix")[0].Run, fw.scriptRuns[0].Run, d.ID)
 	}
 	a.finish(a.startRun(plain.ID).ID)
 	for name, git := range map[string]*gitCredentials{"Fix": fw.runsOf("Fix")[0].Git, "Check": fw.scriptRuns[0].Git} {

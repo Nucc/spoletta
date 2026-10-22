@@ -46,6 +46,8 @@ type agentModels struct {
 }
 
 type runRequest struct {
+	// The run the step is of, whose home every step of it gets; see runHome.
+	Run int64 `json:"run"`
 	// Identify the process in the logs.
 	ProcessID   int64  `json:"processId"`
 	ProcessName string `json:"processName"`
@@ -127,6 +129,8 @@ type outputSpec struct {
 
 // A script process's script, with the objects it takes.
 type scriptRequest struct {
+	// The run the step is of, whose home every step of it gets.
+	Run int64 `json:"run"`
 	// Identify the process in the logs.
 	ProcessID   int64         `json:"processId"`
 	ProcessName string        `json:"processName"`
@@ -619,6 +623,9 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	if run.SessionID != "" {
 		spec.Mounts = append(spec.Mounts, mount{Path: sessionsDir(run.Workspace.ID)})
 	}
+	if err := spec.withHome(run.Run); err != nil {
+		return runResult{Error: "prepare the run's home: " + err.Error()}
+	}
 
 	timeout, short := untilTokenEnds(timeout, run.Git)
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -883,6 +890,9 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	if run.FilesDir != "" {
 		spec.Env = append(spec.Env, "OUTPUTS="+run.FilesDir)
 		spec.Mounts = append(spec.Mounts, mount{Path: run.FilesDir})
+	}
+	if err := spec.withHome(run.Run); err != nil {
+		return runResult{Error: "prepare the run's home: " + err.Error()}
 	}
 	stdout := &cappedBuffer{max: maxScriptBytes}
 	stderr := &cappedBuffer{max: 64 << 10}

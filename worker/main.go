@@ -66,6 +66,8 @@ type runRequest struct {
 	MCPToken   string      `json:"mcpToken"`
 	// The workspace it works in, if the flow has repositories.
 	Workspace *workspaceSpec `json:"workspace"`
+	// The most disk the run may take, in bytes, 0 for no limit; see disk.go.
+	DiskLimit int64 `json:"diskLimit,omitempty"`
 	// The token its git reaches the workspace's repositories with, if any;
 	// see git_credentials.go.
 	Git *gitCredentials `json:"git"`
@@ -140,6 +142,8 @@ type scriptRequest struct {
 	FilesDir string `json:"filesDir"`
 	// The workspace it works in, if the flow has repositories.
 	Workspace *workspaceSpec `json:"workspace"`
+	// The most disk the run may take, in bytes, 0 for no limit; see disk.go.
+	DiskLimit int64 `json:"diskLimit,omitempty"`
 	// The token its git reaches the workspace's repositories with, if any.
 	Git *gitCredentials `json:"git"`
 	// Where a script in a container reaches the internet hosts it may.
@@ -538,6 +542,8 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 		return runResult{Error: err.Error()}
 	}
 	ws.process, ws.session = run.ProcessName, run.SessionID
+	// Once its work is brought back.
+	defer checkDisk(run.Run, run.DiskLimit, &res, l)
 	defer ws.done(&res)
 
 	// An empty model or thinking level leaves the choice to the pi settings.
@@ -858,6 +864,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		return runResult{Error: err.Error()}
 	}
 	ws.process = run.ProcessName
+	defer checkDisk(run.Run, run.DiskLimit, &res, l)
 	defer ws.done(&res)
 	inputs := filepath.Join(private, "inputs")
 	if err := os.Mkdir(inputs, 0o700); err != nil {

@@ -75,6 +75,8 @@ type llmAccess struct {
 type agentRun struct {
 	// The run the step is of, whose home the worker gives its steps.
 	Run int64 `json:"run,omitempty"`
+	// The most disk the run may take, in bytes.
+	DiskLimit int64 `json:"diskLimit,omitempty"`
 	// Identify the process in the worker's logs.
 	ProcessID   int64  `json:"processId"`
 	ProcessName string `json:"processName"`
@@ -578,6 +580,8 @@ type scriptInput struct {
 type scriptRun struct {
 	// The run the step is of, whose home the worker gives its steps.
 	Run int64 `json:"run,omitempty"`
+	// The most disk the run may take, in bytes.
+	DiskLimit int64 `json:"diskLimit,omitempty"`
 	// Identify the process in the worker's logs.
 	ProcessID   int64         `json:"processId"`
 	ProcessName string        `json:"processName"`

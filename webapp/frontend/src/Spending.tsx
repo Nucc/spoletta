@@ -10,6 +10,7 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
   const [runSpend, setRunSpend] = useState('')
   const [userSpend, setUserSpend] = useState('')
   const [userSteps, setUserSteps] = useState('')
+  const [disk, setDisk] = useState('')
   const [saving, setSaving] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -19,6 +20,7 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
     setRunSpend(l.runSpend ? String(l.runSpend) : '')
     setUserSpend(l.userMonthSpend ? String(l.userMonthSpend) : '')
     setUserSteps(l.userParallelSteps ? String(l.userParallelSteps) : '')
+    setDisk(l.runDiskMb ? String(l.runDiskMb) : '')
   }, [])
   useEffect(() => {
     refresh().catch(onError)
@@ -30,12 +32,14 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
   const user = amount(userSpend)
   const steps = amount(userSteps)
   const stepsOk = Number.isInteger(steps) && steps >= 0
+  const diskMb = amount(disk)
+  const diskOk = Number.isInteger(diskMb) && diskMb >= 0
 
   const onSave = async (e: FormEvent) => {
     e.preventDefault()
     setSaving(true)
     try {
-      setLimits(await saveLimits({ runSpend: run, userMonthSpend: user, userParallelSteps: steps }))
+      setLimits(await saveLimits({ runSpend: run, userMonthSpend: user, userParallelSteps: steps, runDiskMb: diskMb }))
     } catch (err) {
       onError(err)
     } finally {
@@ -44,8 +48,8 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
   }
 
   return (
-    <section className="flow-section" aria-label="Spending">
-      <h2>Spending</h2>
+    <section className="flow-section" aria-label="Spending and limits">
+      <h2>Spending &amp; limits</h2>
       <p className="flows-note">
         What agents spend on their models, at the prices of pi's catalog or of the worker's models.json. A model without
         a known price is counted at the largest models' price, so a limit isn't passed unnoticed. Months are UTC's.
@@ -91,7 +95,15 @@ export function SpendingSection({ admin, onError }: { admin: boolean; onError: (
               take every slot; the rest wait their turn.
             </small>
           </label>
-          <button type="submit" disabled={saving || !valid(run) || !valid(user) || !stepsOk}>
+          <label className="panel-field">
+            <span>Disk a run may take (MB)</span>
+            <input value={disk} inputMode="numeric" placeholder="No limit" onChange={(e) => setDisk(e.target.value)} />
+            <small className="panel-note">
+              Its checkouts, agents' sessions, home and files, checked after each step: a step that leaves the run over
+              it fails, its work kept.
+            </small>
+          </label>
+          <button type="submit" disabled={saving || !valid(run) || !valid(user) || !stepsOk || !diskOk}>
             Save limits
           </button>
         </form>

@@ -24,7 +24,7 @@ function tabsFor(me: Me): { id: SettingsTab; label: string }[] {
   tabs.push({ id: 'connectors', label: 'Connectors' })
   tabs.push({ id: 'mcp', label: 'MCP servers' })
   if (configures(me)) tabs.push({ id: 'egress', label: 'Internet access' })
-  tabs.push({ id: 'spending', label: 'Spending' })
+  tabs.push({ id: 'spending', label: 'Spending & limits' })
   tabs.push({ id: 'skills', label: 'Skills & commands' })
   tabs.push({ id: 'api', label: 'API keys' })
   if (me.user) tabs.push({ id: 'teams', label: 'Teams' })

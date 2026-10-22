@@ -261,6 +261,7 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	f.StartedAt = time.Now()
 	run.Prompt = followUpPrompt(message)
 	run.Workspace = s.Workspace
+	run.DiskLimit = currentLimits().diskBytes()
 	run.Run = runID
 	run.SessionID = s.ID
 	run.Resume = true

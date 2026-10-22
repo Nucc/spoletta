@@ -33,6 +33,8 @@ type scriptRun struct {
 	// The workspace it works in, its working directory, if it works on
 	// repositories; $WORKSPACE and $BRANCH say where and on which branch.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// The most disk the run may take, in bytes; see agentRun.
+	DiskLimit int64 `json:"diskLimit,omitempty"`
 	// The token the step's git reaches its repositories with; see
 	// git_tokens.go.
 	Git *gitCredentials `json:"git,omitempty"`
@@ -84,6 +86,7 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 	}
 
 	run.Workspace = ws.forProcess(settings)
+	run.DiskLimit = currentLimits().diskBytes()
 	run.TimeoutMS = settings.timeout().Milliseconds()
 	if run.Since, err = scheduleSince(ctx, db, runID); err != nil {
 		return res, err

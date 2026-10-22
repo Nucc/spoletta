@@ -1712,9 +1712,9 @@ export function removeEgressHost(host: string): Promise<void> {
 // What the instance lets runs and people use, 0 for no limit: what a run
 // and a person in a month (UTC) may spend on models, in dollars (a run that
 // spends its limit is stopped and fails; someone who spends theirs has their
-// agents' calls refused until the next month), and how many steps a person's
-// runs may have going at once.
-export type Limits = { runSpend: number; userMonthSpend: number; userParallelSteps: number }
+// agents' calls refused until the next month), how many steps a person's
+// runs may have going at once, and how much disk a run may take, in MB.
+export type Limits = { runSpend: number; userMonthSpend: number; userParallelSteps: number; runDiskMb: number }
 
 export function getLimits(): Promise<Limits> {
   return request('/api/limits')

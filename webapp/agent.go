@@ -82,6 +82,9 @@ type agentRun struct {
 	MCPToken   string         `json:"mcpToken,omitempty"`
 	// The workspace it works in, if it works on repositories.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
+	// The most disk the run may take, in bytes, checked after the step; 0
+	// for no limit. See limits.go.
+	DiskLimit int64 `json:"diskLimit,omitempty"`
 	// The token the step's git reaches its repositories with; see
 	// git_tokens.go. Beside the workspace, which is kept, as it never is.
 	Git *gitCredentials `json:"git,omitempty"`
@@ -211,6 +214,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	default:
 		run.Prompt = expanded
 		run.Workspace = ws.forProcess(settings)
+		run.DiskLimit = currentLimits().diskBytes()
 		run.Prompt = withChangeRequest(withInputs(withFlow(withWorkspace(run.Prompt, run.Workspace), run.ProcessName, about), inputs), cr)
 	}
 

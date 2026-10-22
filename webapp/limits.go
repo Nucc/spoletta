@@ -17,6 +17,9 @@ package main
 //     so one person's runs can't take every slot; the rest wait their turn
 //     (engine.go's personSlot). Runs nobody started, without sign-in, have
 //     no person.
+//   - run_disk_mb: how much disk a run's workspaces, sessions, home and
+//     files may take, in MB, which the worker checks after each of its
+//     steps (its disk.go), failing a step that leaves the run over it.
 //
 // Limits are read as the webapp starts and kept here; saving them takes
 // effect for steps started after.
@@ -35,7 +38,11 @@ type instanceLimits struct {
 	RunSpend       int64
 	UserMonthSpend int64
 	UserSteps      int64
+	RunDiskMB      int64
 }
+
+// The most disk a run may take, in bytes.
+func (l instanceLimits) diskBytes() int64 { return l.RunDiskMB << 20 }
 
 var limits struct {
 	mu sync.Mutex
@@ -50,7 +57,7 @@ func currentLimits() instanceLimits {
 
 // The rows of limits by their names.
 func (l *instanceLimits) fields() map[string]*int64 {
-	return map[string]*int64{"run_spend": &l.RunSpend, "user_month_spend": &l.UserMonthSpend, "user_parallel_steps": &l.UserSteps}
+	return map[string]*int64{"run_spend": &l.RunSpend, "user_month_spend": &l.UserMonthSpend, "user_parallel_steps": &l.UserSteps, "run_disk_mb": &l.RunDiskMB}
 }
 
 func loadLimits(ctx context.Context, db *sql.DB) error {
@@ -112,10 +119,11 @@ type limitsJSON struct {
 	RunSpend       float64 `json:"runSpend"`
 	UserMonthSpend float64 `json:"userMonthSpend"`
 	UserSteps      int64   `json:"userParallelSteps"`
+	RunDiskMB      int64   `json:"runDiskMb"`
 }
 
 func (l instanceLimits) json() limitsJSON {
-	return limitsJSON{RunSpend: dollars(l.RunSpend), UserMonthSpend: dollars(l.UserMonthSpend), UserSteps: l.UserSteps}
+	return limitsJSON{RunSpend: dollars(l.RunSpend), UserMonthSpend: dollars(l.UserMonthSpend), UserSteps: l.UserSteps, RunDiskMB: l.RunDiskMB}
 }
 
 func registerLimitRoutes(mux *http.ServeMux, db *sql.DB) {
@@ -146,7 +154,11 @@ func registerLimitRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "how many steps a person's runs may go at once isn't a number of steps", http.StatusBadRequest)
 			return
 		}
-		l.UserSteps = body.UserSteps
+		if body.RunDiskMB < 0 || body.RunDiskMB > 1<<30 {
+			http.Error(w, "how much disk a run may take isn't a number of MB", http.StatusBadRequest)
+			return
+		}
+		l.UserSteps, l.RunDiskMB = body.UserSteps, body.RunDiskMB
 		if err := saveLimits(r.Context(), db, l); err != nil {
 			serverError(w, err)
 			return

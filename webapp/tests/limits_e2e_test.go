@@ -250,3 +250,22 @@ func TestAPersonsStepsAtOnce(t *testing.T) {
 	}
 	logLineWith(t, a.runLogs(d.ID, 0), " waits: its person's runs have as many steps going as they may at once, 1")
 }
+
+// The worker is told the most disk a run may take, which it checks after
+// each step; a step that leaves its run over it fails saying so.
+func TestTheWorkerIsToldARunsDiskLimit(t *testing.T) {
+	a := newApp(t)
+	a.call("PUT", "/api/limits", map[string]any{"runDiskMb": 5}, http.StatusOK, nil)
+	t.Cleanup(func() { secretsDB(t).Exec("DELETE FROM limits") })
+	a.refused("PUT", "/api/limits", map[string]any{"runDiskMb": -1}, http.StatusBadRequest, "isn't a number of MB")
+	fixes, _ := gitTokensFlows(a, "https://github.com/acme/api")
+	tooBig := "the run takes 6.0 MB of disk, more than the 5.0 MB it may"
+	a.worker.onScript("Check", func(context.Context, scriptRun) runResult { return runResult{Error: tooBig} })
+	d := a.finish(a.startRun(fixes.ID).ID)
+	if d.Status != runFailed || onlyStep(t, d, "Check").Error != tooBig {
+		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
+	}
+	if fix, check := a.worker.runsOf("Fix")[0].DiskLimit, a.worker.scriptRuns[0].DiskLimit; fix != 5<<20 || check != 5<<20 {
+		t.Errorf("the steps may take %d and %d bytes", fix, check)
+	}
+}

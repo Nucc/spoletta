@@ -33,8 +33,6 @@ services:
     # SELinux would keep the worker from the socket.
     security_opt:
       - label=disable
-    depends_on:
-      - sandbox-image
 
   webapp:
     networks:
@@ -44,7 +42,8 @@ services:
         aliases:
           - webapp
 
-  # Only builds the image steps run in, then ends.
+  # Only builds the image steps run in, then ends; compose builds every
+  # image before it starts anything.
   sandbox-image:
     build:
       context: .

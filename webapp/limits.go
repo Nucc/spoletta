@@ -106,8 +106,11 @@ func dollarMicros(d float64) (int64, error) {
 func dollars(micros int64) float64 { return float64(micros) / 1e6 }
 
 // An amount of millionths of a dollar as people read it, to the cent, or
-// closer under a dime.
+// closer under a dime, and to the millionth under a hundredth of a cent.
 func formatDollars(micros int64) string {
+	if micros < 100 {
+		return fmt.Sprintf("$%.6f", dollars(micros))
+	}
 	if micros < 100000 {
 		return fmt.Sprintf("$%.4f", dollars(micros))
 	}

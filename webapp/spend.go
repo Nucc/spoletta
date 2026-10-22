@@ -265,7 +265,7 @@ func (b *llmBroker) spent(g *llmGrant, micros int64) {
 		rs.micros += micros
 		if g.runLimit > 0 && rs.micros >= g.runLimit && !rs.over {
 			rs.over = true
-			stop = fmt.Sprintf("stopped: it spent %s on its models, and may spend %s", formatDollars(rs.micros), formatDollars(g.runLimit))
+			stop = fmt.Sprintf("it spent %s on its models, and may spend %s", formatDollars(rs.micros), formatDollars(g.runLimit))
 			for token, other := range b.grants {
 				if other.root == g.root {
 					other.expire.Stop()
@@ -278,7 +278,7 @@ func (b *llmBroker) spent(g *llmGrant, micros int64) {
 	}
 	b.mu.Unlock()
 	if stop != "" {
-		audit("run.overspent", g.user, g.root, 0, "%s", stop)
+		audit("run.overspent", g.user, g.root, 0, "stopped: %s", stop)
 		if b.overspent != nil {
 			b.overspent(g.root, stop)
 		}

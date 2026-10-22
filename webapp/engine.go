@@ -127,8 +127,11 @@ type engine struct {
 type liveRun struct {
 	cancel context.CancelFunc
 	// Why it was stopped as failed, rather than by a person: it spent what
-	// it may; see fail.
-	failure string
+	// it may; see fail. The run's context ends with it as its cause, which
+	// its steps going then fail with; a subflow's or item's run has none of
+	// its own, as only the run at their top is failed.
+	failure  string
+	failWith context.CancelCauseFunc
 	// The reviews waiting for a decision, by step id.
 	reviews map[int64]chan decision
 	// What stops each agent, script, Sentry or connector step going, by step id.
@@ -146,8 +149,9 @@ func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker
 // Its agents and scripts work in a workspace with the repositories, on a
 // branch of the run's own, whose name starts with prefix.
 func (e *engine) start(id, flow, version int64, board snapshot, repos []repository, prefix string, given map[int64]value) {
-	ctx, cancel := context.WithCancel(context.Background())
-	lr := e.register(id, cancel)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	lr := e.register(id, func() { cancel(nil) })
+	lr.failWith = cancel
 	go func() {
 		logRunStarted(e.db, id)
 		fr := newFlowRun(flow, version, board, repos, prefix)
@@ -167,8 +171,9 @@ func (e *engine) start(id, flow, version int64, board snapshot, repos []reposito
 // the process, with the objects holding values, and its branches starting
 // from the commits in starts; see reruns.go.
 func (e *engine) rerun(nr pendingRun, flow int64, board *int64, given map[int64]value, from int64, values map[int64]value, starts map[string]string) {
-	ctx, cancel := context.WithCancel(context.Background())
-	lr := e.register(nr.id, cancel)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	lr := e.register(nr.id, func() { cancel(nil) })
+	lr.failWith = cancel
 	go func() {
 		logRunStarted(e.db, nr.id)
 		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
@@ -233,15 +238,19 @@ func (e *engine) stop(id int64) {
 	}
 }
 
-// Stops a run as stop does, but as failed, logging why; a run that is over
-// only has it logged.
+// Stops a run as stop does, but as failed, logging why, such as "it spent
+// what it may"; a run that is over only has it logged.
 func (e *engine) fail(id int64, why string) {
-	runLog(e.db, id, 0, logError, "%s", why)
+	runLog(e.db, id, 0, logError, "stopped: %s", why)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if lr, ok := e.runs[id]; ok {
 		lr.failure = why
-		lr.cancel()
+		if lr.failWith != nil {
+			lr.failWith(errors.New(why))
+		} else {
+			lr.cancel()
+		}
 	}
 }
 
@@ -1637,10 +1646,14 @@ func (e *engine) endPersonSlot(who *int64) {
 // How long after its timeout the engine ends a step the worker didn't.
 const timeoutGrace = 30 * time.Second
 
-// Why a step's context ended, as the step's error.
+// Why a step's context ended, as the step's error: with the run failed on
+// purpose, why.
 func stopReason(ctx context.Context) string {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "it ran longer than its timeout"
+	}
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		return "it was stopped, as its run " + strings.TrimPrefix(cause.Error(), "it ")
 	}
 	return "it was stopped"
 }

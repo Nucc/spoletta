@@ -78,6 +78,9 @@ func TestARunThatSpendsWhatItMayIsStopped(t *testing.T) {
 		t.Errorf("stopped %v; the calls answered %v", stopped, statuses)
 	}
 	logLineWith(t, a.runLogs(d.ID, 0), "stopped: it spent $0.0025 on its models, and may spend $0.0024")
+	if e := onlyStep(t, d, "Spend").Error; e != "it was stopped, as its run spent $0.0025 on its models, and may spend $0.0024" {
+		t.Errorf("the step failed with %q", e)
+	}
 	if l := a.audit(fmt.Sprintf("kind:run.overspent run:%d", d.ID), 1); len(l.Events) != 1 {
 		t.Errorf("the audit log has %+v", l.Events)
 	}

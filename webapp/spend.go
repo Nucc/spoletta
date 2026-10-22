@@ -271,13 +271,17 @@ func (b *llmBroker) spent(g *llmGrant, micros int64) {
 					other.expire.Stop()
 					delete(b.grants, token)
 					b.untrackSpend(other)
+					audit("model.revoke", other.user, other.run, other.step, "the model proxy's token ended, as its run spent what it may")
 				}
 			}
 		}
 	}
 	b.mu.Unlock()
-	if stop != "" && b.overspent != nil {
-		b.overspent(g.root, stop)
+	if stop != "" {
+		audit("run.overspent", g.user, g.root, 0, "%s", stop)
+		if b.overspent != nil {
+			b.overspent(g.root, stop)
+		}
 	}
 }
 

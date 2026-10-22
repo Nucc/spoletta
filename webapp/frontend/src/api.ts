@@ -453,6 +453,27 @@ const searchParams = (s: Search | undefined) => {
   return p.size > 0 ? p.toString() : ''
 }
 
+// An event of the audit log: what a step was handed or did with it, or what
+// an admin changed, for whom and which run and step.
+export type AuditEvent = {
+  id: number
+  at: string
+  who: string
+  run: number | null
+  flow: number | null
+  step: number | null
+  kind: string
+  detail: string
+}
+
+export type AuditLog = { events: AuditEvent[] } & SearchResult
+
+// The latest events the search matches; for admins.
+export function getAuditLog(search?: Search): Promise<AuditLog> {
+  const p = searchParams(search)
+  return request(`/api/audit${p ? '?' + p : ''}`)
+}
+
 // A shared struct's records, the latest written first or as sorted, with
 // the fields its object has in the board's order. more: more than these match.
 export type SharedRecords = { fields: string[]; states: string[]; records: SharedRecord[]; more: boolean } & SearchResult

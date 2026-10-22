@@ -4,6 +4,7 @@ import { getFlow, updateFlow, type Flow } from './api'
 import Board from './Board'
 import FlowData from './FlowData'
 import FlowList from './FlowList'
+import AuditLog from './Audit'
 import Records from './Records'
 import Schedules from './Schedules'
 import Settings, { type SettingsTab } from './Settings'
@@ -11,13 +12,15 @@ import Settings, { type SettingsTab } from './Settings'
 // The page the URL's hash names: #/flows/<id> for a flow's board,
 // #/flows/<id>/runs/<run> for it with one of its runs open, #/flows/<id>/data
 // for what its runs held, #/flows/<id>/records for a shared struct's
-// records, both with ?q=<search>&sort=<key> for what they show, #/schedules for the schedules, #/settings/<tab>
+// records, both with ?q=<search>&sort=<key> for what they show, #/audit for
+// the audit log, with them too, #/schedules for the schedules, #/settings/<tab>
 // for the settings, anything else for the list of flows. #/people, where
 // the people were before the settings, is their tab now.
-type Page = { flow: number; run: number | null } | { data: number } | { records: number } | { settings: SettingsTab | null } | 'schedules' | null
+type Page = { flow: number; run: number | null } | { data: number } | { records: number } | { settings: SettingsTab | null } | 'schedules' | 'audit' | null
 
 const pageInHash = (): Page => {
   if (window.location.hash === '#/schedules') return 'schedules'
+  if (/^#\/audit(?:\?.*)?$/.test(window.location.hash)) return 'audit'
   if (window.location.hash === '#/people') return { settings: 'people' }
   const s = /^#\/settings(?:\/(\w+))?$/.exec(window.location.hash)
   if (s) return { settings: (s[1] as SettingsTab | undefined) ?? null }
@@ -40,6 +43,7 @@ export default function App() {
 
   if (page === null) return <FlowList onOpen={(id) => (window.location.hash = `#/flows/${id}`)} />
   if (page === 'schedules') return <Schedules />
+  if (page === 'audit') return <AuditLog />
   if ('settings' in page) return <Settings tab={page.settings} />
   if ('data' in page) return <FlowData key={page.data} id={page.data} />
   if ('records' in page) return <Records key={page.records} id={page.records} />

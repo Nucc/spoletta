@@ -78,6 +78,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
                 {t.label}
               </a>
             ))}
+            {configures(me) && <a href="#/audit">Audit log</a>}
           </nav>
           <main className="settings-main">
             {shown === 'account' && <AccountSection me={me} />}

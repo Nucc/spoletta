@@ -272,6 +272,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 			return res, err
 		}
 		defer mcp.revoke(run.MCPToken)
+		auditMCP(who, runID, stepID, run.MCPServers)
 		res.Error = msg
 	}
 	if res.Error == "" && run.Workspace != nil {

@@ -138,6 +138,8 @@ func main() {
 		log.Fatalf("read the limits: %v", err)
 	}
 	registerLimitRoutes(mux, db)
+	go writeAudit(db)
+	registerAuditRoutes(mux, db)
 	registerSpendingRoutes(mux, db)
 	egress = newEgressBroker(db, proxyURL)
 	registerEgressRoutes(mux, db)

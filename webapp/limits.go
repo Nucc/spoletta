@@ -163,6 +163,8 @@ func registerLimitRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		auditChange(r, "limits.set", "a run may spend %s, a person %s a month, with %d steps at once, and a run take %d MB of disk (0 for no limit)",
+			formatDollars(l.RunSpend), formatDollars(l.UserMonthSpend), l.UserSteps, l.RunDiskMB)
 		writeJSON(w, http.StatusOK, l.json())
 	})
 }

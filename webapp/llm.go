@@ -248,7 +248,7 @@ func (b *llmBroker) grant(ctx context.Context, who *int64, run, step int64, ttl 
 	if err := b.trackSpend(ctx, g); err != nil {
 		return nil, err
 	}
-	g.expire = time.AfterFunc(ttl, func() { b.revokeToken(token) })
+	g.expire = time.AfterFunc(ttl, func() { b.revokeToken(token, "expired") })
 	b.mu.Lock()
 	b.grants[token] = g
 	b.mu.Unlock()
@@ -257,6 +257,7 @@ func (b *llmBroker) grant(ctx context.Context, who *int64, run, step int64, ttl 
 		access.Providers = append(access.Providers, id)
 	}
 	slices.Sort(access.Providers)
+	audit("model.grant", who, run, step, "the model proxy, reaching %s, for %s at most", strings.Join(access.Providers, ", "), ttl.Round(time.Second))
 	return access, nil
 }
 
@@ -265,17 +266,21 @@ func (b *llmBroker) revoke(access *llmAccess) {
 	if access == nil {
 		return
 	}
-	b.revokeToken(access.Token)
+	b.revokeToken(access.Token, "ended with its step")
 }
 
-func (b *llmBroker) revokeToken(token string) {
+func (b *llmBroker) revokeToken(token, why string) {
 	b.mu.Lock()
-	if g, ok := b.grants[token]; ok {
+	g, ok := b.grants[token]
+	if ok {
 		g.expire.Stop()
 		delete(b.grants, token)
 		b.untrackSpend(g)
 	}
 	b.mu.Unlock()
+	if ok {
+		audit("model.revoke", g.user, g.run, g.step, "the model proxy's token %s", why)
+	}
 }
 
 // How long a token outlives its step's timeout, should the webapp lose the
@@ -335,10 +340,16 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Unlock()
 	if token == "" || !granted || !reaches {
+		if granted {
+			audit("model.refused", g.user, g.run, g.step, "a call to the model provider %s, which the step may not reach", provider)
+		} else if token != "" {
+			audit("model.refused", nil, 0, 0, "a call to the model provider %s with a token that isn't granted, or ended", provider)
+		}
 		http.Error(w, "the model provider "+provider+" isn't available to this step", http.StatusForbidden)
 		return
 	}
 	if refused != "" {
+		audit("model.refused", g.user, g.run, g.step, "a call to the model provider %s: %s", provider, refused)
 		if g.run != 0 {
 			runLog(b.db, g.run, g.step, logError, "a call to the model provider %s was refused: %s", provider, refused)
 		}

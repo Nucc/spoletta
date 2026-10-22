@@ -97,7 +97,7 @@ func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl
 		ttl = llmDefaultTTL
 	}
 	token := randomToken()
-	g.expire = time.AfterFunc(ttl+llmGrantMargin, func() { b.revokeToken(token) })
+	g.expire = time.AfterFunc(ttl+llmGrantMargin, func() { b.revokeToken(token, "expired") })
 	b.mu.Lock()
 	b.grants[token] = g
 	b.mu.Unlock()
@@ -107,6 +107,7 @@ func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl
 	}
 	u.User = url.UserPassword("step", token)
 	u.Path = ""
+	audit("internet.grant", who, run, step, "the egress proxy, reaching the hosts allowed and %s", hostList(g.repos))
 	return &egressAccess{URL: u.String()}
 }
 
@@ -117,12 +118,12 @@ func (b *egressBroker) revoke(a *egressAccess) {
 	}
 	if u, err := url.Parse(a.URL); err == nil && u.User != nil {
 		token, _ := u.User.Password()
-		b.revokeToken(token)
+		b.revokeToken(token, "ended with its step")
 	}
 }
 
 // Ends the token, and every tunnel open with it.
-func (b *egressBroker) revokeToken(token string) {
+func (b *egressBroker) revokeToken(token, why string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if g, ok := b.grants[token]; ok {
@@ -131,7 +132,16 @@ func (b *egressBroker) revokeToken(token string) {
 		for c := range g.tunnels {
 			c.Close()
 		}
+		audit("internet.revoke", g.user, g.run, g.step, "the egress proxy's token %s, with %d connections open", why, len(g.tunnels))
 	}
+}
+
+// The repositories' hosts as the audit log says them.
+func hostList(hosts []string) string {
+	if len(hosts) == 0 {
+		return "no repository's host"
+	}
+	return "the repositories' " + strings.Join(hosts, ", ")
 }
 
 // Keeps the tunnel's connection with its grant, so ending the grant ends
@@ -299,8 +309,13 @@ func (b *egressBroker) forward(w http.ResponseWriter, r *http.Request, g *egress
 	io.Copy(w, resp.Body)
 }
 
-// Notes a connection in the step's run's log.
+// Notes a connection in the step's run's log, and the audit log.
 func (b *egressBroker) logConnection(g *egressGrant, format string, args ...any) {
+	kind := "internet.connect"
+	if strings.HasPrefix(format, "refused") {
+		kind = "internet.refused"
+	}
+	audit(kind, g.user, g.run, g.step, format, args...)
 	if g.run == 0 || b.db == nil {
 		log.Printf("egress of step %d: "+format, append([]any{g.step}, args...)...)
 		return
@@ -417,6 +432,7 @@ func registerEgressRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		auditChange(r, "internet.allow", "steps may reach %s", host)
 		list(w, r)
 	})
 	mux.HandleFunc("DELETE /api/egress-hosts/{host}", func(w http.ResponseWriter, r *http.Request) {
@@ -427,6 +443,7 @@ func registerEgressRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		auditChange(r, "internet.disallow", "steps no longer reach %s", r.PathValue("host"))
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

@@ -207,6 +207,7 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		auditChange(r, "model_key.set", "the key %s reads", env)
 		writeKeys(w, r)
 	})
 
@@ -218,6 +219,7 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		auditChange(r, "model_key.remove", "the key %s reads", r.PathValue("env"))
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

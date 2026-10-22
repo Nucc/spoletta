@@ -128,7 +128,17 @@ func (s gitTokenSource) forWorkspace(ctx context.Context, ws *workspaceSpec) (*g
 	for _, r := range ws.Repositories {
 		urls = append(urls, r.URL)
 	}
-	return s.token(ctx, urls)
+	creds, err := s.token(ctx, urls)
+	switch {
+	case err != nil:
+		audit("git.refused", nil, ws.Run, ws.Step, "no git token for %s: %v", strings.Join(urls, ", "), err)
+	case creds == nil:
+	case creds.Expires != nil:
+		audit("git.grant", nil, ws.Run, ws.Step, "a GitHub App's token for %s, until %s", strings.Join(urls, ", "), creds.Expires.UTC().Format(time.RFC3339))
+	default:
+		audit("git.grant", nil, ws.Run, ws.Step, "the instance's GIT_TOKEN, for %s", strings.Join(urls, ", "))
+	}
+	return creds, err
 }
 
 // A token for the repositories: the GitHub App's if they are all on its

@@ -13,8 +13,9 @@ import { bound, bounds, NONE, parse, quote, resolve, select, selection, type Fac
 // How a facet's value reads, such as a run status's label; none for as it is.
 export type Display = (facet: SearchFacet, value: string) => string | undefined
 
-// The query and sort a table page keeps in its address and for next time.
-export function useSearch(page: 'data' | 'records', id: number) {
+// The query and sort a table page keeps in its address and for next time: a
+// flow's data or records, or the audit log, which is no flow's (id 0).
+export function useSearch(page: 'data' | 'records' | 'audit', id: number) {
   const storeKey = `search-${page}-${id}`
   const [state, setState] = useState<{ query: string; sort: Sort | null }>(() => {
     const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
@@ -31,7 +32,8 @@ export function useSearch(page: 'data' | 'records', id: number) {
     const params = new URLSearchParams()
     if (state.query.trim() !== '') params.set('q', state.query)
     if (state.sort) params.set('sort', (state.sort.desc ? '-' : '') + state.sort.key)
-    const hash = `#/flows/${id}/${page}${params.size > 0 ? '?' + params.toString().replace(/\+/g, '%20') : ''}`
+    const base = page === 'audit' ? '#/audit' : `#/flows/${id}/${page}`
+    const hash = `${base}${params.size > 0 ? '?' + params.toString().replace(/\+/g, '%20') : ''}`
     if (window.location.hash !== hash) window.history.replaceState(null, '', window.location.pathname + window.location.search + hash)
     try {
       localStorage.setItem(storeKey, JSON.stringify({ query: state.query, sort: params.get('sort') ?? undefined }))

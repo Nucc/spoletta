@@ -5311,3 +5311,10 @@ select.flow-owner:disabled {
   font-weight: 600;
   background: #f6f8fa;
 }
+
+/* The audit log's events say what happened in a sentence, which wraps. */
+.data-table td.audit-detail {
+  white-space: normal;
+  min-width: 320px;
+  max-width: 640px;
+}

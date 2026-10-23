@@ -186,6 +186,9 @@ func main() {
 		fmt.Fprintf(w, "ok, mysql %s\n", version)
 	})
 
+	// Once every part of the webapp says what it does with them.
+	go takeCommands(context.Background(), db)
+
 	addr := listenAddr(auth != nil)
 	log.Printf("started; listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, egress.wrap(auth.protect(guardFlows(db, mux)))))

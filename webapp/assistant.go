@@ -82,14 +82,26 @@ func assistantMessages(ctx context.Context, q rowsQuerier, flow int64) ([]assist
 	return msgs, err
 }
 
-// The replies going, by flow, so they can be stopped.
+// The replies going here, by flow, so they can be stopped.
 type assistants struct {
 	mu    sync.Mutex
 	going map[int64]context.CancelFunc
 }
 
+// Stops the flow's reply, if it goes here.
+func (as *assistants) stop(flow int64) bool {
+	as.mu.Lock()
+	cancel, ok := as.going[flow]
+	as.mu.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
+}
+
 func registerAssistantRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	as := &assistants{going: map[int64]context.CancelFunc{}}
+	commandHandlers[commandStopReply] = func(c command) { as.stop(c.target) }
 
 	mux.HandleFunc("GET /api/flows/{id}/assistant", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -173,14 +185,31 @@ func registerAssistantRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		as.mu.Lock()
-		cancel, ok := as.going[id]
-		as.mu.Unlock()
-		if !ok {
-			http.Error(w, "the assistant isn't replying", http.StatusConflict)
-			return
+		if !as.stop(id) {
+			// Another replica may be replying.
+			var reply int64
+			err := db.QueryRowContext(r.Context(), "SELECT id FROM assistant_messages WHERE flow_id = ? AND role = ? AND status = ?",
+				id, roleAssistant, stepActive).Scan(&reply)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				serverError(w, err)
+				return
+			}
+			owner := ""
+			if err == nil {
+				if owner, err = ownerOf(r.Context(), db, "assistant_messages", reply); err != nil {
+					serverError(w, err)
+					return
+				}
+			}
+			if owner == "" || owner == replicaID {
+				http.Error(w, "the assistant isn't replying", http.StatusConflict)
+				return
+			}
+			if err := sendCommand(r.Context(), db, owner, commandStopReply, id, 0, nil); err != nil {
+				serverError(w, err)
+				return
+			}
 		}
-		cancel()
 		w.WriteHeader(http.StatusNoContent)
 	})
 

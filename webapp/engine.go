@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -139,8 +140,10 @@ type liveRun struct {
 }
 
 func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker, parallelSteps int) *engine {
-	return &engine{db: db, workerURL: workerURL, sentry: sentry, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{},
+	e := &engine{db: db, workerURL: workerURL, sentry: sentry, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{},
 		personSteps: map[int64]int64{}, stepEnded: make(chan struct{})}
+	e.takeCommands()
+	return e
 }
 
 // Executes a run of the whole flow, on the top board of version's board,
@@ -229,22 +232,39 @@ func (e *engine) finish(ctx context.Context, id int64, w *walk) string {
 	return rn.Status
 }
 
-// Cancels a run's steps still going, and its reviews still waiting.
+// Cancels a run's steps still going, and its reviews still waiting, at
+// the replica walking it.
 func (e *engine) stop(id int64) {
+	if !e.stopHere(id) {
+		e.ask(id, commandStopRun, 0, nil)
+	}
+}
+
+// Stops the run as stop does, if this replica walks it.
+func (e *engine) stopHere(id int64) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if lr, ok := e.runs[id]; ok {
+	lr, ok := e.runs[id]
+	if ok {
 		lr.cancel()
 	}
+	return ok
 }
 
 // Stops a run as stop does, but as failed, logging why, such as "it spent
 // what it may"; a run that is over only has it logged.
 func (e *engine) fail(id int64, why string) {
 	runLog(e.db, id, 0, logError, "stopped: %s", why)
+	if !e.failHere(id, why) {
+		e.ask(id, commandFailRun, 0, why)
+	}
+}
+
+func (e *engine) failHere(id int64, why string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if lr, ok := e.runs[id]; ok {
+	lr, ok := e.runs[id]
+	if ok {
 		lr.failure = why
 		if lr.failWith != nil {
 			lr.failWith(errors.New(why))
@@ -252,35 +272,106 @@ func (e *engine) fail(id int64, why string) {
 			lr.cancel()
 		}
 	}
+	return ok
 }
 
 // Cancels one step of a run, which fails it and ends its branch; the rest of
 // the run goes on. False if the step isn't going.
 func (e *engine) stopStep(runID, stepID int64) bool {
+	if going, here := e.stopStepHere(runID, stepID); here {
+		return going
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var active int
+	if err := e.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM run_steps WHERE id = ? AND run_id = ? AND status = ?", stepID, runID, stepActive).Scan(&active); err != nil {
+		log.Printf("look for step %d of run %d: %v", stepID, runID, err)
+		return false
+	}
+	return active > 0 && e.ask(runID, commandStopStep, stepID, nil)
+}
+
+// Stops the step as stopStep does, if this replica walks its run: whether
+// the step was going, and whether the run is walked here.
+func (e *engine) stopStepHere(runID, stepID int64) (going, here bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	lr, ok := e.runs[runID]
+	if !ok {
+		return false, false
+	}
+	cancel, ok := lr.steps[stepID]
+	if ok {
+		cancel()
+	}
+	return ok, true
+}
+
+// Lets a run waiting for a review go on with the human's decision, at the
+// replica walking it.
+func (e *engine) decide(runID, stepID int64, d decision) {
+	if !e.decideHere(runID, stepID, d) {
+		e.ask(runID, commandDecide, stepID, decisionCommand{State: d.state, Instructions: d.instructions, Output: d.output, Entries: d.entries})
+	}
+}
+
+func (e *engine) decideHere(runID, stepID int64, d decision) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	lr, ok := e.runs[runID]
 	if !ok {
 		return false
 	}
-	cancel, ok := lr.steps[stepID]
-	if ok {
-		cancel()
-	}
-	return ok
-}
-
-// Lets a run waiting for a review go on with the human's decision.
-func (e *engine) decide(runID, stepID int64, d decision) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	lr, ok := e.runs[runID]
-	if !ok {
-		return
-	}
 	if ch, ok := lr.reviews[stepID]; ok {
 		delete(lr.reviews, stepID)
 		ch <- d
+	}
+	return true
+}
+
+// A decision as a command carries it to the replica walking its run.
+type decisionCommand struct {
+	State        *int64           `json:"state"`
+	Instructions string           `json:"instructions"`
+	Output       string           `json:"output"`
+	Entries      map[int64]string `json:"entries"`
+}
+
+// Asks the replica walking the run, another one alive, to do what the
+// command says; false if no other replica walks it.
+func (e *engine) ask(run int64, kind string, step int64, payload any) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	owner, err := ownerOf(ctx, e.db, "runs", run)
+	if err == nil && (owner == "" || owner == replicaID) {
+		return false
+	}
+	if err == nil {
+		err = sendCommand(ctx, e.db, owner, kind, run, step, payload)
+	}
+	if err != nil {
+		log.Printf("ask the replica walking run %d to %s: %v", run, kind, err)
+		return false
+	}
+	return true
+}
+
+// What the engine does with the commands of other replicas; see commands.go.
+func (e *engine) takeCommands() {
+	commandHandlers[commandStopRun] = func(c command) { e.stopHere(c.target) }
+	commandHandlers[commandFailRun] = func(c command) {
+		var why string
+		json.Unmarshal(c.payload, &why)
+		e.failHere(c.target, why)
+	}
+	commandHandlers[commandStopStep] = func(c command) { e.stopStepHere(c.target, c.step) }
+	commandHandlers[commandDecide] = func(c command) {
+		var d decisionCommand
+		if err := json.Unmarshal(c.payload, &d); err != nil {
+			log.Printf("a decision of step %d of run %d another replica sent: %v", c.step, c.target, err)
+			return
+		}
+		e.decideHere(c.target, c.step, decision{state: d.State, instructions: d.Instructions, output: d.Output, entries: d.Entries})
 	}
 }
 

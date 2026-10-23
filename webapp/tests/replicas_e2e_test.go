@@ -212,3 +212,139 @@ func TestAStoppedReplicasRunsEnd(t *testing.T) {
 		t.Errorf("run %s; steps %s", d.Status, describeSteps(d))
 	}
 }
+
+// Stopping a run, one of its steps, an assistant's reply or a follow-up,
+// and deciding a review, take effect at the replica running it whichever
+// replica the request reaches.
+func TestReplicasActOnWhatAnotherRuns(t *testing.T) {
+	a := newApp(t)
+	other := startApp(t, a.worker.url)
+	cancelled := make(chan string, 4)
+	slow := func(name string) func(context.Context, agentRun) runResult {
+		return func(ctx context.Context, _ agentRun) runResult {
+			select {
+			case <-ctx.Done():
+				cancelled <- name
+			case <-time.After(10 * time.Second):
+				cancelled <- "not " + name
+			}
+			return runResult{Error: "stopped"}
+		}
+	}
+
+	// A step.
+	f := a.newFlow("Stopped elsewhere")
+	a.startAt(f.ID, a.agent(f.ID, "Step", "Work.").ID)
+	a.worker.onAgent("Step", slow("step"))
+	rn := a.startRun(f.ID)
+	s := a.waitStep(rn.ID, "Step", stepActive)
+	other.refused("POST", fmt.Sprintf("/api/runs/%d/steps/%d/stop", rn.ID, s.ID+1000), nil, http.StatusConflict, "no step going")
+	other.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/stop", rn.ID, s.ID), nil, http.StatusNoContent, nil)
+	if got := <-cancelled; got != "step" {
+		t.Errorf("stopping the step at another replica: %s cancelled", got)
+	}
+	if d := a.finish(rn.ID); onlyStep(t, d, "Step").Status != stepError {
+		t.Errorf("the step stopped: %s", describeSteps(d))
+	}
+
+	// A run.
+	g := a.newFlow("Ended elsewhere")
+	a.startAt(g.ID, a.agent(g.ID, "Run", "Work.").ID)
+	a.worker.onAgent("Run", slow("run"))
+	rn = a.startRun(g.ID)
+	a.waitStep(rn.ID, "Run", stepActive)
+	other.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
+	if got := <-cancelled; got != "run" {
+		t.Errorf("stopping the run at another replica: %s cancelled", got)
+	}
+
+	// A review.
+	h := a.newFlow("Decided elsewhere")
+	kick := a.agent(h.ID, "Kick", "Start.")
+	signal := a.newObject(h.ID, "Signal")
+	review := a.newProcess(h.ID, map[string]any{"name": "Review", "kind": kindHuman})
+	a.output(kick.ID, signal.ID)
+	a.input(review.ID, signal.ID)
+	a.startAt(h.ID, kick.ID)
+	a.worker.onAgent("Kick", handsIn(data("go")))
+	rn = a.startRun(h.ID)
+	r := a.waitStep(rn.ID, "Review", stepWaiting)
+	other.call("PATCH", fmt.Sprintf("/api/runs/%d/steps/%d", rn.ID, r.ID), map[string]any{"instructions": "Fine."}, http.StatusNoContent, nil)
+	if d := a.finish(rn.ID); d.Status != runDone {
+		t.Errorf("after the review was decided at another replica, run %s; steps %s", d.Status, describeSteps(d))
+	}
+
+	// A follow-up, of a step working on a repository, so it kept its
+	// session.
+	k := a.newFlow("Followed up elsewhere")
+	a.call("PATCH", fmt.Sprintf("/api/flows/%d", k.ID), map[string]any{"settings": map[string]any{
+		"repositories": []map[string]any{{"url": "https://github.com/acme/api"}},
+	}}, http.StatusOK, nil)
+	a.startAt(k.ID, a.agent(k.ID, "Answer", "Answer.").ID)
+	a.worker.onAgent("Answer", func(ctx context.Context, run agentRun) runResult {
+		if run.Resume {
+			return slow("follow-up")(ctx, run)
+		}
+		return submitted(data("answered"))
+	})
+	d := a.finish(a.startRun(k.ID).ID)
+	step := onlyStep(t, d, "Answer")
+	var fu struct {
+		ID int64 `json:"id"`
+	}
+	a.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/followups", d.ID, step.ID), map[string]any{"message": "More."}, http.StatusCreated, &fu)
+	other.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/followups/%d/stop", d.ID, step.ID, fu.ID), nil, http.StatusNoContent, nil)
+	if got := <-cancelled; got != "follow-up" {
+		t.Errorf("stopping the follow-up at another replica: %s cancelled", got)
+	}
+
+	// An assistant's reply.
+	a.worker.onAgent("Assistant", slow("reply"))
+	askAssistant(a, k.ID, "Hello")
+	other.call("POST", fmt.Sprintf("/api/flows/%d/assistant/stop", k.ID), nil, http.StatusNoContent, nil)
+	if got := <-cancelled; got != "reply" {
+		t.Errorf("stopping the reply at another replica: %s cancelled", got)
+	}
+	if r := assistantReply(a, k.ID); r.Status != "error" {
+		t.Errorf("the reply stopped: %+v", r)
+	}
+	other.refused("POST", fmt.Sprintf("/api/flows/%d/assistant/stop", k.ID), nil, http.StatusConflict, "isn't replying")
+}
+
+// A run whose calls through another replica spend what it may is stopped
+// at the replica running it, once.
+func TestARunOverspentThroughAnotherReplicaIsStopped(t *testing.T) {
+	a := newApp(t)
+	a.worker.quiet = true
+	other := startApp(t, a.worker.url)
+	setLimits(t, a, limitsBody{RunSpend: float64(2*callMicros-100) / 1e6})
+	f := a.newFlow("Spent elsewhere")
+	a.startAt(f.ID, a.agent(f.ID, "Spend", "Spend.").ID)
+	var statuses []int
+	stopped := false
+	a.worker.onAgent("Spend", func(ctx context.Context, run agentRun) runResult {
+		elsewhere := &llmAccess{URL: other.url + "/llm", Token: run.LLM.Token}
+		for range 2 {
+			s, _ := callModel(elsewhere, "fireworks")
+			statuses = append(statuses, s)
+		}
+		select {
+		case <-ctx.Done():
+			stopped = true
+		case <-time.After(20 * time.Second):
+		}
+		after, _ := callModel(run.LLM, "fireworks")
+		statuses = append(statuses, after)
+		return submitted(data("spent"))
+	})
+	d := a.finish(a.startRun(f.ID).ID)
+	if d.Status != runFailed {
+		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
+	}
+	if !stopped || fmt.Sprint(statuses) != "[200 200 403]" {
+		t.Errorf("stopped %v; the calls answered %v", stopped, statuses)
+	}
+	if n := strings.Count(fmt.Sprint(a.runLogs(d.ID, 0)), "stopped: it spent"); n != 1 {
+		t.Errorf("the run was stopped %d times", n)
+	}
+}

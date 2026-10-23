@@ -72,14 +72,26 @@ func followUpPrompt(message string) string {
 		"where it differs from the instructions you were given before, it takes precedence.\n\n<message>\n%s\n</message>\n", message)
 }
 
-// The follow-ups going, so they can be stopped.
+// The follow-ups going here, so they can be stopped.
 type followUps struct {
 	mu    sync.Mutex
 	going map[int64]context.CancelFunc
 }
 
+// Stops the follow-up, if it goes here.
+func (fs *followUps) stop(id int64) bool {
+	fs.mu.Lock()
+	cancel, ok := fs.going[id]
+	fs.mu.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
+}
+
 func registerFollowUpRoutes(mux *http.ServeMux, db *sql.DB, workerURL string, mcp *mcpBroker) {
 	fs := &followUps{going: map[int64]context.CancelFunc{}}
+	commandHandlers[commandStopFollowUp] = func(c command) { fs.stop(c.target) }
 
 	// Carries on the conversation of an agent step that is over:
 	// {"message": "..."}. The follow-up goes on in the server; this returns
@@ -149,14 +161,26 @@ func registerFollowUpRoutes(mux *http.ServeMux, db *sql.DB, workerURL string, mc
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		fs.mu.Lock()
-		cancel, ok := fs.going[id]
-		fs.mu.Unlock()
-		if !ok {
-			http.Error(w, "no follow-up going with that id", http.StatusConflict)
-			return
+		if !fs.stop(id) {
+			// Another replica may be carrying it on.
+			owner, err := ownerOf(r.Context(), db, "run_step_followups", id)
+			var active int
+			if err == nil {
+				err = db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM run_step_followups WHERE id = ? AND status = ?", id, stepActive).Scan(&active)
+			}
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			if active == 0 || owner == "" || owner == replicaID {
+				http.Error(w, "no follow-up going with that id", http.StatusConflict)
+				return
+			}
+			if err := sendCommand(r.Context(), db, owner, commandStopFollowUp, id, 0, nil); err != nil {
+				serverError(w, err)
+				return
+			}
 		}
-		cancel()
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

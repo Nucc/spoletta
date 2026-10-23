@@ -61,9 +61,6 @@ func main() {
 	if err := migrateDatabase(context.Background(), db); err != nil {
 		log.Fatalf("couldn't migrate the database: %v", err)
 	}
-	if err := endInterrupted(db); err != nil {
-		log.Fatalf("couldn't end what the server left running when it stopped: %v", err)
-	}
 	// seal-secrets seals the secrets with the key coming in, and ends,
 	// failing if some changed meanwhile, to be run again; see secrets.go.
 	sealSecrets := len(os.Args) > 1 && os.Args[1] == "seal-secrets"
@@ -77,6 +74,15 @@ func main() {
 		}
 		return
 	}
+	timeout, err := replicaTimeout()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := joinReplicas(db, timeout); err != nil {
+		log.Fatalf("couldn't join the replicas, or end what those that stopped left running: %v", err)
+	}
+	go heartbeat(context.Background(), db, timeout)
+	go leaveOnStop(db)
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(env("STATIC_DIR", "frontend/dist"))))

@@ -227,8 +227,8 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 		return f, run, processSettings{}, err
 	}
 	res, err := tx.ExecContext(ctx,
-		"INSERT INTO run_step_followups (step_id, attempt, message, status, output, error) VALUES (?, ?, ?, ?, '', '')",
-		stepID, f.Attempt, message, stepActive)
+		"INSERT INTO run_step_followups (step_id, attempt, message, status, output, error, replica_id) VALUES (?, ?, ?, ?, '', '', ?)",
+		stepID, f.Attempt, message, stepActive, replicaID)
 	if err != nil {
 		return f, run, processSettings{}, err
 	}

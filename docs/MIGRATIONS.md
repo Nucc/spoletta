@@ -167,8 +167,8 @@ ALTER TABLE runs DROP COLUMN label;
 - **Data changes go in migrations too**, as `UPDATE`s next to the schema
   change they follow from.
 - What must happen on every start rather than once, such as ending runs a
-  stopped server left running, isn't a migration: it goes in
-  `endInterrupted` in [webapp/runs.go](../webapp/runs.go).
+  stopped replica left running, isn't a migration: it goes in
+  `endStopped` in [webapp/replicas.go](../webapp/replicas.go).
 
 A statement with semicolons inside it, such as a trigger, goes between
 `-- +goose StatementBegin` and `-- +goose StatementEnd`. A migration that

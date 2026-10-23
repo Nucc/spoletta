@@ -1421,9 +1421,9 @@ func (w *walk) endStep(stepID int64, status, msg string) {
 // it. board is the flow process whose board it runs, nil for the top board.
 func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64, board *int64, name, key string, stepID int64) (int64, error) {
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		flow, runRunning, version, parent, board, name, key)
+		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, replica_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		flow, runRunning, version, parent, board, name, key, replicaID)
 	if err != nil {
 		return 0, err
 	}

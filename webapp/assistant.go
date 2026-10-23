@@ -257,8 +257,8 @@ func startAssistantReply(ctx context.Context, db *sql.DB, flow int64, message st
 		flow, rolePerson, message, stepDone); err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO assistant_messages (flow_id, role, content, status, error) VALUES (?, ?, '', ?, '')",
-		flow, roleAssistant, stepActive)
+	res, err := tx.ExecContext(ctx, "INSERT INTO assistant_messages (flow_id, role, content, status, error, replica_id) VALUES (?, ?, '', ?, '', ?)",
+		flow, roleAssistant, stepActive, replicaID)
 	if err != nil {
 		return 0, err
 	}

@@ -72,9 +72,9 @@ func (s dbGrants) put(ctx context.Context, kind, token string, g proxyGrant, rea
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO proxy_grants (token_hash, kind, user_id, run_id, step_id, root_run_id, reaches, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) + INTERVAL ? MICROSECOND)`,
-		hashToken(token), kind, g.user, nullID(g.run), nullID(g.step), nullID(g.root), data, ttl.Microseconds())
+		`INSERT INTO proxy_grants (token_hash, kind, user_id, run_id, step_id, root_run_id, reaches, replica_id, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) + INTERVAL ? MICROSECOND)`,
+		hashToken(token), kind, g.user, nullID(g.run), nullID(g.step), nullID(g.root), data, replicaID, ttl.Microseconds())
 	return err
 }
 

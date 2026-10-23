@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -168,54 +167,6 @@ func validRunEnd(s string) bool {
 
 func validStepStatus(s string) bool {
 	return s == stepActive || s == stepWaiting || s == stepDone || s == stepError || s == stepSkipped
-}
-
-// Runs execute in the server; whatever was in flight when it went down can't
-// continue, so it ends as the server starts. Open steps end first, while
-// their runs still read as running; then the runs, whose stored values are
-// released; then the assistant's replies and step follow-ups under way.
-// Each run ended so says so in its log, and what was ended is logged.
-func endInterrupted(db *sql.DB) error {
-	var runs []int64
-	rows, err := db.Query("SELECT id FROM runs WHERE status = 'running'")
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		runs = append(runs, id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, s := range []struct{ query, what string }{
-		{`UPDATE run_steps s JOIN runs r ON r.id = s.run_id
-		SET s.status = 'error', s.error = 'The run ended before this step finished.', s.finished_at = CURRENT_TIMESTAMP(3)
-		WHERE r.status = 'running' AND s.status IN ('active', 'waiting')`, "steps"},
-		{"UPDATE runs SET status = 'interrupted', finished_at = CURRENT_TIMESTAMP(3) WHERE status = 'running'", "runs"},
-		{`DELETE i FROM object_instances i JOIN runs r ON r.id = i.run_id WHERE r.status <> 'done'`, ""},
-		{`UPDATE assistant_messages SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
-		WHERE status = 'active'`, "assistant's replies"},
-		{`UPDATE run_step_followups SET status = 'error', error = 'The server stopped before this finished.', finished_at = CURRENT_TIMESTAMP(3)
-		WHERE status = 'active'`, "follow-ups"},
-	} {
-		res, err := db.Exec(s.query)
-		if err != nil {
-			return err
-		}
-		if n, err := res.RowsAffected(); err == nil && n > 0 && s.what != "" {
-			log.Printf("ended %d %s the server left going when it stopped", n, s.what)
-		}
-	}
-	for _, id := range runs {
-		runLog(db, id, 0, logError, "interrupted: the server stopped while it ran")
-	}
-	return nil
 }
 
 // Starts a step of a run, copying the process's current settings into it.
@@ -466,7 +417,8 @@ func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *in
 	if err != nil {
 		return pendingRun{}, err
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by) VALUES (?, ?, ?, ?, ?)", flow, runRunning, version, schedule, startedBy)
+	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by, replica_id) VALUES (?, ?, ?, ?, ?, ?)",
+		flow, runRunning, version, schedule, startedBy, replicaID)
 	if err != nil {
 		return pendingRun{}, err
 	}

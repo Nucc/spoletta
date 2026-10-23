@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A step's tokens, granted by the replica running it, reach its models,
@@ -135,4 +136,79 @@ func replicasMCP(ctx context.Context, at *app, server int64, token string) strin
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
 	return fmt.Sprintf("%d %s", resp.StatusCode, out)
+}
+
+// An agent that works until its step is stopped, or released.
+func replicasSlow(release <-chan struct{}) func(context.Context, agentRun) runResult {
+	return func(ctx context.Context, _ agentRun) runResult {
+		select {
+		case <-ctx.Done():
+			return runResult{Error: "stopped"}
+		case <-release:
+			return submitted(data("done"))
+		}
+	}
+}
+
+// A replica starting, as in a rolling update, leaves the runs another walks
+// going.
+func TestStartingAReplicaLeavesAnothersRunsGoing(t *testing.T) {
+	a := newApp(t)
+	f := a.newFlow("Rolled over")
+	a.startAt(f.ID, a.agent(f.ID, "Work", "Work.").ID)
+	release := make(chan struct{})
+	a.worker.onAgent("Work", replicasSlow(release))
+	rn := a.startRun(f.ID)
+	a.waitStep(rn.ID, "Work", stepActive)
+
+	other := startApp(t, a.worker.url)
+	if d := other.getRun(rn.ID); d.Status != runRunning {
+		t.Fatalf("after another replica started, the run is %s; steps %s", d.Status, describeSteps(d))
+	}
+	close(release)
+	if d := a.finish(rn.ID); d.Status != runDone {
+		t.Errorf("run %s; steps %s", d.Status, describeSteps(d))
+	}
+}
+
+// What a replica ran ends once it stops: at once when it is told to, as
+// another replica finds it left, and once it hasn't said it is alive for
+// the timeout when it is killed.
+func TestAStoppedReplicasRunsEnd(t *testing.T) {
+	const timeout = "REPLICA_TIMEOUT=3s"
+	fw := newFakeWorker(t)
+	a := startApp(t, fw.url, timeout)
+	a.worker = fw
+	f := a.newFlow("Left behind")
+	a.startAt(f.ID, a.agent(f.ID, "Work", "Work.").ID)
+	fw.onAgent("Work", replicasSlow(nil))
+
+	// Killed: the run ends once the timeout is over since the replica last
+	// said it was alive, a sixth of it before at most, not before.
+	other := startApp(t, fw.url, timeout)
+	rn := a.startRun(f.ID)
+	a.waitStep(rn.ID, "Work", stepActive)
+	killed := time.Now()
+	a.proc.kill()
+	if d := other.getRun(rn.ID); d.Status != runRunning {
+		t.Errorf("as its replica was killed, the run is %s", d.Status)
+	}
+	d := other.waitRun(rn.ID, "it to be ended", func(d runDetail) bool { return d.Status != runRunning })
+	if took := time.Since(killed); d.Status != runInterrupted || took < 2500*time.Millisecond {
+		t.Errorf("run %s after %s; steps %s", d.Status, took, describeSteps(d))
+	}
+	if s := onlyStep(t, d, "Work"); s.Status != stepError || !strings.Contains(s.Error, "The run ended before this step finished") {
+		t.Errorf("its step: %s %q", s.Status, s.Error)
+	}
+
+	// Told to stop: it leaves, so another replica ends its run long
+	// before a timeout of a minute.
+	third := startApp(t, fw.url, "REPLICA_TIMEOUT=1m")
+	rn = third.startRun(f.ID)
+	third.waitStep(rn.ID, "Work", stepActive)
+	third.proc.stop()
+	d = other.waitRun(rn.ID, "it to be ended", func(d runDetail) bool { return d.Status != runRunning })
+	if d.Status != runInterrupted {
+		t.Errorf("run %s; steps %s", d.Status, describeSteps(d))
+	}
 }

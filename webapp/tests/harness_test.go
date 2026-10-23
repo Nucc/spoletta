@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -304,12 +305,24 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 	}
 }
 
-// Ends the webapp, and with it every run it was walking, and returns what
-// it logged.
+// Tells the webapp to stop, as Kubernetes does, so it leaves the replicas
+// and the next webapp ends every run it was walking; killed if it doesn't
+// stop. Returns what it logged.
 func (w *webapp) stop() string {
+	w.cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-w.exited:
+	case <-time.After(10 * time.Second):
+		w.cmd.Process.Kill()
+		<-w.exited
+	}
+	return w.log.String()
+}
+
+// Kills the webapp, as a crash would, so it doesn't leave the replicas.
+func (w *webapp) kill() {
 	w.cmd.Process.Kill()
 	<-w.exited
-	return w.log.String()
 }
 
 // The webapp of a test, with a fake worker of its own. Tests share the
@@ -321,6 +334,8 @@ type app struct {
 	// Sends its requests; one with a session when people sign in, see
 	// users_e2e_test.go.
 	client *http.Client
+	// Its process.
+	proc *webapp
 }
 
 func newApp(t *testing.T) *app {
@@ -355,7 +370,7 @@ func startApp(t *testing.T, workerURL string, extra ...string) *app {
 			t.Logf("the webapp logged:\n%s", out)
 		}
 	})
-	return &app{t: t, url: w.url, client: http.DefaultClient}
+	return &app{t: t, url: w.url, client: http.DefaultClient, proc: w}
 }
 
 // Sends a request with body as JSON, if any, and returns the status and reply.

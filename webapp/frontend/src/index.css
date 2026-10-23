@@ -5281,35 +5281,329 @@ select.flow-owner:disabled {
   background: #f6f8fa;
 }
 
-/* The settings' Spending tab: its limits and what was spent. */
-.limits-form {
+/* The settings' Spending tab: the month at a glance, the limits as a card
+   of fields with their units, and who and which runs spent it as bars. */
+.spending {
   display: flex;
   flex-direction: column;
+  gap: 20px;
+}
+
+.spending-header p {
+  max-width: 640px;
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.spending-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
-  max-width: 420px;
 }
 
-.limits-form button {
-  align-self: flex-start;
+.spending-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 12px;
 }
 
-.spending-table {
-  border-collapse: collapse;
-  font-size: 13px;
-  margin-bottom: 16px;
-  min-width: 320px;
-}
-
-.spending-table th,
-.spending-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid #eaeef2;
-  text-align: left;
-}
-
-.spending-table th {
+.spending-stat-label {
+  color: #656d76;
+  font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.spending-stat-value {
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.spending-stat-note {
+  color: #656d76;
+  font-size: 12px;
+}
+
+.spending-card {
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.spending-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #eaeef2;
+}
+
+.spending-card-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.spending-card-sub {
+  color: #656d76;
+  font-size: 12px;
+}
+
+.spending-empty {
+  padding: 32px 20px;
+  color: #656d76;
+  font-size: 14px;
+  text-align: center;
+}
+
+.limits-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px 28px;
+  padding: 20px;
+}
+
+.limit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.limit-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.limit-input {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.limit-input:focus-within {
+  border-color: #0969da;
+  box-shadow: 0 0 0 3px rgb(9 105 218 / 15%);
+}
+
+.limit-input.invalid {
+  border-color: #cf222e;
+  box-shadow: 0 0 0 3px rgb(207 34 46 / 12%);
+}
+
+.limit-input input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  background: none;
+  border: none;
+  outline: none;
+}
+
+.limit-unit {
+  padding: 0 10px;
+  color: #656d76;
+  font-size: 13px;
+}
+
+.limit-unit:first-child {
+  padding-right: 0;
+}
+
+.limit-help {
+  color: #656d76;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.limit-help code {
+  font-size: 11px;
+  padding: 1px 4px;
   background: #f6f8fa;
+  border-radius: 4px;
+}
+
+.spending-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #f6f8fa;
+  border-top: 1px solid #eaeef2;
+}
+
+.spending-save {
+  padding: 7px 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: #0969da;
+  border: 1px solid #0969da;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.spending-save:hover:not(:disabled) {
+  background: #0860c4;
+}
+
+.spending-save:disabled {
+  color: #8c959f;
+  background: #eaeef2;
+  border-color: #d8dee4;
+  cursor: default;
+}
+
+.limits-read {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 28px;
+  margin: 0;
+  padding: 20px;
+}
+
+.limits-read dt {
+  color: #656d76;
+  font-size: 12px;
+}
+
+.limits-read dd {
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.spending-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.spending-bars {
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+}
+
+.spending-bars li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 20px;
+}
+
+.spending-bars li + li {
+  border-top: 1px solid #f0f2f4;
+}
+
+.spending-bar-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.spending-who {
+  font-weight: 600;
+}
+
+.spending-who.muted {
+  color: #656d76;
+  font-weight: 500;
+}
+
+.spending-amount {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.spending-meta {
+  color: #656d76;
+  font-size: 12px;
+}
+
+.spending-bar {
+  display: block;
+  height: 6px;
+  background: #f0f2f4;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.spending-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #54aeff, #0969da);
+  border-radius: 3px;
+}
+
+.spending-bar span.over {
+  background: #cf222e;
+}
+
+.spending-run {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.spending-run:hover .spending-run-name {
+  color: #0969da;
+  text-decoration: underline;
+}
+
+.spending-rank {
+  flex-shrink: 0;
+  width: 18px;
+  color: #8c959f;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.spending-run-name {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spending-run-id {
+  flex-shrink: 0;
+  color: #656d76;
+  font-size: 12px;
+}
+
+@media (max-width: 860px) {
+  .limits-grid,
+  .limits-read,
+  .spending-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* The audit log's events say what happened in a sentence, which wraps. */

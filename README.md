@@ -105,7 +105,10 @@ cd webapp/frontend && npm run build     # or npm run dev, proxying /api to :8080
 
 The webapp migrates its database as it starts; [docs/MIGRATIONS.md](docs/MIGRATIONS.md)
 says how to write a migration and how to migrate down to run an older
-version. [AGENTS.md](AGENTS.md) maps the code and its conventions.
+version. Any number of webapps can run on one database, such as a
+Deployment's pods behind one Service; [docs/REPLICAS.md](docs/REPLICAS.md)
+says what they share and what happens as one stops. [AGENTS.md](AGENTS.md)
+maps the code and its conventions.
 
 ## License
 

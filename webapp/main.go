@@ -132,7 +132,7 @@ func main() {
 	if err != nil || parallelSteps < 1 {
 		log.Fatalf("PARALLEL_STEPS must be a positive number")
 	}
-	log.Printf("runs up to %d agent, script and Sentry steps at once (PARALLEL_STEPS)", parallelSteps)
+	log.Printf("runs up to %d agent, script and Sentry steps at once at this replica (PARALLEL_STEPS)", parallelSteps)
 	// Where the worker reaches this webapp's proxies, for MCP servers and for
 	// models; MCP_PROXY_URL is its old name.
 	proxyURL := env("PROXY_URL", env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")))

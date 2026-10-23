@@ -272,8 +272,9 @@ until set:
   steps running at once spends a little more than its limit.
 - **What a person may spend a month**, UTC's, on their runs, follow-ups and
   flows' assistants; past it their calls are refused until the next month.
-- **How many steps a person's runs may have going at once**, of the
-  instance's `PARALLEL_STEPS`, so one person's runs can't take every slot.
+- **How many steps a person's runs may have going at once**, at every
+  replica of the webapp, of their `PARALLEL_STEPS`, so one person's runs
+  can't take every slot.
   A step waiting for its person's turn holds none of the slots.
 - **How much disk a run may take**: its checkouts, sessions, home and
   files, measured after each step by the blocks they take, each file once

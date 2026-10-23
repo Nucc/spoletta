@@ -143,6 +143,8 @@ func main() {
 	registerSpendingRoutes(mux, db)
 	egress = newEgressBroker(db, proxyURL)
 	registerEgressRoutes(mux, db)
+	go egress.watchTunnels(context.Background())
+	go clearExpiredGrants(context.Background(), db)
 	registerSkillRoutes(mux, db)
 	registerConnectorRoutes(mux, db)
 	sentry := sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}

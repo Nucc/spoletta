@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,15 @@ import (
 func grantedBroker(t *testing.T, token string, routes map[string]llmRoute) *llmBroker {
 	t.Helper()
 	b := newLLMBroker(nil, "", "http://webapp")
-	b.grants[token] = &llmGrant{routes: routes, issued: time.Now(), expire: time.AfterFunc(time.Hour, func() {})}
+	var providers []string
+	for id := range routes {
+		providers = append(providers, id)
+	}
+	if err := b.grants.put(context.Background(), grantModel, token, proxyGrant{}, llmReaches{Providers: providers}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// Worked out already, for as long as the test takes.
+	b.routed, b.routedAt = routes, time.Now().Add(time.Hour)
 	return b
 }
 

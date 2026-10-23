@@ -4,12 +4,13 @@ package main
 // never with the providers' keys. Each agent step, follow-up and assistant
 // reply gets a token of its own, which the worker writes into pi's
 // models.json as every provider's key, with the provider's URL pointed
-// here, at /llm/{provider}/; the proxy takes a request with a token it
-// granted, puts the provider's real key where the token was, and passes it
-// on to the provider, streaming the answer back. The token ends with the
-// step, or a while after its timeout should the webapp lose it, so an
-// agent that printed it has nothing worth keeping. Keys are opened from
-// their sealed rows as now and stay in this process.
+// here, at /llm/{provider}/; the proxy takes a request with a token
+// granted at any replica of the webapp (grants.go), puts the provider's
+// real key where the token was, and passes it on to the provider,
+// streaming the answer back. The token ends with the step, or a while
+// after its timeout should the webapp lose it, so an agent that printed it
+// has nothing worth keeping. Keys are opened from their sealed rows by the
+// replica a call reaches, and stay in its memory.
 //
 // The providers a token reaches are those added in the settings, with
 // their saved keys or ones in the webapp's environment, and those of the
@@ -99,16 +100,19 @@ type llmRoute struct {
 	base, anthropic, key string
 }
 
+// A model grant: who and which step it is for, and what it reaches.
 type llmGrant struct {
-	user      *int64
-	run, step int64
-	routes    map[string]llmRoute
-	issued    time.Time
-	expire    *time.Timer
-	// The run its run's spending counts toward, none for an assistant's,
-	// and the most it and its person may spend (spend.go), 0 for no limit.
-	root                int64
-	runLimit, userLimit int64
+	proxyGrant
+	llmReaches
+}
+
+// What a model grant reaches, kept with it: the providers it was granted
+// for, whose routes the replica a call reaches works out again, and the
+// most its run and its person may spend (spend.go), 0 for no limit.
+type llmReaches struct {
+	Providers []string `json:"providers"`
+	RunLimit  int64    `json:"runLimit,omitempty"`
+	UserLimit int64    `json:"userLimit,omitempty"`
 }
 
 type llmBroker struct {
@@ -116,9 +120,14 @@ type llmBroker struct {
 	workerURL string
 	// Where the worker reaches the proxy.
 	proxyURL string
+	grants   grantStore
 
-	mu     sync.Mutex
-	grants map[string]*llmGrant
+	mu sync.Mutex
+	// Ends each token this replica granted as it expires.
+	expiries map[string]*time.Timer
+	// The routes to the providers, worked out at most every routesFor.
+	routed   map[string]llmRoute
+	routedAt time.Time
 	// The worker's providers, asked for at most once a minute.
 	host   []hostProvider
 	hostAt time.Time
@@ -128,10 +137,6 @@ type llmBroker struct {
 	// pricesFor.
 	catalog   map[string]map[string]modelCost
 	catalogAt time.Time
-	// What runs, by the run their spending counts toward, and people have
-	// spent, while they have tokens; see spend.go.
-	runSpend  map[int64]*runSpend
-	userSpend map[int64]*userSpend
 	// Stops a run that spent what it may, saying why; set to the engine's.
 	overspent func(run int64, why string)
 }
@@ -140,8 +145,8 @@ type llmBroker struct {
 var llm *llmBroker
 
 func newLLMBroker(db *sql.DB, workerURL, proxyURL string) *llmBroker {
-	return &llmBroker{db: db, workerURL: workerURL, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: map[string]*llmGrant{}, upstreams: upstreamOverrides(),
-		runSpend: map[int64]*runSpend{}, userSpend: map[int64]*userSpend{}}
+	return &llmBroker{db: db, workerURL: workerURL, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: grantsIn(db),
+		expiries: map[string]*time.Timer{}, upstreams: upstreamOverrides()}
 }
 
 // A provider of the worker's pi config, as the worker says; see the
@@ -235,30 +240,57 @@ func (b *llmBroker) routes(ctx context.Context) (map[string]llmRoute, error) {
 	return routes, nil
 }
 
-// Grants a token reaching the providers for a step of the run or a
-// follow-up of it, or for a flow's assistant (step 0, run 0), done for
-// who, and ends it after ttl unless revoked first.
-func (b *llmBroker) grant(ctx context.Context, who *int64, run, step int64, ttl time.Duration) (*llmAccess, error) {
+// How long the routes to the providers are kept before they are worked
+// out again, so a key changed in the settings reaches calls soon after.
+const routesFor = 10 * time.Second
+
+// The routes as worked out last, or again if that was a while ago.
+func (b *llmBroker) currentRoutes(ctx context.Context) (map[string]llmRoute, error) {
+	b.mu.Lock()
+	routed, at := b.routed, b.routedAt
+	b.mu.Unlock()
+	if routed != nil && time.Since(at) < routesFor {
+		return routed, nil
+	}
+	return b.freshRoutes(ctx)
+}
+
+func (b *llmBroker) freshRoutes(ctx context.Context) (map[string]llmRoute, error) {
 	routes, err := b.routes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	token := randomToken()
-	g := &llmGrant{user: who, run: run, step: step, routes: routes, issued: time.Now()}
-	if err := b.trackSpend(ctx, g); err != nil {
+	b.mu.Lock()
+	b.routed, b.routedAt = routes, time.Now()
+	b.mu.Unlock()
+	return routes, nil
+}
+
+// Grants a token reaching the providers for a step of the run or a
+// follow-up of it, or for a flow's assistant (step 0, run 0), done for
+// who, and ends it after ttl unless revoked first.
+func (b *llmBroker) grant(ctx context.Context, who *int64, run, step int64, ttl time.Duration) (*llmAccess, error) {
+	routes, err := b.freshRoutes(ctx)
+	if err != nil {
 		return nil, err
 	}
-	g.expire = time.AfterFunc(ttl, func() { b.revokeToken(token, "expired") })
-	b.mu.Lock()
-	b.grants[token] = g
-	b.mu.Unlock()
-	access := &llmAccess{URL: b.proxyURL + "/llm", Token: token, Providers: []string{}}
-	for id := range routes {
-		access.Providers = append(access.Providers, id)
+	g := &llmGrant{proxyGrant: proxyGrant{user: who, run: run, step: step}, llmReaches: llmReaches{Providers: []string{}}}
+	if err := b.limitSpend(ctx, g); err != nil {
+		return nil, err
 	}
-	slices.Sort(access.Providers)
-	audit("model.grant", who, run, step, "the model proxy, reaching %s, for %s at most", strings.Join(access.Providers, ", "), ttl.Round(time.Second))
-	return access, nil
+	for id := range routes {
+		g.Providers = append(g.Providers, id)
+	}
+	slices.Sort(g.Providers)
+	token := randomToken()
+	if err := b.grants.put(ctx, grantModel, token, g.proxyGrant, g.llmReaches, ttl); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.expiries[token] = time.AfterFunc(ttl, func() { b.revokeToken(token, "expired") })
+	b.mu.Unlock()
+	audit("model.grant", who, run, step, "the model proxy, reaching %s, for %s at most", strings.Join(g.Providers, ", "), ttl.Round(time.Second))
+	return &llmAccess{URL: b.proxyURL + "/llm", Token: token, Providers: g.Providers}, nil
 }
 
 // Ends a token; nothing reaches a provider with it after.
@@ -271,20 +303,18 @@ func (b *llmBroker) revoke(access *llmAccess) {
 
 func (b *llmBroker) revokeToken(token, why string) {
 	b.mu.Lock()
-	g, ok := b.grants[token]
-	if ok {
-		g.expire.Stop()
-		delete(b.grants, token)
-		b.untrackSpend(g)
+	if t, ok := b.expiries[token]; ok {
+		t.Stop()
+		delete(b.expiries, token)
 	}
 	b.mu.Unlock()
-	if ok {
-		audit("model.revoke", g.user, g.run, g.step, "the model proxy's token %s", why)
+	if g, ok := b.grants.remove(grantModel, token); ok {
+		auditGrantEnd(grantModel, g, why)
 	}
 }
 
 // How long a token outlives its step's timeout, should the webapp lose the
-// step: a restart ends every token anyway, as they are only kept here.
+// step.
 const llmGrantMargin = 5 * time.Minute
 
 // The longest a model's request may be: prompts with images in them.
@@ -329,16 +359,23 @@ func registerLLMRoutes(mux *http.ServeMux, b *llmBroker) {
 func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	token, header := llmTokenOf(r.Header)
-	b.mu.Lock()
-	g, granted := b.grants[token]
+	g := &llmGrant{}
+	pg, granted, err := b.grants.lookup(r.Context(), grantModel, token, &g.llmReaches)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	g.proxyGrant = pg
 	var route llmRoute
 	reaches := false
-	var refused string
-	if granted {
-		route, reaches = g.routes[provider]
-		refused = b.outOfBudget(g)
+	if granted && slices.Contains(g.Providers, provider) {
+		routes, err := b.currentRoutes(r.Context())
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		route, reaches = routes[provider]
 	}
-	b.mu.Unlock()
 	if token == "" || !granted || !reaches {
 		if granted {
 			audit("model.refused", g.user, g.run, g.step, "a call to the model provider %s, which the step may not reach", provider)
@@ -346,6 +383,11 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 			audit("model.refused", nil, 0, 0, "a call to the model provider %s with a token that isn't granted, or ended", provider)
 		}
 		http.Error(w, "the model provider "+provider+" isn't available to this step", http.StatusForbidden)
+		return
+	}
+	refused, err := b.outOfBudget(r.Context(), g)
+	if err != nil {
+		serverError(w, err)
 		return
 	}
 	if refused != "" {
@@ -603,11 +645,11 @@ func (b *llmBroker) recordUsage(g *llmGrant, provider, model string, u llmUsage)
 		price = unknownModelCost
 	}
 	cost := price.micros(u)
-	b.spent(g, cost)
 	var root any
 	if g.root != 0 {
 		root = g.root
 	}
+	defer b.checkSpent(ctx, g)
 	if _, err := b.db.ExecContext(ctx,
 		`INSERT INTO llm_usage (user_id, run_id, root_run_id, step_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, priced)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

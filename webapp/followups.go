@@ -282,7 +282,7 @@ func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBrok
 	}
 	run.Egress = egress.grant(who, run.Run, stepID, run.Workspace, time.Duration(run.TimeoutMS)*time.Millisecond)
 	defer egress.revoke(run.Egress)
-	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, uses)
+	run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, run.Run, stepID, uses, time.Duration(run.TimeoutMS)*time.Millisecond)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}

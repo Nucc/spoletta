@@ -20,6 +20,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"sort"
@@ -116,25 +117,12 @@ func (p priceBook) of(provider, model string) (modelCost, bool) {
 }
 
 // What a run, with its subflows' and items' runs, and a person this month
-// have spent, kept while a token of theirs is alive and read again from
-// llm_usage when the first is granted. A run's calls are checked against
-// the least of the instance's limit and its flow's as they come to the
-// proxy, and a person's against the instance's; the call that crosses a
-// limit is let through, as what it costs is only known once it is over,
-// and so are calls already going, so a run with steps running at once
-// spends a little more than its limit.
-type runSpend struct {
-	micros int64
-	tokens int
-	// Over its limit, and stopped.
-	over bool
-}
-
-type userSpend struct {
-	month  string
-	micros int64
-	tokens int
-}
+// have spent is summed from llm_usage as each call comes to the proxy, so
+// it counts every replica's calls. A run's calls are checked against the
+// least of the instance's limit and its flow's, and a person's against the
+// instance's; the call that crosses a limit is let through, as what it
+// costs is only known once it is over, and so are calls already going, so
+// a run with steps running at once spends a little more than its limit.
 
 // The month spend is counted by, as YYYY-MM in UTC.
 func spendMonth(t time.Time) string { return t.UTC().Format("2006-01") }
@@ -166,122 +154,89 @@ func leastLimit(a, b int64) int64 {
 	return a
 }
 
-// Counts a grant's spending from what was spent before it, and sets the
-// limits it is held to.
-func (b *llmBroker) trackSpend(ctx context.Context, g *llmGrant) error {
+// Sets the limits a grant's spending is held to, and the run it counts
+// toward.
+func (b *llmBroker) limitSpend(ctx context.Context, g *llmGrant) error {
 	l := currentLimits()
-	g.userLimit = l.UserMonthSpend
+	g.UserLimit = l.UserMonthSpend
 	if g.run != 0 {
 		root, flowLimit, err := rootRun(ctx, b.db, g.run)
 		if err != nil {
 			return err
 		}
-		g.root, g.runLimit = root, leastLimit(l.RunSpend, flowLimit)
-	}
-	now := time.Now().UTC()
-	month := spendMonth(now)
-	var runSpent, userSpent int64
-	if g.root != 0 {
-		if err := b.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(cost_micros), 0) FROM llm_usage WHERE root_run_id = ?", g.root).Scan(&runSpent); err != nil {
-			return err
-		}
-	}
-	if g.user != nil {
-		if err := b.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(cost_micros), 0) FROM llm_usage WHERE user_id = ? AND at >= ?",
-			*g.user, time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)).Scan(&userSpent); err != nil {
-			return err
-		}
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if g.root != 0 {
-		rs := b.runSpend[g.root]
-		if rs == nil {
-			rs = &runSpend{micros: runSpent}
-			b.runSpend[g.root] = rs
-		}
-		rs.tokens++
-	}
-	if g.user != nil {
-		us := b.userSpend[*g.user]
-		if us == nil || us.month != month {
-			tokens := 0
-			if us != nil {
-				tokens = us.tokens
-			}
-			us = &userSpend{month: month, micros: userSpent, tokens: tokens}
-			b.userSpend[*g.user] = us
-		}
-		us.tokens++
+		g.root, g.RunLimit = root, leastLimit(l.RunSpend, flowLimit)
 	}
 	return nil
 }
 
-// Stops counting a grant's spending; b.mu is held.
-func (b *llmBroker) untrackSpend(g *llmGrant) {
-	if rs := b.runSpend[g.root]; rs != nil {
-		if rs.tokens--; rs.tokens <= 0 {
-			delete(b.runSpend, g.root)
-		}
-	}
-	if g.user != nil {
-		if us := b.userSpend[*g.user]; us != nil {
-			if us.tokens--; us.tokens <= 0 {
-				delete(b.userSpend, *g.user)
-			}
-		}
-	}
+// What the run a grant's spending counts toward has spent.
+func (b *llmBroker) rootSpent(ctx context.Context, g *llmGrant) (int64, error) {
+	var micros int64
+	err := b.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(cost_micros), 0) FROM llm_usage WHERE root_run_id = ?", g.root).Scan(&micros)
+	return micros, err
 }
 
 // Why a grant's call is refused, if it is: its run or its person has spent
 // what they may. pi doesn't try again a call refused for being out of
-// budget, so the step fails saying why. b.mu is held.
-func (b *llmBroker) outOfBudget(g *llmGrant) string {
-	if rs := b.runSpend[g.root]; rs != nil && g.runLimit > 0 && rs.micros >= g.runLimit {
-		return fmt.Sprintf("out of budget: the run has spent %s on its models, and may spend %s", formatDollars(rs.micros), formatDollars(g.runLimit))
+// budget, so the step fails saying why.
+func (b *llmBroker) outOfBudget(ctx context.Context, g *llmGrant) (string, error) {
+	if b.db == nil {
+		return "", nil
 	}
-	if g.user != nil && g.userLimit > 0 {
-		if us := b.userSpend[*g.user]; us != nil && us.month == spendMonth(time.Now()) && us.micros >= g.userLimit {
-			return fmt.Sprintf("out of budget: its person has spent %s on models this month, and may spend %s", formatDollars(us.micros), formatDollars(g.userLimit))
+	if g.root != 0 && g.RunLimit > 0 {
+		spent, err := b.rootSpent(ctx, g)
+		if err != nil {
+			return "", err
+		}
+		if spent >= g.RunLimit {
+			return fmt.Sprintf("out of budget: the run has spent %s on its models, and may spend %s", formatDollars(spent), formatDollars(g.RunLimit)), nil
 		}
 	}
-	return ""
+	if g.user != nil && g.UserLimit > 0 {
+		now := time.Now().UTC()
+		var spent int64
+		if err := b.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(cost_micros), 0) FROM llm_usage WHERE user_id = ? AND at >= ?",
+			*g.user, time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)).Scan(&spent); err != nil {
+			return "", err
+		}
+		if spent >= g.UserLimit {
+			return fmt.Sprintf("out of budget: its person has spent %s on models this month, and may spend %s", formatDollars(spent), formatDollars(g.UserLimit)), nil
+		}
+	}
+	return "", nil
 }
 
-// Adds what a call cost to its run's and person's spending. A run it takes
-// past its limit is stopped: its tokens are revoked, and the engine fails
-// the run saying why.
-func (b *llmBroker) spent(g *llmGrant, micros int64) {
-	b.mu.Lock()
-	var stop string
-	if us := b.userSpend[derefUser(g.user)]; g.user != nil && us != nil {
-		if month := spendMonth(time.Now()); us.month != month {
-			us.month, us.micros = month, 0
-		}
-		us.micros += micros
+// Stops the run a grant's spending counts toward once a call recorded
+// took it past its limit: the model tokens of all its steps are revoked,
+// and the engine fails the run saying why. Only the replica whose call
+// revoked them stops it, so it is stopped once.
+func (b *llmBroker) checkSpent(ctx context.Context, g *llmGrant) {
+	if g.root == 0 || g.RunLimit <= 0 {
+		return
 	}
-	rs := b.runSpend[g.root]
-	if rs != nil {
-		rs.micros += micros
-		if g.runLimit > 0 && rs.micros >= g.runLimit && !rs.over {
-			rs.over = true
-			stop = fmt.Sprintf("it spent %s on its models, and may spend %s", formatDollars(rs.micros), formatDollars(g.runLimit))
-			for token, other := range b.grants {
-				if other.root == g.root {
-					other.expire.Stop()
-					delete(b.grants, token)
-					b.untrackSpend(other)
-					audit("model.revoke", other.user, other.run, other.step, "the model proxy's token ended, as its run spent what it may")
-				}
-			}
-		}
+	spent, err := b.rootSpent(ctx, g)
+	if err != nil {
+		log.Printf("read what run %d spent: %v", g.root, err)
+		return
 	}
-	b.mu.Unlock()
-	if stop != "" {
-		audit("run.overspent", g.user, g.root, 0, "stopped: %s", stop)
-		if b.overspent != nil {
-			b.overspent(g.root, stop)
-		}
+	if spent < g.RunLimit {
+		return
+	}
+	ended, err := b.grants.removeRoot(g.root)
+	if err != nil {
+		log.Printf("end the model tokens of run %d, which spent what it may: %v", g.root, err)
+		return
+	}
+	if len(ended) == 0 {
+		return
+	}
+	for _, other := range ended {
+		audit("model.revoke", other.user, other.run, other.step, "the model proxy's token ended, as its run spent what it may")
+	}
+	stop := fmt.Sprintf("it spent %s on its models, and may spend %s", formatDollars(spent), formatDollars(g.RunLimit))
+	audit("run.overspent", g.user, g.root, 0, "stopped: %s", stop)
+	if b.overspent != nil {
+		b.overspent(g.root, stop)
 	}
 }
 

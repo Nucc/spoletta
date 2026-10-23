@@ -174,8 +174,8 @@ type mcpBroker struct {
 	// Sign-ins under way, by OAuth state.
 	pending map[string]mcpSignIn
 	// The servers each agent step's token reaches, and whose connections it
-	// reaches them with.
-	grants map[string]mcpGrant
+	// reaches them with; see grants.go.
+	grants grantStore
 	// Held while refreshing a connection's token, so concurrent requests
 	// don't spend a refresh token the server rotates.
 	refreshing map[mcpConnection]*sync.Mutex
@@ -186,10 +186,10 @@ type mcpConnection struct {
 	server, user int64
 }
 
-type mcpGrant struct {
-	user int64
-	// The tools the step has of each server it reaches; nil is all of them.
-	servers map[int64]toolFilter
+// What an MCP grant reaches, kept with it.
+type mcpReaches struct {
+	// The tools the step has of each server it reaches; null is all of them.
+	Servers map[int64]toolFilter `json:"servers"`
 }
 
 type mcpSignIn struct {
@@ -209,7 +209,7 @@ func newMCPBroker(db *sql.DB, proxyURL string, signIn bool) *mcpBroker {
 		proxyURL:   strings.TrimRight(proxyURL, "/"),
 		signIn:     signIn,
 		pending:    map[string]mcpSignIn{},
-		grants:     map[string]mcpGrant{},
+		grants:     grantsIn(db),
 		refreshing: map[mcpConnection]*sync.Mutex{},
 	}
 }
@@ -1007,8 +1007,9 @@ type mcpRunServer struct {
 // returns them with the token that reaches them through the proxy, which
 // revoke ends, and which reaches only the tools the process keeps to. A
 // server that is missing or signed out fails the step with a message
-// saying what to do; that is msg, err is for anything else.
-func (b *mcpBroker) grant(ctx context.Context, who *int64, uses processSettings) (servers []mcpRunServer, token, msg string, err error) {
+// saying what to do; that is msg, err is for anything else. The token is
+// for the step of the run, and ends after ttl unless revoked first.
+func (b *mcpBroker) grant(ctx context.Context, who *int64, run, step int64, uses processSettings, ttl time.Duration) (servers []mcpRunServer, token, msg string, err error) {
 	if len(uses.MCPServers) == 0 {
 		return nil, "", "", nil
 	}
@@ -1050,10 +1051,13 @@ func (b *mcpBroker) grant(ctx context.Context, who *int64, uses processSettings)
 			Description: s.Description,
 		})
 	}
+	if ttl <= 0 {
+		ttl = llmDefaultTTL
+	}
 	token = randomToken()
-	b.mu.Lock()
-	b.grants[token] = mcpGrant{user: user, servers: allowed}
-	b.mu.Unlock()
+	if err := b.grants.put(ctx, grantMCP, token, proxyGrant{user: who, run: run, step: step}, mcpReaches{Servers: allowed}, ttl+llmGrantMargin); err != nil {
+		return nil, "", "", err
+	}
 	return servers, token, "", nil
 }
 
@@ -1061,9 +1065,7 @@ func (b *mcpBroker) revoke(token string) {
 	if token == "" {
 		return
 	}
-	b.mu.Lock()
-	delete(b.grants, token)
-	b.mu.Unlock()
+	b.grants.remove(grantMCP, token)
 }
 
 // Request headers streamable HTTP needs passed on; the rest, the step's
@@ -1086,10 +1088,14 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	b.mu.Lock()
-	g, granted := b.grants[token]
-	filter, allowed := g.servers[id]
-	b.mu.Unlock()
+	var reaches mcpReaches
+	g, granted, err := b.grants.lookup(r.Context(), grantMCP, token, &reaches)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	filter, allowed := reaches.Servers[id]
+	user := derefUser(g.user)
 	if !ok || !granted || !allowed {
 		http.Error(w, "this MCP server isn't available to this step", http.StatusForbidden)
 		return
@@ -1105,7 +1111,7 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c := findConnector(connector); c != nil {
-		access, err := b.accessToken(r.Context(), id, g.user, "")
+		access, err := b.accessToken(r.Context(), id, user, "")
 		if err != nil {
 			http.Error(w, "token for "+name+": "+err.Error(), http.StatusBadGateway)
 			return
@@ -1129,7 +1135,7 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	var resp *http.Response
 	rejected := ""
 	for attempt := 0; attempt < 2; attempt++ {
-		access, err := b.accessToken(r.Context(), id, g.user, rejected)
+		access, err := b.accessToken(r.Context(), id, user, rejected)
 		if errors.Is(err, errMCPNotConnected) {
 			http.Error(w, fmt.Sprintf("the MCP server %s isn't connected; connect it in Settings, under MCP servers", name), http.StatusBadGateway)
 			return

@@ -267,7 +267,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		run.Egress = egress.grant(who, runID, stepID, run.Workspace, 2*settings.timeout())
 		defer egress.revoke(run.Egress)
 		var msg string
-		run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, settings)
+		run.MCPServers, run.MCPToken, msg, err = mcp.grant(ctx, who, runID, stepID, settings, 2*settings.timeout())
 		if err != nil {
 			return res, err
 		}

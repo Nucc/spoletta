@@ -44,23 +44,29 @@ type egressAccess struct {
 	URL string `json:"url"`
 }
 
+// What an internet grant reaches, kept with it: the hosts of the step's
+// repositories, with their ports.
+type egressReaches struct {
+	Repos []string `json:"repos"`
+}
+
 type egressGrant struct {
-	user      *int64
-	run, step int64
-	// The hosts of the step's repositories, with their ports.
-	repos  []string
-	expire *time.Timer
-	// The tunnels open with it, which end with it; the broker's lock
-	// guards them.
-	tunnels map[net.Conn]bool
+	proxyGrant
+	egressReaches
+	token string
 }
 
 type egressBroker struct {
 	db       *sql.DB
 	proxyURL string
+	grants   grantStore
 
-	mu     sync.Mutex
-	grants map[string]*egressGrant
+	mu sync.Mutex
+	// Ends each token this replica granted as it expires.
+	expiries map[string]*time.Timer
+	// The tunnels open here, by the token they were opened with, which end
+	// with it, wherever it is revoked; see watchTunnels.
+	tunnels map[string]map[net.Conn]bool
 	// Whether loopback addresses may be dialled, as only tests' hosts are.
 	loopback bool
 	// The hosts allowed, when not the database's, as for tests.
@@ -71,17 +77,20 @@ type egressBroker struct {
 var egress *egressBroker
 
 func newEgressBroker(db *sql.DB, proxyURL string) *egressBroker {
-	return &egressBroker{db: db, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: map[string]*egressGrant{}}
+	return &egressBroker{db: db, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: grantsIn(db),
+		expiries: map[string]*time.Timer{}, tunnels: map[string]map[net.Conn]bool{}}
 }
 
 // Grants the step a token for the proxy, reaching the allowed hosts and
 // its workspace's repositories' hosts, for ttl at most; nil for a broker
-// there isn't.
+// there isn't, or a token that couldn't be kept, which leaves the step
+// without the internet.
 func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl time.Duration) *egressAccess {
 	if b == nil {
 		return nil
 	}
-	g := &egressGrant{user: who, run: run, step: step, tunnels: map[net.Conn]bool{}}
+	g := proxyGrant{user: who, run: run, step: step}
+	reaches := egressReaches{Repos: []string{}}
 	if ws != nil {
 		for _, r := range ws.Repositories {
 			if u, err := url.Parse(r.URL); err == nil && u.Hostname() != "" {
@@ -89,25 +98,30 @@ func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl
 				if port == "" {
 					port = "443"
 				}
-				g.repos = append(g.repos, net.JoinHostPort(strings.ToLower(u.Hostname()), port))
+				reaches.Repos = append(reaches.Repos, net.JoinHostPort(strings.ToLower(u.Hostname()), port))
 			}
 		}
 	}
 	if ttl <= 0 {
 		ttl = llmDefaultTTL
 	}
-	token := randomToken()
-	g.expire = time.AfterFunc(ttl+llmGrantMargin, func() { b.revokeToken(token, "expired") })
-	b.mu.Lock()
-	b.grants[token] = g
-	b.mu.Unlock()
 	u, err := url.Parse(b.proxyURL)
 	if err != nil {
 		return nil
 	}
+	token := randomToken()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := b.grants.put(ctx, grantInternet, token, g, reaches, ttl+llmGrantMargin); err != nil {
+		log.Printf("keep the egress token of step %d: %v", step, err)
+		return nil
+	}
+	b.mu.Lock()
+	b.expiries[token] = time.AfterFunc(ttl+llmGrantMargin, func() { b.revokeToken(token, "expired") })
+	b.mu.Unlock()
 	u.User = url.UserPassword("step", token)
 	u.Path = ""
-	audit("internet.grant", who, run, step, "the egress proxy, reaching the hosts allowed and %s", hostList(g.repos))
+	audit("internet.grant", who, run, step, "the egress proxy, reaching the hosts allowed and %s", hostList(reaches.Repos))
 	return &egressAccess{URL: u.String()}
 }
 
@@ -122,17 +136,52 @@ func (b *egressBroker) revoke(a *egressAccess) {
 	}
 }
 
-// Ends the token, and every tunnel open with it.
+// Ends the token, and every tunnel open with it here.
 func (b *egressBroker) revokeToken(token, why string) {
 	b.mu.Lock()
+	if t, ok := b.expiries[token]; ok {
+		t.Stop()
+		delete(b.expiries, token)
+	}
+	b.mu.Unlock()
+	g, ok := b.grants.remove(grantInternet, token)
+	open := b.closeTunnels(token)
+	if ok {
+		audit("internet.revoke", g.user, g.run, g.step, "the egress proxy's token %s, with %d connections open", why, open)
+	}
+}
+
+// Closes the tunnels open here with the token, and says how many there were.
+func (b *egressBroker) closeTunnels(token string) int {
+	b.mu.Lock()
 	defer b.mu.Unlock()
-	if g, ok := b.grants[token]; ok {
-		g.expire.Stop()
-		delete(b.grants, token)
-		for c := range g.tunnels {
-			c.Close()
+	open := len(b.tunnels[token])
+	for c := range b.tunnels[token] {
+		c.Close()
+	}
+	delete(b.tunnels, token)
+	return open
+}
+
+// Ends the tunnels open here whose tokens ended at another replica, or
+// expired, every few seconds.
+func (b *egressBroker) watchTunnels(ctx context.Context) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 		}
-		audit("internet.revoke", g.user, g.run, g.step, "the egress proxy's token %s, with %d connections open", why, len(g.tunnels))
+		b.mu.Lock()
+		tokens := slices.Collect(maps.Keys(b.tunnels))
+		b.mu.Unlock()
+		for _, token := range tokens {
+			if _, ok, err := b.grants.lookup(ctx, grantInternet, token, nil); err == nil && !ok {
+				b.closeTunnels(token)
+			}
+		}
 	}
 }
 
@@ -147,19 +196,27 @@ func hostList(hosts []string) string {
 // Keeps the tunnel's connection with its grant, so ending the grant ends
 // it; false if the grant is over already.
 func (b *egressBroker) track(g *egressGrant, c net.Conn) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !slices.ContainsFunc(slices.Collect(maps.Values(b.grants)), func(o *egressGrant) bool { return o == g }) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, ok, err := b.grants.lookup(ctx, grantInternet, g.token, nil); err != nil || !ok {
 		return false
 	}
-	g.tunnels[c] = true
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tunnels[g.token] == nil {
+		b.tunnels[g.token] = map[net.Conn]bool{}
+	}
+	b.tunnels[g.token][c] = true
 	return true
 }
 
 func (b *egressBroker) untrack(g *egressGrant, c net.Conn) {
 	b.mu.Lock()
-	delete(g.tunnels, c)
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+	delete(b.tunnels[g.token], c)
+	if len(b.tunnels[g.token]) == 0 {
+		delete(b.tunnels, g.token)
+	}
 }
 
 // What the proxy is asked: a CONNECT, or a plain request naming its URL
@@ -179,24 +236,33 @@ func (b *egressBroker) wrap(next http.Handler) http.Handler {
 	})
 }
 
-// The grant of the token a proxy request carries as its password.
-func (b *egressBroker) grantOf(r *http.Request) *egressGrant {
+// The grant of the token a proxy request carries as its password; nil
+// without one.
+func (b *egressBroker) grantOf(r *http.Request) (*egressGrant, error) {
 	user, pass, ok := strings.Cut(r.Header.Get("Proxy-Authorization"), " ")
 	if !ok || !strings.EqualFold(user, "Basic") {
-		return nil
+		return nil, nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(pass)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	_, token, _ := strings.Cut(string(raw), ":")
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.grants[token]
+	g := &egressGrant{token: token}
+	pg, ok, err := b.grants.lookup(r.Context(), grantInternet, token, &g.egressReaches)
+	if err != nil || !ok {
+		return nil, err
+	}
+	g.proxyGrant = pg
+	return g, nil
 }
 
 func (b *egressBroker) serve(w http.ResponseWriter, r *http.Request) {
-	g := b.grantOf(r)
+	g, err := b.grantOf(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if g == nil {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="steps"`)
 		http.Error(w, "only a step's own token reaches the internet through here", http.StatusProxyAuthRequired)
@@ -220,7 +286,7 @@ func (b *egressBroker) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	viaRepo := slices.Contains(g.repos, net.JoinHostPort(host, port))
+	viaRepo := slices.Contains(g.Repos, net.JoinHostPort(host, port))
 	if !listed && !viaRepo {
 		b.logConnection(g, "refused %s:%s, which isn't allowed: an admin allows hosts in Settings, under Internet access", host, port)
 		http.Error(w, fmt.Sprintf("%s isn't a host steps may reach; an admin allows hosts in Settings, under Internet access", host), http.StatusForbidden)

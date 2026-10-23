@@ -143,6 +143,7 @@ func main() {
 	if err := loadLimits(context.Background(), db); err != nil {
 		log.Fatalf("read the limits: %v", err)
 	}
+	go reloadLimits(context.Background(), db)
 	registerLimitRoutes(mux, db)
 	go writeAudit(db)
 	registerAuditRoutes(mux, db)

@@ -21,17 +21,20 @@ package main
 //     files may take, in MB, which the worker checks after each of its
 //     steps (its disk.go), failing a step that leaves the run over it.
 //
-// Limits are read as the webapp starts and kept here; saving them takes
-// effect for steps started after.
+// Limits are read as the webapp starts and kept here, and read again every
+// few seconds, so those saved at another replica reach this one soon
+// after; saving them takes effect for steps started after.
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"sync"
+	"time"
 )
 
 type instanceLimits struct {
@@ -81,6 +84,25 @@ func loadLimits(ctx context.Context, db *sql.DB) error {
 	limits.l = l
 	limits.mu.Unlock()
 	return nil
+}
+
+// How often the limits are read again.
+const limitsFor = 5 * time.Second
+
+// Reads the limits again every limitsFor, until ctx ends.
+func reloadLimits(ctx context.Context, db *sql.DB) {
+	t := time.NewTicker(limitsFor)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if err := loadLimits(ctx, db); err != nil {
+			log.Printf("WARNING: couldn't read the limits again: %v", err)
+		}
+	}
 }
 
 func saveLimits(ctx context.Context, db *sql.DB, l instanceLimits) error {

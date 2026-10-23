@@ -162,6 +162,11 @@ func modelKeyPlace(env string) string { return "model_keys/" + env }
 // Where a model provider's key is kept.
 func modelProviderPlace(id string) string { return "model_providers/" + id }
 
+// A sign-in under way's verifier, kept only for the ten minutes it lasts,
+// so it isn't sealed again as keys rotate: one sealed with a key gone has
+// its person sign in again.
+func mcpSignInPlace(state string) string { return "mcp_sign_ins/" + hashToken(state) }
+
 func mcpTokenPlace(column string, server, user int64) string {
 	return fmt.Sprintf("mcp_tokens/%s/%d/%d", column, server, user)
 }

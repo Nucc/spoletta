@@ -171,8 +171,6 @@ type mcpBroker struct {
 	signIn bool
 
 	mu sync.Mutex
-	// Sign-ins under way, by OAuth state.
-	pending map[string]mcpSignIn
 	// The servers each agent step's token reaches, and whose connections it
 	// reaches them with; see grants.go.
 	grants grantStore
@@ -200,7 +198,6 @@ type mcpSignIn struct {
 	clientID      string
 	tokenEndpoint string
 	resource      string
-	expires       time.Time
 }
 
 func newMCPBroker(db *sql.DB, proxyURL string, signIn bool) *mcpBroker {
@@ -208,7 +205,6 @@ func newMCPBroker(db *sql.DB, proxyURL string, signIn bool) *mcpBroker {
 		db:         db,
 		proxyURL:   strings.TrimRight(proxyURL, "/"),
 		signIn:     signIn,
-		pending:    map[string]mcpSignIn{},
 		grants:     grantsIn(db),
 		refreshing: map[mcpConnection]*sync.Mutex{},
 	}
@@ -694,18 +690,21 @@ func (b *mcpBroker) startSignIn(ctx context.Context, id, user int64, redirect st
 	state := randomToken()
 	verifier := randomToken()
 	challenge := sha256.Sum256([]byte(verifier))
-	b.mu.Lock()
-	now := time.Now()
-	for s, p := range b.pending {
-		if now.After(p.expires) {
-			delete(b.pending, s)
-		}
+	// Kept in the database, as the sign-in page may come back to another
+	// replica than this one.
+	if _, err := b.db.ExecContext(ctx, "DELETE FROM mcp_sign_ins WHERE expires_at <= CURRENT_TIMESTAMP(3)"); err != nil {
+		return "", err
 	}
-	b.pending[state] = mcpSignIn{
-		server: id, user: user, verifier: verifier, redirect: redirect, clientID: clientID,
-		tokenEndpoint: c.tokenEndpoint, resource: c.resource, expires: now.Add(10 * time.Minute),
+	sealedVerifier, err := secrets.seal(mcpSignInPlace(state), verifier)
+	if err != nil {
+		return "", err
 	}
-	b.mu.Unlock()
+	if _, err := b.db.ExecContext(ctx,
+		`INSERT INTO mcp_sign_ins (state_hash, server_id, user_id, verifier, redirect_uri, client_id, token_endpoint, resource, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) + INTERVAL 10 MINUTE)`,
+		hashToken(state), id, user, sealedVerifier, redirect, clientID, c.tokenEndpoint, c.resource); err != nil {
+		return "", err
+	}
 
 	q := url.Values{
 		"response_type":         {"code"},
@@ -804,11 +803,11 @@ func expiresAt(t tokenResponse) *time.Time {
 // Exchanges the code the sign-in page came back with for tokens, and returns
 // the server's name.
 func (b *mcpBroker) finishSignIn(ctx context.Context, q url.Values) (string, error) {
-	b.mu.Lock()
-	p, ok := b.pending[q.Get("state")]
-	delete(b.pending, q.Get("state"))
-	b.mu.Unlock()
-	if !ok || time.Now().After(p.expires) {
+	p, ok, err := b.takeSignIn(ctx, q.Get("state"))
+	if err != nil {
+		return "", err
+	}
+	if !ok {
 		return "", errors.New("this sign-in expired or was already used; start it again from the settings")
 	}
 	if e := q.Get("error"); e != "" {
@@ -851,6 +850,35 @@ func (b *mcpBroker) finishSignIn(ctx context.Context, q url.Values) (string, err
 	return name, err
 }
 
+// The sign-in the state names, which is used up; false if it expired, was
+// used, or never was, or a key it was sealed with is gone.
+func (b *mcpBroker) takeSignIn(ctx context.Context, state string) (mcpSignIn, bool, error) {
+	var p mcpSignIn
+	var verifier string
+	err := b.db.QueryRowContext(ctx,
+		`SELECT server_id, user_id, verifier, redirect_uri, client_id, token_endpoint, resource FROM mcp_sign_ins
+		WHERE state_hash = ? AND expires_at > CURRENT_TIMESTAMP(3)`, hashToken(state)).
+		Scan(&p.server, &p.user, &verifier, &p.redirect, &p.clientID, &p.tokenEndpoint, &p.resource)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, false, nil
+	}
+	if err != nil {
+		return p, false, err
+	}
+	res, err := b.db.ExecContext(ctx, "DELETE FROM mcp_sign_ins WHERE state_hash = ?", hashToken(state))
+	if err != nil {
+		return p, false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return p, false, nil
+	}
+	if p.verifier, err = secrets.open(mcpSignInPlace(state), verifier); err != nil {
+		log.Printf("mcp: a sign-in to server %d sealed with a key that is gone: %v", p.server, err)
+		return p, false, nil
+	}
+	return p, true, nil
+}
+
 // The access token of the user's connection to a server, refreshed first
 // when it has expired or, with rejected set, when the server turned that
 // token away.
@@ -866,6 +894,9 @@ func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected st
 	if auth == authToken {
 		return adminToken(ctx, b.db, id, rejected)
 	}
+	if access, ok, err := b.freshToken(ctx, id, user, rejected); err != nil || ok {
+		return access, err
+	}
 	c := mcpConnection{id, user}
 	b.mu.Lock()
 	lock, ok := b.refreshing[c]
@@ -876,6 +907,12 @@ func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected st
 	b.mu.Unlock()
 	lock.Lock()
 	defer lock.Unlock()
+	// And at every replica: a server rotating refresh tokens takes each once.
+	unlock, err := lockInDatabase(ctx, b.db, fmt.Sprintf("mcp-refresh:%d:%d", id, user))
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 
 	var access, refresh sql.NullString
 	var expires sql.NullTime
@@ -944,6 +981,53 @@ func (b *mcpBroker) accessToken(ctx context.Context, id, user int64, rejected st
 		return "", err
 	}
 	return t.AccessToken, nil
+}
+
+// The access token of the user's connection to a server, if it is still
+// fresh and not the one rejected; false if it needs refreshing.
+func (b *mcpBroker) freshToken(ctx context.Context, id, user int64, rejected string) (string, bool, error) {
+	var access sql.NullString
+	var expires sql.NullTime
+	err := b.db.QueryRowContext(ctx, "SELECT access_token, expires_at FROM mcp_tokens WHERE server_id = ? AND user_id = ?", id, user).Scan(&access, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, errMCPNotConnected
+	}
+	if err != nil || !access.Valid {
+		return "", false, err
+	}
+	if expires.Valid && !time.Now().Add(30*time.Second).Before(expires.Time) {
+		return "", false, nil
+	}
+	token, err := secrets.open(mcpTokenPlace("access_token", id, user), access.String)
+	if err != nil || token == rejected {
+		return "", false, err
+	}
+	return token, true, nil
+}
+
+// Takes the database's lock of the name, which one connection of every
+// replica's holds at a time, waiting up to half a minute; the function
+// returned gives it back.
+func lockInDatabase(ctx context.Context, db *sql.DB, name string) (func(), error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Lock names are the server's, so the database's name is in them.
+	const lockName = "LEFT(CONCAT(DATABASE(), ':', ?), 64)"
+	var got sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK("+lockName+", 30)", name).Scan(&got); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if !got.Valid || got.Int64 != 1 {
+		conn.Close()
+		return nil, fmt.Errorf("waited too long for %s, which another replica holds", name)
+	}
+	return func() {
+		conn.ExecContext(context.Background(), "DO RELEASE_LOCK("+lockName+")", name)
+		conn.Close()
+	}, nil
 }
 
 // The token an admin set for a server taking one. It can't be refreshed, so

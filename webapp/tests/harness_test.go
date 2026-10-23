@@ -270,6 +270,9 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 		"LLM_UPSTREAMS=" + testUpstreams(),
 		"GATEWAY_KEY=gw-from-env",
 		"VAULT_GATEWAY_KEY=gw-from-vault",
+		// Told to stop, it exits at once, without the race detector's
+		// second of waiting for reports; races are reported as they happen.
+		"GORACE=atexit_sleep_ms=0",
 	}
 	w.cmd.Env = append(w.cmd.Env, extra...)
 	w.cmd.Stdout, w.cmd.Stderr = w.log, w.log

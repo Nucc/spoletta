@@ -221,9 +221,12 @@ func TestAStoppedReplicasRunsEnd(t *testing.T) {
 func TestReplicasActOnWhatAnotherRuns(t *testing.T) {
 	a := newApp(t)
 	other := startApp(t, a.worker.url)
-	cancelled := make(chan string, 4)
+	// Each agent says when it starts, so it is stopped while it works,
+	// not before it reached the worker, and when it is cancelled.
+	started, cancelled := make(chan string, 4), make(chan string, 4)
 	slow := func(name string) func(context.Context, agentRun) runResult {
 		return func(ctx context.Context, _ agentRun) runResult {
+			started <- name
 			select {
 			case <-ctx.Done():
 				cancelled <- name
@@ -231,6 +234,27 @@ func TestReplicasActOnWhatAnotherRuns(t *testing.T) {
 				cancelled <- "not " + name
 			}
 			return runResult{Error: "stopped"}
+		}
+	}
+	// What was cancelled, once the agent that started was.
+	stoppedWhile := func(name string, stop func()) {
+		t.Helper()
+		select {
+		case got := <-started:
+			if got != name {
+				t.Fatalf("%s started, want %s", got, name)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s didn't start", name)
+		}
+		stop()
+		select {
+		case got := <-cancelled:
+			if got != name {
+				t.Errorf("stopping %s at another replica: %s cancelled", name, got)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatalf("stopping %s at another replica cancelled nothing", name)
 		}
 	}
 
@@ -241,10 +265,9 @@ func TestReplicasActOnWhatAnotherRuns(t *testing.T) {
 	rn := a.startRun(f.ID)
 	s := a.waitStep(rn.ID, "Step", stepActive)
 	other.refused("POST", fmt.Sprintf("/api/runs/%d/steps/%d/stop", rn.ID, s.ID+1000), nil, http.StatusConflict, "no step going")
-	other.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/stop", rn.ID, s.ID), nil, http.StatusNoContent, nil)
-	if got := <-cancelled; got != "step" {
-		t.Errorf("stopping the step at another replica: %s cancelled", got)
-	}
+	stoppedWhile("step", func() {
+		other.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/stop", rn.ID, s.ID), nil, http.StatusNoContent, nil)
+	})
 	if d := a.finish(rn.ID); onlyStep(t, d, "Step").Status != stepError {
 		t.Errorf("the step stopped: %s", describeSteps(d))
 	}
@@ -255,10 +278,9 @@ func TestReplicasActOnWhatAnotherRuns(t *testing.T) {
 	a.worker.onAgent("Run", slow("run"))
 	rn = a.startRun(g.ID)
 	a.waitStep(rn.ID, "Run", stepActive)
-	other.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
-	if got := <-cancelled; got != "run" {
-		t.Errorf("stopping the run at another replica: %s cancelled", got)
-	}
+	stoppedWhile("run", func() {
+		other.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
+	})
 
 	// A review.
 	h := a.newFlow("Decided elsewhere")
@@ -295,18 +317,16 @@ func TestReplicasActOnWhatAnotherRuns(t *testing.T) {
 		ID int64 `json:"id"`
 	}
 	a.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/followups", d.ID, step.ID), map[string]any{"message": "More."}, http.StatusCreated, &fu)
-	other.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/followups/%d/stop", d.ID, step.ID, fu.ID), nil, http.StatusNoContent, nil)
-	if got := <-cancelled; got != "follow-up" {
-		t.Errorf("stopping the follow-up at another replica: %s cancelled", got)
-	}
+	stoppedWhile("follow-up", func() {
+		other.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/followups/%d/stop", d.ID, step.ID, fu.ID), nil, http.StatusNoContent, nil)
+	})
 
 	// An assistant's reply.
 	a.worker.onAgent("Assistant", slow("reply"))
 	askAssistant(a, k.ID, "Hello")
-	other.call("POST", fmt.Sprintf("/api/flows/%d/assistant/stop", k.ID), nil, http.StatusNoContent, nil)
-	if got := <-cancelled; got != "reply" {
-		t.Errorf("stopping the reply at another replica: %s cancelled", got)
-	}
+	stoppedWhile("reply", func() {
+		other.call("POST", fmt.Sprintf("/api/flows/%d/assistant/stop", k.ID), nil, http.StatusNoContent, nil)
+	})
 	if r := assistantReply(a, k.ID); r.Status != "error" {
 		t.Errorf("the reply stopped: %+v", r)
 	}

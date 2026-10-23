@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -346,5 +347,62 @@ func TestARunOverspentThroughAnotherReplicaIsStopped(t *testing.T) {
 	}
 	if n := strings.Count(fmt.Sprint(a.runLogs(d.ID, 0)), "stopped: it spent"); n != 1 {
 		t.Errorf("the run was stopped %d times", n)
+	}
+}
+
+// A person's runs have as many steps going at once as they may across
+// every replica, not at each.
+func TestAPersonsStepsAtOnceAcrossReplicas(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	a.call("PUT", "/api/limits", map[string]any{"userParallelSteps": 1}, http.StatusOK, nil)
+	t.Cleanup(func() { secretsDB(t).Exec("DELETE FROM limits") })
+	other := startApp(t, a.worker.url,
+		"OIDC_ISSUER="+p.srv.URL,
+		"OIDC_CLIENT_ID="+usersClientID,
+		"OIDC_CLIENT_SECRET="+usersClientSecret,
+		"OIDC_ALLOWED_DOMAINS=example.org",
+		"ADMIN_EMAILS=Ada@Example.com")
+	bob := usersNewPerson("Bob")
+	usersAdd(a, bob.email)
+	usersSignIn(a, p, bob)
+	// Sessions are kept in the database, and cookies go to either port.
+	other.client = a.client
+	f := a.newFlow("Bob's on two replicas")
+	a.startAt(f.ID, a.agent(f.ID, "Work", "Work.").ID)
+	var mu sync.Mutex
+	going, most := 0, 0
+	release := make(chan struct{})
+	a.worker.onAgent("Work", func(ctx context.Context, _ agentRun) runResult {
+		mu.Lock()
+		going++
+		most = max(most, going)
+		first := going == 1 && most == 1
+		mu.Unlock()
+		if first {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		mu.Lock()
+		going--
+		mu.Unlock()
+		return runResult{OK: true, Output: "done"}
+	})
+	first := a.startRun(f.ID)
+	a.waitStep(first.ID, "Work", stepActive)
+	second := other.startRun(f.ID)
+	other.waitRun(second.ID, "its step to wait", func(runDetail) bool {
+		return strings.Contains(fmt.Sprint(other.runLogs(second.ID, 0)), "waits: its person's runs have as many steps going as they may at once, 1")
+	})
+	close(release)
+	for _, d := range []runDetail{a.finish(first.ID), other.finish(second.ID)} {
+		if d.Status != runDone {
+			t.Errorf("run %s; steps %s", d.Status, describeSteps(d))
+		}
+	}
+	if most != 1 {
+		t.Errorf("Bob had %d steps going at once, may have 1", most)
 	}
 }

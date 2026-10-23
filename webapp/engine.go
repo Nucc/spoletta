@@ -118,10 +118,9 @@ type engine struct {
 	slots chan struct{}
 	mu    sync.Mutex
 	runs  map[int64]*liveRun
-	// How many steps each person's runs have going, and what is closed, and
-	// made again, as one ends; see personSlot.
-	personSteps map[int64]int64
-	stepEnded   chan struct{}
+	// What is closed, and made again, as a step here gives back its
+	// person's slot; see personSlot.
+	stepEnded chan struct{}
 }
 
 // A run in progress.
@@ -141,7 +140,7 @@ type liveRun struct {
 
 func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker, parallelSteps int) *engine {
 	e := &engine{db: db, workerURL: workerURL, sentry: sentry, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{},
-		personSteps: map[int64]int64{}, stepEnded: make(chan struct{})}
+		stepEnded: make(chan struct{})}
 	e.takeCommands()
 	return e
 }
@@ -1632,10 +1631,11 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 		runLog(w.e.db, w.run, 0, logError, "process %d couldn't run: whose run it is: %v", id, err)
 		return runResult{}, false, false, 0
 	}
-	if !w.e.personSlot(w.ctx, who, w.run, w.names[id]) {
+	slot, ok := w.e.personSlot(w.ctx, who, w.run, w.names[id])
+	if !ok {
 		return runResult{}, false, true, 0
 	}
-	defer w.e.endPersonSlot(who)
+	defer w.e.endPersonSlot(slot)
 	select {
 	case w.e.slots <- struct{}{}:
 	case <-w.ctx.Done():
@@ -1690,46 +1690,85 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 }
 
 // Waits until the person's runs have fewer steps going than they may
-// (limits.go), before the step takes one of the engine's slots, so one
-// waiting holds none of everyone's; false if the run ended meanwhile. A run
-// of nobody's isn't held to it. Its run's log says when a step waits.
-func (e *engine) personSlot(ctx context.Context, who *int64, run int64, process string) bool {
+// (limits.go), at every replica, before the step takes one of this
+// replica's slots, so one waiting holds none of everyone's. Returns the
+// slot taken in person_slots, which endPersonSlot gives back, 0 for a run
+// of nobody's, which isn't held to it; false if the run ended meanwhile.
+// Its run's log says when a step waits.
+func (e *engine) personSlot(ctx context.Context, who *int64, run int64, process string) (int64, bool) {
+	if who == nil {
+		return 0, true
+	}
 	logged := false
 	for {
 		limit := currentLimits().UserSteps
 		e.mu.Lock()
-		if who == nil || limit <= 0 || e.personSteps[*who] < limit {
-			if who != nil {
-				e.personSteps[*who]++
-			}
-			e.mu.Unlock()
-			return true
-		}
 		ended := e.stepEnded
 		e.mu.Unlock()
-		if !logged {
+		slot, err := takePersonSlot(ctx, e.db, *who, run, limit)
+		if err != nil && ctx.Err() == nil {
+			runLog(e.db, run, 0, logError, "%s couldn't count its person's steps going: %v", process, err)
+		}
+		if slot != 0 {
+			return slot, true
+		}
+		if !logged && err == nil {
 			runLog(e.db, run, 0, logInfo, "%s waits: its person's runs have as many steps going as they may at once, %d", process, limit)
 			logged = true
 		}
 		select {
 		case <-ended:
-		// The limit may have been raised.
-		case <-time.After(5 * time.Second):
+		// Another replica's step may have ended, or the limit been raised.
+		case <-time.After(time.Second):
 		case <-ctx.Done():
-			return false
+			return 0, false
 		}
 	}
 }
 
-func (e *engine) endPersonSlot(who *int64) {
-	if who == nil {
+// Takes a slot of the person's for a step of the run, unless they have as
+// many as limit taken, 0 for no limit; 0 if they have.
+func takePersonSlot(ctx context.Context, db *sql.DB, who, run, limit int64) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	// One person's slots are taken one at a time, so two replicas can't
+	// both take the last.
+	var id int64
+	if err := tx.QueryRowContext(ctx, "SELECT id FROM users WHERE id = ? FOR UPDATE", who).Scan(&id); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if limit > 0 {
+		var taken int64
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM person_slots WHERE user_id = ?", who).Scan(&taken); err != nil {
+			return 0, err
+		}
+		if taken >= limit {
+			return 0, nil
+		}
+	}
+	res, err := tx.ExecContext(ctx, "INSERT INTO person_slots (user_id, run_id, replica_id) VALUES (?, ?, ?)", who, run, replicaID)
+	if err != nil {
+		return 0, err
+	}
+	slot, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return slot, tx.Commit()
+}
+
+func (e *engine) endPersonSlot(slot int64) {
+	if slot == 0 {
 		return
+	}
+	if _, err := e.db.Exec("DELETE FROM person_slots WHERE id = ?", slot); err != nil {
+		log.Printf("WARNING: couldn't give back a person's slot %d: %v", slot, err)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.personSteps[*who]--; e.personSteps[*who] <= 0 {
-		delete(e.personSteps, *who)
-	}
 	close(e.stepEnded)
 	e.stepEnded = make(chan struct{})
 }

@@ -123,8 +123,8 @@ func orphaned(col string) string {
 // continue, so it ends. The replicas that stopped go first; then their open
 // steps, while their runs still read as running; then the runs, whose
 // stored values are released; then the assistant's replies and step
-// follow-ups under way, what other replicas asked of them, and the tokens
-// their steps were granted. Each run
+// follow-ups under way, what other replicas asked of them, their people's
+// slots (engine.go's personSlot) and the tokens their steps were granted. Each run
 // ended so says so in its log, and what was ended is logged.
 func endStopped(ctx context.Context, db *sql.DB, timeout time.Duration) error {
 	res, err := db.ExecContext(ctx, "DELETE FROM replicas WHERE seen_at <= CURRENT_TIMESTAMP(3) - INTERVAL ? MICROSECOND", timeout.Microseconds())
@@ -184,9 +184,12 @@ func endStopped(ctx context.Context, db *sql.DB, timeout time.Duration) error {
 			log.Printf("ended %d %s a replica that stopped left going", n, s.what)
 		}
 	}
-	// What was asked of them goes undone.
-	if _, err := db.ExecContext(ctx, "DELETE FROM replica_commands WHERE replica_id NOT IN (SELECT id FROM replicas)"); err != nil {
-		return err
+	// What was asked of them goes undone, and their people's slots are
+	// given back.
+	for _, table := range []string{"replica_commands", "person_slots"} {
+		if _, err := db.ExecContext(ctx, "DELETE FROM "+table+" WHERE replica_id NOT IN (SELECT id FROM replicas)"); err != nil {
+			return err
+		}
 	}
 	return clearGrants(ctx, db, orphaned("replica_id"), "ended, as the server granting it stopped")
 }

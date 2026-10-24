@@ -121,7 +121,7 @@ func TestPodmanScriptStepInItsWorkspace(t *testing.T) {
 		Run:       31,
 		Script:    "echo cached > $HOME/cache; ls " + workspacesRoot + "; cd api && git log --oneline | wc -l && echo new > new.txt",
 		Workspace: &workspaceSpec{ID: "run-31", Branch: branch, Run: 31, Step: 4, Repositories: []repository{{Name: "api", URL: url}}},
-	}, time.Minute, newStepLogger("test", nil))
+	}, time.Minute, newStepLogger("test", nil), nil)
 	if !res.OK {
 		t.Fatalf("the script failed: %s", res.Error)
 	}

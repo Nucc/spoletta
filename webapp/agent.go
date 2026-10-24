@@ -542,6 +542,15 @@ var workerToken string
 // to read and close if it succeeded. No client timeout: agent runs can take
 // minutes, and the worker enforces its own limit.
 func requestWorker(ctx context.Context, method, url string, in any) (*http.Response, error) {
+	req, err := workerRequest(ctx, method, url, in)
+	if err != nil {
+		return nil, err
+	}
+	return doWorker(req)
+}
+
+// A request to the worker with its token, for the caller to add to.
+func workerRequest(ctx context.Context, method, url string, in any) (*http.Request, error) {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -558,7 +567,12 @@ func requestWorker(ctx context.Context, method, url string, in any) (*http.Respo
 	if workerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+workerToken)
 	}
+	return req, nil
+}
 
+// Sends the request; the reply is the caller's to read and close if it
+// succeeded.
+func doWorker(req *http.Request) (*http.Response, error) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getRunLogs, getStepChanges, type AgentMessage, type RunLogLine, type FileChange, type MessageBlock, type RepoChanges, type RunStep, type StepMessage } from './api'
+import { getRunLogs, getStepChanges, getStepOutput, type AgentMessage, type OutputChunk, type RunLogLine, type FileChange, type MessageBlock, type RepoChanges, type RunStep, type StepMessage } from './api'
 import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
 
 // An agent step's conversation as a terminal shows it, in a large window in
@@ -10,9 +10,9 @@ import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
 // a step working on repositories, the files it changed with their diffs:
 // once it ended, what it committed (see changes.go); while it goes, what its
 // edit and write calls did, as a command's changes show only in the commits.
-// A script's step shows the script, what it was given, the lines the worker
-// logged of it (what it printed to stderr among them) and what it printed,
-// which come once it ended.
+// A script's step shows the script, what it was given and what it prints,
+// stdout and stderr as they came, followed as it runs; one from before that
+// was kept shows the lines the worker logged of it and its output instead.
 export default function StepTerminal({ run, step, onClose }: { run: number; step: RunStep; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
   const screen = useRef<HTMLDivElement>(null)
@@ -20,6 +20,7 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
   const script = step.kind === 'script'
   const { messages, loaded, error, going } = useStepMessages(run, step, !script)
   const logs = useStepLogs(run, step.id, script, going)
+  const printed = useStepOutput(run, step.id, script, going)
   const results = useMemo(() => resultsByCall(messages), [messages])
   const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
 
@@ -32,7 +33,7 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
 
   useEffect(() => {
     if (atEnd.current && screen.current) screen.current.scrollTop = screen.current.scrollHeight
-  }, [messages.length, loaded, logs.lines?.length])
+  }, [messages.length, loaded, logs.lines?.length, printed.chunks?.length])
 
   return (
     <dialog
@@ -68,7 +69,7 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
           }}
         >
           {script ? (
-            <ScriptScreen step={step} logs={logs.lines} error={logs.error} going={going} />
+            <ScriptScreen step={step} printed={printed.chunks} logs={logs.lines} error={printed.error || logs.error} going={going} />
           ) : (
             <>
               {error && <p className="term-error">The conversation couldn't load: {error}</p>}
@@ -137,10 +138,65 @@ function useStepLogs(run: number, step: number, enabled: boolean, going: boolean
   return { lines, error }
 }
 
+// What the script step printed, followed while it goes, and once more as
+// it ends for the last of it.
+function useStepOutput(run: number, step: number, enabled: boolean, going: boolean) {
+  const [chunks, setChunks] = useState<OutputChunk[] | null>(null)
+  const [error, setError] = useState('')
+  const last = useRef(0)
+  useEffect(() => {
+    if (!enabled) return
+    let stale = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const fetchMore = () => {
+      getStepOutput(run, step, last.current)
+        .then((more) => {
+          if (stale) return
+          setError('')
+          if (more.length > 0) last.current = more[more.length - 1].id
+          setChunks((cs) => (more.length === 0 && cs ? cs : [...(cs ?? []), ...more]))
+          // A full page means there is more.
+          if (more.length >= OUTPUT_PAGE || going) timer = setTimeout(fetchMore, more.length >= OUTPUT_PAGE ? 0 : OUTPUT_REFRESH_MS)
+        })
+        .catch((err) => !stale && setError(err instanceof Error ? err.message : String(err)))
+    }
+    fetchMore()
+    return () => {
+      stale = true
+      clearTimeout(timer)
+    }
+  }, [run, step, enabled, going])
+  return { chunks, error }
+}
+
+const OUTPUT_PAGE = 1000
+const OUTPUT_REFRESH_MS = 1000
+
 const formatLogTime = (s: string) =>
   new Date(s).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
-function ScriptScreen({ step, logs, error, going }: { step: RunStep; logs: RunLogLine[] | null; error: string; going: boolean }) {
+function ScriptScreen({
+  step,
+  printed,
+  logs,
+  error,
+  going,
+}: {
+  step: RunStep
+  printed: OutputChunk[] | null
+  logs: RunLogLine[] | null
+  error: string
+  going: boolean
+}) {
+  // A step from before what scripts print was kept as they ran.
+  const streamed = going || (printed !== null && printed.length > 0)
+  // A script's error starts with what it printed to stderr, shown already.
+  const stderr = (printed ?? [])
+    .filter((c) => c.stream === 'stderr')
+    .map((c) => c.text)
+    .join('')
+    .trim()
+  const failure = stderr && step.error.startsWith(stderr) ? step.error.slice(stderr.length).trim() || 'It failed.' : step.error
   return (
     <>
       <div className="term-prompt">
@@ -163,9 +219,19 @@ function ScriptScreen({ step, logs, error, going }: { step: RunStep; logs: RunLo
           </div>
         </div>
       ))}
-      {error && <p className="term-error">The log couldn't load: {error}</p>}
-      {logs === null && !error && <p className="term-dim">Loading…</p>}
-      {logs?.map((l) => (
+      {error && <p className="term-error">What it printed couldn't load: {error}</p>}
+      {streamed && printed !== null && printed.length > 0 && (
+        <pre className="term-output">
+          {printed.map((c) => (
+            <span key={c.id} className={c.stream}>
+              {c.text}
+            </span>
+          ))}
+        </pre>
+      )}
+      {streamed && !going && (failure ? <pre className="term-error">{failure}</pre> : <p className="term-dim">⏺ It ended without an error.</p>)}
+      {!streamed && logs === null && !error && <p className="term-dim">Loading…</p>}
+      {!streamed && logs?.map((l) => (
         <div key={l.id} className={`term-log ${l.level}`}>
           <time dateTime={l.time} title={new Date(l.time).toLocaleString()}>
             {formatLogTime(l.time)}
@@ -175,9 +241,9 @@ function ScriptScreen({ step, logs, error, going }: { step: RunStep; logs: RunLo
       ))}
       {going ? (
         <p className="term-dim">
-          <span className="term-cursor" aria-hidden="true" /> running… what it prints shows once it ends.
+          <span className="term-cursor" aria-hidden="true" /> running…
         </p>
-      ) : (
+      ) : streamed ? null : (
         <>
           {step.output && (
             <div className="term-says">

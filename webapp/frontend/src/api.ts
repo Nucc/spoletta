@@ -1243,6 +1243,19 @@ export type RepoChanges = {
   error?: string
 }
 
+// A chunk of what a script step printed, as it printed it.
+export type OutputChunk = {
+  id: number
+  stream: 'stdout' | 'stderr'
+  text: string
+  createdAt: string
+}
+
+// What the script step printed, in order; after gives only what came since.
+export function getStepOutput(run: number, id: number, after = 0): Promise<OutputChunk[]> {
+  return request(`/api/runs/${run}/steps/${id}/output?after=${after}`)
+}
+
 export function getStepChanges(run: number, id: number): Promise<RepoChanges[]> {
   return request(`/api/runs/${run}/steps/${id}/changes`)
 }

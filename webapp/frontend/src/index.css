@@ -5451,6 +5451,14 @@ select.flow-owner:disabled {
   color: #adbac7;
 }
 
+.term-output {
+  margin: 0 0 10px !important;
+}
+
+.term-output .stderr {
+  color: #f0b072;
+}
+
 .term-log {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);

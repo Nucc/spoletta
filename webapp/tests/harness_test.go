@@ -599,6 +599,9 @@ type fakeWorker struct {
 	// The messages an agent's conversation records, by process name,
 	// instead of the one every agent sends.
 	messages map[string][]map[string]any
+	// What a script prints as it runs, by process name, sent before it
+	// replies: each a stream and its text.
+	scriptOutput map[string][][2]string
 	// Every run asked for, in the order asked.
 	agentRuns  []agentRun
 	scriptRuns []scriptRun
@@ -616,7 +619,7 @@ type fakeWorker struct {
 }
 
 func newFakeWorker(t *testing.T) *fakeWorker {
-	fw := &fakeWorker{t: t, agents: map[string]func(context.Context, agentRun) runResult{}, scripts: map[string]func(context.Context, scriptRun) runResult{}, messages: map[string][]map[string]any{}}
+	fw := &fakeWorker{t: t, agents: map[string]func(context.Context, agentRun) runResult{}, scripts: map[string]func(context.Context, scriptRun) runResult{}, messages: map[string][]map[string]any{}, scriptOutput: map[string][][2]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, agentModels{Default: "fake/model", Models: []string{"fake/model"}})
@@ -726,15 +729,37 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 		fw.mu.Lock()
 		fw.scriptRuns = append(fw.scriptRuns, run)
 		reply := fw.scripts[run.ProcessName]
+		output := fw.scriptOutput[run.ProcessName]
 		fw.mu.Unlock()
+		// As the real one: streamed when asked to, what the script prints
+		// first and its log as it goes, else the result alone.
+		stream := strings.Contains(r.Header.Get("Accept"), "application/x-ndjson")
+		enc := json.NewEncoder(w)
+		started := logLine{Time: time.Now(), Level: "info", Message: "fake bash runs " + run.ProcessName}
+		if stream {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			enc.Encode(map[string]any{"log": started})
+			for _, o := range output {
+				enc.Encode(map[string]any{"output": map[string]string{"stream": o[0], "text": o[1]}})
+			}
+			w.(http.Flusher).Flush()
+		}
 		res := runResult{Error: "the fake worker has no script for " + run.ProcessName}
 		if reply != nil {
 			res = reply(r.Context(), run)
 		} else {
 			t.Errorf("fake worker: no script for %q", run.ProcessName)
 		}
-		res.Log = append([]logLine{{Time: time.Now(), Level: "info", Message: "fake bash runs " + run.ProcessName}}, res.Log...)
-		writeJSON(w, http.StatusOK, res)
+		if !stream {
+			res.Log = append([]logLine{started}, res.Log...)
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		for _, l := range res.Log {
+			enc.Encode(map[string]any{"log": l})
+		}
+		res.Log = nil
+		enc.Encode(map[string]any{"result": res})
 	})
 	// As the real one with WORKER_TOKEN set: nothing gets through without it.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

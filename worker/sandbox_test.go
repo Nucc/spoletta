@@ -47,7 +47,7 @@ func TestProcessSandbox(t *testing.T) {
 func TestStepsOfARunShareItsHome(t *testing.T) {
 	workspacesRoot = t.TempDir()
 	step := func(run int64, script string) runResult {
-		return runScript(context.Background(), scriptRequest{Run: run, Script: script}, time.Minute, newStepLogger("test", nil))
+		return runScript(context.Background(), scriptRequest{Run: run, Script: script}, time.Minute, newStepLogger("test", nil), nil)
 	}
 	if res := step(5, `echo cached > "$HOME/cache"; echo "$HOME"`); !res.OK || res.Output != runHome(5) {
 		t.Fatalf("the first step: %+v", res)

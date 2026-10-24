@@ -374,12 +374,42 @@ func main() {
 		}
 
 		started := time.Now()
-		l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), nil)
-		res := runScript(r.Context(), run, limit(run.TimeoutMS, timeout), l)
+		// A webapp asking for a stream gets a JSON record per line, as for an
+		// agent: {"output": {"stream", "text"}} for what the script prints as
+		// it prints it, {"log": ...} for each line the worker logs of it,
+		// then {"result": ...}. Otherwise the reply is the result alone, its
+		// log in it.
+		if !strings.Contains(r.Header.Get("Accept"), "application/x-ndjson") {
+			l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), nil)
+			res := runScript(r.Context(), run, limit(run.TimeoutMS, timeout), l, nil)
+			logOutcome(l, "bash", res, time.Since(started))
+			res.Log = l.kept()
+			if r.Context().Err() == nil {
+				reply(w, http.StatusOK, res)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		rc := http.NewResponseController(w)
+		var mu sync.Mutex
+		send := func(record any) {
+			mu.Lock()
+			defer mu.Unlock()
+			if err := json.NewEncoder(w).Encode(record); err == nil {
+				rc.Flush()
+			}
+		}
+		l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), func(line logLine) {
+			send(map[string]logLine{"log": line})
+		})
+		out := newLiveOutput(func(stream, text string) {
+			send(map[string]map[string]string{"output": {"stream": stream, "text": text}})
+		})
+		res := runScript(r.Context(), run, limit(run.TimeoutMS, timeout), l, out)
 		logOutcome(l, "bash", res, time.Since(started))
-		res.Log = l.kept()
 		if r.Context().Err() == nil {
-			reply(w, http.StatusOK, res)
+			send(map[string]runResult{"result": res})
 		}
 	})
 
@@ -863,7 +893,9 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // the script prints is its output; a non-zero exit fails it, with what it
 // printed to stderr as the error. Like pi, it runs in a process group of its own,
 // which a cancelled request or the timeout kills.
-func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l *stepLogger) (res runResult) {
+// What it prints goes to out as it prints it, if there is one.
+func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l *stepLogger, out *liveOutput) (res runResult) {
+	defer out.close()
 	// The inputs, the script and the git token stay out of the working
 	// directory, which a workspace shares with other steps, readable only
 	// by the worker's user.
@@ -934,7 +966,8 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	} else {
 		l.infof("bash, given nothing")
 	}
-	err = steps.run(runCtx, spec, stdout, stderr)
+	err = steps.run(runCtx, spec, out.writer("stdout", stdout), out.writer("stderr", stderr))
+	out.close()
 	if notStarted(err) && runCtx.Err() == nil {
 		return runResult{Error: "failed to start bash: " + err.Error()}
 	}

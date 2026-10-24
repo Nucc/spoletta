@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"log"
-	"net/http"
 	"strings"
 )
 
@@ -17,7 +16,8 @@ import (
 // JSON array for a list. Files it generates go in the directory $OUTPUTS
 // points to, with their paths in its output. A non-zero exit fails the step.
 // In a scheduled run, $SINCE and its alias $LAST_RUN say when the schedule
-// last got through, so the script can fetch only what changed since.
+// last got through, so the script can fetch only what changed since. What
+// it prints is kept as it prints it, for reading; see script_output.go.
 
 // What the worker runs.
 type scriptRun struct {
@@ -118,13 +118,17 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 		}
 		run.Egress = egress.grant(who, runID, stepID, run.Workspace, settings.timeout())
 		defer egress.revoke(run.Egress)
-		if err := callWorker(ctx, http.MethodPost, workerURL+"/script", run, &res); err != nil {
+		res, err = streamScript(ctx, workerURL, run, func(stream, text string) {
+			recordOutput(db, stepID, stream, text)
+		}, func(l workerLogLine) {
+			recordWorkerLog(db, stepID, []workerLogLine{l})
+		})
+		if err != nil {
 			res = runResult{Error: "worker unavailable: " + err.Error()}
 			if ctx.Err() != nil {
 				res.Error = stopReason(ctx)
 			}
 		}
-		recordWorkerLog(db, stepID, res.Log)
 		if err := recordCommits(context.Background(), db, stepID, res.Commits); err != nil {
 			log.Printf("record commits of step %d: %v", stepID, err)
 		}

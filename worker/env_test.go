@@ -22,7 +22,7 @@ func TestScriptsGetOnlyTheirEnvironment(t *testing.T) {
 	t.Setenv("SHARED_TOKEN", "meant-for-scripts")
 	t.Setenv("CHILD_ENV", "SHARED_TOKEN, not a name")
 
-	res := runScript(context.Background(), scriptRequest{Script: "env", Inputs: []scriptInput{{Name: "Ticket", Content: "x"}}}, time.Minute, newStepLogger("test", nil))
+	res := runScript(context.Background(), scriptRequest{Script: "env", Inputs: []scriptInput{{Name: "Ticket", Content: "x"}}}, time.Minute, newStepLogger("test", nil), nil)
 	if !res.OK {
 		t.Fatalf("script failed: %s", res.Error)
 	}

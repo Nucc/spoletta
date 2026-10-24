@@ -57,7 +57,7 @@ func TestStepGitGetsItsToken(t *testing.T) {
 		t.Errorf("git without the step's environment got %q", out)
 	}
 
-	res := runScript(context.Background(), scriptRequest{Script: "git credential fill <<'EOF'\nprotocol=https\nhost=github.com\n\nEOF", Git: &gitCredentials{Token: "script-token"}}, time.Minute, newStepLogger("test", nil))
+	res := runScript(context.Background(), scriptRequest{Script: "git credential fill <<'EOF'\nprotocol=https\nhost=github.com\n\nEOF", Git: &gitCredentials{Token: "script-token"}}, time.Minute, newStepLogger("test", nil), nil)
 	if !strings.Contains(res.Output, "password=script-token") || !strings.Contains(res.Output, "username=x-access-token") {
 		t.Errorf("the script's git got %q, %s", res.Output, res.Error)
 	}
@@ -70,7 +70,7 @@ func TestStepGitGetsItsToken(t *testing.T) {
 // A step that would outlive its token is cut short, saying so.
 func TestStepEndsBeforeItsToken(t *testing.T) {
 	soon := time.Now().Add(time.Minute + 2*time.Second)
-	res := runScript(context.Background(), scriptRequest{Script: "sleep 60", Git: &gitCredentials{Token: "t", Expires: &soon}}, 10*time.Minute, newStepLogger("test", nil))
+	res := runScript(context.Background(), scriptRequest{Script: "sleep 60", Git: &gitCredentials{Token: "t", Expires: &soon}}, 10*time.Minute, newStepLogger("test", nil), nil)
 	if res.OK || !strings.Contains(res.Error, "git token ends") {
 		t.Errorf("result = %+v", res)
 	}

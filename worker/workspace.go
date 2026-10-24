@@ -315,6 +315,17 @@ fi
 // The checkout and its git must be the directories they were, not links
 // leading to another's, and it may borrow no objects from elsewhere. The
 // caller isn't holding the shared repository's lock.
+//
+// The fetch still reads objects the step made, which may be crafted to
+// trip up whoever reads them, so it checks each one it takes
+// (fetch.fsckObjects) and refuses the branch if one is malformed. Fetching
+// from the repository's origin (fetchShared) doesn't, as a repository's
+// history often holds old objects that fail the check. What a step's branch
+// brings is what the step made and what it was cloned with from the shared
+// repository, which the shared repository mostly has already and isn't
+// sent again; but one of the repository's own commits that fails the check,
+// sent again because the shared repository lacks it, keeps the branch from
+// coming back, as a step's malformed object would.
 func bringBack(ctx context.Context, dest, repo, branch string) error {
 	gitDir := filepath.Join(dest, ".git")
 	for _, p := range []string{dest, gitDir, filepath.Join(gitDir, "objects"), filepath.Join(gitDir, "objects", "info")} {
@@ -335,7 +346,7 @@ func bringBack(ctx context.Context, dest, repo, branch string) error {
 		}
 	}
 	defer lockPath(repo)()
-	return gitOK(ctx, repo, "fetch", "--quiet", "--no-tags", "file://"+dest, "+refs/heads/"+branch+":refs/heads/"+branch)
+	return gitOK(ctx, repo, "-c", "fetch.fsckObjects=true", "fetch", "--quiet", "--no-tags", "file://"+dest, "+refs/heads/"+branch+":refs/heads/"+branch)
 }
 
 // Clones the run's branch of the repository into the workspace, unless it
@@ -511,10 +522,15 @@ func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return "", fmt.Errorf("git %s: %s", args[0], msg)
+		// Named by its command, past any -c setting it was given.
+		name := args[0]
+		for i := 0; i+2 < len(args) && args[i] == "-c"; i += 2 {
+			name = args[i+2]
 		}
-		return "", fmt.Errorf("git %s: %w", args[0], err)
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", fmt.Errorf("git %s: %s", name, msg)
+		}
+		return "", fmt.Errorf("git %s: %w", name, err)
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }

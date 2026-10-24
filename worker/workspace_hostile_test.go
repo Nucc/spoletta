@@ -144,6 +144,54 @@ func TestALinkedCheckoutIsntBroughtBack(t *testing.T) {
 	}
 }
 
+// A step's commit comes back, but one it crafted malformed, here a commit
+// whose author has no proper email, isn't: the fetch into the shared
+// repository checks each object it takes, and the branch stays as it was.
+func TestAMalformedCommitIsntBroughtBack(t *testing.T) {
+	gitSetUp(t)
+	const url, branch = "https://example.invalid/acme/api.git", "flow/test/run-11"
+	sharedWithBranch(t, url, branch)
+	shared := sharedRepo(url)
+	var ran []sandboxSpec
+	steps = idleSandbox{&ran}
+	t.Cleanup(func() { steps = processSandbox{} })
+	spec := &workspaceSpec{ID: "run-11", Branch: branch, Repositories: []repository{{Name: "api", URL: url}}}
+
+	ws, err := takeWorkspace(context.Background(), spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := filepath.Join(ws.dir, "api")
+	os.WriteFile(filepath.Join(api, "fix.go"), []byte("package fix\n"), 0o644)
+	git(t, api, "add", "--all")
+	git(t, api, "commit", "--quiet", "-m", "Fix it")
+	var res runResult
+	ws.done(&res)
+	good := git(t, shared, "rev-parse", "refs/heads/"+branch)
+	if got := git(t, shared, "log", "-1", "--format=%s", good); got != "Fix it" {
+		t.Fatalf("the step's commit didn't come back: the branch is at %q", got)
+	}
+
+	ws, err = takeWorkspace(context.Background(), spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api = filepath.Join(ws.dir, "api")
+	tree, head := git(t, api, "rev-parse", "HEAD^{tree}"), git(t, api, "rev-parse", "HEAD")
+	raw := filepath.Join(t.TempDir(), "commit")
+	os.WriteFile(raw, []byte("tree "+tree+"\nparent "+head+"\nauthor Evil <evil 1700000000 +0000\ncommitter Evil <evil@x> 1700000000 +0000\n\nEvil\n"), 0o644)
+	evil := git(t, api, "hash-object", "-t", "commit", "-w", "--literally", raw)
+	git(t, api, "update-ref", "refs/heads/"+branch, evil)
+	res = runResult{}
+	ws.done(&res)
+	if len(res.Commits) != 0 {
+		t.Errorf("brought back %+v", res.Commits)
+	}
+	if got := git(t, shared, "rev-parse", "refs/heads/"+branch); got != good {
+		t.Errorf("the branch moved to %s, the malformed commit", got)
+	}
+}
+
 // A re-run's branch starts from the commit it is given, which another
 // run's branch holds.
 func TestReRunStartsFromItsCommit(t *testing.T) {

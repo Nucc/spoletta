@@ -15,7 +15,12 @@ package main
 // *.example.com takes example.com's subdomains. A host is dialled only at
 // a public address, unless an admin allowed it by name: an allowed name
 // that resolves to the webapp's own network, or a repository's URL a flow
-// names, mustn't reach the database or the webapp's neighbours.
+// names, mustn't reach the database or the webapp's neighbours. Not public
+// are the private ranges, shared address space (100.64.0.0/10, where
+// clusters often keep pods and services), the IETF's, benchmarking and
+// reserved ranges, in IPv4 or written as IPv6; the machine's own,
+// link-local (the cloud's metadata service) and multicast addresses are
+// never dialled, allowed or not.
 
 import (
 	"bufio"
@@ -389,8 +394,40 @@ func (b *egressBroker) logConnection(g *egressGrant, format string, args ...any)
 	runLog(b.db, g.run, g.step, logInfo, "internet access: "+format, args...)
 }
 
+// The IPv4 ranges that aren't the internet's though IsPrivate doesn't say
+// so: "this network", which some systems take for the machine itself, is
+// never reached, like loopback; the rest are reached only by a host an
+// admin allowed by name, as private addresses are. Shared address space
+// (100.64.0.0/10) is where many Kubernetes clusters keep their pods and
+// services, and Tailscale its machines; 192.0.0.0/24 is the IETF's own,
+// 198.18.0.0/15 is for benchmarking networks, and 240.0.0.0/4, broadcast
+// with it, is reserved. IPNet.Contains takes an IPv4 address written as
+// IPv6 (::ffff:100.64.0.1) as the IPv4 one, so neither form gets past.
+var (
+	unreachableNets = parseNets("0.0.0.0/8")
+	internalNets    = parseNets("100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4")
+)
+
+func parseNets(cidrs ...string) []*net.IPNet {
+	nets := make([]*net.IPNet, len(cidrs))
+	for i, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic(err)
+		}
+		nets[i] = n
+	}
+	return nets
+}
+
+func inNets(ip net.IP, nets []*net.IPNet) bool {
+	return slices.ContainsFunc(nets, func(n *net.IPNet) bool { return n.Contains(ip) })
+}
+
 // Refuses dialling an address that isn't public, unless an admin allowed
-// the host by name.
+// the host by name: a private or otherwise internal address is reached only
+// by a host allowed, and the machine's own, link-local and multicast
+// addresses never.
 func refusePrivate(listed, loopback bool) func(network, address string, _ syscall.RawConn) error {
 	return func(_, address string, _ syscall.RawConn) error {
 		host, _, _ := net.SplitHostPort(address)
@@ -398,10 +435,10 @@ func refusePrivate(listed, loopback bool) func(network, address string, _ syscal
 		if ip == nil || loopback && ip.IsLoopback() {
 			return nil
 		}
-		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || inNets(ip, unreachableNets) {
 			return fmt.Errorf("%s isn't an address steps may reach", ip)
 		}
-		if ip.IsPrivate() && !listed {
+		if (ip.IsPrivate() || inNets(ip, internalNets)) && !listed {
 			return fmt.Errorf("%s is a private address, which only a host an admin allowed may be at", ip)
 		}
 		return nil

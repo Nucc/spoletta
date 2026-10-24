@@ -39,6 +39,37 @@ func TestEgressMatches(t *testing.T) {
 	}
 }
 
+// Internal addresses IsPrivate leaves out are refused as private ones are,
+// unless an admin allowed the host by name, in IPv4 or written as IPv6;
+// the machine's own are refused allowed or not, and public ones dialled.
+func TestRefusePrivateInternalRanges(t *testing.T) {
+	internal := []string{
+		"100.64.0.1:443", "100.127.255.254:443", // shared address space
+		"192.0.0.8:443",                     // the IETF's
+		"198.18.0.1:443", "198.19.255.1:80", // benchmarking
+		"240.0.0.1:443", "255.255.255.255:80", // reserved, and broadcast
+		"[::ffff:100.64.0.1]:443", "[::ffff:10.0.0.5]:443", "[::ffff:198.18.0.1]:443", // IPv4 written as IPv6
+	}
+	for _, addr := range internal {
+		if refusePrivate(false, false)("tcp", addr, nil) == nil {
+			t.Errorf("%s was dialled for a host not allowed", addr)
+		}
+		if err := refusePrivate(true, false)("tcp", addr, nil); err != nil {
+			t.Errorf("%s was refused for a host an admin allowed: %v", addr, err)
+		}
+	}
+	for _, addr := range []string{"127.0.0.1:443", "[::ffff:127.0.0.1]:443", "0.0.0.0:443", "0.1.2.3:443", "[::ffff:169.254.169.254]:80"} {
+		if refusePrivate(true, false)("tcp", addr, nil) == nil {
+			t.Errorf("%s was dialled for a host an admin allowed", addr)
+		}
+	}
+	for _, addr := range []string{"93.184.216.34:443", "100.128.0.1:443", "198.20.0.1:443", "192.0.1.1:443", "[2606:2800:220:1::1]:443"} {
+		if err := refusePrivate(false, false)("tcp", addr, nil); err != nil {
+			t.Errorf("the public %s was refused: %v", addr, err)
+		}
+	}
+}
+
 // A step's token reaches the hosts allowed and its repositories' through
 // the proxy, plain or tunnelled; without it, or to another host, nothing.
 func TestEgressProxy(t *testing.T) {

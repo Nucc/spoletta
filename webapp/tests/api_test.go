@@ -22,6 +22,7 @@ const kindConnector = "connector"
 const kindFlow = "flow"
 const kindHuman = "human"
 const kindInput = "input"
+const kindLoop = "loop"
 const kindScript = "script"
 const kindSentry = "sentry"
 const kindSubflow = "subflow"
@@ -416,6 +417,10 @@ type processSettings struct {
 	// decisions can no longer send the object back to a process that ran;
 	// defaultRounds when absent. See engine.go.
 	Rounds *int `json:"rounds,omitempty"`
+	// How many times a process runs round a loop with no person deciding
+	// in between before someone is asked whether it goes on; defaultLoops
+	// when absent. See loops.go.
+	Loops *int `json:"loops,omitempty"`
 	// How long an agent, script or Sentry step may take, in seconds, before
 	// it fails; the worker's own limit when absent.
 	Timeout *int `json:"timeout,omitempty"`
@@ -432,6 +437,8 @@ type processSettings struct {
 const (
 	defaultRounds = 3
 	maxRounds     = 20
+	defaultLoops  = 5
+	maxLoops      = 100
 	maxTimeout    = 24 * 60 * 60
 	maxRetries    = 5
 )

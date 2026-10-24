@@ -60,6 +60,10 @@ export type ProcessSettings = {
   // no longer send the object back to a process that ran; DEFAULT_ROUNDS
   // when absent.
   rounds?: number
+  // How many times a process runs round a loop with no person deciding in
+  // between before someone is asked whether it goes on; DEFAULT_LOOPS when
+  // absent.
+  loops?: number
   // How long an agent, script, Sentry or connector step may take, in seconds; the
   // worker's own limit when absent.
   timeout?: number
@@ -74,6 +78,8 @@ export type ProcessSettings = {
 
 export const DEFAULT_ROUNDS = 3
 export const MAX_ROUNDS = 20
+export const DEFAULT_LOOPS = 5
+export const MAX_LOOPS = 100
 // The longest timeout, a day in seconds, and the most retries.
 export const MAX_TIMEOUT = 24 * 60 * 60
 export const MAX_RETRIES = 5
@@ -972,10 +978,11 @@ export type RunStep = {
   // A re-run's step holding what it copied from the run it re-runs has no
   // process, and is of kind copied; so has the step holding what a run
   // started over the API was given, of kind input.
-  kind: ProcessKind | 'copied' | 'input'
+  kind: ProcessKind | 'copied' | 'input' | 'loop'
   model: string
   thinking: ThinkingLevel | ''
-  // For agents, the prompt as sent, inputs and change request included.
+  // For agents, the prompt as sent, inputs and change request included; for
+  // a loop step, what it asks: whether its process goes on round a loop.
   prompt: string
   inputs: RunInput[]
   changeRequest: ChangeRequest | null
@@ -988,7 +995,8 @@ export type RunStep = {
   instructions: string
   // Who decided it, when people sign in; empty otherwise. For human steps,
   // the roles that decide them, absent when anyone does, and whether the
-  // person signed in may.
+  // person signed in may; loop steps are answered by those who may edit
+  // the flow.
   decidedBy: string
   handledBy?: string[]
   canDecide: boolean
@@ -1277,6 +1285,12 @@ export function decideStep(
   decision: { state: number | null; instructions: string; entries?: Entries },
 ): Promise<void> {
   return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(decision) })
+}
+
+// Answers a loop step: whether its process goes on round the loop, or stops,
+// which fails the run.
+export function answerLoop(run: number, id: number, goOn: boolean): Promise<void> {
+  return request(`/api/runs/${run}/steps/${id}/loop`, { method: 'POST', body: JSON.stringify({ goOn }) })
 }
 
 // A saved snapshot of the whole board. Saving always adds a version on top;

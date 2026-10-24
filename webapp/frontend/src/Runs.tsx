@@ -291,7 +291,7 @@ export function RunPanel({
 export const rerunnableFrom = (run: FlowRunDetail, s: RunStep) => run.status !== 'running' && s.process !== null && s.kind !== 'copied'
 
 // Agent, script, Sentry and connector steps can be stopped while they go.
-export const stoppable = (s: { kind: ProcessKind | 'copied' | 'input'; status: StepStatus }) =>
+export const stoppable = (s: { kind: ProcessKind | 'copied' | 'input' | 'loop'; status: StepStatus }) =>
   s.status === 'active' && (s.kind === 'agent' || s.kind === 'script' || s.kind === 'sentry' || s.kind === 'connector')
 
 function Step({
@@ -389,7 +389,13 @@ function Step({
             />
           </>
         )}
-        {s.prompt && (
+        {s.kind === 'loop' && (
+          <Block
+            label={s.decidedBy && s.status !== 'waiting' ? `Asked · answered by ${s.decidedBy}` : 'Asked'}
+            text={s.prompt}
+          />
+        )}
+        {s.prompt && s.kind !== 'loop' && (
           <details className="step-prompt">
             <summary>
               {s.kind === 'script' ? 'Script it ran' : s.kind === 'sentry' ? 'Request sent to Sentry' : s.kind === 'connector' ? 'Operation it carried out' : 'Prompt sent to the agent'}
@@ -411,7 +417,7 @@ function Step({
             failed={s.status !== 'duplicate' && s.status !== 'skipped'}
           />
         )}
-        {s.kind !== 'human' && s.kind !== 'flow' && s.kind !== 'subflow' && (s.status === 'done' || s.status === 'duplicate') && (
+        {s.kind !== 'human' && s.kind !== 'flow' && s.kind !== 'subflow' && s.kind !== 'loop' && (s.status === 'done' || s.status === 'duplicate') && (
           <Block label="Output" text={s.output || '(empty)'} data />
         )}
         {s.kind !== 'human' && objects.length > 0 && (

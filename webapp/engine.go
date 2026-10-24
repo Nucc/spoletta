@@ -66,6 +66,9 @@ import (
 // failed process's branch ends, but the run doesn't fail, and the processes
 // it leads to run in a fresh pass, taking what the failed one took and what
 // went wrong. A step stopped by a person or with its run isn't handled.
+// A process going round such a loop, with no person deciding in between,
+// too many times or on just what it took before, waits for someone to say
+// whether it goes on; see loops.go.
 // Processes still connected directly run right after their predecessor.
 //
 // A human process waits for a person to review its inputs and set an object
@@ -106,6 +109,8 @@ type decision struct {
 	instructions string
 	output       string
 	entries      map[int64]string
+	// For a loop step: whether its process goes on; see loops.go.
+	goOn bool
 }
 
 type engine struct {
@@ -310,7 +315,7 @@ func (e *engine) stopStepHere(runID, stepID int64) (going, here bool) {
 // replica walking it.
 func (e *engine) decide(runID, stepID int64, d decision) {
 	if !e.decideHere(runID, stepID, d) {
-		e.ask(runID, commandDecide, stepID, decisionCommand{State: d.state, Instructions: d.instructions, Output: d.output, Entries: d.entries})
+		e.ask(runID, commandDecide, stepID, decisionCommand{State: d.state, Instructions: d.instructions, Output: d.output, Entries: d.entries, GoOn: d.goOn})
 	}
 }
 
@@ -334,6 +339,7 @@ type decisionCommand struct {
 	Instructions string           `json:"instructions"`
 	Output       string           `json:"output"`
 	Entries      map[int64]string `json:"entries"`
+	GoOn         bool             `json:"goOn,omitempty"`
 }
 
 // Asks the replica walking the run, another one alive, to do what the
@@ -370,17 +376,22 @@ func (e *engine) takeCommands() {
 			log.Printf("a decision of step %d of run %d another replica sent: %v", c.step, c.target, err)
 			return
 		}
-		e.decideHere(c.target, c.step, decision{state: d.State, instructions: d.Instructions, output: d.Output, entries: d.Entries})
+		e.decideHere(c.target, c.step, decision{state: d.State, instructions: d.Instructions, output: d.Output, entries: d.Entries, goOn: d.GoOn})
 	}
 }
 
 // Records a review as waiting and waits for its decision. The step and the
-// wait start together, so a decision can't come in between. False if the
-// run ended first, or the step couldn't be recorded.
-func (e *engine) await(ctx context.Context, lr *liveRun, runID, processID int64, inputs []runInput) (int64, decision, bool) {
+// wait start together, so a decision can't come in between. With a question,
+// the step is a loop step asking it instead; see loops.go. False if the run
+// ended first, or the step couldn't be recorded.
+func (e *engine) await(ctx context.Context, lr *liveRun, runID, processID int64, inputs []runInput, question string) (int64, decision, bool) {
 	ch := make(chan decision, 1)
+	kind := ""
+	if question != "" {
+		kind = kindLoop
+	}
 	e.mu.Lock()
-	stepID, err := startStep(ctx, e.db, runID, processID, stepWaiting, "", inputs, nil)
+	stepID, err := startStepAs(ctx, e.db, runID, processID, kind, stepWaiting, question, inputs, nil)
 	if err == nil {
 		lr.reviews[stepID] = ch
 	}
@@ -416,13 +427,26 @@ type review struct {
 	reviewer, instructions string
 }
 
-// The processes run in one pass of a run.
+// The processes run in one pass of a run, and what each took.
 type pass struct {
 	mu      sync.Mutex
 	visited map[int64]bool
+	inputs  map[int64]inputsSum
+	// The pass it came from, back to the last a person started, which has
+	// none; and whether its processes' runs count toward their loops, which
+	// a reviewer's rounds bound instead. See loops.go.
+	parent *pass
+	counts bool
 }
 
-func newPass() *pass { return &pass{visited: map[int64]bool{}} }
+// A pass starting from the start, or from a person's decision.
+func newPass() *pass { return &pass{visited: map[int64]bool{}, inputs: map[int64]inputsSum{}, counts: true} }
+
+// A fresh pass coming from p: from a reviewer's decision, whose rounds bound
+// it, or from a failure.
+func (p *pass) fork(reviewed bool) *pass {
+	return &pass{visited: map[int64]bool{}, inputs: map[int64]inputsSum{}, parent: p, counts: !reviewed}
+}
 
 // Whether the process hadn't run in this pass yet; it has now.
 func (p *pass) visit(id int64) bool {
@@ -535,7 +559,11 @@ type walk struct {
 	// processes taking them run, but hold nothing to hand in.
 	unstored map[int64]bool
 	// How many times each process has run, over all passes.
-	ran        map[int64]int
+	ran map[int64]int
+	// How many more times each process may go round a loop, and whether on
+	// what it took before, as someone let it; see loops.go.
+	allowed    map[int64]int
+	trusted    map[int64]bool
 	failed     bool
 	terminated bool
 }
@@ -588,6 +616,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{}, rules: map[int64][]ruledState{},
 		generated: map[int64]bool{}, values: map[int64]value{}, skipped: map[int64]bool{}, unstored: map[int64]bool{}, ran: map[int64]int{},
+		allowed: map[int64]int{}, trusted: map[int64]bool{},
 	}
 	w.reviews, w.terminate = context.WithCancel(ctx)
 	s := fr.board
@@ -1053,13 +1082,16 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 		w.runHuman(id, p, given)
 		return
 	}
+	if !w.goOn(id, p, given, cr) {
+		return
+	}
 
 	var out map[int64]value
 	var ok bool
 	if w.kinds[id] == kindFlow || w.kinds[id] == kindSubflow {
 		out, ok = w.runFlow(id)
 	} else {
-		out, ok = w.runStep(id, given, cr)
+		out, ok = w.runStep(id, p, given, cr)
 	}
 	if !ok {
 		return
@@ -1086,11 +1118,11 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 					msg := fmt.Sprintf("It decided %s is %s again after %d rounds, the most it runs; it can no longer send it back.",
 						strconv.Quote(w.objects[o]), strconv.Quote(w.stateNames[st]), w.ran[id])
 					w.note(id, stepError, msg)
-					w.handleFailure(id, given, msg)
+					w.handleFailure(id, p, given, msg)
 					return
 				}
 				if fresh == nil {
-					fresh = newPass()
+					fresh = p.fork(true)
 				}
 				from = fresh
 			}
@@ -1110,7 +1142,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 // Executes an agent, script, Sentry or connector process; returns what it generated, each
 // object in the state its link names. False if it failed or found a
 // duplicate, which terminates the run and so still returns what it generated.
-func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64]value, bool) {
+func (w *walk) runStep(id int64, p *pass, given []runInput, cr *changeRequest) (map[int64]value, bool) {
 	var res runResult
 	var ok, stopped bool
 	var stepID int64
@@ -1124,7 +1156,7 @@ func (w *walk) runStep(id int64, given []runInput, cr *changeRequest) (map[int64
 		if stopped {
 			w.fail()
 		} else {
-			w.handleFailure(id, given, res.Error)
+			w.handleFailure(id, p, given, res.Error)
 		}
 		return nil, false
 	}
@@ -1204,10 +1236,10 @@ func (w *walk) fail() {
 	w.mu.Unlock()
 }
 
-// The process failed, saying why: what handles its failure runs, each in a
-// fresh pass, taking what it took and what went wrong; without any, the
-// run fails.
-func (w *walk) handleFailure(id int64, given []runInput, msg string) {
+// The process failed in pass p, saying why: what handles its failure runs,
+// each in a fresh pass coming from p, taking what it took and what went
+// wrong; without any, the run fails.
+func (w *walk) handleFailure(id int64, p *pass, given []runInput, msg string) {
 	handlers := w.handlers[id]
 	if len(handlers) == 0 || w.stopped() {
 		w.fail()
@@ -1219,7 +1251,7 @@ func (w *walk) handleFailure(id int64, given []runInput, msg string) {
 	extra := append([]runInput{{Name: "Failure of " + w.names[id], Content: msg}}, given...)
 	next := make([]func(), len(handlers))
 	for i, h := range handlers {
-		next[i] = func() { w.runProcessWith(h, newPass(), 0, extra) }
+		next[i] = func() { w.runProcessWith(h, p.fork(false), 0, extra) }
 	}
 	all(next)
 }
@@ -1541,7 +1573,7 @@ func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64,
 // processes taking it; then a fresh pass starts from the object they set, for
 // the processes taking it in that state.
 func (w *walk) runHuman(id int64, p *pass, given []runInput) {
-	stepID, d, ok := w.e.await(w.reviews, w.lr, w.run, id, given)
+	stepID, d, ok := w.e.await(w.reviews, w.lr, w.run, id, given, "")
 	if !ok {
 		return
 	}

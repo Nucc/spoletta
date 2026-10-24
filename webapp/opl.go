@@ -332,6 +332,9 @@ func (o *oplWriter) processSentences(p process, indent string) {
 	if p.Kind == kindAgent && reviews {
 		o.line(indent, "%s runs at most %d rounds.", name, st.rounds())
 	}
+	if st.Loops != nil {
+		o.line(indent, "%s asks before going round a loop more than %d times.", name, *st.Loops)
+	}
 	if st.Timeout != nil {
 		o.line(indent, "%s fails after %d seconds.", name, *st.Timeout)
 	}

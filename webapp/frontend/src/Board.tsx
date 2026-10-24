@@ -101,6 +101,7 @@ import {
   deleteLink,
   deleteObject,
   deleteProcess,
+  answerLoop,
   decideStep,
   deleteState,
   getRun,
@@ -940,7 +941,7 @@ export default function Board({
             s?.kind === 'human' && s.outcome
               ? decisionText(s.outcome, shownRun.objects.find((o) => o.step === s.id)?.name, s.instructions)
               : s?.output
-          const review = s?.kind === 'human' && s.status === 'waiting' ? s.inputs : undefined
+          const review = (s?.kind === 'human' || s?.kind === 'loop') && s.status === 'waiting' ? s.inputs : undefined
           return {
             ...n,
             data: {
@@ -2198,10 +2199,37 @@ export default function Board({
     return true
   }
 
-  // What a human process waiting in the open run shows to decide on.
+  // Answers the loop step the process waits on in the open run.
+  const onAnswerLoop = async (id: string, goOn: boolean) => {
+    const step = shownRun?.steps.filter((s) => String(s.process) === id && s.status === 'waiting').at(-1)
+    if (!shownRun || !step) return false
+    try {
+      await answerLoop(shownRun.id, step.id, goOn)
+    } catch (err) {
+      report(err)
+      return false
+    } finally {
+      setRunReload((n) => n + 1)
+    }
+    updateData(id, { status: goOn ? 'active' : 'error', review: undefined })
+    return true
+  }
+
+  // What a human process waiting in the open run shows to decide on, or a
+  // process asking whether it goes on round a loop.
   const reviewOf = (n: ProcessNodeType): Review | undefined => {
     if (!n.data.review) return undefined
     const step = shownRun?.steps.filter((s) => String(s.process) === n.id && s.status === 'waiting').at(-1)
+    if (step?.kind === 'loop')
+      return {
+        inputs: n.data.review,
+        options: [],
+        entries: [],
+        handledBy: [],
+        canDecide: step.canDecide,
+        onDecide: async () => false,
+        loop: { question: step.prompt, onAnswer: (goOn) => onAnswerLoop(n.id, goOn) },
+      }
     return {
       inputs: n.data.review,
       options: decisionOptions(n.id),

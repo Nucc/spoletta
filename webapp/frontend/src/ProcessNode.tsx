@@ -23,7 +23,8 @@ export type ProcessNodeData = {
   // What the last run of this process printed, or why it failed.
   output?: string
   runError?: string
-  // While a human process waits for a decision: the inputs under review.
+  // While a human process waits for a decision, or a process asks whether it
+  // goes on round a loop: the inputs under review.
   review?: RunInput[]
   // Whether the run shown can be re-run from this process: it ended, and
   // the process ran in it rather than being copied from an earlier run.

@@ -162,6 +162,7 @@ func main() {
 	eng := newEngine(db, workerURL, sentry, mcp, parallelSteps)
 	llm.overspent = eng.fail
 	registerRunRoutes(mux, db, eng)
+	registerLoopRoutes(mux, db, eng)
 	registerLogRoutes(mux, db)
 	registerRerunRoutes(mux, db, eng)
 	registerAPIRoutes(mux, db, eng, auth != nil)

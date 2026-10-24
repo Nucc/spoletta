@@ -626,6 +626,12 @@ body {
   background: #fff1e5;
 }
 
+/* A step asking whether its process goes on round a loop. */
+.process-kind.loop {
+  color: #953800;
+  background: #fff1e5;
+}
+
 .process-kind.sentry {
   color: #6639ba;
   background: #fbefff;

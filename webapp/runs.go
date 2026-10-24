@@ -97,7 +97,8 @@ type step struct {
 	Kind        string `json:"kind"`
 	Model       string `json:"model"`
 	Thinking    string `json:"thinking"`
-	// The prompt as sent to the agent, inputs and change request included.
+	// The prompt as sent to the agent, inputs and change request included;
+	// for a loop step, what it asks; see loops.go.
 	Prompt        string         `json:"prompt"`
 	Inputs        []runInput     `json:"inputs"`
 	ChangeRequest *changeRequest `json:"changeRequest"`
@@ -110,7 +111,8 @@ type step struct {
 	Instructions string `json:"instructions"`
 	// Who decided it, with everyone signing in; see users.go. For human
 	// steps, the roles that decide them, none when anyone does, and whether
-	// the user asking may; see user_roles.go.
+	// the user asking may; see user_roles.go. Loop steps are answered by
+	// those who may edit the flow.
 	DecidedBy string   `json:"decidedBy"`
 	HandledBy []string `json:"handledBy,omitempty"`
 	CanDecide bool     `json:"canDecide"`
@@ -171,6 +173,12 @@ func validStepStatus(s string) bool {
 
 // Starts a step of a run, copying the process's current settings into it.
 func startStep(ctx context.Context, db *sql.DB, runID, processID int64, status, prompt string, inputs []runInput, cr *changeRequest) (int64, error) {
+	return startStepAs(ctx, db, runID, processID, "", status, prompt, inputs, cr)
+}
+
+// Starts a step as startStep does, of kind rather than its process's, unless
+// empty.
+func startStepAs(ctx context.Context, db *sql.DB, runID, processID int64, kind, status, prompt string, inputs []runInput, cr *changeRequest) (int64, error) {
 	if inputs == nil {
 		inputs = []runInput{}
 	}
@@ -186,8 +194,8 @@ func startStep(ctx context.Context, db *sql.DB, runID, processID int64, status, 
 	}
 	res, err := db.ExecContext(ctx,
 		`INSERT INTO run_steps (run_id, process_id, process_ref, process_name, kind, model, thinking, prompt, inputs, change_request, status, output, error, instructions)
-		SELECT ?, id, id, name, kind, model, thinking, ?, ?, ?, ?, '', '', '' FROM processes WHERE id = ?`,
-		runID, prompt, in, crJSON, status, processID)
+		SELECT ?, id, id, name, COALESCE(NULLIF(?, ''), kind), model, thinking, ?, ?, ?, ?, '', '', '' FROM processes WHERE id = ?`,
+		runID, kind, prompt, in, crJSON, status, processID)
 	if err != nil {
 		return 0, err
 	}
@@ -578,6 +586,13 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		rows.Close()
 		for i, s := range detail.Steps {
+			if s.Kind == kindLoop {
+				if detail.Steps[i].CanDecide, err = mayAnswerLoops(r.Context(), db, requestUser(r), rn.Flow); err != nil {
+					serverError(w, err)
+					return
+				}
+				continue
+			}
 			if s.Kind != kindHuman {
 				continue
 			}

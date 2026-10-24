@@ -111,6 +111,7 @@ Flows and procedures have the same shape:
   skills: [release-notes]   # agent: the skills it is given, by name: the file's, or the app's
   repositories: [app]   # the flow's repositories it works on; all if absent, none if []
   rounds: 3             # agent deciding states: how many times it can send work back
+  loops: 5              # how many times it runs round a loop before someone is asked
   timeout: 600          # seconds
   retries: 2
   quorum: 1             # how many of what it takes it waits for

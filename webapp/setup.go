@@ -127,6 +127,7 @@ type setupProcess struct {
 	Sentry       *setupSentry        `yaml:"sentry,omitempty"`
 	Connector    *setupConnector     `yaml:"connector,omitempty"`
 	Rounds       *int                `yaml:"rounds,omitempty"`
+	Loops        *int                `yaml:"loops,omitempty"`
 	Timeout      *int                `yaml:"timeout,omitempty"`
 	Retries      *int                `yaml:"retries,omitempty"`
 	Quorum       *int                `yaml:"quorum,omitempty"`

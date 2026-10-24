@@ -60,6 +60,10 @@ type processSettings struct {
 	// decisions can no longer send the object back to a process that ran;
 	// defaultRounds when absent. See engine.go.
 	Rounds *int `json:"rounds,omitempty"`
+	// How many times a process runs round a loop with no person deciding
+	// in between before someone is asked whether it goes on; defaultLoops
+	// when absent. See loops.go.
+	Loops *int `json:"loops,omitempty"`
 	// How long an agent, script, Sentry or connector step may take, in seconds, before
 	// it fails; the worker's own limit when absent.
 	Timeout *int `json:"timeout,omitempty"`
@@ -118,6 +122,9 @@ func (s processSettings) sentry() sentrySettings {
 func (s processSettings) problem() string {
 	if s.Rounds != nil && (*s.Rounds < 1 || *s.Rounds > maxRounds) {
 		return fmt.Sprintf("rounds must be from 1 to %d", maxRounds)
+	}
+	if s.Loops != nil && (*s.Loops < 1 || *s.Loops > maxLoops) {
+		return fmt.Sprintf("loops must be from 1 to %d", maxLoops)
 	}
 	if s.Timeout != nil && (*s.Timeout < 1 || *s.Timeout > maxTimeout) {
 		return fmt.Sprintf("timeout must be from 1 to %d seconds", maxTimeout)

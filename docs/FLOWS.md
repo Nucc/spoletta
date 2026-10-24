@@ -296,6 +296,9 @@ Settings for agent, script, Sentry and connector processes:
 - `timeout` in seconds (1 to 86400): the step fails after it.
 - `retries` (0 to 5): how many more times a failed step is tried, each a
   step of its own.
+- `loops` (1 to 100, default 5): how many times it may run round a loop with
+  no person deciding in between before someone is asked whether it goes on
+  (section 4.4).
 
 Settings for any process:
 - `quorum`: run once this many of the objects it takes without waiting for
@@ -525,6 +528,22 @@ times, a decision sending the work back to a process that already ran fails
 it instead, which ends that branch (or goes to its `onFailure` handler). A
 person can loop as long as they like.
 
+Any other loop, such as an `onFailure` handler fixing what the failed
+process takes so it runs again, has a **circuit breaker**. A process about
+to run round a loop, with no person deciding since it last did, waits for
+someone who may edit the flow to say whether it goes on:
+
+- once it has run `loops` times round it (default 5), or
+- at once, when it would take exactly what it took on an earlier round,
+  since the loop then gets nowhere.
+
+The question shows on the board as a review does. Going on lets it run
+`loops` more times, on the same input too; stopping ends its branch and
+fails the run, without its `onFailure` handler. Loops a reviewer's `rounds`
+bound, or a person's decisions drive, never ask. A loop meant to go round
+many times, such as polling until something is ready, needs a higher
+`loops`.
+
 When a reviewer sends work back, the process taking it in that state gets a
 **change request**: the reviewed work and the reviewer's instructions, in
 place of the object as a plain input (section 5.1). A person's decision
@@ -747,6 +766,7 @@ check that each one is what you meant.
 | output | `"Fix" yields "Patch".` |
 | quorum | `"Summarize" needs 2 of what it takes, and is skipped once it can't get them.` |
 | rounds (agent reviews only) | `"Critic" runs at most 3 rounds.` |
+| loops (when set) | `"Fix" asks before going round a loop more than 10 times.` |
 | timeout | `"Fix" fails after 900 seconds.` |
 | retries | `"Fix" is tried again up to 2 times when it fails.` |
 | failure connection | `"Escalate" handles a failure of "Fix".` |
@@ -1473,8 +1493,8 @@ Check them before you import.
 - A process can't `next` or `onFailure` to itself. Connections stay within
   one flow.
 - A subflow can't, directly or through other subflows, run its own flow.
-- `rounds` from 1 to 20; `timeout` from 1 to 86400; `retries` from 0 to 5;
-  `quorum` at least 1.
+- `rounds` from 1 to 20; `loops` from 1 to 100; `timeout` from 1 to 86400;
+  `retries` from 0 to 5; `quorum` at least 1.
 - Sentry `organization` and `project` are slugs (letters, digits, `-`, `_`).
 - `thinking` is one of the listed levels.
 

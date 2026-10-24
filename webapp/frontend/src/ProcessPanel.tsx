@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  DEFAULT_LOOPS,
   DEFAULT_ROUNDS,
   DEFAULT_SENTRY,
+  MAX_LOOPS,
   MAX_RETRIES,
   MAX_ROUNDS,
   MAX_TIMEOUT,
@@ -96,6 +98,9 @@ export type Review = {
   // Null when there are no states to set, which ends the branch, unless
   // there are objects filled in. Resolves to whether the server took it.
   onDecide: (state: number | null, instructions: string, entries?: Entries) => Promise<boolean>
+  // For a process going round a loop: what it asks, whether the process
+  // goes on, instead of states to set; see loops.go.
+  loop?: { question: string; onAnswer: (goOn: boolean) => Promise<boolean> }
 }
 
 // Edits one process; mount with key={id} so switching processes resets the form.
@@ -422,6 +427,16 @@ export default function ProcessPanel({
             />
           )}
           <NumberSetting
+            label="Loops"
+            title="How many times it may run round a loop with no person deciding in between, such as a failure connection leading back to it, before someone is asked whether it goes on"
+            value={settings.loops}
+            fallback={DEFAULT_LOOPS}
+            min={1}
+            max={MAX_LOOPS}
+            readOnly={readOnly}
+            onChange={(loops) => setSettings(({ loops: _, ...rest }) => (loops === undefined ? rest : { ...rest, loops }))}
+          />
+          <NumberSetting
             label="Timeout (s)"
             title="How long a step may take before it fails; the worker's own limit when empty"
             value={settings.timeout}
@@ -710,6 +725,57 @@ const filled = (d: Draft): boolean =>
   typeof d === 'string' ? d.trim() !== '' : Array.isArray(d) ? d.every(filled) : Object.values(d).every(filled)
 
 export function ReviewForm({ review }: { review: Review }) {
+  if (review.loop) return <LoopForm review={review} loop={review.loop} />
+  return <DecisionForm review={review} />
+}
+
+// Asks whether a process going round a loop goes on, beside what it would take.
+function LoopForm({ review, loop }: { review: Review; loop: NonNullable<Review['loop']> }) {
+  const [sending, setSending] = useState(false)
+  const answer = async (goOn: boolean) => {
+    setSending(true)
+    await loop.onAnswer(goOn)
+    setSending(false)
+  }
+  return (
+    <section className="review" aria-label="Loop">
+      <span className="review-title">Going round a loop</span>
+      <div className="review-body">
+        {review.inputs.length > 0 && (
+          <div className="review-inputs">
+            {review.inputs.map((input, i) => (
+              <div key={i} className="panel-run">
+                <span>
+                  {input.name}
+                  {input.state && ` (${input.state})`}
+                </span>
+                <Data text={input.content} />
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="review-form">
+          <p>{loop.question}</p>
+          <small className="panel-note">
+            Going on lets it run as many more times round the loop, and on what it took before. Stopping ends its
+            branch and fails the run.
+          </small>
+          {!review.canDecide && <small className="panel-note">Only those who may edit this flow answer this.</small>}
+          <div className="review-actions">
+            <button disabled={!review.canDecide || sending} onClick={() => answer(true)}>
+              Go on
+            </button>
+            <button disabled={!review.canDecide || sending} onClick={() => answer(false)}>
+              Stop
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function DecisionForm({ review }: { review: Review }) {
   const [instructions, setInstructions] = useState('')
   const [drafts, setDrafts] = useState<Record<number, Draft>>(() =>
     Object.fromEntries(review.entries.map((o) => [o.id, emptyDraft(o)])),

@@ -70,18 +70,26 @@ repositories, is kept in `.meta`, which no step reaches.
 
 ## The sandboxes
 
-`SANDBOX` picks where a step's program runs (`worker/sandbox.go`):
+`SANDBOX` picks where a step's program runs (`worker/sandbox.go`). It has
+no default: a worker without it set doesn't start, naming the choices, so
+running without isolation is something someone chose, never something a
+deploy forgot. The choices:
 
 | `SANDBOX` | Each step runs | Sees | Network |
 |---|---|---|---|
-| `process` (default) | as a process of the worker's | what the worker sees | the worker's |
+| `process` | as a process of the worker's | what the worker sees | the worker's |
 | `podman` | in a container, through podman's libpod API | its own directories | only the webapp |
 | `docker` | in a container, through the Docker Engine API (26+) | its own directories | only the webapp |
-| `kubernetes` | in a pod, through the cluster's API | its own directories | as network policies allow |
+| `kubernetes` | in a pod, through the cluster's API | its own directories | as network policies allow, checked as the worker starts |
 
-`process` isolates nothing between steps. It is for development, tests, and a
-laptop without containers in containers. Everything in the previous section
-still holds, so even then no step sees a secret.
+`process` isolates nothing between steps. A step runs as the worker's user,
+so it can read the worker's environment through `/proc`, with whatever
+secrets it holds, such as `WORKER_TOKEN` or `GIT_TOKEN`, and the private
+directories, and so the tokens, of every other step running at the same
+time, and it reaches whatever the worker reaches. What the previous section
+lists keeps secrets out of a step's own environment and files, but not out
+of its reach. `process` is for development and tests only, and for a laptop
+without containers in containers; the worker warns as it starts with it.
 
 In the others, a step's container sees only the directories the worker gives
 it, each a part of one of the worker's volumes, mounted at the same path:
@@ -231,6 +239,27 @@ spec:
 The webapp's `PROXY_URL` must be its service's address, such as
 `http://spoletta-webapp.spoletta:8080`, which steps reach through those
 policies.
+
+Nothing in a pod's spec holds it to these policies. Without them, or with a
+CNI that doesn't enforce them, a step's pod reaches whatever any pod
+reaches: the cloud's metadata service at `169.254.169.254`, the cluster's
+API, other pods, the internet. So as it starts, the worker runs a second
+probe: a pod of each label, `offline` and `webapp`, tries to connect to the
+cluster's API and to `1.1.1.1:443`, and if either gets through to either,
+the worker doesn't start. Both labels must be fenced from them: an offline
+pod from everything, and a webapp pod held to the webapp and the cluster's
+DNS, so a cluster with only one of the two policies is refused too. A
+connection that fails could mean a policy refused it or that
+nothing answers there, so the probe tries addresses that answer every pod
+of a cluster without policies: every pod reaches the API through the
+`kubernetes` service, and the public address answers whoever reaches the
+internet. The metadata service isn't tried, as it doesn't answer on every
+cluster. The worker doesn't know the webapp's address, which the webapp
+gives steps, so it doesn't try that either. A cluster that fences off the
+API some other way and has no internet passes without proving its
+policies. Where the operator knows the policies hold and the probe fails
+for some other reason, `SANDBOX_NETWORK_PROBE=off` skips it, which the
+worker warns of as it starts.
 
 ## Internet access
 

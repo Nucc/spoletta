@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -39,6 +40,17 @@ func TestProcessSandbox(t *testing.T) {
 	}
 	if err := (processSandbox{}).run(context.Background(), sandboxSpec{Cmd: []string{"no-such-program-here"}}, &out, &errOut); !notStarted(err) {
 		t.Errorf("a missing program: %v", err)
+	}
+}
+
+// A worker without SANDBOX set doesn't start: running steps without
+// isolation must be chosen, with process, never fallen into.
+func TestNoSandboxRefused(t *testing.T) {
+	if _, err := newSandbox(""); err == nil || !strings.Contains(err.Error(), "SANDBOX isn't set") {
+		t.Errorf("an empty SANDBOX gave %v, want refused", err)
+	}
+	if _, err := newSandbox("process"); err != nil {
+		t.Errorf("SANDBOX=process gave %v", err)
 	}
 }
 

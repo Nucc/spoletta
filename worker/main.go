@@ -273,6 +273,9 @@ func main() {
 	if steps, err = newSandbox(os.Getenv("SANDBOX")); err != nil {
 		log.Fatalf("worker: %v", err)
 	}
+	if _, ok := steps.(processSandbox); ok {
+		log.Printf("worker: WARNING: SANDBOX is process, which is unsafe outside development and tests: steps run as plain processes of the worker's, isolating nothing, so a step can read the worker's environment and other steps' tokens, and reach anything the worker can; set SANDBOX to podman, docker or kubernetes to run each step in a container of its own")
+	}
 	token, err := workerToken()
 	if err != nil {
 		log.Fatalf("worker: %v", err)

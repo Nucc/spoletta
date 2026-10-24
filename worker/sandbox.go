@@ -5,17 +5,22 @@ package main
 // runs in a sandbox it starts for the step and throws away after. SANDBOX
 // picks one:
 //
-//   - process (the default): a plain process of the worker's, in a process
-//     group of its own that stopping the step kills. It sees what the
-//     worker sees, so it isolates nothing; it is for development and
-//     tests, and for a laptop without podman in podman.
+//   - process: a plain process of the worker's, in a process group of its
+//     own that stopping the step kills. It sees what the worker sees, so it
+//     isolates nothing: running as the worker's user, a step can read the
+//     worker's environment through /proc, the private directories and
+//     tokens of the other steps going at the same time, and reach whatever
+//     the worker reaches. It is for development and tests, and for a laptop
+//     without podman in podman; the worker warns as it starts with it.
 //   - podman and docker: a container per step, made through the engine's
 //     API, that sees only the step's own directories, on a network reaching
 //     only the webapp; see sandbox_engine.go.
 //   - kubernetes: a pod per step, beside the worker's, seeing only the
 //     step's own parts of the worker's volumes; see sandbox_kubernetes.go.
 //
-// Another goes behind the same interface.
+// There is no default: a worker without SANDBOX set doesn't start, so
+// running without isolation is something someone chose, never something a
+// deploy forgot. Another sandbox goes behind the same interface.
 
 import (
 	"context"
@@ -94,7 +99,9 @@ var steps sandbox = processSandbox{}
 
 func newSandbox(kind string) (sandbox, error) {
 	switch kind {
-	case "", "process":
+	case "":
+		return nil, errors.New("SANDBOX isn't set: set it to podman, docker or kubernetes, which run each step in a container of its own, or to process to run steps as the worker's own processes, which isolates nothing and is for development and tests only")
+	case "process":
 		return processSandbox{}, nil
 	case "podman":
 		return newEngineSandbox(context.Background(), libpodAPI)

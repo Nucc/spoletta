@@ -18,14 +18,19 @@ import (
 
 // A cluster's API holding the worker's pod, which runs the pods it is
 // given as a kubelet would, printing what their command says: "part" for
-// the probe of subpaths, which it gives what it asks for, or hello and an
-// error on stderr, exiting 3.
+// the probe of subpaths, which it gives what it asks for, for the probe of
+// the network each address refused (7), or reached (0) when open, or hello
+// and an error on stderr, exiting 3.
 type fakeCluster struct {
-	mu      sync.Mutex
-	pods    map[string]map[string]any
-	logged  map[string]bool
-	deleted []string
-	made    []map[string]any
+	mu   sync.Mutex
+	open bool
+	// Only pods labelled webapp get through, offline ones fenced: a cluster
+	// with one of the two policies missing.
+	openWebapp bool
+	pods       map[string]map[string]any
+	logged     map[string]bool
+	deleted    []string
+	made       []map[string]any
 }
 
 func (c *fakeCluster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -78,13 +83,28 @@ func (c *fakeCluster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("part\n"))
 			return
 		}
+		if args := container["command"].([]any); strings.Contains(cmd, "curl") {
+			labels := c.pods[n]["metadata"].(map[string]any)["labels"].(map[string]any)
+			code := "7"
+			if c.open || c.openWebapp && labels[sandboxNetwork] == "webapp" {
+				code = "0"
+			}
+			for i, a := range args {
+				if strings.Contains(fmt.Sprint(a), "curl") {
+					for _, t := range args[i+2:] {
+						fmt.Fprintf(w, "%s %s\n", t, code)
+					}
+				}
+			}
+			return
+		}
 		os.WriteFile(stderrFile, []byte("oops\n"), 0o600)
 		w.Write([]byte("hello\n"))
 	case r.Method == "GET":
 		state := map[string]any{"running": map[string]any{}}
 		if c.logged[name] {
 			code := 0
-			if !strings.Contains(fmt.Sprint(c.pods[name]["spec"]), "echo part") {
+			if spec := fmt.Sprint(c.pods[name]["spec"]); !strings.Contains(spec, "echo part") && !strings.Contains(spec, "curl") {
 				code = 3
 			}
 			state = map[string]any{"terminated": map[string]any{"exitCode": code}}
@@ -98,10 +118,11 @@ func (c *fakeCluster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func TestKubernetesSandbox(t *testing.T) {
-	cluster := &fakeCluster{pods: map[string]map[string]any{}, logged: map[string]bool{}}
+// Points the worker at the fake cluster, as the worker in its pod worker-0.
+func kubeSetUp(t *testing.T, cluster *fakeCluster) {
+	t.Helper()
 	srv := httptest.NewTLSServer(cluster)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca.crt")
 	os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600)
@@ -115,12 +136,17 @@ func TestKubernetesSandbox(t *testing.T) {
 	} {
 		t.Setenv(k, v)
 	}
+}
+
+func TestKubernetesSandbox(t *testing.T) {
+	cluster := &fakeCluster{pods: map[string]map[string]any{}, logged: map[string]bool{}}
+	kubeSetUp(t, cluster)
 	s, err := newKubeSandbox(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cluster.made) != 1 {
-		t.Fatalf("the probe made %d pods", len(cluster.made))
+	if len(cluster.made) != 3 {
+		t.Fatalf("the probes made %d pods", len(cluster.made))
 	}
 
 	ws := filepath.Join(workspacesRoot, "run-3")
@@ -136,7 +162,7 @@ func TestKubernetesSandbox(t *testing.T) {
 	if !errors.As(err, &exit) || exit != 3 || out.String() != "hello\n" || errOut.String() != "oops\n" {
 		t.Errorf("ran with %v, printing %q and %q", err, out.String(), errOut.String())
 	}
-	pod := cluster.made[1]
+	pod := cluster.made[3]
 	spec := pod["spec"].(map[string]any)
 	b, _ := json.Marshal(pod)
 	for _, want := range []string{
@@ -155,11 +181,56 @@ func TestKubernetesSandbox(t *testing.T) {
 	if strings.Contains(string(b), "/worker/bin") || len(spec["volumes"].([]any)) != 3 {
 		t.Errorf("the pod: %s", b)
 	}
-	probe, _ := json.Marshal(cluster.made[0])
-	if !strings.Contains(string(probe), `"spoletta.sandbox/network":"offline"`) {
-		t.Errorf("the probe's pod wasn't offline: %s", probe)
+	// The subpath probe and the first network probe are offline; the second
+	// network probe carries the label ordinary steps run with.
+	for i, network := range []string{"offline", "offline", "webapp"} {
+		probe, _ := json.Marshal(cluster.made[i])
+		if !strings.Contains(string(probe), `"spoletta.sandbox/network":"`+network+`"`) {
+			t.Errorf("probe pod %d isn't labelled %s: %s", i, network, probe)
+		}
+	}
+	for _, made := range cluster.made[1:3] {
+		if !strings.Contains(fmt.Sprint(made["spec"]), "1.1.1.1:443") {
+			t.Errorf("the network's probe didn't try the internet: %v", made["spec"])
+		}
+	}
+	if len(cluster.deleted) < 4 {
+		t.Errorf("deleted %v, want every pod", cluster.deleted)
+	}
+}
+
+// A cluster whose offline pods reach the cluster's API and the internet,
+// network policies missing or not enforced, keeps the worker from starting,
+// unless SANDBOX_NETWORK_PROBE is off.
+func TestKubernetesSandboxRefusesANetworkNothingFences(t *testing.T) {
+	cluster := &fakeCluster{pods: map[string]map[string]any{}, logged: map[string]bool{}, open: true}
+	kubeSetUp(t, cluster)
+	_, err := newKubeSandbox(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "1.1.1.1:443") || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("started with %v, want refused", err)
 	}
 	if len(cluster.deleted) < 2 {
-		t.Errorf("deleted %v, want both pods", cluster.deleted)
+		t.Errorf("deleted %v, want the probes' pods", cluster.deleted)
+	}
+
+	t.Setenv("SANDBOX_NETWORK_PROBE", "off")
+	cluster.made = nil
+	if _, err := newKubeSandbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(cluster.made) != 1 {
+		t.Errorf("with the probe off, made %d pods, want only the probe of subpaths'", len(cluster.made))
+	}
+}
+
+// A cluster that fences offline pods but lets webapp-labelled ones through,
+// one of the two policies missing or too loose, keeps the worker from
+// starting too: ordinary steps carry the webapp label.
+func TestKubernetesSandboxRefusesWebappPodsNothingFences(t *testing.T) {
+	cluster := &fakeCluster{pods: map[string]map[string]any{}, logged: map[string]bool{}, openWebapp: true}
+	kubeSetUp(t, cluster)
+	_, err := newKubeSandbox(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "=webapp") {
+		t.Fatalf("started with %v, want refused for the webapp label", err)
 	}
 }

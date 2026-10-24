@@ -20,8 +20,13 @@ package main
 // The network is the cluster's to fence: steps' pods carry the label
 // spoletta.sandbox/network, webapp for those that may reach the webapp and
 // offline for those that may reach nothing, which network policies (in
-// docs/SANDBOX.md) hold them to. A pod's stdout comes from its log, which
-// interleaves stderr, so stderr goes to a file of the worker's instead.
+// docs/SANDBOX.md) hold them to. Nothing in a pod's spec can hold it to
+// them: without the policies, or a CNI that enforces them, a step's pod
+// reaches whatever pods reach, the cluster's metadata service, other pods
+// and the internet. So as it starts, the worker checks an offline pod
+// reaches nothing (see probeNetwork), and doesn't start if it does. A pod's
+// stdout comes from its log, which interleaves stderr, so stderr goes to a
+// file of the worker's instead.
 //
 // Without the API, or the worker's own pod's claims, the worker doesn't
 // start; pods it started and didn't delete, the worker stopping meanwhile,
@@ -152,8 +157,96 @@ func newKubeSandbox(ctx context.Context) (sandbox, error) {
 	if err := probeSubpaths(s); err != nil {
 		return nil, err
 	}
+	if os.Getenv("SANDBOX_NETWORK_PROBE") == "off" {
+		log.Printf("worker: WARNING: SANDBOX_NETWORK_PROBE is off, so nothing checks that network policies keep steps' pods from the cluster and the internet")
+	} else if err := s.probeNetwork(); err != nil {
+		return nil, err
+	}
 	log.Printf("worker: steps run in pods of %s in the namespace %s, as %s", s.image, s.namespace, s.user)
 	return s, nil
+}
+
+// The address an offline pod tries besides the cluster's API: a public one
+// that answers on 443 from anywhere with the internet.
+var networkProbeTargets = []string{"1.1.1.1:443"}
+
+// Checks network policies hold steps' pods to what their label allows: a
+// pod of each label tries to connect to the cluster's API and to a public
+// address on the internet, and if either pod gets through to either target
+// the worker doesn't start. An offline pod the policies must keep from
+// everything; a webapp pod they must keep to the webapp and the cluster's
+// DNS, so neither may reach these targets. Probing both catches a cluster
+// with only one of the two policies, which would fence review-less commits
+// but leave every ordinary step open. A connection that fails has two
+// causes, a policy refusing it or nothing answering there, so the targets
+// are ones that answer a pod in a cluster without policies: the API is what
+// every pod reaches through the kubernetes service, and the public address
+// answers whoever reaches the internet. The worker doesn't know the
+// webapp's address, which steps are given by the webapp, so it isn't tried.
+// A cluster where the API is fenced off some other way and the internet
+// unreachable passes without proving its policies; one whose operator knows
+// its policies hold, the probe failing for another reason, sets
+// SANDBOX_NETWORK_PROBE=off. The probes' pods are deleted as a step's is,
+// and swept with them if the worker stops meanwhile.
+func (s *kubeSandbox) probeNetwork() error {
+	targets := slices.Clone(networkProbeTargets)
+	if u, err := url.Parse(s.api); err == nil && u.Host != "" {
+		port := u.Port()
+		if port == "" {
+			port = "443"
+		}
+		targets = append([]string{net.JoinHostPort(u.Hostname(), port)}, targets...)
+	}
+	for _, offline := range []bool{true, false} {
+		if err := s.probeNetworkAs(offline, targets); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Probes one of the labels: offline, or with offline false the webapp one.
+func (s *kubeSandbox) probeNetworkAs(offline bool, targets []string) error {
+	label := "webapp"
+	if offline {
+		label = "offline"
+	}
+	// curl says why it didn't get through: 6 the name didn't resolve, 7 the
+	// connection was refused or unreachable, 28 it timed out; the shell's 126
+	// and 127 that there is no curl to run. Anything else, TLS failing or an
+	// HTTP error included, means it connected.
+	const script = `for t; do
+	curl --noproxy '*' -sk --connect-timeout 5 --max-time 10 -o /dev/null "https://$t/"
+	echo "$t $?"
+done`
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	err := s.run(ctx, sandboxSpec{Cmd: append([]string{"/bin/sh", "-c", script, "sh"}, targets...), Dir: "/tmp", Offline: offline}, &out, &errOut)
+	if err != nil {
+		return fmt.Errorf("the probe of steps' network didn't run (%v %s); SANDBOX_NETWORK_PROBE=off skips it", err, strings.TrimSpace(errOut.String()))
+	}
+	codes := map[string]string{}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if t, code, ok := strings.Cut(strings.TrimSpace(line), " "); ok {
+			codes[t] = code
+		}
+	}
+	var reached []string
+	for _, t := range targets {
+		switch code, ok := codes[t]; {
+		case !ok:
+			return fmt.Errorf("the probe of steps' network said nothing of %s (%s); SANDBOX_NETWORK_PROBE=off skips it", t, strings.TrimSpace(out.String()))
+		case code == "126" || code == "127":
+			return fmt.Errorf("the probe of steps' network can't run curl in %s; SANDBOX_NETWORK_PROBE=off skips it", s.image)
+		case code != "6" && code != "7" && code != "28":
+			reached = append(reached, t)
+		}
+	}
+	if len(reached) > 0 {
+		return fmt.Errorf("a step's pod labelled %s=%s reached %s: no network policy holds steps' pods, or the cluster's network doesn't enforce them, so steps would reach the cluster and the internet; apply the policies in docs/SANDBOX.md", sandboxNetwork, label, strings.Join(reached, " and "))
+	}
+	return nil
 }
 
 func (s *kubeSandbox) pods() string {

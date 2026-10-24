@@ -991,6 +991,39 @@ body {
   border-radius: 6px;
 }
 
+.step-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: #0d1117;
+  color: #e6edf3;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.step-activity > span {
+  color: #8b949e;
+  font-family: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.step-activity p {
+  margin: 0;
+}
+
+.step-activity pre {
+  margin: 0;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .panel-run .data {
   position: relative;
   min-height: 0;

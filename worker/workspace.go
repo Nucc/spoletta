@@ -148,9 +148,10 @@ type repoCommits struct {
 const maxListedCommits = 20
 
 // Gets the workspace ready for a step and takes it: each repository the step
-// works on is checked out on the branch. The caller gives it back with done
-// once the step is over.
-func takeWorkspace(ctx context.Context, ws *workspaceSpec) (*takenWorkspace, error) {
+// works on is checked out on the branch. What it does meanwhile, and waits
+// for, goes to the step's log l as it does it (see git_progress.go). The
+// caller gives it back with done once the step is over.
+func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*takenWorkspace, error) {
 	if !safeID.MatchString(ws.ID) {
 		return nil, fmt.Errorf("invalid workspace %q", ws.ID)
 	}
@@ -174,7 +175,7 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec) (*takenWorkspace, err
 		}
 	}
 	dir := filepath.Join(workspacesRoot, ws.ID)
-	unlock := lockPath(dir)
+	unlock := lockSaying(dir, l, ws.ID, "another step of the run working in it")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		unlock()
 		return nil, err
@@ -199,10 +200,10 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec) (*takenWorkspace, err
 	defer cancel()
 	t := &takenWorkspace{dir: dir, spec: ws, repos: ws.Repositories, before: map[string]string{}, release: unlock}
 	for _, r := range ws.Repositories {
-		recreated, err := checkout(pctx, dir, ws.Branch, r)
+		recreated, err := checkout(pctx, l, dir, ws.Branch, r)
 		if err != nil {
 			unlock()
-			return nil, fmt.Errorf("repository %s: %w", r.Name, err)
+			return nil, fmt.Errorf("repository %s: %w", r.Name, prepareError(ctx, pctx, err))
 		}
 		if recreated {
 			t.recreated = append(t.recreated, r.Name)
@@ -345,7 +346,7 @@ func bringBack(ctx context.Context, dest, repo, branch string) error {
 // outside the workspace, which steps write, and moved in once ready, so one
 // cut short leaves nothing that looks ready. A worktree from before
 // checkouts were clones is released first, and made again as one.
-func checkout(ctx context.Context, dir, branch string, r repository) (bool, error) {
+func checkout(ctx context.Context, l *stepLogger, dir, branch string, r repository) (bool, error) {
 	dest := filepath.Join(dir, r.Name)
 	if fi, err := os.Lstat(dest); err == nil {
 		switch {
@@ -364,8 +365,9 @@ func checkout(ctx context.Context, dir, branch string, r repository) (bool, erro
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
+	started := time.Now()
 	repo := sharedRepo(r.URL)
-	unlock := lockPath(repo)
+	unlock := lockSaying(repo, l, r.Name, "another step fetching "+shownURL(r.URL))
 	exists := false
 	if _, err := os.Stat(repo); err == nil {
 		exists = gitOK(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil
@@ -379,7 +381,7 @@ func checkout(ctx context.Context, dir, branch string, r repository) (bool, erro
 			}
 		} else {
 			var err error
-			if start, err = fetchShared(ctx, repo, r.URL, r.Base); err != nil {
+			if start, err = fetchShared(ctx, l, r.Name, repo, r.URL, r.Base); err != nil {
 				unlock()
 				return false, err
 			}
@@ -398,7 +400,12 @@ func checkout(ctx context.Context, dir, branch string, r repository) (bool, erro
 	// What an earlier try left behind.
 	os.RemoveAll(tmp)
 	defer os.RemoveAll(tmp)
-	if err := gitOK(ctx, "", "clone", "--quiet", "--depth=1", "--no-tags", "--single-branch", "--branch", branch, "--", "file://"+repo, tmp); err != nil {
+	if exists {
+		l.infof("%s: checking out the branch %s again, its checkout having been removed to save space", r.Name, branch)
+	} else {
+		l.infof("%s: checking out the branch %s", r.Name, branch)
+	}
+	if err := gitLogged(ctx, l, r.Name, "", "clone", "--progress", "--depth=1", "--no-tags", "--single-branch", "--branch", branch, "--", "file://"+repo, tmp); err != nil {
 		return false, err
 	}
 	if err := gitOK(ctx, tmp, "remote", "set-url", "origin", r.URL); err != nil {
@@ -407,7 +414,11 @@ func checkout(ctx context.Context, dir, branch string, r repository) (bool, erro
 	if err := ownForSandbox(tmp, true); err != nil {
 		return false, err
 	}
-	return exists, os.Rename(tmp, dest)
+	if err := os.Rename(tmp, dest); err != nil {
+		return false, err
+	}
+	l.infof("%s: ready in %s", r.Name, time.Since(started).Round(100*time.Millisecond))
+	return exists, nil
 }
 
 // Where the repository behind url is shared from.
@@ -420,9 +431,10 @@ func sharedRepo(url string) string {
 // repository, making it the first time, and returns where runs' branches
 // start from. Its own branches are the runs'; the repository's are under
 // origin/, so fetching never touches the runs' work. The caller holds its
-// lock.
-func fetchShared(ctx context.Context, repo, url, base string) (string, error) {
+// lock. What it does goes to l, each line after name.
+func fetchShared(ctx context.Context, l *stepLogger, name, repo, url, base string) (string, error) {
 	if _, err := os.Stat(repo); errors.Is(err, fs.ErrNotExist) {
+		l.infof("%s: fetching %s for the first time", name, shownURL(url))
 		if err := makeShared(ctx, repo, url); err != nil {
 			return "", err
 		}
@@ -430,6 +442,7 @@ func fetchShared(ctx context.Context, repo, url, base string) (string, error) {
 		return "", err
 	}
 	if base == "" {
+		l.infof("%s: asking %s for its default branch", name, shownURL(url))
 		// "ref: refs/heads/main\tHEAD" and the commit on the next line.
 		out, err := gitOut(ctx, repo, "ls-remote", "--symref", "origin", "HEAD")
 		if err != nil {
@@ -449,7 +462,8 @@ func fetchShared(ctx context.Context, repo, url, base string) (string, error) {
 			return "", err
 		}
 	}
-	if err := gitOK(ctx, repo, "fetch", "--quiet", "--prune", "--no-tags", "--depth=1", "origin"); err != nil {
+	l.infof("%s: fetching the latest commit of %s from %s", name, base, shownURL(url))
+	if err := gitLogged(ctx, l, name, repo, "fetch", "--progress", "--prune", "--no-tags", "--depth=1", "origin"); err != nil {
 		return "", err
 	}
 	return "origin/" + base, nil

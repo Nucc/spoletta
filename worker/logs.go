@@ -1,11 +1,13 @@
 package main
 
 // What the worker logs of a step it runs goes to its own log, as ever, and
-// back to the webapp, which keeps it in the step's run's log: where the step
-// worked, how pi or bash was started, what they printed to stderr, often
-// progress or warnings, and how it ended, with what went wrong. The lines
-// are streamed as they come, so a step stopped half way keeps those it got
-// to; a script's come with its result to a webapp not asking for a stream.
+// back to the webapp, which keeps it in the step's run's log: getting its
+// workspace ready as it goes, with git's progress and what it waits for
+// (see git_progress.go), where the step worked, how pi or bash was
+// started, what they printed to stderr, often progress or warnings, and
+// how it ended, with what went wrong. The lines are streamed as they come,
+// so a step stopped half way keeps those it got to; a script's come with
+// its result to a webapp not asking for a stream.
 // Prompts, keys and tokens are never logged.
 
 import (

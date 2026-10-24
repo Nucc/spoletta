@@ -13,16 +13,22 @@ import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
 // A script's step shows the script, what it was given and what it prints,
 // stdout and stderr as they came, followed as it runs; one from before that
 // was kept shows the lines the worker logged of it and its output instead.
+// A script's output, an agent's conversation and each follow-up's start
+// with what the worker logged before them: getting the workspace ready,
+// git's progress and what it waited for, then how pi or bash was started.
 export default function StepTerminal({ run, step, onClose }: { run: number; step: RunStep; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
   const screen = useRef<HTMLDivElement>(null)
   const atEnd = useRef(true)
   const script = step.kind === 'script'
   const { messages, loaded, error, going } = useStepMessages(run, step, !script)
-  const logs = useStepLogs(run, step.id, script, going)
+  const logs = useStepLogs(run, step.id, true, going)
   const printed = useStepOutput(run, step.id, script, going)
   const results = useMemo(() => resultsByCall(messages), [messages])
   const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
+  const setup = useMemo(() => (script ? new Map<number, RunLogLine[]>() : setupLines(step, messages, logs.lines ?? [])), [script, step, messages, logs.lines])
+  // Follow-ups going that have said nothing yet, whose setup shows after the conversation.
+  const waiting = step.followUps.filter((f) => f.status === 'active' && !messages.some((m) => m.attempt === f.attempt))
 
   useEffect(() => {
     const dialog = ref.current
@@ -74,19 +80,29 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
             <>
               {error && <p className="term-error">The conversation couldn't load: {error}</p>}
               {!loaded && !error && <p className="term-dim">Loading…</p>}
-              {loaded && messages.length === 0 && (
+              <WorkerLines lines={setup.get(1)} />
+              {loaded && messages.length === 0 && !setup.has(1) && (
                 <p className="term-dim">{going ? 'Nothing yet.' : 'No conversation was recorded for this step.'}</p>
               )}
               {messages.map((m, i) => (
                 <div key={m.id}>
                   {m.attempt > 1 && messages[i - 1]?.attempt !== m.attempt && (
-                    <p className="term-rule">
-                      {followUpOf.has(m.attempt)
-                        ? `Follow-up · ${formatTime(followUpOf.get(m.attempt)!.startedAt)}`
-                        : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again`}
-                    </p>
+                    <>
+                      <p className="term-rule">
+                        {followUpOf.has(m.attempt)
+                          ? `Follow-up · ${formatTime(followUpOf.get(m.attempt)!.startedAt)}`
+                          : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again`}
+                      </p>
+                      <WorkerLines lines={setup.get(m.attempt)} />
+                    </>
                   )}
                   <TerminalMessage message={m.message} results={results} going={going} />
+                </div>
+              ))}
+              {waiting.map((f) => (
+                <div key={f.id}>
+                  <p className="term-rule">Follow-up · {formatTime(f.startedAt)}</p>
+                  <WorkerLines lines={setup.get(f.attempt)} />
                 </div>
               ))}
               {going && loaded && (
@@ -103,13 +119,45 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
   )
 }
 
+// What the worker logged of an agent step before each of its conversations
+// started, by attempt: the step's own from when it started, a follow-up's
+// from when it did, until its first message.
+function setupLines(step: RunStep, messages: StepMessage[], logs: RunLogLine[]) {
+  const starts = [{ attempt: 1, at: Date.parse(step.startedAt) }, ...step.followUps.map((f) => ({ attempt: f.attempt, at: Date.parse(f.startedAt) }))].sort(
+    (a, b) => a.at - b.at,
+  )
+  const firstMessage = new Map<number, number>()
+  for (const m of messages) if (!firstMessage.has(m.attempt)) firstMessage.set(m.attempt, Date.parse(m.createdAt))
+  const setup = new Map<number, RunLogLine[]>()
+  for (const l of logs) {
+    if (l.source !== 'worker') continue
+    const at = Date.parse(l.time)
+    const attempt = starts.filter((s) => s.at <= at).pop()?.attempt ?? 1
+    if (at > (firstMessage.get(attempt) ?? Infinity)) continue
+    setup.set(attempt, [...(setup.get(attempt) ?? []), l])
+  }
+  return setup
+}
+
+function WorkerLines({ lines }: { lines?: RunLogLine[] }) {
+  if (!lines) return null
+  return lines.map((l) => (
+    <div key={l.id} className={`term-log ${l.level}`}>
+      <time dateTime={l.time} title={new Date(l.time).toLocaleString()}>
+        {formatLogTime(l.time)}
+      </time>
+      <pre>{l.message}</pre>
+    </div>
+  ))
+}
+
 // The most log lines the webapp gives at once; a full page means there are more.
 const LOGS_PAGE = 5000
 const LOGS_REFRESH_MS = 1500
 
 // The run's log lines about the step, followed while it goes, and once
 // more as it ends for the last ones.
-function useStepLogs(run: number, step: number, enabled: boolean, going: boolean) {
+export function useStepLogs(run: number, step: number, enabled: boolean, going: boolean) {
   const [lines, setLines] = useState<RunLogLine[] | null>(null)
   const [error, setError] = useState('')
   const last = useRef(0)
@@ -172,7 +220,7 @@ function useStepOutput(run: number, step: number, enabled: boolean, going: boole
 const OUTPUT_PAGE = 1000
 const OUTPUT_REFRESH_MS = 1000
 
-const formatLogTime = (s: string) =>
+export const formatLogTime = (s: string) =>
   new Date(s).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
 function ScriptScreen({
@@ -197,6 +245,10 @@ function ScriptScreen({
     .join('')
     .trim()
   const failure = stderr && step.error.startsWith(stderr) ? step.error.slice(stderr.length).trim() || 'It failed.' : step.error
+  // What the worker logged before the script printed anything: getting the
+  // workspace ready, then how bash was started.
+  const firstPrinted = printed?.length ? Date.parse(printed[0].createdAt) : Infinity
+  const setup = (logs ?? []).filter((l) => l.source === 'worker' && Date.parse(l.time) <= firstPrinted)
   return (
     <>
       <div className="term-prompt">
@@ -219,6 +271,7 @@ function ScriptScreen({
           </div>
         </div>
       ))}
+      {streamed && <WorkerLines lines={setup} />}
       {error && <p className="term-error">What it printed couldn't load: {error}</p>}
       {streamed && printed !== null && printed.length > 0 && (
         <pre className="term-output">

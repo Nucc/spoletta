@@ -55,7 +55,7 @@ func TestReleasedWorkspaceIsMadeAgainFromItsBranch(t *testing.T) {
 	spec := &workspaceSpec{ID: "run-7", Branch: branch, Run: 7, Step: 12, Repositories: []repository{{Name: "api", URL: url}}}
 	ctx := context.Background()
 
-	ws, err := takeWorkspace(ctx, spec)
+	ws, err := takeWorkspace(ctx, spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestReleasedWorkspaceIsMadeAgainFromItsBranch(t *testing.T) {
 		t.Errorf("the workspace is still there: %v", err)
 	}
 
-	ws, err = takeWorkspace(ctx, spec)
+	ws, err = takeWorkspace(ctx, spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

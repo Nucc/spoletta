@@ -41,7 +41,7 @@ func TestWhatAStepLeavesInItsGitDoesntRunOutsideTheSandbox(t *testing.T) {
 	const url, branch = "https://example.invalid/acme/api.git", "flow/test/run-9"
 	sharedWithBranch(t, url, branch)
 	spec := &workspaceSpec{ID: "run-9", Branch: branch, Run: 9, Step: 3, Repositories: []repository{{Name: "api", URL: url}}}
-	ws, err := takeWorkspace(context.Background(), spec)
+	ws, err := takeWorkspace(context.Background(), spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestALinkedCheckoutIsntBroughtBack(t *testing.T) {
 		},
 	} {
 		spec := &workspaceSpec{ID: "run-10", Branch: branch, Repositories: []repository{{Name: "api", URL: url}}}
-		ws, err := takeWorkspace(context.Background(), spec)
+		ws, err := takeWorkspace(context.Background(), spec, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -151,7 +151,7 @@ func TestReRunStartsFromItsCommit(t *testing.T) {
 	const url = "https://example.invalid/acme/api.git"
 	sharedWithBranch(t, url, "flow/test/run-1")
 	ctx := context.Background()
-	ws, err := takeWorkspace(ctx, &workspaceSpec{ID: "run-1", Branch: "flow/test/run-1", Repositories: []repository{{Name: "api", URL: url}}})
+	ws, err := takeWorkspace(ctx, &workspaceSpec{ID: "run-1", Branch: "flow/test/run-1", Repositories: []repository{{Name: "api", URL: url}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,10 +161,10 @@ func TestReRunStartsFromItsCommit(t *testing.T) {
 	ws.done(&res)
 	start := res.Commits[0].After
 	os.WriteFile(filepath.Join(workspacesRoot, "run-1", "api", "two.go"), []byte("2"), 0o644)
-	ws, _ = takeWorkspace(ctx, &workspaceSpec{ID: "run-1", Branch: "flow/test/run-1", Repositories: []repository{{Name: "api", URL: url}}})
+	ws, _ = takeWorkspace(ctx, &workspaceSpec{ID: "run-1", Branch: "flow/test/run-1", Repositories: []repository{{Name: "api", URL: url}}}, nil)
 	ws.done(&res)
 
-	again, err := takeWorkspace(ctx, &workspaceSpec{ID: "run-2", Branch: "flow/test/run-2", Repositories: []repository{{Name: "api", URL: url, Start: start}}})
+	again, err := takeWorkspace(ctx, &workspaceSpec{ID: "run-2", Branch: "flow/test/run-2", Repositories: []repository{{Name: "api", URL: url, Start: start}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestAWorktreeFromBeforeIsMadeAgainAsAClone(t *testing.T) {
 	git(t, repo, "worktree", "add", "--quiet", filepath.Join(dir, "api"), branch)
 	os.WriteFile(filepath.Join(dir, "api", "old.go"), []byte("old"), 0o644)
 
-	ws, err := takeWorkspace(context.Background(), &workspaceSpec{ID: "run-11", Branch: branch, Repositories: []repository{{Name: "api", URL: url}}})
+	ws, err := takeWorkspace(context.Background(), &workspaceSpec{ID: "run-11", Branch: branch, Repositories: []repository{{Name: "api", URL: url}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

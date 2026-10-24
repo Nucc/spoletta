@@ -854,7 +854,8 @@ func recreatedNote(repos []string) string {
 func workDir(ctx context.Context, ws *workspaceSpec, scratch string, l *stepLogger) (string, *takenWorkspace, error) {
 	if ws != nil {
 		started := time.Now()
-		t, err := takeWorkspace(ctx, ws)
+		l.infof("getting the workspace %s ready", ws.ID)
+		t, err := takeWorkspace(ctx, ws, l)
 		if err != nil {
 			return "", nil, errors.New("prepare workspace: " + err.Error())
 		}

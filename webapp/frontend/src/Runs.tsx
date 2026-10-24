@@ -20,7 +20,7 @@ import {
 } from './api'
 import { ClockIcon, TerminalIcon } from './icons'
 import RunLogs from './RunLogs'
-import StepTerminal from './StepTerminal'
+import StepTerminal, { formatLogTime, useStepLogs } from './StepTerminal'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
@@ -349,6 +349,8 @@ function Step({
             Re-run from here
           </button>
         )}
+        {(s.kind === 'agent' || s.kind === 'script') &&
+          (s.status === 'active' || s.followUps.some((f) => f.status === 'active')) && <StepActivity run={run} step={s.id} />}
         {s.kind === 'agent' && (
           <p className="panel-note">
             Model: {s.model || 'default'} · thinking: {s.thinking || 'default'}
@@ -460,6 +462,36 @@ function Step({
         {s.canFollowUp && s.status !== 'active' && <FollowUpForm run={run} step={s.id} busy={busy} onSent={onChanged} />}
       </div>
     </details>
+  )
+}
+
+// How many of the latest lines of the worker's log a going step shows.
+const ACTIVITY_LINES = 6
+
+// What the worker does of a step while it goes, the latest lines of its log
+// followed as they come: getting its workspace ready, fetching and cloning
+// with git's progress and what it waits for, then starting pi or bash.
+function StepActivity({ run, step }: { run: number; step: number }) {
+  const { lines, error } = useStepLogs(run, step, true, true)
+  const shown = (lines ?? []).filter((l) => l.source === 'worker').slice(-ACTIVITY_LINES)
+  return (
+    <div className="step-activity" aria-live="polite">
+      <span>Worker</span>
+      {error ? (
+        <p className="term-error">Its log couldn't load: {error}</p>
+      ) : shown.length === 0 ? (
+        <p className="term-dim">Waiting for the worker…</p>
+      ) : (
+        shown.map((l) => (
+          <div key={l.id} className={`term-log ${l.level}`}>
+            <time dateTime={l.time} title={new Date(l.time).toLocaleString()}>
+              {formatLogTime(l.time)}
+            </time>
+            <pre>{l.message}</pre>
+          </div>
+        ))
+      )}
+    </div>
   )
 }
 

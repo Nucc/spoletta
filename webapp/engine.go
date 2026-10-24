@@ -994,6 +994,18 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 			taken[i.object] = true
 		}
 	}
+	// What it waits for in a state goes in when it is in that state, though a
+	// connection or the start ran it before the object's entering it did.
+	// The trigger goes in below, as what it reviews if it does.
+	for _, i := range w.inputs[id] {
+		if i.state == 0 || i.object == trigger || taken[i.object] {
+			continue
+		}
+		if v, ok := w.values[i.object]; ok && v.state == i.state && w.generated[i.object] && !w.unstored[i.object] {
+			given = append(given, w.inputOf(id, i.object))
+			taken[i.object] = true
+		}
+	}
 	for _, o := range w.startGiven(id) {
 		if !taken[o] && o != trigger {
 			given = append(given, w.inputOf(id, o))

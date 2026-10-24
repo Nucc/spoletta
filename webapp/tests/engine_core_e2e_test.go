@@ -367,6 +367,36 @@ func TestEngineStateLinkWithPlainInputs(t *testing.T) {
 	}
 }
 
+// A process taking an object in a state that a direct connection reaches
+// too takes the object when it is in that state, whether the connection or
+// the object entering the state ran it first.
+func TestEngineStateLinkWithConnection(t *testing.T) {
+	for i := range 5 {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			a := newApp(t)
+			f := a.newFlow("State plus connection")
+			judge := a.agent(f.ID, "Judge", "Judge.")
+			verdict := a.newObject(f.ID, "Verdict")
+			good := a.newState(verdict.ID, "good")
+			act := a.agent(f.ID, "Act", "Act.")
+			a.link(map[string]any{"process": judge.ID, "object": verdict.ID, "direction": directionOutput, "state": good.ID})
+			a.link(map[string]any{"process": act.ID, "object": verdict.ID, "direction": directionInput, "state": good.ID})
+			a.call("POST", "/api/connections", map[string]any{"source": judge.ID, "target": act.ID}, http.StatusCreated, nil)
+			a.startAt(f.ID, judge.ID)
+
+			a.worker.onAgent("Judge", handsIn(data("ok")))
+			a.worker.onAgent("Act", corePlain("acted"))
+
+			d := a.finish(a.startRun(f.ID).ID)
+			coreDone(t, d)
+			as := onlyStep(t, d, "Act")
+			if len(as.Inputs) != 1 || as.Inputs[0].Name != "Verdict" || as.Inputs[0].State != "good" {
+				t.Errorf("Act took %+v, want Verdict good", as.Inputs)
+			}
+		})
+	}
+}
+
 // A direct connection runs its target right after its source succeeds, and
 // not after it fails; a cycle of connections runs each process once.
 func TestEngineConnections(t *testing.T) {

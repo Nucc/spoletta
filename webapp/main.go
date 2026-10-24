@@ -170,6 +170,7 @@ func main() {
 	registerScheduleRoutes(mux, db)
 	go runSchedules(context.Background(), db, eng, time.Second)
 	registerMessageRoutes(mux, db)
+	registerChangeRoutes(mux, db, workerURL)
 	registerFollowUpRoutes(mux, db, workerURL, mcp)
 	go releaseEnded(db, workerURL)
 	registerVersionRoutes(mux, db)

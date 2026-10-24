@@ -160,6 +160,13 @@ export const ClockIcon = () => (
   </Icon>
 )
 
+export const TerminalIcon = () => (
+  <Icon>
+    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+    <path d="M4.5 6.5l2 1.5-2 1.5M8 10h3.5" />
+  </Icon>
+)
+
 export const CodeIcon = () => (
   <Icon>
     <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" />

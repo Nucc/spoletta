@@ -604,6 +604,10 @@ type fakeWorker struct {
 	scriptRuns []scriptRun
 	// The runs whose workspaces the webapp asked to release, in the order asked.
 	released []int64
+	// The diffs the webapp asked for, in the order asked, and what the
+	// worker replies to each; see worker/diff.go.
+	diffs     []map[string]string
+	diffReply func(map[string]string) map[string]any
 	// How many requests came without the worker's token.
 	refused int
 	// Whether agents leave reaching their models to the test, rather than
@@ -659,6 +663,22 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 		fw.released = append(fw.released, body.Runs...)
 		fw.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string][]string{"released": {}})
+	})
+	mux.HandleFunc("POST /workspaces/diff", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		fw.mu.Lock()
+		fw.diffs = append(fw.diffs, body)
+		reply := fw.diffReply
+		fw.mu.Unlock()
+		if reply == nil {
+			writeJSON(w, http.StatusOK, map[string]string{"error": "the fake worker keeps no such repository of the workspace"})
+			return
+		}
+		writeJSON(w, http.StatusOK, reply(body))
 	})
 	// As the real one: a record per line, each message of the conversation
 	// and a line it logs, then the result.

@@ -5287,6 +5287,350 @@ select.flow-owner:disabled {
   background: #f6f8fa;
 }
 
+/* A step's terminal: its conversation as a terminal shows it, everything in
+   full on one page that scrolls, and beside it the files it changed, whose
+   diffs open in place. Neither pane has a box scrolling inside it. */
+.terminal-button {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  cursor: pointer;
+}
+
+.terminal-button:hover {
+  background: #f6f8fa;
+}
+
+.review-dialog.step-terminal {
+  width: min(1500px, calc(100vw - 32px));
+  height: calc(100vh - 64px);
+}
+
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.terminal-body.with-files {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+}
+
+.terminal-screen {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px;
+  background: #0d1117;
+  color: #e6edf3;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.terminal-screen pre,
+.terminal-files pre {
+  margin: 0;
+  max-height: none;
+  overflow: visible;
+  font: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.terminal-screen p {
+  margin: 0 0 8px;
+}
+
+.term-prompt,
+.term-says,
+.term-thinking,
+.term-call-line,
+.term-result {
+  display: grid;
+  grid-template-columns: 1.5em minmax(0, 1fr);
+  margin-bottom: 8px;
+}
+
+.term-call-line,
+.term-result {
+  margin-bottom: 2px;
+}
+
+.term-call {
+  margin-bottom: 10px;
+}
+
+.term-mark {
+  user-select: none;
+}
+
+.term-prompt {
+  padding: 6px 0;
+  color: #f0f6fc;
+  font-weight: 600;
+}
+
+.term-prompt .term-mark {
+  color: #d2a8ff;
+}
+
+.term-thinking {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.term-call-line .term-mark {
+  color: #3fb950;
+}
+
+.term-call-line pre {
+  font-weight: 600;
+}
+
+.term-call-line.failed .term-mark,
+.term-result.failed,
+.term-error {
+  color: #ff7b72;
+}
+
+.term-result {
+  padding-left: 1.5em;
+  grid-template-columns: 1.5em minmax(0, 1fr);
+  color: #adbac7;
+}
+
+.term-result .term-mark,
+.term-dim {
+  color: #8b949e;
+}
+
+.term-rule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 12px !important;
+  color: #8b949e;
+}
+
+.term-rule::before,
+.term-rule::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid #30363d;
+}
+
+.term-fold {
+  margin-bottom: 8px;
+  color: #8b949e;
+}
+
+.term-fold summary {
+  cursor: pointer;
+}
+
+.term-fold pre {
+  margin-top: 6px;
+}
+
+.term-cursor {
+  display: inline-block;
+  width: 0.6em;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background: #e6edf3;
+  animation: term-blink 1s steps(1) infinite;
+}
+
+@keyframes term-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.term-patch {
+  margin: 2px 0 4px 3em !important;
+}
+
+.term-patch span {
+  display: block;
+}
+
+.term-patch .add {
+  color: #3fb950;
+  background: rgba(46, 160, 67, 0.15);
+}
+
+.term-patch .del {
+  color: #ff7b72;
+  background: rgba(248, 81, 73, 0.15);
+}
+
+.term-patch .hunk {
+  color: #79c0ff;
+}
+
+.term-patch .head {
+  color: #8b949e;
+  font-weight: 600;
+}
+
+.terminal-files {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 4px 12px 0;
+  font-size: 13px;
+}
+
+.terminal-files header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  background: #fff;
+}
+
+.terminal-files h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.terminal-files ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.terminal-repo + .terminal-repo {
+  margin-top: 14px;
+}
+
+.terminal-repo-name {
+  margin: 6px 0;
+}
+
+.terminal-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 6px;
+  font: inherit;
+  text-align: left;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.terminal-file:hover,
+.terminal-file[aria-expanded='true'] {
+  background: #f6f8fa;
+}
+
+.terminal-file-status {
+  flex: none;
+  width: 1.2em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  color: #9a6700;
+}
+
+.terminal-file-status.added {
+  color: #1a7f37;
+}
+
+.terminal-file-status.deleted {
+  color: #cf222e;
+}
+
+.terminal-file-status.renamed,
+.terminal-file-status.copied {
+  color: #0969da;
+}
+
+.terminal-file-path {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  word-break: break-all;
+}
+
+.terminal-file-counts {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.terminal-file-counts .add {
+  color: #1a7f37;
+}
+
+.terminal-file-counts .del {
+  color: #cf222e;
+}
+
+/* Beside the files the diff is light, as the panel is. */
+.terminal-files .term-patch {
+  margin: 4px 0 10px !important;
+  padding: 6px 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  color: #1f2328;
+}
+
+.terminal-files .term-patch span {
+  padding: 0 8px;
+}
+
+.terminal-files .term-patch .add {
+  color: #116329;
+  background: #dafbe1;
+}
+
+.terminal-files .term-patch .del {
+  color: #82071e;
+  background: #ffebe9;
+}
+
+.terminal-files .term-patch .hunk {
+  color: #0550ae;
+  background: #ddf4ff;
+}
+
+.terminal-files .term-patch .head {
+  color: #57606a;
+}
+
+@media (max-width: 760px) {
+  .terminal-body.with-files {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}
+
 /* The settings' Spending tab: the month at a glance, the limits as a card
    of fields with their units, and who and which runs spent it as bars. */
 .spending {

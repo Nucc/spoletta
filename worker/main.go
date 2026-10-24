@@ -420,6 +420,23 @@ func main() {
 		reply(w, http.StatusOK, map[string][]string{"released": released})
 	})
 
+	// What a step changed in one of its workspace's repositories, between two
+	// commits: {"workspace", "repository", "before", "after"}; see diff.go.
+	mux.HandleFunc("POST /workspaces/diff", func(w http.ResponseWriter, r *http.Request) {
+		var body diffRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
+			reply(w, http.StatusBadRequest, map[string]string{"error": "invalid request: " + err.Error()})
+			return
+		}
+		// What stops a diff is the webapp's to show, so it comes as the reply.
+		d, err := diffWorkspace(r.Context(), body)
+		if err != nil {
+			reply(w, http.StatusOK, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, d)
+	})
+
 	log.Printf("worker: listening on %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, requireToken(token, mux)))
 }

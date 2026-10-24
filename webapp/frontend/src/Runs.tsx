@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Data } from './Data'
 import {
   fileUrl,
@@ -17,8 +18,9 @@ import {
   type StepStatus,
   type StepUsage,
 } from './api'
-import { ClockIcon } from './icons'
+import { ClockIcon, TerminalIcon } from './icons'
 import RunLogs from './RunLogs'
+import StepTerminal from './StepTerminal'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
@@ -31,7 +33,7 @@ export const RUN_LABELS: Record<FlowRunStatus, string> = {
   terminated: 'Terminated',
 }
 
-const STEP_LABELS: Record<StepStatus, string> = {
+export const STEP_LABELS: Record<StepStatus, string> = {
   active: 'Running',
   waiting: 'Waiting for a person',
   done: 'Done',
@@ -317,6 +319,7 @@ function Step({
   busy: boolean
   onChanged: () => void
 }) {
+  const [terminal, setTerminal] = useState(false)
   if (s.kind === 'copied' || s.kind === 'input') return <CopiedStep step={s} focused={focused} objects={objects} />
   return (
     <details className={`step${focused ? ' focused' : ''}`} open={s.status !== 'done' || s.followUps.length > 0}>
@@ -403,7 +406,21 @@ function Step({
             <pre>{s.prompt}</pre>
           </details>
         )}
-        {s.kind === 'agent' && s.prompt && <Conversation run={run} step={s} />}
+        {s.kind === 'agent' && s.prompt && (
+          <>
+            <button
+              className="terminal-button"
+              onClick={() => setTerminal(true)}
+              title="Follow what the agent does as in a terminal, with the files it changed beside it"
+            >
+              <TerminalIcon /> Terminal
+            </button>
+            <Conversation run={run} step={s} />
+          </>
+        )}
+        {/* Outside the step, whose details close as it ends and would hide
+            the dialog while it stays modal. */}
+        {terminal && createPortal(<StepTerminal run={run} step={s} onClose={() => setTerminal(false)} />, document.body)}
         {s.kind === 'human' && s.outcome && (
           <Block
             label={s.decidedBy ? `Decision · ${s.decidedBy}` : 'Decision'}
@@ -601,9 +618,6 @@ function FollowUpForm({ run, step, busy, onSent }: { run: number; step: number; 
   )
 }
 
-// What the agent did: its conversation with the model, loaded once opened,
-// and followed while the step goes. Once the step ended, it loads once more
-// for the messages that came in last.
 // The commits a step made in each repository, from the one it started on.
 function StepCommits({ commits }: { commits: RepoCommits[] }) {
   return (
@@ -631,17 +645,18 @@ function StepCommits({ commits }: { commits: RepoCommits[] }) {
   )
 }
 
-function Conversation({ run, step }: { run: number; step: RunStep }) {
-  const [open, setOpen] = useState(false)
+// A step's conversation with the model, loaded once enabled, and followed
+// while the step or a follow-up of it goes. Once it ended, it loads once
+// more for the messages that came in last.
+export function useStepMessages(run: number, step: RunStep, enabled: boolean) {
   const [messages, setMessages] = useState<StepMessage[]>([])
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const last = useRef(0)
   const going = step.status === 'active' || step.followUps.some((f) => f.status === 'active')
-  const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
 
   useEffect(() => {
-    if (!open) return
+    if (!enabled) return
     let stopped = false
     let timer: number | undefined
     const load = async () => {
@@ -665,7 +680,16 @@ function Conversation({ run, step }: { run: number; step: RunStep }) {
       stopped = true
       window.clearTimeout(timer)
     }
-  }, [open, going, run, step.id])
+  }, [enabled, going, run, step.id])
+
+  return { messages, loaded, error, going }
+}
+
+// What the agent did: its conversation with the model, loaded once opened.
+function Conversation({ run, step }: { run: number; step: RunStep }) {
+  const [open, setOpen] = useState(false)
+  const { messages, loaded, error, going } = useStepMessages(run, step, open)
+  const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
 
   return (
     <details className="step-prompt conversation" onToggle={(e) => setOpen(e.currentTarget.open)}>

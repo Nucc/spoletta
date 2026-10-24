@@ -1196,9 +1196,12 @@ export type AgentMessage = {
   model?: string
   stopReason?: string
   errorMessage?: string
-  // Tool results.
+  // Tool results, with the call they answer; an edit's details hold its
+  // patch unless too large to keep.
+  toolCallId?: string
   toolName?: string
   isError?: boolean
+  details?: { patch?: string; diff?: string }
 }
 
 export type StepMessage = {
@@ -1212,6 +1215,36 @@ export type StepMessage = {
 // An agent step's conversation; after, a message id, gives only the messages since.
 export function getStepMessages(run: number, id: number, after = 0): Promise<StepMessage[]> {
   return request(`/api/runs/${run}/steps/${id}/messages?after=${after}`)
+}
+
+// A file a step changed, with its part of the diff; omitted when too large
+// to show.
+export type FileChange = {
+  path: string
+  oldPath?: string
+  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'type changed'
+  additions: number
+  deletions: number
+  binary?: boolean
+  patch: string
+  omitted?: boolean
+}
+
+// What a step, with its follow-ups, changed in a repository from the commit
+// it started from to the one it left; more counts the files past those
+// listed, and error says why they couldn't be read.
+export type RepoChanges = {
+  name: string
+  before: string
+  after: string
+  uncommitted: boolean
+  files: FileChange[]
+  more: number
+  error?: string
+}
+
+export function getStepChanges(run: number, id: number): Promise<RepoChanges[]> {
+  return request(`/api/runs/${run}/steps/${id}/changes`)
 }
 
 // Ends a run where it is; steps still going are cancelled.

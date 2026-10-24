@@ -406,18 +406,16 @@ function Step({
             <pre>{s.prompt}</pre>
           </details>
         )}
-        {s.kind === 'agent' && s.prompt && (
-          <>
-            <button
-              className="terminal-button"
-              onClick={() => setTerminal(true)}
-              title="Follow what the agent does as in a terminal, with the files it changed beside it"
-            >
-              <TerminalIcon /> Terminal
-            </button>
-            <Conversation run={run} step={s} />
-          </>
+        {(s.kind === 'agent' || s.kind === 'script') && s.prompt && (
+          <button
+            className="terminal-button"
+            onClick={() => setTerminal(true)}
+            title={`Follow what the ${s.kind === 'agent' ? 'agent does' : 'script does'} as in a terminal, with the files it changed beside it`}
+          >
+            <TerminalIcon /> Terminal
+          </button>
         )}
+        {s.kind === 'agent' && s.prompt && <Conversation run={run} step={s} />}
         {/* Outside the step, whose details close as it ends and would hide
             the dialog while it stays modal. */}
         {terminal && createPortal(<StepTerminal run={run} step={s} onClose={() => setTerminal(false)} />, document.body)}

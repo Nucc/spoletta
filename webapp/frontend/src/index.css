@@ -5446,6 +5446,27 @@ select.flow-owner:disabled {
   margin-top: 6px;
 }
 
+.term-script {
+  margin: 0 0 10px 1.5em !important;
+  color: #adbac7;
+}
+
+.term-log {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px;
+  margin-bottom: 2px;
+  color: #adbac7;
+}
+
+.term-log time {
+  color: #8b949e;
+}
+
+.term-log.error {
+  color: #ff7b72;
+}
+
 .term-cursor {
   display: inline-block;
   width: 0.6em;

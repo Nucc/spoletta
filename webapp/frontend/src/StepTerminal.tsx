@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getStepChanges, type AgentMessage, type FileChange, type MessageBlock, type RepoChanges, type RunStep, type StepMessage } from './api'
+import { getRunLogs, getStepChanges, type AgentMessage, type RunLogLine, type FileChange, type MessageBlock, type RepoChanges, type RunStep, type StepMessage } from './api'
 import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
 
 // An agent step's conversation as a terminal shows it, in a large window in
@@ -10,11 +10,16 @@ import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
 // a step working on repositories, the files it changed with their diffs:
 // once it ended, what it committed (see changes.go); while it goes, what its
 // edit and write calls did, as a command's changes show only in the commits.
+// A script's step shows the script, what it was given, the lines the worker
+// logged of it (what it printed to stderr among them) and what it printed,
+// which come once it ended.
 export default function StepTerminal({ run, step, onClose }: { run: number; step: RunStep; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
   const screen = useRef<HTMLDivElement>(null)
   const atEnd = useRef(true)
-  const { messages, loaded, error, going } = useStepMessages(run, step, true)
+  const script = step.kind === 'script'
+  const { messages, loaded, error, going } = useStepMessages(run, step, !script)
+  const logs = useStepLogs(run, step.id, script, going)
   const results = useMemo(() => resultsByCall(messages), [messages])
   const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
 
@@ -27,7 +32,7 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
 
   useEffect(() => {
     if (atEnd.current && screen.current) screen.current.scrollTop = screen.current.scrollHeight
-  }, [messages.length, loaded])
+  }, [messages.length, loaded, logs.lines?.length])
 
   return (
     <dialog
@@ -62,32 +67,129 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
             atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
           }}
         >
-          {error && <p className="term-error">The conversation couldn't load: {error}</p>}
-          {!loaded && !error && <p className="term-dim">Loading…</p>}
-          {loaded && messages.length === 0 && (
-            <p className="term-dim">{going ? 'Nothing yet.' : 'No conversation was recorded for this step.'}</p>
-          )}
-          {messages.map((m, i) => (
-            <div key={m.id}>
-              {m.attempt > 1 && messages[i - 1]?.attempt !== m.attempt && (
-                <p className="term-rule">
-                  {followUpOf.has(m.attempt)
-                    ? `Follow-up · ${formatTime(followUpOf.get(m.attempt)!.startedAt)}`
-                    : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again`}
+          {script ? (
+            <ScriptScreen step={step} logs={logs.lines} error={logs.error} going={going} />
+          ) : (
+            <>
+              {error && <p className="term-error">The conversation couldn't load: {error}</p>}
+              {!loaded && !error && <p className="term-dim">Loading…</p>}
+              {loaded && messages.length === 0 && (
+                <p className="term-dim">{going ? 'Nothing yet.' : 'No conversation was recorded for this step.'}</p>
+              )}
+              {messages.map((m, i) => (
+                <div key={m.id}>
+                  {m.attempt > 1 && messages[i - 1]?.attempt !== m.attempt && (
+                    <p className="term-rule">
+                      {followUpOf.has(m.attempt)
+                        ? `Follow-up · ${formatTime(followUpOf.get(m.attempt)!.startedAt)}`
+                        : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again`}
+                    </p>
+                  )}
+                  <TerminalMessage message={m.message} results={results} going={going} />
+                </div>
+              ))}
+              {going && loaded && (
+                <p className="term-dim">
+                  <span className="term-cursor" aria-hidden="true" /> working…
                 </p>
               )}
-              <TerminalMessage message={m.message} results={results} going={going} />
-            </div>
-          ))}
-          {going && loaded && (
-            <p className="term-dim">
-              <span className="term-cursor" aria-hidden="true" /> working…
-            </p>
+            </>
           )}
         </div>
         {step.branch && <ChangedFiles run={run} step={step} messages={messages} going={going} />}
       </div>
     </dialog>
+  )
+}
+
+// The most log lines the webapp gives at once; a full page means there are more.
+const LOGS_PAGE = 5000
+const LOGS_REFRESH_MS = 1500
+
+// The run's log lines about the step, followed while it goes, and once
+// more as it ends for the last ones.
+function useStepLogs(run: number, step: number, enabled: boolean, going: boolean) {
+  const [lines, setLines] = useState<RunLogLine[] | null>(null)
+  const [error, setError] = useState('')
+  const last = useRef(0)
+  useEffect(() => {
+    if (!enabled) return
+    let stale = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const fetchMore = () => {
+      getRunLogs(run, last.current)
+        .then((more) => {
+          if (stale) return
+          setError('')
+          const full = more.length >= LOGS_PAGE
+          if (more.length > 0) last.current = more[more.length - 1].id
+          setLines((ls) => [...(ls ?? []), ...more.filter((l) => l.step === step)])
+          if (full || going) timer = setTimeout(fetchMore, full ? 0 : LOGS_REFRESH_MS)
+        })
+        .catch((err) => !stale && setError(err instanceof Error ? err.message : String(err)))
+    }
+    fetchMore()
+    return () => {
+      stale = true
+      clearTimeout(timer)
+    }
+  }, [run, step, enabled, going])
+  return { lines, error }
+}
+
+const formatLogTime = (s: string) =>
+  new Date(s).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+function ScriptScreen({ step, logs, error, going }: { step: RunStep; logs: RunLogLine[] | null; error: string; going: boolean }) {
+  return (
+    <>
+      <div className="term-prompt">
+        <span className="term-mark">$</span>
+        <pre>bash script</pre>
+      </div>
+      <pre className="term-script">{step.prompt}</pre>
+      {step.inputs.map((input, i) => (
+        <div key={i} className="term-call">
+          <div className="term-call-line">
+            <span className="term-mark">⏺</span>
+            <pre>
+              $INPUTS/{input.name}
+              {input.state && ` · ${input.state}`}
+            </pre>
+          </div>
+          <div className="term-result">
+            <span className="term-mark">⎿</span>
+            <pre>{input.content || '(empty)'}</pre>
+          </div>
+        </div>
+      ))}
+      {error && <p className="term-error">The log couldn't load: {error}</p>}
+      {logs === null && !error && <p className="term-dim">Loading…</p>}
+      {logs?.map((l) => (
+        <div key={l.id} className={`term-log ${l.level}`}>
+          <time dateTime={l.time} title={new Date(l.time).toLocaleString()}>
+            {formatLogTime(l.time)}
+          </time>
+          <pre>{l.message}</pre>
+        </div>
+      ))}
+      {going ? (
+        <p className="term-dim">
+          <span className="term-cursor" aria-hidden="true" /> running… what it prints shows once it ends.
+        </p>
+      ) : (
+        <>
+          {step.output && (
+            <div className="term-says">
+              <span className="term-mark">⏺</span>
+              <pre>{step.output}</pre>
+            </div>
+          )}
+          {step.error && <pre className="term-error">{step.error}</pre>}
+          {!step.output && !step.error && <p className="term-dim">It printed nothing.</p>}
+        </>
+      )}
+    </>
   )
 }
 
@@ -398,15 +500,17 @@ function ChangedFiles({ run, step, messages, going }: { run: number; step: RunSt
       ) : (
         <>
           <p className="panel-note">
-            {going
-              ? live.length === 0
-                ? 'No files yet. They show as the agent edits and writes them; what its commands change shows once it ends.'
-                : 'As the agent edits and writes them; what its commands change shows once it ends.'
-              : changes === null && !error
-                ? 'Loading…'
-                : live.length === 0
-                  ? 'It changed nothing.'
-                  : 'Nothing was committed; these are the files its edits and writes touched.'}
+            {going && step.kind === 'script'
+              ? 'What the script changes shows once it ends.'
+              : going
+                ? live.length === 0
+                  ? 'No files yet. They show as the agent edits and writes them; what its commands change shows once it ends.'
+                  : 'As the agent edits and writes them; what its commands change shows once it ends.'
+                  : changes === null && !error
+                  ? 'Loading…'
+                  : live.length === 0
+                    ? 'It changed nothing.'
+                    : 'Nothing was committed; these are the files its edits and writes touched.'}
           </p>
           <ul>
             {live.map((f) => (

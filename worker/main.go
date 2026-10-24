@@ -939,7 +939,9 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		since = strconv.FormatInt(*run.Since, 10)
 	}
 	spec := sandboxSpec{Cmd: []string{"bash", script}, Dir: cwd, Mounts: []mount{{Path: cwd}, {Path: private, ReadOnly: true}}, Egress: run.Egress.proxy()}
-	spec.Env = childEnv(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since)...)
+	// What it prints goes to a pipe, which Python would otherwise print to
+	// a few KB at a time, so following it as it runs would show nothing.
+	spec.Env = childEnv(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since, "PYTHONUNBUFFERED=1")...)
 	if run.Workspace != nil {
 		spec.Env = append(spec.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
 	}

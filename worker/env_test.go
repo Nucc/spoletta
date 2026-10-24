@@ -27,7 +27,7 @@ func TestScriptsGetOnlyTheirEnvironment(t *testing.T) {
 		t.Fatalf("script failed: %s", res.Error)
 	}
 	allowed := append(slices.Clone(childVars), "GIT_TERMINAL_PROMPT", "SHARED_TOKEN",
-		"INPUTS", "SINCE", "LAST_RUN", "WORKSPACE", "BRANCH", "OUTPUTS",
+		"INPUTS", "SINCE", "LAST_RUN", "WORKSPACE", "BRANCH", "OUTPUTS", "PYTHONUNBUFFERED",
 		// What bash sets itself.
 		"PWD", "OLDPWD", "SHLVL", "_")
 	var names []string
@@ -41,7 +41,7 @@ func TestScriptsGetOnlyTheirEnvironment(t *testing.T) {
 			t.Errorf("the script got %s", name)
 		}
 	}
-	if !slices.Contains(names, "SHARED_TOKEN") || !slices.Contains(names, "INPUTS") {
+	if !slices.Contains(names, "SHARED_TOKEN") || !slices.Contains(names, "INPUTS") || !slices.Contains(names, "PYTHONUNBUFFERED") {
 		t.Errorf("the script didn't get what it should: %v", names)
 	}
 }

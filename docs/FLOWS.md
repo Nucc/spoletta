@@ -644,6 +644,11 @@ definitions do that.
   For a cursor of your own, such as the newest `updated_at` seen, carry a
   persistent object over instead (see 3.1).
 - A non-zero exit fails it, with stderr as the error.
+- What it prints, stdout and stderr, shows in its step's terminal window as
+  it runs. Its stdout is a pipe, so most programs hold what they print back
+  until a few KB pile up; Python is told not to (`PYTHONUNBUFFERED=1`), and
+  others can be made to line by line with `stdbuf -oL`, `jq --unbuffered` or
+  `grep --line-buffered`. Progress on stderr shows at once.
 - It gets none of the instance's secrets: no model keys, no Sentry or Jira
   token. A variable such as `$JIRA_TOKEN` is there only if the instance
   passes it to every script with `CHILD_ENV`; for a service built in, use a

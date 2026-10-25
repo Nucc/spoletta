@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -113,6 +114,11 @@ func TestBodyRefs(t *testing.T) {
 		{"/api/processes", ``, nil},
 	} {
 		got := bodyRefs(c.path, []byte(c.body))
+		// The fields are read in flowFields' order, a map's, so the ids
+		// of a table come in any order; the guard checks each alike.
+		for _, ids := range got {
+			slices.Sort(ids)
+		}
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("bodyRefs(%s, %s) = %v, want %v", c.path, c.body, got, c.want)
 		}

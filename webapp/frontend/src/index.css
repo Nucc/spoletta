@@ -6024,3 +6024,71 @@ select.flow-owner:disabled {
   min-width: 320px;
   max-width: 640px;
 }
+
+/* The flows a person picks from to start on records. */
+.record-run-flows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.record-run-flows label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.record-run-busy {
+  display: block;
+}
+
+/* Runs a flow on a record, a smaller twin of the board's play button. */
+.record-play {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0 0 0 1px;
+  color: #fff;
+  background: #1a7f37;
+  border: 1px solid #1a7f37;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.record-play svg {
+  width: 10px;
+  height: 10px;
+}
+
+.record-play:hover,
+.records-run:hover {
+  background: #116329;
+  border-color: #116329;
+}
+
+/* Runs a flow on each record ticked. */
+.records-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 10px;
+  font-size: 13px;
+  color: #fff;
+  background: #1a7f37;
+  border: 1px solid #1a7f37;
+  border-radius: 14px;
+  cursor: pointer;
+}
+
+.records-run svg {
+  width: 11px;
+  height: 11px;
+}

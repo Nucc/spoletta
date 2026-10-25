@@ -41,12 +41,14 @@ type run struct {
 	// Who started it, when someone did with everyone signing in; see users.go.
 	StartedBy string `json:"startedBy"`
 	// The name of the API key that started it, if one did; see api.go.
-	APIKey     string     `json:"apiKey"`
+	APIKey string `json:"apiKey"`
+	// The shared record a person started it on, if one did; see record_runs.go.
+	Record     *int64     `json:"record"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
 
-var runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), started_at, finished_at"
+var runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), record_id, started_at, finished_at"
 
 // The tokens a step's model calls took in and gave out, and what they cost
 // at the models' catalog prices, in dollars.
@@ -81,7 +83,7 @@ func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage,
 }
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.Record, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -396,7 +398,7 @@ func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix, nil)
+	eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix, nil, 0)
 	return nr.id, nil
 }
 
@@ -406,6 +408,8 @@ type pendingRun struct {
 	board       snapshot
 	repos       []repository
 	prefix      string
+	// The shared record it is started on, 0 for none; see record_runs.go.
+	record int64
 }
 
 // Records a run of the flow on its board as it is: a board changed since its

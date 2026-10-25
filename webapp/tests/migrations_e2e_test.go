@@ -103,20 +103,7 @@ func TestMigrateDatabaseFromBeforeMigrations(t *testing.T) {
 // and undoes nothing.
 func TestMigrateCommand(t *testing.T) {
 	needDB(t)
-	migrate := func(args ...string) (string, error) {
-		cmd := exec.Command(testDB.binary, append([]string{"migrate"}, args...)...)
-		cmd.Env = []string{
-			"PATH=" + os.Getenv("PATH"),
-			"HOME=" + os.Getenv("HOME"),
-			"DB_HOST=" + testDB.host,
-			"DB_PORT=" + testDB.port,
-			"DB_NAME=" + testDB.name,
-			"DB_USER=" + testDB.user,
-			"DB_PASSWORD=" + testDB.password,
-		}
-		out, err := cmd.CombinedOutput()
-		return string(out), err
-	}
+	migrate := func(args ...string) (string, error) { return migrateDB(testDB.name, args...) }
 
 	out, err := migrate("status")
 	if err != nil {
@@ -139,6 +126,57 @@ func TestMigrateCommand(t *testing.T) {
 
 	if out, err := migrate("down-to"); err == nil || !strings.Contains(out, "usage:") {
 		t.Errorf("migrate down-to without a version = %v, want the usage:\n%s", err, out)
+	}
+}
+
+// Runs `webapp migrate` with args on the database name.
+func migrateDB(name string, args ...string) (string, error) {
+	cmd := exec.Command(testDB.binary, append([]string{"migrate"}, args...)...)
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"DB_HOST=" + testDB.host,
+		"DB_PORT=" + testDB.port,
+		"DB_NAME=" + name,
+		"DB_USER=" + testDB.user,
+		"DB_PASSWORD=" + testDB.password,
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// Every migration after the schema one is undone by its Down, leaving the
+// database as the schema migration made it, so an older webapp runs on it;
+// and the webapp starting again brings it back up to the columns a new
+// database has.
+func TestMigrationsGoDownAndUpAgain(t *testing.T) {
+	needDB(t)
+	root := secretsDB(t)
+	name := fmt.Sprintf("%s%d_down", testDBPrefix, time.Now().UnixNano())
+	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
+	db := openDB(t, name)
+	startApp(t, newFakeWorker(t).url, "DB_NAME="+name).proc.stop()
+	up := columns(t, db)
+
+	if out, err := migrateDB(name, "down-to", "2"); err != nil {
+		t.Fatalf("migrate down-to 2: %v\n%s", err, out)
+	}
+	var latest int
+	if err := db.QueryRow("SELECT MAX(version_id) FROM goose_db_version WHERE is_applied").Scan(&latest); err != nil || latest != 2 {
+		t.Fatalf("down to version %d (%v), want 2", latest, err)
+	}
+	// Such as the record a run was started on (00015).
+	if down := columns(t, db); slices.ContainsFunc(down, func(c string) bool { return strings.HasPrefix(c, "runs.record_id ") }) {
+		t.Errorf("runs.record_id is still there after going down")
+	}
+
+	startApp(t, newFakeWorker(t).url, "DB_NAME="+name)
+	again := columns(t, db)
+	if !slices.Equal(up, again) {
+		t.Errorf("going down and up again changed the columns:\nbefore %v\nafter  %v", up, again)
 	}
 }
 

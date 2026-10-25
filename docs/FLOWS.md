@@ -432,6 +432,12 @@ off. After an agent step ends, a person can send it follow-up messages
     as a table, a column per field, searched and sorted as a flow's Data page
     is: faceted queries such as `state:new -@severity:low crash`, over
     every record stored.
+  - A person can pick the record a flow works on: **Run…** on a record (or
+    on those ticked) starts a flow querying the struct on it, a run per
+    record, and each of that run's queries of the struct reads the record
+    alone, whatever its state and rule select. So a flow implementing "the
+    open Jira ticket" its query gives it implements the one picked; write
+    its query for the scheduled case, and it serves both.
 
 ### 3.9 Schedules
 

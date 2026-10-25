@@ -151,17 +151,19 @@ func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker
 }
 
 // Executes a run of the whole flow, on the top board of version's board,
-// given what came from outside, if anything (see api.go), in the background,
+// given what came from outside, if anything (see api.go), on the shared
+// record a person started it on, if any (see record_runs.go), in the background,
 // and ends it once nothing in it is left to run.
 // Its agents and scripts work in a workspace with the repositories, on a
 // branch of the run's own, whose name starts with prefix.
-func (e *engine) start(id, flow, version int64, board snapshot, repos []repository, prefix string, given map[int64]value) {
+func (e *engine) start(id, flow, version int64, board snapshot, repos []repository, prefix string, given map[int64]value, record int64) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	lr := e.register(id, func() { cancel(nil) })
 	lr.failWith = cancel
 	go func() {
 		logRunStarted(e.db, id)
 		fr := newFlowRun(flow, version, board, repos, prefix)
+		fr.record = record
 		w := newWalk(ctx, e, id, lr, fr, nil, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
 		if err := w.carry(); err != nil {
 			runLog(e.db, id, 0, logError, "the objects it carries couldn't be carried in: %v", err)
@@ -185,6 +187,7 @@ func (e *engine) rerun(nr pendingRun, flow int64, board *int64, given map[int64]
 		logRunStarted(e.db, nr.id)
 		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
 		fr.starts = starts
+		fr.record = nr.record
 		w := newWalk(ctx, e, nr.id, lr, fr, board, given, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10)))
 		w.resume(from, values)
 		e.finish(ctx, nr.id, w)
@@ -440,7 +443,9 @@ type pass struct {
 }
 
 // A pass starting from the start, or from a person's decision.
-func newPass() *pass { return &pass{visited: map[int64]bool{}, inputs: map[int64]inputsSum{}, counts: true} }
+func newPass() *pass {
+	return &pass{visited: map[int64]bool{}, inputs: map[int64]inputsSum{}, counts: true}
+}
 
 // A fresh pass coming from p: from a reviewer's decision, whose rounds bound
 // it, or from a failure.
@@ -474,6 +479,9 @@ type flowRun struct {
 	// For a flow a subflow process runs: the flows it runs inside, outermost
 	// first.
 	callers []int64
+	// The shared record a person started the run on, 0 for none; see
+	// record_runs.go.
+	record int64
 	// The board's OPL, made once an agent asks for it.
 	describe sync.Once
 	about    string

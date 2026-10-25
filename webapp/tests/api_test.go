@@ -496,7 +496,9 @@ type run struct {
 	Schedule  *int64 `json:"schedule"`
 	StartedBy string `json:"startedBy"`
 	// The name of the API key that started it, if one did.
-	APIKey     string     `json:"apiKey"`
+	APIKey string `json:"apiKey"`
+	// The shared record a person started it on, if one did.
+	Record     *int64     `json:"record"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }

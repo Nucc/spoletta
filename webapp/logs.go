@@ -127,6 +127,9 @@ func logRunStarted(db *sql.DB, id int64) {
 	case rn.Parent == nil:
 		msg += ", by someone unknown, as nobody signs in"
 	}
+	if rn.Record != nil {
+		msg += fmt.Sprintf(", on record %d", *rn.Record)
+	}
 	if rn.RerunOf != nil {
 		msg += fmt.Sprintf("; a re-run of run %d from %s", *rn.RerunOf, rn.RerunFromName)
 	}

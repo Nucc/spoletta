@@ -190,11 +190,16 @@ func queryRecords(ctx context.Context, db *sql.DB, run, object int64, q *linkQue
 	return string(b), err
 }
 
-// The inputs a process's query links give it, in object order.
+// The inputs a process's query links give it, in object order. A run
+// started on a shared record reads that record alone of its store, whatever
+// the query; see record_runs.go.
 func (w *walk) queried(id int64) ([]runInput, error) {
 	var ins []runInput
 	for _, qe := range w.queries[id] {
-		content, err := queryRecords(w.ctx, w.e.db, w.run, qe.object, qe.query)
+		content, pinned, err := w.fr.pinnedRecord(w.ctx, w.e.db, qe.object)
+		if err == nil && !pinned {
+			content, err = queryRecords(w.ctx, w.e.db, w.run, qe.object, qe.query)
+		}
 		if err != nil {
 			return nil, err
 		}

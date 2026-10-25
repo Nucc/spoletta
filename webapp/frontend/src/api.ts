@@ -509,6 +509,30 @@ export function deleteSharedRecords(struct: number, ids: number[]): Promise<{ de
   return request(`/api/structs/${struct}/records/delete`, { method: 'POST', body: JSON.stringify({ ids }) })
 }
 
+// A flow a person may start on a struct's records: one whose queries read
+// them, and why its queries wouldn't select each record asked about, by id,
+// for those they wouldn't.
+export type RecordFlow = { id: number; name: string; off: Record<string, string> }
+
+// A run going on a record: one started on it, or the one that last moved it
+// on, still running.
+export type RecordRun = { run: number; flow: number }
+
+// The flows that can be started on the struct's records, with which of the
+// records named each wouldn't select, and the runs going on each, by id.
+export function listRecordFlows(
+  struct: number,
+  records: number[],
+): Promise<{ flows: RecordFlow[]; going: Record<string, RecordRun[] | undefined> }> {
+  return request(`/api/structs/${struct}/records/flows?records=${records.join(',')}`)
+}
+
+// Starts a run of the flow on each record, its queries of the struct's
+// records reading that one alone.
+export function startRecordRuns(struct: number, flow: number, records: number[]): Promise<FlowRun[]> {
+  return request(`/api/structs/${struct}/records/runs`, { method: 'POST', body: JSON.stringify({ flow, records }) })
+}
+
 // A module other flows run stays one.
 export function updateFlow(id: number, patch: Partial<Pick<Flow, 'name' | 'module' | 'settings'>>): Promise<Flow> {
   return request(`/api/flows/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
@@ -946,6 +970,9 @@ export type FlowRun = {
   startedBy: string
   // The name of the API key that started it, if one did.
   apiKey: string
+  // The shared record a person started it on, if one did; its queries of
+  // the record's store read that record alone.
+  record: number | null
   startedAt: string
   finishedAt: string | null
 }

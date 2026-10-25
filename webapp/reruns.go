@@ -520,10 +520,14 @@ func registerRerunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		if _, err := tx.ExecContext(r.Context(),
 			`UPDATE runs SET parent_run_id = ?, process_ref = ?, process_name = ?, item_key = ?,
-				rerun_of = ?, rerun_from = ?, rerun_from_name = ?, starts = ? WHERE id = ?`,
-			src.Parent, src.Process, src.ProcessName, src.ItemKey, src.ID, p.process, p.name, starts, nr.id); err != nil {
+				rerun_of = ?, rerun_from = ?, rerun_from_name = ?, starts = ?, record_id = ? WHERE id = ?`,
+			src.Parent, src.Process, src.ProcessName, src.ItemKey, src.ID, p.process, p.name, starts, src.Record, nr.id); err != nil {
 			serverError(w, err)
 			return
+		}
+		// A re-run of a run started on a record reads that record again.
+		if src.Record != nil {
+			nr.record = *src.Record
 		}
 		dup, err := recordCopied(r.Context(), tx, src.ID, stepID, nr.id, p)
 		if err != nil {

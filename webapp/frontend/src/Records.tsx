@@ -13,9 +13,10 @@ import {
   type SharedRecords as Records,
 } from './api'
 import { HeaderResizer, useColumnWidths } from './HeaderResizer'
-import { FlowBuilderIcon, TableIcon } from './icons'
+import { FlowBuilderIcon, PlayIcon, TableIcon } from './icons'
 import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { RecordDialog } from './RecordDialog'
+import { RecordRunDialog } from './RecordRunDialog'
 import { formatTime } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch } from './Search'
 
@@ -111,7 +112,9 @@ function fieldsOf(records: Records): string[] {
 // searched and sorted by any of them, on the server over every record
 // stored (Search.tsx). A person corrects them here too: adds a record,
 // edits one's fields and state, and deletes those ticked, one or many; and
-// drags a column's header edge to widen or narrow it.
+// drags a column's header edge to widen or narrow it. And starts a flow
+// querying them on one record, or on each of those ticked
+// (RecordRunDialog.tsx).
 export default function RecordsPage({ id }: { id: number }) {
   const [flow, setFlow] = useState<Flow | null>(null)
   const [flowError, setFlowError] = useState<string | null>(null)
@@ -120,6 +123,8 @@ export default function RecordsPage({ id }: { id: number }) {
   const [opened, setOpened] = useState<Opened | null>(null)
   // The record being written by hand: one corrected, or a new one.
   const [editing, setEditing] = useState<SharedRecord | 'new' | null>(null)
+  // The records a flow is being started on, a run on each.
+  const [running, setRunning] = useState<number[] | null>(null)
   const [ticked, setTicked] = useState<Set<number>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
   const columns = useColumnWidths(`records-columns-${id}`)
@@ -259,6 +264,9 @@ export default function RecordsPage({ id }: { id: number }) {
                     <span>
                       {ticked.size} {ticked.size === 1 ? 'record' : 'records'} ticked
                     </span>
+                    <button className="records-run" onClick={() => setRunning([...ticked])} title="Run a flow on each record ticked">
+                      <PlayIcon /> Run
+                    </button>
                     <button className="link-button danger" onClick={deleteTicked}>
                       Delete
                     </button>
@@ -313,6 +321,14 @@ export default function RecordsPage({ id }: { id: number }) {
                                     aria-label={`Tick record ${r.id}`}
                                     onChange={() => tick(r.id)}
                                   />
+                                  <button
+                                    className="record-play"
+                                    aria-label={`Run a flow on record ${r.id}`}
+                                    title="Run a flow on this record"
+                                    onClick={() => setRunning([r.id])}
+                                  >
+                                    <PlayIcon />
+                                  </button>
                                   <button className="link-button" title="Show all of it" onClick={() => setOpened(whole)}>
                                     {r.id}
                                   </button>
@@ -321,6 +337,7 @@ export default function RecordsPage({ id }: { id: number }) {
                                       Edit
                                     </button>
                                   )}
+
                                 </span>,
                               )}
                             </td>
@@ -400,6 +417,7 @@ export default function RecordsPage({ id }: { id: number }) {
           onClose={() => setEditing(null)}
         />
       )}
+      {running !== null && <RecordRunDialog struct={id} name={name} records={running} onClose={() => (setRunning(null), load())} />}
       {opened && <ValueDialog opened={opened} onOpen={setOpened} onClose={() => setOpened(null)} onFilter={filterBy} />}
     </div>
   )

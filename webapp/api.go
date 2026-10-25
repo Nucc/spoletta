@@ -452,7 +452,7 @@ func startAPIRun(ctx context.Context, db *sql.DB, eng *engine, flow, key int64, 
 		return 0, false, nil, err
 	}
 	if dup == nil {
-		eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix, given)
+		eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix, given, 0)
 	}
 	return nr.id, true, nil, nil
 }

@@ -408,9 +408,11 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	if route.anthropic != "" && r.Header.Get("Anthropic-Version") != "" {
 		base = route.anthropic
 	}
-	target := strings.TrimSuffix(base, "/") + "/" + r.PathValue("path")
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
+	target, ok := llmTarget(base, r.PathValue("path"), r.URL.RawQuery)
+	if !ok {
+		audit("model.refused", g.user, g.run, g.step, "a call to the model provider %s at a path outside its URL", provider)
+		http.Error(w, "the path isn't one under the model provider's URL", http.StatusBadRequest)
+		return
 	}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
 	if err != nil {
@@ -463,6 +465,39 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode/100 == 2 {
 		b.recordUsage(g, provider, modelOf(body, r.PathValue("path")), u.usage())
 	}
+}
+
+// The URL a request for a path under the proxy's /llm/{provider}/ goes to:
+// the same path under the provider's URL, with the request's query; false
+// when the path would leave it. The path comes decoded, so %2F..%2F or
+// %3F in an agent's request would otherwise reach the provider as a step
+// up out of a gateway's URL, which may hold more than the provider's API
+// (https://gateway/tenant/v1), or as a query of the agent's making, with
+// the real key either way.
+func llmTarget(base, path, query string) (string, bool) {
+	if strings.ContainsAny(path, `?#\`) {
+		return "", false
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == ".." || segment == "." {
+			return "", false
+		}
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", false
+	}
+	// Set as a path, never as text read as a URL again, so what's left of
+	// the agent's escaping, such as %2e, reaches the provider as written.
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/" + path
+	u.RawPath = ""
+	if query != "" {
+		if u.RawQuery != "" {
+			u.RawQuery += "&"
+		}
+		u.RawQuery += query
+	}
+	return u.String(), true
 }
 
 // What went wrong reaching a URL, without the URL.

@@ -92,6 +92,36 @@ func TestLLMProxySwapsTheTokenForTheKey(t *testing.T) {
 			t.Errorf("%s: %d, want refused", name, w.Code)
 		}
 	}
+	// The path the mux decodes stays under the provider's URL: no step up
+	// out of it to what else its host serves, and no query or fragment of
+	// the agent's making, with the real key.
+	for _, path := range []string{
+		"/llm/openai/..%2F..%2Fx",
+		"/llm/openai/%2e%2e/x",
+		"/llm/openai/responses/%2E%2E%2F%2E%2E%2Fadmin",
+		"/llm/openai/.%2Fresponses",
+		"/llm/openai/..%5Cx",
+		"/llm/openai/responses%3Fapi-key=x",
+		"/llm/openai/responses%23x",
+	} {
+		got = nil
+		w := serveLLM(b, withHeader(httptest.NewRequest("POST", path, strings.NewReader(`{}`)), "Authorization", "Bearer step-token"))
+		if w.Code != http.StatusBadRequest || got != nil {
+			reached := ""
+			if got != nil {
+				reached = got.URL.String()
+			}
+			t.Errorf("%s: %d, reaching %q, want refused", path, w.Code, reached)
+		}
+	}
+	// What's left of the agent's escaping reaches the provider as written,
+	// never read as a step up.
+	got = nil
+	w := serveLLM(b, withHeader(httptest.NewRequest("POST", "/llm/openai/%252e%252e/x", strings.NewReader(`{}`)), "Authorization", "Bearer step-token"))
+	if w.Code != http.StatusOK || got == nil || got.URL.Path != "/v1/%2e%2e/x" {
+		t.Errorf("an escaped %%2e: %d %+v", w.Code, got)
+	}
+
 	b.revoke(&llmAccess{Token: "step-token"})
 	if w := serveLLM(b, withHeader(httptest.NewRequest("POST", "/llm/openai/responses", nil), "Authorization", "Bearer step-token")); w.Code != http.StatusForbidden {
 		t.Errorf("a revoked token: %d, want refused", w.Code)

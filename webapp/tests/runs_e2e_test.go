@@ -261,7 +261,7 @@ func TestStoppingARun(t *testing.T) {
 	if ended.Status != runInterrupted || ended.FinishedAt == nil {
 		t.Errorf("stopped run = %+v", ended)
 	}
-	if !<-cancelled {
+	if !receive(t, cancelled, "the step to say whether it was cancelled") {
 		t.Fatal("stopping the run didn't cancel its step")
 	}
 	d := a.waitRun(rn.ID, "its step to end", func(d runDetail) bool {

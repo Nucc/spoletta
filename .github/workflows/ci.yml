@@ -27,7 +27,7 @@ jobs:
         with:
           go-version-file: webapp/go.mod
           cache-dependency-path: webapp/go.sum
-      - run: go build ./... && go vet ./... && go test .
+      - run: go build ./... && go vet ./... && go test -v .
 
   # The webapp started for real on MySQL, driven over HTTP with the worker
   # faked, on the MySQL compose.yaml runs.
@@ -60,7 +60,7 @@ jobs:
         with:
           go-version-file: webapp/go.mod
           cache-dependency-path: webapp/go.sum
-      - run: go test -race -timeout 25m ./tests
+      - run: go test -v -race -timeout 25m ./tests
 
   # Tests needing podman (SANDBOX_TEST) skip; git and bash are on the runner.
   worker:
@@ -75,7 +75,7 @@ jobs:
           go-version-file: worker/go.mod
           # The worker has no dependencies, so no go.sum to key a cache on.
           cache: false
-      - run: go build ./... && go vet ./... && go test -race .
+      - run: go build ./... && go vet ./... && go test -v -race .
 
   frontend:
     runs-on: ubuntu-latest

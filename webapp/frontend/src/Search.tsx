@@ -34,7 +34,7 @@ export function useSearch(page: 'data' | 'records' | 'audit', id: number) {
     if (state.sort) params.set('sort', (state.sort.desc ? '-' : '') + state.sort.key)
     const base = page === 'audit' ? '#/audit' : `#/flows/${id}/${page}`
     const hash = `${base}${params.size > 0 ? '?' + params.toString().replace(/\+/g, '%20') : ''}`
-    if (window.location.hash !== hash) window.history.replaceState(null, '', window.location.pathname + window.location.search + hash)
+    if (window.location.hash !== hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + hash)
     try {
       localStorage.setItem(storeKey, JSON.stringify({ query: state.query, sort: params.get('sort') ?? undefined }))
     } catch {

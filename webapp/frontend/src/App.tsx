@@ -8,6 +8,8 @@ import AuditLog from './Audit'
 import Records from './Records'
 import Schedules from './Schedules'
 import Settings, { type SettingsTab } from './Settings'
+import TabBar from './TabBar'
+import { TabContext, useTabs } from './tabs'
 
 // The page the URL's hash names: #/flows/<id> for a flow's board,
 // #/flows/<id>/runs/<run> for it with one of its runs open, #/flows/<id>/data
@@ -15,7 +17,8 @@ import Settings, { type SettingsTab } from './Settings'
 // records, both with ?q=<search>&sort=<key> for what they show, #/audit for
 // the audit log, with them too, #/schedules for the schedules, #/settings/<tab>
 // for the settings, anything else for the list of flows. #/people, where
-// the people were before the settings, is their tab now.
+// the people were before the settings, is their tab now. The address is
+// the open tab's; each tab keeps its own (tabs.ts).
 type Page = { flow: number; run: number | null } | { data: number } | { records: number } | { settings: SettingsTab | null } | 'schedules' | 'audit' | null
 
 const pageInHash = (): Page => {
@@ -33,14 +36,22 @@ const pageInHash = (): Page => {
 }
 
 export default function App() {
-  const [page, setPage] = useState(pageInHash)
+  const { tabs, active, select, add, close } = useTabs()
+  return (
+    <>
+      <TabBar tabs={tabs} active={active} onSelect={select} onAdd={() => add('#/', true)} onClose={close} />
+      <div className="tab-page">
+        {/* A new page for each tab, so nothing of one shows on another. */}
+        <TabContext.Provider value={active}>
+          <Page key={active} />
+        </TabContext.Provider>
+      </div>
+    </>
+  )
+}
 
-  useEffect(() => {
-    const onHash = () => setPage(pageInHash())
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
-
+function Page() {
+  const page = pageInHash()
   if (page === null) return <FlowList onOpen={(id) => (window.location.hash = `#/flows/${id}`)} />
   if (page === 'schedules') return <Schedules />
   if (page === 'audit') return <AuditLog />

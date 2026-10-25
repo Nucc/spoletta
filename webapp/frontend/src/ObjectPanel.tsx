@@ -5,6 +5,7 @@ import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TableIcon, TrashIc
 import { quantityText, type Quantity } from './quantity'
 import QuantityInput from './QuantityInput'
 import { fieldsOf, ownedBy, type Field } from './structure'
+import { openTab } from './tabs'
 
 const SAVE_DELAY_MS = 500
 
@@ -142,7 +143,17 @@ export default function ObjectPanel({
       {module && (
         <p className="panel-note module-note">
           A copy of {module.struct ? 'the struct' : 'an object of the procedure'}{' '}
-          <a href={`#/flows/${module.id}`}>{module.name}</a>, which it follows: its
+          <a
+            href={`#/flows/${module.id}`}
+            // It opens in a new tab, leaving this flow where it is.
+            onClick={(e) => {
+              e.preventDefault()
+              openTab(`#/flows/${module.id}`)
+            }}
+          >
+            {module.name}
+          </a>
+          , which it follows: its
           name, how many it is, its states, attributes and what it is made of change only there, and here with it.
         </p>
       )}

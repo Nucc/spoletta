@@ -9,6 +9,103 @@ body,
   margin: 0;
 }
 
+/* The tabs along the top, each page below them; see tabs.ts. */
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.tab-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 4px 8px 0;
+  background: #eaeef2;
+  border-bottom: 1px solid #d8dee4;
+  flex-shrink: 0;
+}
+
+.tab-list {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 200px;
+  min-width: 80px;
+  height: 28px;
+  margin-bottom: -1px;
+  padding: 0 4px 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px 6px 0 0;
+  font-size: 13px;
+  color: #57606a;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab:hover {
+  background: #f3f5f7;
+}
+
+.tab.active {
+  background: #fff;
+  border-color: #d8dee4;
+  border-bottom-color: #fff;
+  color: #1f2328;
+}
+
+.tab-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close,
+.tab-add {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: #57606a;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tab-add {
+  width: 26px;
+  height: 26px;
+  margin-bottom: 2px;
+  font-size: 18px;
+}
+
+.tab-close:hover,
+.tab-add:hover {
+  background: #d8dee4;
+  color: #1f2328;
+}
+
 body {
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: #1f2328;
@@ -18,7 +115,7 @@ body {
 .board {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
 }
 
 .toolbar {
@@ -2433,7 +2530,7 @@ body {
 .flows-page {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: 100%;
 }
 
 .flows {

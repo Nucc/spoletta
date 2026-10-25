@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, DragEvent, MouseEvent } from 'react'
 import { flushSync } from 'react-dom'
 import {
@@ -85,6 +85,7 @@ import { configures, useMe } from './Account'
 import { OwnerPicker } from './Owner'
 import { onCopiedElsewhere, readCopied, writeCopied } from './clipboard'
 import { FlowSettingsPanel } from './FlowSettings'
+import { keepTabView, openTab, TabContext, tabView, type TabView } from './tabs'
 import {
   listTeams,
   setFlowOwner,
@@ -437,7 +438,14 @@ export default function Board({
   useEffect(() => onCopiedElsewhere(() => setCopied(readCopied())), [])
   // Where the pointer is over the canvas, on the screen, for pasting there.
   const pointer = useRef<XYPosition | null>(null)
-  const { getNode, getNodes, screenToFlowPosition, fitView } = useReactFlow<FlowNode>()
+  const { getNode, getNodes, screenToFlowPosition, fitView, getViewport } = useReactFlow<FlowNode>()
+
+  // Coming back to its tab, the board opens where it was looked at, rather
+  // than moving to show all of it.
+  const tab = useContext(TabContext)
+  const [savedView] = useState(() => tabView(tab, flowId))
+  // Until the board is shown, there is nothing of it to keep.
+  const viewShown = useRef(false)
   const wrapper = useRef<HTMLDivElement>(null)
   const draftSeq = useRef(0)
   // Loads the board again, for callbacks made before loadBoard is.
@@ -764,9 +772,12 @@ export default function Board({
     refreshVersions()
     // The flow just loaded; show all of it once its nodes are measured.
     loadBoard()
-      .then(() => window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS))
+      .then(() => {
+        viewShown.current = true
+        if (!savedView) window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
+      })
       .catch(report)
-  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, refreshSkills, fitView, flowId])
+  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, refreshSkills, fitView, flowId, savedView])
 
   // The settings take the side panel; a node opened afterwards takes it back.
   const openMCPSettings = (open: boolean) => {
@@ -1109,8 +1120,8 @@ export default function Board({
     setUnfolded(id)
   }
 
-  // Zooming into a subflow process goes to the flow it runs, on the run it
-  // ran there if a run is shown, and the browser's back button comes back.
+  // Zooming into a subflow process opens the flow it runs in a new tab, on
+  // the run it ran there if a run is shown.
   const zoomIn = (id: string) => {
     if (isObject(id)) {
       unfold(objectIdOf(id))
@@ -1123,7 +1134,7 @@ export default function Board({
       const target = node.data.settings.flow
       if (target === undefined) return
       const child = shownRun?.steps.filter((s) => String(s.process) === id && s.childRun !== null).at(-1)?.childRun
-      window.location.hash = child ? `#/flows/${target}/runs/${child}` : `#/flows/${target}`
+      openTab(child ? `#/flows/${target}/runs/${child}` : `#/flows/${target}`)
       return
     }
     setUnfolded(null)
@@ -1155,12 +1166,27 @@ export default function Board({
 
   // The panel opening or closing changes the canvas's width; the board moves
   // to the middle of it once the canvas has taken its new width.
+  // The run's panel opening again as the board comes back to its tab leaves
+  // it where it was kept, with the panel beside it.
   const panelWasOpen = useRef(panelOpen)
+  const panelComingBack = useRef(savedView?.panel === true)
   useEffect(() => {
     if (panelOpen === panelWasOpen.current) return
     panelWasOpen.current = panelOpen
-    window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
+    const comingBack = panelComingBack.current && panelOpen
+    panelComingBack.current = false
+    if (!comingBack) window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
   }, [panelOpen, fitView])
+
+  // Where the top board is looked at is kept for its tab as it moves and as
+  // the board leaves, as when another tab opens; on another board, the top
+  // one is shown whole when the tab comes back.
+  const onTop = boardId === null && unfolded === null
+  const viewOf = useRef(() => null as TabView | null)
+  useEffect(() => {
+    viewOf.current = () => (onTop ? { flow: flowId, ...getViewport(), panel: panelOpen && runId !== null } : null)
+  })
+  useEffect(() => () => void (viewShown.current && keepTabView(tab, viewOf.current())), [tab])
 
   const savePositions = (positions: Map<string, XYPosition>) => {
     for (const [id, { x, y }] of positions) {
@@ -1933,7 +1959,7 @@ export default function Board({
   // The address names the open run, so going back to this flow opens it again.
   useEffect(() => {
     const want = runId === null ? `#/flows/${flowId}` : `#/flows/${flowId}/runs/${runId}`
-    if (window.location.hash !== want) window.history.replaceState(null, '', want)
+    if (window.location.hash !== want) window.history.replaceState(window.history.state, '', want)
   }, [runId, flowId])
 
   // The selected processes, and the objects among the selection, move into a
@@ -2480,6 +2506,8 @@ export default function Board({
                 onEdgeDoubleClick={(_, edge) => !readOnly && edge.data?.route && setRoute(edge.id, null, true)}
                 onPaneClick={() => setPanelId(null)}
                 onNodeDragStop={onNodeDragStop}
+                onMoveEnd={() => keepTabView(tab, viewOf.current())}
+                defaultViewport={savedView ?? undefined}
                 onDoubleClick={onPaneDoubleClick}
                 zoomOnDoubleClick={false}
                 nodesDraggable={!readOnly}

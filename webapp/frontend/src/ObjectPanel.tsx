@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FlowObject, ObjectAttribute, ObjectState, Relation } from './api'
 import { Data } from './Data'
-import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TrashIcon, ZoomInIcon } from './icons'
+import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TableIcon, TrashIcon, ZoomInIcon } from './icons'
 import { quantityText, type Quantity } from './quantity'
 import QuantityInput from './QuantityInput'
 import { fieldsOf, ownedBy, type Field } from './structure'
@@ -15,6 +15,7 @@ const SAVE_DELAY_MS = 500
 // is edited on its own board, once unfolded.
 export default function ObjectPanel({
   id,
+  flow,
   objects,
   name,
   attributes,
@@ -44,6 +45,8 @@ export default function ObjectPanel({
   onClose,
 }: {
   id: number
+  // The flow whose board it is on.
+  flow: number
   // Every object of the flow, which tell what this one is made of.
   objects: FlowObject[]
   name: string
@@ -234,6 +237,11 @@ export default function ObjectPanel({
             into the state it comes out in. Which records get worked on, or worked on again, is up to the processes'
             queries: no run claims a record, so runs querying the same state at once may take the same one.
           </p>
+          {shared && (
+            <a className="link-button records-table-link" href={`#/flows/${flow}/records`}>
+              <TableIcon /> Show its records
+            </a>
+          )}
         </>
       )}
       {!owner && !human && !structRoot && shared && (
@@ -242,6 +250,11 @@ export default function ObjectPanel({
           taking or querying it moves the records it generates into the state it comes out in; one only generating it
           adds and refreshes records, keeping their state.
         </p>
+      )}
+      {!owner && !human && !structRoot && shared && module && (
+        <a className="link-button records-table-link" href={`#/flows/${module.id}/records`}>
+          <TableIcon /> Show its records
+        </a>
       )}
       {!owner && !human && !structRoot && !shared && (
         <>
@@ -259,6 +272,15 @@ export default function ObjectPanel({
             only once: a step generating a value another run stored terminates its run, so nothing is processed twice.
             Values are compared ignoring case and spacing; empty ones never collide.
           </p>
+          {persistent && (
+            <a
+              className="link-button records-table-link"
+              href={`#/flows/${flow}/data?q=${encodeURIComponent('status:done')}`}
+              title="What this flow's runs that ended done stored, a run per row"
+            >
+              <TableIcon /> Show what runs stored
+            </a>
+          )}
         </>
       )}
       {!human && (

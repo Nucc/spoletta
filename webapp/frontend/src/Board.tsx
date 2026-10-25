@@ -2605,6 +2605,7 @@ export default function Board({
             onUnfoldPart={unfold}
             persistent={objectPanelNode.data.persistent}
             onPersistentChange={(persistent) => setPersistent(objectPanelNode.id, persistent)}
+            flow={flowId}
             shared={objectPanelNode.data.shared}
             onSharedChange={(shared) => setShared(objectPanelNode.id, shared)}
             quantity={objectPanelNode.data}

@@ -82,8 +82,8 @@ jobs:
       # test leaves behind would hold it open and keep the step from ending.
       - run: |
           go build ./... && go vet ./...
-          rc=0; go test -v -race . > test.log 2>&1 || rc=$?
-          cat test.log
+          rc=0; timeout -k 5 180 go test -v -race -timeout 150s . > test.log 2>&1 || rc=$?
+          echo "go test exited $rc"; cat test.log
           echo "--- still running:"; ps -eo pid,ppid,pgid,etimes,user,args --forest
           for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q test.log && echo "holds output: $p $(tr '\0' ' ' < $p/cmdline)"; done
           exit $rc

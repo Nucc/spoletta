@@ -18,6 +18,7 @@ permissions:
 jobs:
   webapp:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: webapp
@@ -65,6 +66,7 @@ jobs:
   # Tests needing podman (SANDBOX_TEST) skip; git and bash are on the runner.
   worker:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: worker
@@ -75,10 +77,20 @@ jobs:
           go-version-file: worker/go.mod
           # The worker has no dependencies, so no go.sum to key a cache on.
           cache: false
-      - run: go build ./... && go vet ./... && go test -v -race .
+      # The tests' output goes to a file, shown once they end: with -v the
+      # test binary writes straight to the step's output, and a process a
+      # test leaves behind would hold it open and keep the step from ending.
+      - run: |
+          go build ./... && go vet ./...
+          rc=0; go test -v -race . > test.log 2>&1 || rc=$?
+          cat test.log
+          echo "--- still running:"; ps -eo pid,ppid,pgid,etimes,user,args --forest
+          for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q test.log && echo "holds output: $p $(tr '\0' ' ' < $p/cmdline)"; done
+          exit $rc
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: webapp/frontend

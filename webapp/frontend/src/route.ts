@@ -60,10 +60,25 @@ export function defaultLanes(source: End, target: End): Lanes {
   return [leave, Math.max(across(source, sv), across(target, sv)) + SIDE, arrive]
 }
 
+// Keeps the first and last lanes at least a stub clear of their ends, so a
+// route leaves and enters each end in a short straight line, never along
+// the node's edge or behind it, as a lane left where it was when its node
+// moved would.
+function clearOfEnds(source: End, target: End, lanes: Lanes): Lanes {
+  if (lanes.length === 0) return lanes
+  const clear = [...lanes]
+  const leave = along(source, vertical(source.position)) + STUB * outward(source.position)
+  clear[0] = outward(source.position) > 0 ? Math.max(clear[0], leave) : Math.min(clear[0], leave)
+  const last = clear.length - 1
+  const arrive = along(target, vertical(target.position)) - STUB * inward(target.position)
+  clear[last] = inward(target.position) > 0 ? Math.min(clear[last], arrive) : Math.max(clear[last], arrive)
+  return clear
+}
+
 // The corners of the route, both ends included. Lanes that don't fit the
 // ends, as when a link was redrawn, give way to the default route.
 export function routePoints(source: End, target: End, stored: Lanes | null | undefined): XYPosition[] {
-  const lanes = stored && fits(source, target, stored) ? stored : defaultLanes(source, target)
+  const lanes = clearOfEnds(source, target, lanesOf(source, target, stored))
   let isVertical = vertical(source.position)
   let at: XYPosition = { x: source.x, y: source.y }
   const points = [at]

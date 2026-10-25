@@ -13,15 +13,35 @@ import (
 	"time"
 )
 
+type auditEntry struct {
+	Kind   string `json:"kind"`
+	Who    string `json:"who"`
+	Run    *int64 `json:"run"`
+	Step   *int64 `json:"step"`
+	Detail string `json:"detail"`
+}
+
 type auditLog struct {
-	Events []struct {
-		Kind   string `json:"kind"`
-		Who    string `json:"who"`
-		Run    *int64 `json:"run"`
-		Step   *int64 `json:"step"`
-		Detail string `json:"detail"`
-	} `json:"events"`
-	Matched int `json:"matched"`
+	Events  []auditEntry `json:"events"`
+	Matched int          `json:"matched"`
+}
+
+// Waits for an event the query matches that ok accepts, given who it was
+// for and what it says: events are written in the background, and earlier
+// tests' stay in the database. Fails if none comes.
+func (a *app) auditEvent(query string, ok func(who, detail string) bool) {
+	a.t.Helper()
+	var log auditLog
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		a.call("GET", "/api/audit?q="+url.QueryEscape(query), nil, http.StatusOK, &log)
+		if slices.ContainsFunc(log.Events, func(e auditEntry) bool { return ok(e.Who, e.Detail) }) {
+			return
+		}
+		if time.Now().After(deadline) {
+			a.t.Fatalf("no event of %q is the one wanted: %+v", query, log.Events)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // The events the query matches, once there are at least n: they are
@@ -65,10 +85,11 @@ func TestTheAuditLogRecordsWhatStepsWereHanded(t *testing.T) {
 		t.Errorf("the git tokens' events: %+v", g.Events)
 	}
 
-	// An admin's change is recorded too.
-	a.call("POST", "/api/egress-hosts", map[string]any{"host": "audited.example.com"}, http.StatusOK, nil)
-	t.Cleanup(func() { secretsDB(t).Exec("DELETE FROM egress_hosts WHERE host = 'audited.example.com'") })
-	if c := a.audit("kind:internet.allow audited", 1); len(c.Events) != 1 || c.Events[0].Detail != "steps may reach audited.example.com" {
+	// An admin's change is recorded too, of a host no earlier test allowed.
+	host := fmt.Sprintf("audited%d.example.com", time.Now().UnixNano())
+	a.call("POST", "/api/egress-hosts", map[string]any{"host": host}, http.StatusOK, nil)
+	t.Cleanup(func() { secretsDB(t).Exec("DELETE FROM egress_hosts WHERE host = ?", host) })
+	if c := a.audit("kind:internet.allow "+host, 1); len(c.Events) != 1 || c.Events[0].Detail != "steps may reach "+host {
 		t.Errorf("the change's events: %+v", c.Events)
 	}
 }
@@ -76,11 +97,14 @@ func TestTheAuditLogRecordsWhatStepsWereHanded(t *testing.T) {
 func TestOnlyAdminsReadTheAuditLog(t *testing.T) {
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
-	a.call("PUT", "/api/limits", map[string]any{"runSpend": 3}, http.StatusOK, nil)
+	// An amount earlier tests are unlikely to have set, so the event found
+	// is this test's.
+	spend := float64(100+time.Now().UnixNano()%90000) / 100
+	a.call("PUT", "/api/limits", map[string]any{"runSpend": spend}, http.StatusOK, nil)
 	t.Cleanup(func() { secretsDB(t).Exec("DELETE FROM limits") })
-	if l := a.audit("kind:limits.set", 1); len(l.Events) == 0 || l.Events[0].Who != "Ada Lovelace" || !strings.HasPrefix(l.Events[0].Detail, "a run may spend $3.00") {
-		t.Errorf("the limits' events: %+v", l.Events)
-	}
+	a.auditEvent("kind:limits.set", func(who, detail string) bool {
+		return who == "Ada Lovelace" && strings.HasPrefix(detail, fmt.Sprintf("a run may spend $%.2f,", spend))
+	})
 	bob := usersNewPerson("Bob")
 	usersAdd(a, bob.email)
 	usersSignIn(a, p, bob)

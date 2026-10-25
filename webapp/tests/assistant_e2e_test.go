@@ -209,7 +209,10 @@ func TestAssistantRepliesOneAtATime(t *testing.T) {
 	a := newApp(t)
 	f := a.newFlow(fmt.Sprintf("Waiting %d", time.Now().UnixNano()))
 	a.worker.onAgent("Assistant", func(ctx context.Context, _ agentRun) runResult {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second):
+		}
 		return runResult{Error: "cancelled"}
 	})
 	askAssistant(a, f.ID, "Build it")

@@ -127,9 +127,10 @@ func TestModules(t *testing.T) {
 
 	var all []modFlow
 	a.call("GET", "/api/flows", nil, http.StatusOK, &all)
+	// Earlier tests' flows share the database, so only this test's count.
 	var modules []string
 	for _, f := range all {
-		if f.Module {
+		if f.Module && (f.ID == lib.ID || f.ID == job.ID || f.ID == other.ID) {
 			modules = append(modules, f.Name)
 		}
 	}

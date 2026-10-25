@@ -52,11 +52,11 @@ func TestStepsGetTheInstancesGitToken(t *testing.T) {
 		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
 	}
 	// Each step says which run it is of, whose home it gets.
-	if fw.runsOf("Fix")[0].Run != d.ID || fw.scriptRuns[0].Run != d.ID {
-		t.Errorf("the steps were of runs %d and %d, want %d", fw.runsOf("Fix")[0].Run, fw.scriptRuns[0].Run, d.ID)
+	if fw.runsOf("Fix")[0].Run != d.ID || fw.scriptRunsSoFar()[0].Run != d.ID {
+		t.Errorf("the steps were of runs %d and %d, want %d", fw.runsOf("Fix")[0].Run, fw.scriptRunsSoFar()[0].Run, d.ID)
 	}
 	a.finish(a.startRun(plain.ID).ID)
-	for name, git := range map[string]*gitCredentials{"Fix": fw.runsOf("Fix")[0].Git, "Check": fw.scriptRuns[0].Git} {
+	for name, git := range map[string]*gitCredentials{"Fix": fw.runsOf("Fix")[0].Git, "Check": fw.scriptRunsSoFar()[0].Git} {
 		if git == nil || git.Token != "static-e2e-token" || git.Username != "x-access-token" || git.Expires != nil {
 			t.Errorf("%s's git got %+v", name, git)
 		}
@@ -109,7 +109,7 @@ func TestStepsGetAGitHubAppsTokenForTheirRepositories(t *testing.T) {
 	if d := a.finish(a.startRun(fixes.ID).ID); d.Status != runDone {
 		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
 	}
-	fix, check := fw.runsOf("Fix")[0].Git, fw.scriptRuns[0].Git
+	fix, check := fw.runsOf("Fix")[0].Git, fw.scriptRunsSoFar()[0].Git
 	if fix == nil || check == nil || fix.Token == check.Token || !strings.HasPrefix(fix.Token, "ghs_step_") || fix.Expires == nil || fix.Expires.Year() != 2099 {
 		t.Errorf("Fix's git got %+v, Check's %+v; want a token each", fix, check)
 	}

@@ -759,8 +759,11 @@ func TestEngineParallelStepsLimit(t *testing.T) {
 	close(release)
 	d = a.finish(rn.ID)
 	coreDone(t, d)
-	if len(d.Steps) != 5 || most != 3 {
-		t.Errorf("%d steps, at most %d at once; want 5 and 3", len(d.Steps), most)
+	mu.Lock()
+	atOnce := most
+	mu.Unlock()
+	if len(d.Steps) != 5 || atOnce != 3 {
+		t.Errorf("%d steps, at most %d at once; want 5 and 3", len(d.Steps), atOnce)
 	}
 }
 

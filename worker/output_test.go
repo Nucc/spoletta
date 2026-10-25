@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -93,18 +96,30 @@ func TestLiveOutputStopsPastItsLimit(t *testing.T) {
 func TestScriptOutputIsSentAsItPrints(t *testing.T) {
 	var sent sentOutput
 	o := newLiveOutput(sent.send)
-	done := make(chan runResult)
+	// The script goes on only once the test has seen its first line, so
+	// what was sent by then can only have come while it went.
+	goOn := filepath.Join(t.TempDir(), "go-on")
+	done := make(chan runResult, 1)
 	go func() {
-		done <- runScript(context.Background(), scriptRequest{Script: "echo first; echo oops >&2; sleep 3; echo '{\"data\": 1}'"}, time.Minute, newStepLogger("test", nil), o)
+		script := fmt.Sprintf("echo first; echo oops >&2; while [ ! -e %q ]; do sleep 0.02; done; echo '{\"data\": 1}'", goOn)
+		done <- runScript(context.Background(), scriptRequest{Script: script}, time.Minute, newStepLogger("test", nil), o)
 	}()
-	deadline := time.Now().Add(2500 * time.Millisecond)
+	deadline := time.Now().Add(30 * time.Second)
 	for sent.text("stdout") != "first\n" && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if got := sent.text("stdout"); got != "first\n" {
-		t.Errorf("while the script slept, stdout sent %q", got)
+		t.Errorf("while the script waited, stdout sent %q", got)
 	}
-	res := <-done
+	if err := os.WriteFile(goOn, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var res runResult
+	select {
+	case res = <-done:
+	case <-time.After(time.Minute + 10*time.Second):
+		t.Fatal("the script never ended")
+	}
 	if !res.OK || res.Output != `first
 {"data": 1}` {
 		t.Errorf("result %+v", res)

@@ -809,6 +809,39 @@ func (fw *fakeWorker) runsOf(process string) []agentRun {
 	return rs
 }
 
+// The script runs asked for so far, of every process.
+func (fw *fakeWorker) scriptRunsSoFar() []scriptRun {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	return slices.Clone(fw.scriptRuns)
+}
+
+// Removes the named MCP servers once the test is over, so a later test, or
+// this one run again on the same database, may add them by the same names.
+func forgetMCPServers(t *testing.T, names ...string) {
+	t.Helper()
+	db := secretsDB(t)
+	t.Cleanup(func() {
+		for _, name := range names {
+			db.Exec("DELETE FROM mcp_servers WHERE name = ?", name)
+		}
+	})
+}
+
+// Receives what a step or server sends on ch, failing the test if nothing
+// comes in a while rather than hanging the whole package.
+func receive[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
+	}
+}
+
 // Reaches each provider the step may through the proxy, as an agent does
 // with its token, and returns the key each was reached with, by provider.
 func reachModels(llm *llmAccess) map[string]string {

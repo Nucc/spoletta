@@ -22,6 +22,7 @@ import (
 // its MCP servers and the internet through another replica too, as long
 // as the step goes.
 func TestTokensReachEveryReplica(t *testing.T) {
+	forgetMCPServers(t, "rp_all", "rp_some")
 	a := newApp(t)
 	other := startApp(t, a.worker.url)
 	db := secretsDB(t)
@@ -342,27 +343,36 @@ func TestARunOverspentThroughAnotherReplicaIsStopped(t *testing.T) {
 	setLimits(t, a, limitsBody{RunSpend: float64(2*callMicros-100) / 1e6})
 	f := a.newFlow("Spent elsewhere")
 	a.startAt(f.ID, a.agent(f.ID, "Spend", "Spend.").ID)
-	var statuses []int
-	stopped := false
+	// What the agent saw, sent once it has made its last call, which may
+	// come after the run shows as ended.
+	type spent struct {
+		statuses []int
+		stopped  bool
+	}
+	done := make(chan spent, 1)
 	a.worker.onAgent("Spend", func(ctx context.Context, run agentRun) runResult {
+		var sp spent
+		defer func() { done <- sp }()
 		elsewhere := &llmAccess{URL: other.url + "/llm", Token: run.LLM.Token}
 		for range 2 {
 			s, _ := callModel(elsewhere, "fireworks")
-			statuses = append(statuses, s)
+			sp.statuses = append(sp.statuses, s)
 		}
 		select {
 		case <-ctx.Done():
-			stopped = true
+			sp.stopped = true
 		case <-time.After(20 * time.Second):
 		}
 		after, _ := callModel(run.LLM, "fireworks")
-		statuses = append(statuses, after)
+		sp.statuses = append(sp.statuses, after)
 		return submitted(data("spent"))
 	})
 	d := a.finish(a.startRun(f.ID).ID)
 	if d.Status != runFailed {
 		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
 	}
+	sp := receive(t, done, "the agent's last call")
+	stopped, statuses := sp.stopped, sp.statuses
 	if !stopped || fmt.Sprint(statuses) != "[200 200 403]" {
 		t.Errorf("stopped %v; the calls answered %v", stopped, statuses)
 	}
@@ -431,6 +441,7 @@ func TestAPersonsStepsAtOnceAcrossReplicas(t *testing.T) {
 // The replica a person's browser comes back to from an MCP server's
 // sign-in finishes it, whichever replica started it.
 func TestAnMCPSignInFinishesAtAnotherReplica(t *testing.T) {
+	forgetMCPServers(t, "rp_tracker")
 	a, p := usersApp(t)
 	other := startApp(t, a.worker.url,
 		"OIDC_ISSUER="+p.srv.URL,
@@ -492,6 +503,7 @@ func TestLimitsReachEveryReplica(t *testing.T) {
 // once, so a server rotating refresh tokens, which takes each once, keeps
 // the person connected.
 func TestReplicasRefreshAConnectionOnce(t *testing.T) {
+	forgetMCPServers(t, "rp_rotating")
 	a, p := usersApp(t)
 	other := startApp(t, a.worker.url,
 		"OIDC_ISSUER="+p.srv.URL,
@@ -578,15 +590,22 @@ func TestReplicasRefreshAConnectionOnce(t *testing.T) {
 		return submitted(data("used"))
 	})
 	first, second := a.startRun(f.ID), other.startRun(f.ID)
-	a.finish(first.ID)
-	other.finish(second.ID)
+	if d := a.finish(first.ID); d.Status != runDone {
+		t.Errorf("the first run %s; steps %s", d.Status, describeSteps(d))
+	}
+	if d := other.finish(second.ID); d.Status != runDone {
+		t.Errorf("the second run %s; steps %s", d.Status, describeSteps(d))
+	}
 	for range 2 {
-		if got := <-reached; !strings.Contains(got, "Bearer access-1") {
+		if got := receive(t, reached, "a step reaching the server"); !strings.Contains(got, "Bearer access-1") {
 			t.Errorf("a step reached the server with %s", got)
 		}
 	}
-	if refreshed != 1 || refused != 0 {
-		t.Errorf("refreshed %d times, %d refused", refreshed, refused)
+	mu.Lock()
+	timesRefreshed, timesRefused := refreshed, refused
+	mu.Unlock()
+	if timesRefreshed != 1 || timesRefused != 0 {
+		t.Errorf("refreshed %d times, %d refused", timesRefreshed, timesRefused)
 	}
 	if !settingsConnected(a, server.ID) {
 		t.Errorf("the connection was lost")

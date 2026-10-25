@@ -35,6 +35,8 @@ type settingsKeys struct {
 // shown again.
 func TestSettingsModelKeys(t *testing.T) {
 	a, p := usersApp(t)
+	db := secretsDB(t)
+	t.Cleanup(func() { db.Exec("DELETE FROM model_keys WHERE env IN ('GATEWAY_KEY', 'OPENAI_API_KEY')") })
 	usersSignIn(a, p, usersAda)
 	var keys settingsKeys
 	a.call("GET", "/api/model-keys", nil, http.StatusOK, &keys)
@@ -157,6 +159,7 @@ func settingsConnected(a *app, id int64) bool {
 // Only an admin configures MCP servers; each person connects them for
 // themselves, and an agent reaches a server as whoever its run is for.
 func TestSettingsMCPConnections(t *testing.T) {
+	forgetMCPServers(t, "tracker", "mine")
 	a, p := usersApp(t)
 	m := newSettingsMCP(t)
 	usersSignIn(a, p, usersAda)
@@ -195,7 +198,7 @@ func TestSettingsMCPConnections(t *testing.T) {
 	if d := a.finish(a.startRun(f.ID).ID); d.Status != runDone {
 		t.Fatalf("bob's run %s: %s", d.Status, describeSteps(d))
 	}
-	if body := <-reached; !strings.Contains(body, "Bearer bob-token") {
+	if body := receive(t, reached, "bob's agent reaching the server"); !strings.Contains(body, "Bearer bob-token") {
 		t.Errorf("bob's agent reached the server with %s", body)
 	}
 
@@ -209,8 +212,10 @@ func TestSettingsMCPConnections(t *testing.T) {
 		t.Errorf("carl's step %s: %s", s.Status, s.Error)
 	}
 	m.connect(a, server.ID, "carl-token")
-	a.finish(a.startRun(f.ID).ID)
-	if body := <-reached; !strings.Contains(body, "Bearer carl-token") {
+	if d := a.finish(a.startRun(f.ID).ID); d.Status != runDone {
+		t.Fatalf("carl's run %s: %s", d.Status, describeSteps(d))
+	}
+	if body := receive(t, reached, "carl's agent reaching the server"); !strings.Contains(body, "Bearer carl-token") {
 		t.Errorf("carl's agent reached the server with %s", body)
 	}
 	a.call("POST", fmt.Sprintf("/api/mcp-servers/%d/disconnect", server.ID), nil, http.StatusNoContent, nil)

@@ -252,6 +252,7 @@ func connectorsMCP(ctx context.Context, run agentRun, server, body string) strin
 // process picks others, and of any MCP server only those it picks, if it
 // picks some.
 func TestConnectorsForAgents(t *testing.T) {
+	forgetMCPServers(t, "ca_gh", "ca_tracker")
 	a, p := usersApp(t)
 	g := newConnectorsGitHub(t)
 	ext := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -346,7 +347,7 @@ func TestConnectorsForAgents(t *testing.T) {
 	if d := a.finish(a.startRun(f.ID).ID); d.Status != runDone {
 		t.Fatalf("bob's run: %s %s", d.Status, describeSteps(d))
 	}
-	got := <-seen
+	got := receive(t, seen, "bob's agent to report what it saw")
 	if !strings.HasPrefix(got["init"], "200 ") || !strings.Contains(got["init"], `"protocolVersion":"2025-06-18"`) {
 		t.Errorf("initialize: %s", got["init"])
 	}
@@ -380,7 +381,7 @@ func TestConnectorsForAgents(t *testing.T) {
 	if d := a.finish(a.startRun(f.ID).ID); d.Status != runDone {
 		t.Fatalf("ada's run: %s %s", d.Status, describeSteps(d))
 	}
-	got = <-seen
+	got = receive(t, seen, "ada's agent to report what it saw")
 	if strings.Contains(got["tools"], `"get_issue"`) || !strings.Contains(got["tools"], `"add_comment"`) {
 		t.Errorf("picked tools: %s", got["tools"])
 	}

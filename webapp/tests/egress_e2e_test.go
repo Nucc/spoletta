@@ -13,19 +13,23 @@ import (
 	"testing"
 )
 
-// Asks the webapp's proxy for target with the step's egress access.
+// Asks the webapp's proxy for target with the step's egress access. Fake
+// agents call it off the test's goroutine, so what goes wrong is reported
+// with t.Error, never t.Fatal, and answers 0.
 func throughEgress(t *testing.T, a *app, access *egressAccess, target string) int {
 	t.Helper()
 	granted, err := url.Parse(access.URL)
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return 0
 	}
 	proxy, _ := url.Parse(a.url)
 	proxy.User = granted.User
 	c := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
 	resp, err := c.Get(target)
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return 0
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)

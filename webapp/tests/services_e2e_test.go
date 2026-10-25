@@ -26,6 +26,7 @@ type servicesDirectoryEntry struct {
 }
 
 func TestServiceConnectors(t *testing.T) {
+	forgetMCPServers(t, "sc_slack", "sc_home", "sc_telegram", "sc_api_one", "sc_api_two")
 	a := newApp(t)
 
 	var dir []servicesDirectoryEntry

@@ -93,14 +93,23 @@ func TestTakingAWorkspaceLogsWhatItDoes(t *testing.T) {
 		}
 		took <- err
 	}()
-	for len(waiting.kept()) == 0 {
+	for deadline := time.Now().Add(30 * time.Second); len(waiting.kept()) == 0; {
+		if time.Now().After(deadline) {
+			ws.release()
+			t.Fatal("the second step never said it was waiting")
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	if msg := waiting.kept()[0].Message; msg != "run-3: waiting for another step of the run working in it" {
 		t.Fatalf("logged %q", msg)
 	}
 	ws.release()
-	if err := <-took; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-took:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the second step never took the workspace")
 	}
 }

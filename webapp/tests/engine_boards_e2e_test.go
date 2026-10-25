@@ -822,7 +822,7 @@ func TestRunNotDoneReleasesItsValues(t *testing.T) {
 			})
 
 			first := a.startRun(n.flow.ID)
-			<-started
+			receive(t, started, "Notify to start")
 			if end == runInterrupted {
 				a.waitStep(first.ID, "Notify", stepActive)
 				a.call("PATCH", fmt.Sprintf("/api/runs/%d", first.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)

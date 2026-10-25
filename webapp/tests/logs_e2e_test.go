@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,20 @@ func TestRunLogsTellWhatHappened(t *testing.T) {
 	if d.Status != runFailed {
 		t.Fatalf("run %s, want failed", d.Status)
 	}
-	lines := a.runLogs(rn.ID, 0)
+	// The run's status is kept before its workspaces are released and how
+	// it finished is logged, so the last line may come a little after it
+	// shows as ended.
+	var lines []runLogLine
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		lines = a.runLogs(rn.ID, 0)
+		if slices.ContainsFunc(lines, func(l runLogLine) bool { return strings.HasPrefix(l.Message, "finished: ") }) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the run's log never said how it finished: %+v", lines)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	started := logLineWith(t, lines, `started, a run of "Logged"`)
 	if !strings.Contains(started.Message, "by Ada Lovelace") || started.Source != "webapp" || started.Level != "info" || started.Step != nil {
 		t.Errorf("the run's start logged %+v", started)

@@ -53,27 +53,36 @@ func TestARunThatSpendsWhatItMayIsStopped(t *testing.T) {
 	setLimits(t, a, limitsBody{RunSpend: float64(2*callMicros-100) / 1e6})
 	f := a.newFlow("Spender")
 	a.startAt(f.ID, a.agent(f.ID, "Spend", "Spend.").ID)
-	var statuses []int
-	stopped := false
+	// What the agent saw, sent once it has made its last call, which may
+	// come after the run shows as ended.
+	type spent struct {
+		statuses []int
+		stopped  bool
+	}
+	done := make(chan spent, 1)
 	a.worker.onAgent("Spend", func(ctx context.Context, run agentRun) runResult {
+		var sp spent
+		defer func() { done <- sp }()
 		for range 2 {
 			s, _ := callModel(run.LLM, "fireworks")
-			statuses = append(statuses, s)
+			sp.statuses = append(sp.statuses, s)
 		}
 		// The engine stops the step, as it would a pi still going.
 		select {
 		case <-ctx.Done():
-			stopped = true
+			sp.stopped = true
 		case <-time.After(20 * time.Second):
 		}
 		after, _ := callModel(run.LLM, "fireworks")
-		statuses = append(statuses, after)
+		sp.statuses = append(sp.statuses, after)
 		return submitted(data("spent"))
 	})
 	d := a.finish(a.startRun(f.ID).ID)
 	if d.Status != runFailed {
 		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
 	}
+	sp := receive(t, done, "the agent's last call")
+	stopped, statuses := sp.stopped, sp.statuses
 	if !stopped || fmt.Sprint(statuses) != "[200 200 403]" {
 		t.Errorf("stopped %v; the calls answered %v", stopped, statuses)
 	}
@@ -127,13 +136,23 @@ func TestAFlowsLimitAndRefusedCalls(t *testing.T) {
 	}}, http.StatusOK, nil)
 	a.refused("PATCH", fmt.Sprintf("/api/flows/%d", f.ID), map[string]any{"settings": map[string]any{"runSpendLimit": -1}}, http.StatusBadRequest, "isn't an amount of dollars")
 	a.startAt(f.ID, a.agent(f.ID, "Spend", "Spend.").ID)
+	// What each call answered, kept by the agent, which says when it has
+	// returned: a follow-up stopped for spending too much makes its second
+	// call after the engine has stopped it.
+	var mu sync.Mutex
 	var calls []string
+	returned := make(chan struct{}, 3)
 	a.worker.onAgent("Spend", func(ctx context.Context, run agentRun) runResult {
-		status, body := callModel(run.LLM, "fireworks")
-		calls = append(calls, fmt.Sprintf("%d %s", status, body))
-		if run.Resume {
-			status, body = callModel(run.LLM, "fireworks")
+		defer func() { returned <- struct{}{} }()
+		call := func() {
+			status, body := callModel(run.LLM, "fireworks")
+			mu.Lock()
 			calls = append(calls, fmt.Sprintf("%d %s", status, body))
+			mu.Unlock()
+		}
+		call()
+		if run.Resume {
+			call()
 			return runResult{OK: true, Output: "again"}
 		}
 		return submitted(data("spent"))
@@ -142,6 +161,7 @@ func TestAFlowsLimitAndRefusedCalls(t *testing.T) {
 	if d.Status != runDone {
 		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
 	}
+	receive(t, returned, "the agent to return")
 
 	// A follow-up spends the rest: its call passes the flow's limit, the
 	// run's tokens end, and the next call reaches nothing.
@@ -152,10 +172,12 @@ func TestAFlowsLimitAndRefusedCalls(t *testing.T) {
 			s := onlyStep(t, d, "Spend")
 			return len(s.FollowUps) == n && s.FollowUps[n-1].Status != stepActive
 		})
+		receive(t, returned, "the follow-up's agent to return")
 	}
 	followUp(1)
 	logLineWith(t, a.runLogs(d.ID, 0), "stopped: it spent $0.0025 on its models, and may spend $0.0024")
 	// Then one more has nothing left to spend.
+	// Every agent has returned, so calls holds all they made.
 	followUp(2)
 	if len(calls) != 5 || !strings.HasPrefix(calls[1], "200 ") || !strings.HasPrefix(calls[2], "403 ") {
 		t.Fatalf("the calls answered %q", calls)
@@ -251,8 +273,11 @@ func TestAPersonsStepsAtOnce(t *testing.T) {
 		})
 	}
 	d := a.finish(a.startRun(f.ID).ID)
-	if d.Status != runDone || len(d.Steps) != 3 || most != 1 {
-		t.Fatalf("run %s with %d steps, at most %d at once; want 1: %s", d.Status, len(d.Steps), most, describeSteps(d))
+	mu.Lock()
+	atOnce := most
+	mu.Unlock()
+	if d.Status != runDone || len(d.Steps) != 3 || atOnce != 1 {
+		t.Fatalf("run %s with %d steps, at most %d at once; want 1: %s", d.Status, len(d.Steps), atOnce, describeSteps(d))
 	}
 	logLineWith(t, a.runLogs(d.ID, 0), " waits: its person's runs have as many steps going as they may at once, 1")
 }
@@ -271,7 +296,7 @@ func TestTheWorkerIsToldARunsDiskLimit(t *testing.T) {
 	if d.Status != runFailed || onlyStep(t, d, "Check").Error != tooBig {
 		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
 	}
-	if fix, check := a.worker.runsOf("Fix")[0].DiskLimit, a.worker.scriptRuns[0].DiskLimit; fix != 5<<20 || check != 5<<20 {
+	if fix, check := a.worker.runsOf("Fix")[0].DiskLimit, a.worker.scriptRunsSoFar()[0].DiskLimit; fix != 5<<20 || check != 5<<20 {
 		t.Errorf("the steps may take %d and %d bytes", fix, check)
 	}
 }

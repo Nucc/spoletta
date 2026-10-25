@@ -4,7 +4,10 @@ import type { SearchFacet } from './api'
 // values. The server searches (search.go), over every row stored; this
 // parses a query the same way, to colour it in the search bar and to tick
 // facets' values, and rewrites it as facets are ticked, so the query stays
-// the only thing saying what shows. See search.go for what a query says.
+// the only thing saying what shows. See search.go for what a query says;
+// the queries in webapp/testdata/search_grammar.json and the trees both
+// parsers have to read them as (scripts/query-parity.ts here,
+// search_grammar_test.go there) keep the two in step.
 
 // What separates terms: the characters both Go's unicode.IsSpace and
 // JavaScript's \s take as space, the same ones search.go lists. U+0085,

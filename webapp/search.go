@@ -32,7 +32,9 @@ import (
 // Typing never fails: what doesn't parse is taken as text, and a key no
 // facet has matches nothing. A key with nothing after its colon yet doesn't
 // narrow anything. The board's search bar (frontend query.ts) parses
-// queries the same way, to colour them and to tick facets' values.
+// queries the same way, to colour them and to tick facets' values; the
+// queries in testdata/search_grammar.json and the trees both parsers have
+// to read them as (search_grammar_test.go) keep the two in step.
 
 // What one search reads at most, so a flow's whole history can't make it
 // unbounded; the page says when there was more.

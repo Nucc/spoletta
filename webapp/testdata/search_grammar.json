@@ -1,0 +1,478 @@
+{
+  "cases": [
+    {
+      "query": "",
+      "ast": "all"
+    },
+    {
+      "query": "   ",
+      "ast": "all"
+    },
+    {
+      "query": "timeout",
+      "ast": "(term _ (is \"timeout\"))"
+    },
+    {
+      "query": "crash timeout",
+      "ast": "(and (term _ (is \"crash\")) (term _ (is \"timeout\")))"
+    },
+    {
+      "query": "\"in sync\"",
+      "ast": "(term _ (is-literal \"in sync\"))"
+    },
+    {
+      "query": "\"say \\\"hi\\\" \\\\ there\"",
+      "ast": "(term _ (is-literal \"say \\\"hi\\\" \\\\ there\"))"
+    },
+    {
+      "query": "\"unclosed phrase",
+      "ast": "(term _ (is-literal \"unclosed phrase\"))"
+    },
+    {
+      "query": "\"a\\",
+      "ast": "(term _ (is-literal \"a\\\\\"))"
+    },
+    {
+      "query": "a\\",
+      "ast": "(term _ (is \"a\\\\\"))"
+    },
+    {
+      "query": "-\"x y\"",
+      "ast": "(not (term _ (is-literal \"x y\")))"
+    },
+    {
+      "query": "a\\:b",
+      "ast": "(term _ (is \"a:b\"))"
+    },
+    {
+      "query": "a\\:b:c",
+      "ast": "(term \"a:b\" (is \"c\"))"
+    },
+    {
+      "query": "\\(a\\)",
+      "ast": "(term _ (is \"(a)\"))"
+    },
+    {
+      "query": "status:failed",
+      "ast": "(term \"status\" (is \"failed\"))"
+    },
+    {
+      "query": "status:\"in progress\"",
+      "ast": "(term \"status\" (is-literal \"in progress\"))"
+    },
+    {
+      "query": "status:(failed OR interrupted)",
+      "ast": "(or (term \"status\" (is \"failed\")) (term \"status\" (is \"interrupted\")))"
+    },
+    {
+      "query": "key:(a \"b c\" -d)",
+      "ast": "(and (term \"key\" (is \"a\")) (term \"key\" (is-literal \"b c\")) (not (term \"key\" (is \"d\"))))"
+    },
+    {
+      "query": "key:(a OR (b c))",
+      "ast": "(or (term \"key\" (is \"a\")) (and (term \"key\" (is \"b\")) (term \"key\" (is \"c\"))))"
+    },
+    {
+      "query": "status:",
+      "ast": "all"
+    },
+    {
+      "query": "status: x",
+      "ast": "(term _ (is \"x\"))"
+    },
+    {
+      "query": "status:done -",
+      "ast": "(term \"status\" (is \"done\"))"
+    },
+    {
+      "query": "@Invoice.amount:>100",
+      "ast": "(term \"@Invoice.amount\" (> \"100\"))"
+    },
+    {
+      "query": "@Bug.title:*BUG*",
+      "ast": "(term \"@Bug.title\" (is \"*BUG*\"))"
+    },
+    {
+      "query": "title:*bug*",
+      "ast": "(term \"title\" (is \"*bug*\"))"
+    },
+    {
+      "query": "time*sync",
+      "ast": "(term _ (is \"time*sync\"))"
+    },
+    {
+      "query": "tags:*",
+      "ast": "(term \"tags\" exists)"
+    },
+    {
+      "query": "-tags:*",
+      "ast": "(not (term \"tags\" exists))"
+    },
+    {
+      "query": "tags:\"*\"",
+      "ast": "(term \"tags\" (is-literal \"*\"))"
+    },
+    {
+      "query": "status:done OR status:failed",
+      "ast": "(or (term \"status\" (is \"done\")) (term \"status\" (is \"failed\")))"
+    },
+    {
+      "query": "a AND b",
+      "ast": "(and (term _ (is \"a\")) (term _ (is \"b\")))"
+    },
+    {
+      "query": "a OR b c",
+      "ast": "(or (term _ (is \"a\")) (and (term _ (is \"b\")) (term _ (is \"c\"))))"
+    },
+    {
+      "query": "-status:done",
+      "ast": "(not (term \"status\" (is \"done\")))"
+    },
+    {
+      "query": "NOT status:done",
+      "ast": "(not (term \"status\" (is \"done\")))"
+    },
+    {
+      "query": "NOT NOT x",
+      "ast": "(not (not (term _ (is \"x\"))))"
+    },
+    {
+      "query": "- x",
+      "ast": "(term _ (is \"x\"))"
+    },
+    {
+      "query": "-(a OR b)",
+      "ast": "(not (or (term _ (is \"a\")) (term _ (is \"b\"))))"
+    },
+    {
+      "query": "(a OR b) c",
+      "ast": "(and (or (term _ (is \"a\")) (term _ (is \"b\"))) (term _ (is \"c\")))"
+    },
+    {
+      "query": "(status:done",
+      "ast": "(term \"status\" (is \"done\"))"
+    },
+    {
+      "query": "status:done)",
+      "ast": "(term \"status\" (is \"done\"))"
+    },
+    {
+      "query": "(a OR)",
+      "ast": "(term _ (is \"a\"))"
+    },
+    {
+      "query": "OR",
+      "ast": "all"
+    },
+    {
+      "query": "AND",
+      "ast": "all"
+    },
+    {
+      "query": "NOT",
+      "ast": "all"
+    },
+    {
+      "query": "a OR",
+      "ast": "(term _ (is \"a\"))"
+    },
+    {
+      "query": "ORa ANDb NOTc",
+      "ast": "(and (term _ (is \"ORa\")) (term _ (is \"ANDb\")) (term _ (is \"NOTc\")))"
+    },
+    {
+      "query": "NOT)",
+      "ast": "(term _ (is \"NOT\"))"
+    },
+    {
+      "query": "amount:[5 TO 30]",
+      "ast": "(term \"amount\" (range \"5\" \"30\"))"
+    },
+    {
+      "query": "amount:[* TO 5]",
+      "ast": "(term \"amount\" (range \"*\" \"5\"))"
+    },
+    {
+      "query": "amount:[5]",
+      "ast": "(term \"amount\" (range \"5\" \"*\"))"
+    },
+    {
+      "query": "amount:[ TO 5]",
+      "ast": "(term \"amount\" (range \"*\" \"5\"))"
+    },
+    {
+      "query": "amount:[TO 5]",
+      "ast": "(term \"amount\" (range \"TO 5\" \"*\"))"
+    },
+    {
+      "query": "amount:[1 TO TO 3]",
+      "ast": "(term \"amount\" (range \"1\" \"TO 3\"))"
+    },
+    {
+      "query": "amount:[1 TO 2 TO 3]",
+      "ast": "(term \"amount\" (range \"1\" \"2 TO 3\"))"
+    },
+    {
+      "query": "amount:[5\tTO\t30]",
+      "ast": "(term \"amount\" (range \"5\" \"30\"))"
+    },
+    {
+      "query": "amount:[5\u00a0TO\u300030]",
+      "ast": "(term \"amount\" (range \"5\" \"30\"))"
+    },
+    {
+      "query": "amount:[5\u0085TO\u008530]",
+      "ast": "(term \"amount\" (range \"5\u0085TO\u008530\" \"*\"))"
+    },
+    {
+      "query": "amount:[5 TO 30",
+      "ast": "(term \"amount\" (range \"5\" \"30\"))"
+    },
+    {
+      "query": "amount:[",
+      "ast": "(term \"amount\" (range \"*\" \"*\"))"
+    },
+    {
+      "query": "started:[2026-10-01 TO 2026-10-16T23:00]",
+      "ast": "(term \"started\" (range \"2026-10-01\" \"2026-10-16T23:00\"))"
+    },
+    {
+      "query": "amount:>10",
+      "ast": "(term \"amount\" (> \"10\"))"
+    },
+    {
+      "query": "amount:>=10",
+      "ast": "(term \"amount\" (>= \"10\"))"
+    },
+    {
+      "query": "amount:<=5",
+      "ast": "(term \"amount\" (<= \"5\"))"
+    },
+    {
+      "query": "amount:<\"a b\"",
+      "ast": "(term \"amount\" (< \"a b\"))"
+    },
+    {
+      "query": "amount:>",
+      "ast": "all"
+    },
+    {
+      "query": "amount:> 10",
+      "ast": "(term _ (is \"10\"))"
+    },
+    {
+      "query": "(amount:>)",
+      "ast": "all"
+    },
+    {
+      "query": "started:>now-1d",
+      "ast": "(term \"started\" (> \"now-1d\"))"
+    },
+    {
+      "query": "a\tb\nc\rd",
+      "ast": "(and (term _ (is \"a\")) (term _ (is \"b\")) (term _ (is \"c\")) (term _ (is \"d\")))"
+    },
+    {
+      "query": "a\u000bb\fc",
+      "ast": "(and (term _ (is \"a\")) (term _ (is \"b\")) (term _ (is \"c\")))"
+    },
+    {
+      "query": "a\u00a0b",
+      "ast": "(and (term _ (is \"a\")) (term _ (is \"b\")))"
+    },
+    {
+      "query": "a\u3000b\u2028c",
+      "ast": "(and (term _ (is \"a\")) (term _ (is \"b\")) (term _ (is \"c\")))"
+    },
+    {
+      "query": "a\u0085b",
+      "ast": "(term _ (is \"a\u0085b\"))"
+    },
+    {
+      "query": "a\ufeffb",
+      "ast": "(term _ (is \"a\ufeffb\"))"
+    },
+    {
+      "query": "a\\\rb",
+      "ast": "(term _ (is \"a\rb\"))"
+    },
+    {
+      "query": "k:a\\\u2028b",
+      "ast": "(term \"k\" (is \"a\u2028b\"))"
+    },
+    {
+      "query": "-\u0000",
+      "ast": "(not (term _ (is \"\u0000\")))"
+    },
+    {
+      "query": "k:\u0000",
+      "ast": "(term \"k\" (is \"\u0000\"))"
+    },
+    {
+      "query": "état:déjà",
+      "ast": "(term \"état\" (is \"déjà\"))"
+    },
+    {
+      "query": "😀 OR 日本",
+      "ast": "(or (term _ (is \"😀\")) (term _ (is \"日本\")))"
+    },
+    {
+      "query": "\"😀 x\"",
+      "ast": "(term _ (is-literal \"😀 x\"))"
+    },
+    {
+      "query": "a\tb\nc\u000bd\fe\rf g\u00a0h\u1680i\u2000j\u2001k\u2002l\u2003m\u2004n\u2005o\u2006p\u2007q\u2008r\u2009s\u200at\u2028u\u2029v\u202fw\u205fx\u3000y",
+      "ast": "(and (term _ (is \"a\")) (term _ (is \"b\")) (term _ (is \"c\")) (term _ (is \"d\")) (term _ (is \"e\")) (term _ (is \"f\")) (term _ (is \"g\")) (term _ (is \"h\")) (term _ (is \"i\")) (term _ (is \"j\")) (term _ (is \"k\")) (term _ (is \"l\")) (term _ (is \"m\")) (term _ (is \"n\")) (term _ (is \"o\")) (term _ (is \"p\")) (term _ (is \"q\")) (term _ (is \"r\")) (term _ (is \"s\")) (term _ (is \"t\")) (term _ (is \"u\")) (term _ (is \"v\")) (term _ (is \"w\")) (term _ (is \"x\")) (term _ (is \"y\")))"
+    }
+  ],
+  "quotes": [
+    {
+      "value": "plain",
+      "quoted": "plain"
+    },
+    {
+      "value": "a-b",
+      "quoted": "a-b"
+    },
+    {
+      "value": "déjà",
+      "quoted": "déjà"
+    },
+    {
+      "value": "NOTE",
+      "quoted": "NOTE"
+    },
+    {
+      "value": "a\u0085b",
+      "quoted": "a\u0085b"
+    },
+    {
+      "value": "a\ufeffb",
+      "quoted": "a\ufeffb"
+    },
+    {
+      "value": "a*b",
+      "quoted": "\"a*b\""
+    },
+    {
+      "value": "*",
+      "quoted": "\"*\""
+    },
+    {
+      "value": "-x",
+      "quoted": "\"-x\""
+    },
+    {
+      "value": "OR",
+      "quoted": "\"OR\""
+    },
+    {
+      "value": "AND",
+      "quoted": "\"AND\""
+    },
+    {
+      "value": "NOT",
+      "quoted": "\"NOT\""
+    },
+    {
+      "value": "\"",
+      "quoted": "\"\\\"\""
+    },
+    {
+      "value": "\\",
+      "quoted": "\"\\\\\""
+    },
+    {
+      "value": "(",
+      "quoted": "\"(\""
+    },
+    {
+      "value": ")",
+      "quoted": "\")\""
+    },
+    {
+      "value": ":",
+      "quoted": "\":\""
+    },
+    {
+      "value": "a b",
+      "quoted": "\"a b\""
+    },
+    {
+      "value": "a\u00a0b",
+      "quoted": "\"a\u00a0b\""
+    },
+    {
+      "value": "x>1",
+      "quoted": "\"x>1\""
+    },
+    {
+      "value": "[1 TO 2]",
+      "quoted": "\"[1 TO 2]\""
+    },
+    {
+      "value": "say \"hi\" \\",
+      "quoted": "\"say \\\"hi\\\" \\\\\""
+    },
+    {
+      "value": "",
+      "quoted": "\"\""
+    },
+    {
+      "value": "a\u1680b",
+      "quoted": "\"a\u1680b\""
+    },
+    {
+      "value": "a\u2000b",
+      "quoted": "\"a\u2000b\""
+    },
+    {
+      "value": "a\u2001b",
+      "quoted": "\"a\u2001b\""
+    },
+    {
+      "value": "a\u2002b",
+      "quoted": "\"a\u2002b\""
+    },
+    {
+      "value": "a\u2003b",
+      "quoted": "\"a\u2003b\""
+    },
+    {
+      "value": "a\u2004b",
+      "quoted": "\"a\u2004b\""
+    },
+    {
+      "value": "a\u2005b",
+      "quoted": "\"a\u2005b\""
+    },
+    {
+      "value": "a\u2006b",
+      "quoted": "\"a\u2006b\""
+    },
+    {
+      "value": "a\u2007b",
+      "quoted": "\"a\u2007b\""
+    },
+    {
+      "value": "a\u2008b",
+      "quoted": "\"a\u2008b\""
+    },
+    {
+      "value": "a\u2009b",
+      "quoted": "\"a\u2009b\""
+    },
+    {
+      "value": "a\u200ab",
+      "quoted": "\"a\u200ab\""
+    },
+    {
+      "value": "a\u202fb",
+      "quoted": "\"a\u202fb\""
+    },
+    {
+      "value": "a\u205fb",
+      "quoted": "\"a\u205fb\""
+    }
+  ]
+}

@@ -317,6 +317,8 @@ func TestConnectorsForAgents(t *testing.T) {
 			"write":   connectorsMCP(ctx, run, "ca_gh", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"add_comment","arguments":{"owner":"acme","repo":"app","number":7,"body":"hi"}}}`),
 			"listed":  connectorsMCP(ctx, run, "ca_tracker", `{"jsonrpc":"2.0","id":5,"method":"tools/list"}`),
 			"removed": connectorsMCP(ctx, run, "ca_tracker", `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"delete_everything"}}`),
+			"garbled": connectorsMCP(ctx, run, "ca_tracker", `[{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"delete_everything"}},5]`),
+			"decoy":   connectorsMCP(ctx, run, "ca_tracker", `{"jsonrpc":"2.0","id":8,"method":"tools/call","Method":"ping","params":{"name":"delete_everything"}}`),
 		}
 		return submitted(data("used"))
 	})
@@ -390,6 +392,13 @@ func TestConnectorsForAgents(t *testing.T) {
 	}
 	if !strings.Contains(got["removed"], "isn't one this process uses") || strings.Contains(got["removed"], "Bearer") {
 		t.Errorf("an unpicked tool of an MCP server: %s", got["removed"])
+	}
+	// What the proxy can't read can't reach a server holding the step to
+	// some tools, nor a key in another case standing in for one it reads.
+	for _, k := range []string{"garbled", "decoy"} {
+		if !strings.HasPrefix(got[k], "400 ") || strings.Contains(got[k], "Bearer") {
+			t.Errorf("a %s request to an MCP server's picked tools: %s", k, got[k])
+		}
 	}
 
 	// The tools to pick from, as the process's panel lists them.

@@ -48,6 +48,46 @@ func TestToolFilterRefuse(t *testing.T) {
 	}
 }
 
+// A message is read by its keys as written, so a key in another case can't
+// stand in for one the filter reads, and what isn't JSON-RPC, a batch with
+// something other than a message in it among them, isn't read at all.
+func TestParseRPCReadsKeysExactly(t *testing.T) {
+	f := toolFilter{"search": true}
+	for name, body := range map[string]string{
+		"a Method decoy":        `{"jsonrpc":"2.0","id":3,"method":"tools/call","Method":"ping","params":{"name":"delete"}}`,
+		"a decoy before":        `{"jsonrpc":"2.0","id":3,"METHOD":"ping","method":"tools/call","params":{"name":"delete"}}`,
+		"a Params decoy":        `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"delete"},"Params":{"name":"search"}}`,
+		"a batch with a number": `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete"}},5]`,
+		"a batch with null":     `[null,{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete"}}]`,
+		"garbage":               `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"delete"}`,
+		"a method not a string": `{"jsonrpc":"2.0","id":3,"method":["tools/call"],"params":{"name":"delete"}}`,
+		"a number":              `5`,
+	} {
+		if msgs, _ := parseRPC([]byte(body)); msgs != nil {
+			t.Errorf("%s was read as %+v", name, msgs)
+		}
+	}
+	for name, body := range map[string]string{
+		"a NAME decoy":    `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"delete","NAME":"search"}}`,
+		"a decoy before":  `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"Name":"search","name":"delete"}}`,
+		"no name":         `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{}}`,
+		"params a string": `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":"search"}`,
+	} {
+		msgs, _ := parseRPC([]byte(body))
+		if msgs == nil || f.refuse(msgs) == nil {
+			t.Errorf("%s wasn't refused: %+v", name, msgs)
+		}
+	}
+	if msgs, _ := parseRPC([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search","arguments":{"Name":"x"}}}`)); len(msgs) != 1 || f.refuse(msgs) != nil {
+		t.Errorf("a picked tool with an argument called Name was refused: %+v", msgs)
+	}
+	// The GET opening the server's stream of events has no body, and no
+	// message to refuse.
+	if msgs, batch := parseRPC([]byte("  ")); msgs != nil || batch || f.refuse(msgs) != nil {
+		t.Errorf("an empty body: %+v %v", msgs, batch)
+	}
+}
+
 const toolsResult = `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"search","inputSchema":{}},{"name":"delete","inputSchema":{}}],"nextCursor":"c"}}`
 
 func filtered(t *testing.T, contentType, body string) string {

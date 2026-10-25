@@ -478,7 +478,7 @@ func serveConnector(w http.ResponseWriter, r *http.Request, c *connector, client
 	}
 	messages, batch := parseRPC(body)
 	if messages == nil {
-		writeJSON(w, http.StatusBadRequest, rpcFailure(json.RawMessage("null"), -32700, "the request isn't JSON-RPC"))
+		writeJSON(w, http.StatusBadRequest, rpcFailure(json.RawMessage("null"), rpcParseError, "the request isn't JSON-RPC"))
 		return
 	}
 	var out []rpcMessage

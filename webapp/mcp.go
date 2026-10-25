@@ -1203,7 +1203,14 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		serveConnector(w, r, c, c.client(serverURL, access), filter, body)
 		return
 	}
+	// A step held to some tools sends only what the proxy can read: a body
+	// it can't, passed on, could call any tool. One with nothing in it, the
+	// GET opening the server's stream of events, calls none.
 	messages, _ := parseRPC(body)
+	if filter != nil && messages == nil && len(bytes.TrimSpace(body)) > 0 {
+		writeJSON(w, http.StatusBadRequest, rpcFailure(json.RawMessage("null"), rpcParseError, "the request isn't JSON-RPC the proxy can read"))
+		return
+	}
 	if refusal := filter.refuse(messages); refusal != nil {
 		writeJSON(w, http.StatusOK, refusal)
 		return

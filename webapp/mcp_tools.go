@@ -67,9 +67,11 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-// JSON-RPC's codes for a method there is none of and for parameters it
-// doesn't take, such as a tool it doesn't have.
+// JSON-RPC's codes for a request that isn't JSON, for a method there is
+// none of and for parameters it doesn't take, such as a tool it doesn't
+// have.
 const (
+	rpcParseError     = -32700
 	rpcMethodNotFound = -32601
 	rpcInvalidParams  = -32602
 )
@@ -79,30 +81,86 @@ func rpcFailure(id json.RawMessage, code int, msg string) rpcMessage {
 }
 
 // The messages of a request's body, one or a batch of them; whether it was
-// a batch.
+// a batch. nil is a body that isn't JSON-RPC, or has nothing in it.
+//
+// A message is read by its keys exactly as written, as the servers behind
+// the proxy read them, never by Go's matching of keys whatever their case:
+// otherwise a message saying "method" twice, once as "Method", would be
+// checked as one method and carried out as another. A message naming a key
+// the proxy reads in a case other than its own isn't JSON-RPC, since a
+// server reading keys as Go does could take either.
 func parseRPC(body []byte) ([]rpcMessage, bool) {
 	body = bytes.TrimSpace(body)
 	if len(body) > 0 && body[0] == '[' {
-		var batch []rpcMessage
-		if json.Unmarshal(body, &batch) == nil {
-			return batch, true
+		var raw []json.RawMessage
+		if json.Unmarshal(body, &raw) != nil {
+			return nil, true
 		}
-		return nil, true
+		batch := make([]rpcMessage, 0, len(raw))
+		for _, r := range raw {
+			m, ok := decodeRPC(r)
+			if !ok {
+				return nil, true
+			}
+			batch = append(batch, m)
+		}
+		return batch, true
 	}
-	var m rpcMessage
-	if json.Unmarshal(body, &m) != nil {
+	m, ok := decodeRPC(body)
+	if !ok {
 		return nil, false
 	}
 	return []rpcMessage{m}, false
 }
 
-// The tool a tools/call message calls.
-func calledTool(m rpcMessage) string {
-	var p struct {
-		Name string `json:"name"`
+// One message, a JSON object, by its exact keys.
+func decodeRPC(raw []byte) (rpcMessage, bool) {
+	fields, ok := rpcFields(raw, "jsonrpc", "id", "method", "params", "result", "error")
+	if !ok {
+		return rpcMessage{}, false
 	}
-	json.Unmarshal(m.Params, &p)
-	return p.Name
+	var m rpcMessage
+	if v, ok := fields["jsonrpc"]; ok && json.Unmarshal(v, &m.JSONRPC) != nil {
+		return rpcMessage{}, false
+	}
+	if v, ok := fields["method"]; ok && json.Unmarshal(v, &m.Method) != nil {
+		return rpcMessage{}, false
+	}
+	if v, ok := fields["error"]; ok && json.Unmarshal(v, &m.Error) != nil {
+		return rpcMessage{}, false
+	}
+	m.ID, m.Params, m.Result = fields["id"], fields["params"], fields["result"]
+	return m, true
+}
+
+// A JSON object's members by their keys as written; false when it isn't an
+// object, or names one of the keys given in another case.
+func rpcFields(raw []byte, keys ...string) (map[string]json.RawMessage, bool) {
+	raw = bytes.TrimSpace(raw)
+	var fields map[string]json.RawMessage
+	if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &fields) != nil {
+		return nil, false
+	}
+	for k := range fields {
+		for _, key := range keys {
+			if k != key && strings.EqualFold(k, key) {
+				return nil, false
+			}
+		}
+	}
+	return fields, true
+}
+
+// The tool a tools/call message calls, "" when it names none or names it
+// in a way a server could read otherwise.
+func calledTool(m rpcMessage) string {
+	params, ok := rpcFields(m.Params, "name")
+	if !ok {
+		return ""
+	}
+	var name string
+	json.Unmarshal(params["name"], &name)
+	return name
 }
 
 // What to answer, instead of passing the request on, when it calls a tool
@@ -112,24 +170,29 @@ func (f toolFilter) refuse(messages []rpcMessage) any {
 	if f == nil {
 		return nil
 	}
-	refused := ""
-	for _, m := range messages {
-		if m.Method == "tools/call" && !f.allows(calledTool(m)) {
-			refused = calledTool(m)
-			break
-		}
-	}
-	if refused == "" {
+	// A call naming no tool, or naming it so a server could read another,
+	// is refused as calling one the step doesn't have.
+	i := slices.IndexFunc(messages, func(m rpcMessage) bool {
+		return m.Method == "tools/call" && !f.allows(calledTool(m))
+	})
+	if i < 0 {
 		return nil
+	}
+	refused := calledTool(messages[i])
+	if refused == "" {
+		refused = "(none named)"
 	}
 	var out []rpcMessage
 	for _, m := range messages {
 		if len(m.ID) == 0 {
 			continue
 		}
-		msg := fmt.Sprintf("the tool %s isn't one this process uses; pick it in the process's MCP servers to use it", refused)
-		if m.Method != "tools/call" || calledTool(m) != refused {
-			msg = fmt.Sprintf("not sent, since the batch calls %s, a tool this process doesn't use", refused)
+		msg := fmt.Sprintf("not sent, since the batch calls %s, a tool this process doesn't use", refused)
+		if m.Method == "tools/call" && !f.allows(calledTool(m)) {
+			msg = "the call names no tool this process uses"
+			if tool := calledTool(m); tool != "" {
+				msg = fmt.Sprintf("the tool %s isn't one this process uses; pick it in the process's MCP servers to use it", tool)
+			}
 		}
 		out = append(out, rpcFailure(m.ID, rpcInvalidParams, msg))
 	}

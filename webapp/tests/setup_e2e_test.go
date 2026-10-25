@@ -103,7 +103,7 @@ func setupImport(a *app, file string) (int, []byte) {
 		a.t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/yaml")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.client.Do(req)
 	if err != nil {
 		a.t.Fatal(err)
 	}
@@ -123,6 +123,35 @@ func setupImportOK(a *app, file string) setupImported {
 		a.t.Fatal(err)
 	}
 	return res
+}
+
+// With sign-in, the setup file is everyone's flows and skills, so someone
+// who isn't an admin neither takes it out nor brings one in; nothing of a
+// file they send is imported.
+func TestSetupOnlyAdmins(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	bob := usersNewPerson("Bob")
+	usersAdd(a, bob.email)
+
+	usersSignIn(a, p, bob)
+	a.refused("GET", "/api/setup", nil, http.StatusForbidden, "only an admin")
+	prefix := fmt.Sprintf("na%d", time.Now().UnixNano())
+	if status, body := setupImport(a, strings.ReplaceAll(setupWritten, "PFX", prefix)); status != http.StatusForbidden || !strings.Contains(string(body), "only an admin") {
+		t.Errorf("POST /api/setup = %d %q, want 403 with %q", status, bytes.TrimSpace(body), "only an admin")
+	}
+
+	usersSignIn(a, p, usersAda)
+	var fs []flow
+	a.call("GET", "/api/flows", nil, http.StatusOK, &fs)
+	for _, f := range fs {
+		if strings.HasPrefix(f.Name, prefix) {
+			t.Errorf("a refused file left %q behind", f.Name)
+		}
+	}
+	if _, body := a.do("GET", "/api/mcp-servers", nil); strings.Contains(string(body), prefix) {
+		t.Errorf("a refused file left its MCP server behind: %s", body)
+	}
 }
 
 // A setup as an LLM might write it: no places, every kind of thing.

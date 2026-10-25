@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +89,7 @@ func TestTeamsManagersMakeTeams(t *testing.T) {
 func TestTeamsFlowOwners(t *testing.T) {
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
+	adaClient := a.client
 	bob, carl := usersNewPerson("Bob"), usersNewPerson("Carl")
 	bobRow, carlRow := usersAdd(a, bob.email), usersAdd(a, carl.email)
 	var tm, other teamsTeam
@@ -102,33 +104,131 @@ func TestTeamsFlowOwners(t *testing.T) {
 	}
 	proc := a.agent(f.ID, "Draft", "Draft it.")
 	obj := a.newObject(f.ID, "Invoice")
-	a.output(proc.ID, obj.ID)
+	lnk := a.output(proc.ID, obj.ID)
 	var mine flow
 	a.call("POST", "/api/flows", map[string]any{"name": "Elsewhere", "owner": map[string]any{"kind": "user", "id": bobRow.ID}}, http.StatusCreated, &mine)
+	a.startAt(f.ID, proc.ID)
+	a.worker.onAgent("Draft", handsIn(data("invoice")))
 	rn := a.startRun(f.ID)
+	st := onlyStep(t, a.finish(rn.ID), "Draft")
+
+	// Something of every kind a request names by its id, for Carl to be
+	// turned away from.
+	type row struct {
+		ID int64 `json:"id"`
+	}
+	send := a.agent(f.ID, "Send", "Send it.")
+	var conn, attr, sched, ver, strct row
+	a.call("POST", "/api/connections", map[string]any{"source": proc.ID, "target": send.ID}, http.StatusCreated, &conn)
+	state := a.newState(obj.ID, "Sent")
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", obj.ID), map[string]any{"name": "total", "definition": "The total"}, http.StatusCreated, &attr)
+	a.call("POST", "/api/schedules", map[string]any{"flow": f.ID, "cron": "0 9 * * 1-5", "timezone": "UTC"}, http.StatusCreated, &sched)
+	t.Cleanup(func() {
+		a.client = adaClient
+		a.do("DELETE", fmt.Sprintf("/api/schedules/%d", sched.ID), nil)
+	})
+	a.call("POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), nil, http.StatusCreated, &ver)
+	a.call("POST", "/api/flows", map[string]any{"name": fmt.Sprint("Ledger", bobRow.ID), "struct": true, "owner": map[string]any{"kind": "user", "id": bobRow.ID}}, http.StatusCreated, &strct)
 
 	usersSignIn(a, p, carl)
 	if slices.Contains(teamsFlows(a), f.ID) {
 		t.Errorf("carl sees bob's flow")
 	}
-	for _, c := range []struct {
+	var scheds []row
+	a.call("GET", "/api/schedules", nil, http.StatusOK, &scheds)
+	if slices.Contains(scheds, sched) {
+		t.Errorf("carl sees bob's schedule")
+	}
+	// Carl's own flow, to take what is Bob's into.
+	var own flow
+	a.call("POST", "/api/flows", map[string]any{"name": "Carl's", "owner": map[string]any{"kind": "user", "id": carlRow.ID}}, http.StatusCreated, &own)
+	ownProc := a.agent(own.ID, "Mine", "Do mine.")
+	ownObj := a.newObject(own.ID, "Mine")
+	runPath := func(rest string) string { return fmt.Sprintf("/api/runs/%d%s", rn.ID, rest) }
+	stepPath := func(rest string) string { return runPath(fmt.Sprintf("/steps/%d%s", st.ID, rest)) }
+	cases := []struct {
 		method, path string
-		body         any
+		body         map[string]any
 	}{
 		{"GET", fmt.Sprintf("/api/flows/%d", f.ID), nil},
 		{"PATCH", fmt.Sprintf("/api/flows/%d", f.ID), map[string]any{"name": "Mine"}},
-		{"GET", fmt.Sprintf("/api/processes?flow=%d", f.ID), nil},
+		{"GET", fmt.Sprintf("/api/flows/%d/opl", f.ID), nil},
+		{"GET", fmt.Sprintf("/api/flows/%d/setup", f.ID), nil},
+		{"GET", fmt.Sprintf("/api/flows/%d/assistant", f.ID), nil},
+		{"POST", fmt.Sprintf("/api/flows/%d/assistant", f.ID), map[string]any{"message": "Make it mine."}},
+		{"PUT", fmt.Sprintf("/api/flows/%d/owner", f.ID), map[string]any{"kind": "global"}},
+		{"GET", fmt.Sprintf("/api/structs/%d/records", strct.ID), nil},
+		{"POST", fmt.Sprintf("/api/structs/%d/copies", strct.ID), map[string]any{"flow": own.ID, "x": 0, "y": 0}},
 		{"PATCH", fmt.Sprintf("/api/processes/%d", proc.ID), map[string]any{"name": "Mine"}},
 		{"DELETE", fmt.Sprintf("/api/objects/%d", obj.ID), nil},
-		{"POST", "/api/processes", map[string]any{"flow": f.ID, "name": "Sneak", "kind": "agent"}},
 		{"POST", fmt.Sprintf("/api/objects/%d/states", obj.ID), map[string]any{"name": "Paid"}},
-		{"GET", fmt.Sprintf("/api/runs/%d", rn.ID), nil},
+		{"PUT", fmt.Sprintf("/api/links/%d/query", lnk.ID), map[string]any{"query": nil}},
+		{"PUT", fmt.Sprintf("/api/links/%d/role", lnk.ID), map[string]any{"role": "instrument"}},
+		{"DELETE", fmt.Sprintf("/api/connections/%d", conn.ID), nil},
+		{"PATCH", fmt.Sprintf("/api/states/%d", state.ID), map[string]any{"name": "Mine"}},
+		{"DELETE", fmt.Sprintf("/api/attributes/%d", attr.ID), nil},
+		{"GET", runPath(""), nil},
+		{"GET", runPath("/logs"), nil},
+		{"GET", stepPath("/output"), nil},
+		{"GET", stepPath("/rerun"), nil},
+		{"POST", stepPath("/rerun"), map[string]any{}},
+		{"POST", stepPath("/followups"), map[string]any{"message": "Again."}},
+		{"POST", stepPath("/loop"), map[string]any{"go": true}},
+		{"PATCH", fmt.Sprintf("/api/schedules/%d", sched.ID), map[string]any{"cron": "0 10 * * *"}},
+		{"DELETE", fmt.Sprintf("/api/schedules/%d", sched.ID), nil},
+		{"GET", fmt.Sprintf("/api/versions/%d", ver.ID), nil},
+		{"POST", fmt.Sprintf("/api/versions/%d/restore", ver.ID), nil},
+		// Ids in the query or the body; whatever else they name is Carl's.
+		{"GET", fmt.Sprintf("/api/processes?flow=%d", f.ID), nil},
+		{"GET", fmt.Sprintf("/api/schedules?flow=%d", f.ID), nil},
+		{"POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), nil},
+		{"POST", "/api/processes", map[string]any{"flow": f.ID, "name": "Sneak", "kind": "agent"}},
 		{"POST", "/api/runs", map[string]any{"flow": f.ID}},
-		{"POST", "/api/paste", map[string]any{"from": f.ID, "processes": []int64{proc.ID}, "flow": f.ID}},
-	} {
-		a.refused(c.method, c.path, c.body, http.StatusNotFound, "not found")
+		{"POST", "/api/paste", map[string]any{"from": f.ID, "processes": []int64{proc.ID}, "flow": own.ID}},
+		{"POST", "/api/paste", map[string]any{"from": f.ID, "processes": []int64{}, "flow": own.ID}},
+		{"POST", "/api/paste", map[string]any{"from": own.ID, "processes": []int64{ownProc.ID}, "flow": own.ID, "board": proc.ID}},
+		{"POST", "/api/paste", map[string]any{"from": own.ID, "objects": []int64{obj.ID}, "flow": own.ID}},
+		{"POST", "/api/processes", map[string]any{"flow": own.ID, "parent": proc.ID, "name": "Sneak", "kind": "agent"}},
+		{"POST", "/api/links", map[string]any{"process": proc.ID, "object": ownObj.ID, "direction": directionInput}},
+		{"POST", "/api/links", map[string]any{"process": ownProc.ID, "object": obj.ID, "direction": directionInput}},
+		{"POST", "/api/connections", map[string]any{"source": ownProc.ID, "target": proc.ID}},
+		{"PATCH", fmt.Sprintf("/api/processes/%d", ownProc.ID), map[string]any{"settings": map[string]any{"flow": f.ID}}},
+		// A generated file of Bob's run; see files.go.
+		{"GET", fmt.Sprintf("/api/files?path=/data/files/runs/%d/invoice.txt", rn.ID), nil},
 	}
-	a.refused("PUT", fmt.Sprintf("/api/flows/%d/owner", f.ID), map[string]any{"kind": "global"}, http.StatusNotFound, "not found")
+	for _, c := range cases {
+		var body any
+		if c.body != nil {
+			body = c.body
+		}
+		a.refused(c.method, c.path, body, http.StatusNotFound, "flow not found")
+	}
+
+	// Every kind of path and every field guardFlows (owners.go) finds a
+	// flow's id from has a row above; keep these lists in step with its
+	// flowPaths and flowFields, and with bodyRefs' source, target and
+	// settings, and the run files of /api/files.
+	for _, kind := range []string{"flows", "structs", "processes", "objects", "links", "connections", "states", "attributes", "runs", "schedules", "versions"} {
+		if !slices.ContainsFunc(cases, func(c struct {
+			method, path string
+			body         map[string]any
+		}) bool {
+			return strings.HasPrefix(c.path, "/api/"+kind+"/")
+		}) {
+			t.Errorf("no request names an id in the path of /api/%s/", kind)
+		}
+	}
+	for _, field := range []string{"flow", "from", "parent", "board", "process", "processes", "object", "objects", "source", "target", "settings", "path"} {
+		if !slices.ContainsFunc(cases, func(c struct {
+			method, path string
+			body         map[string]any
+		}) bool {
+			_, inBody := c.body[field]
+			return inBody || strings.Contains(c.path, "?"+field+"=")
+		}) {
+			t.Errorf("no request names an id in its field %q", field)
+		}
+	}
 
 	// Given to Bob's team, its members see it; Carl joins, and does too.
 	usersSignIn(a, p, bob)
@@ -178,6 +278,7 @@ func TestTeamsRemoveSomeone(t *testing.T) {
 	row := usersAdd(a, bob.email)
 
 	usersSignIn(a, p, bob)
+	bobClient := a.client
 	a.refused("DELETE", fmt.Sprintf("/api/users/%d", me.User.ID), nil, http.StatusForbidden, "only an admin")
 	f := a.newFlow("Bob's")
 	b := humanNewReviewBoard(a)
@@ -186,7 +287,13 @@ func TestTeamsRemoveSomeone(t *testing.T) {
 	a.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
 
 	usersSignIn(a, p, usersAda)
+	adaClient := a.client
 	a.call("DELETE", fmt.Sprintf("/api/users/%d", row.ID), nil, http.StatusNoContent, nil)
+	// The session he had is over too.
+	a.client = bobClient
+	a.refused("GET", "/api/me", nil, http.StatusUnauthorized, "sign in first")
+	a.refused("GET", "/api/flows", nil, http.StatusUnauthorized, "sign in first")
+	a.client = adaClient
 	a.refused("DELETE", fmt.Sprintf("/api/users/%d", row.ID), nil, http.StatusNotFound, "no one")
 	var got flow
 	a.call("GET", fmt.Sprintf("/api/flows/%d", f.ID), nil, http.StatusOK, &got)
@@ -233,6 +340,9 @@ func TestTeamsReviewersSeeFlows(t *testing.T) {
 	a.call("GET", fmt.Sprintf("/api/processes?flow=%d", b.flow.ID), nil, http.StatusOK, nil)
 	a.refused("PATCH", fmt.Sprintf("/api/flows/%d", b.flow.ID), map[string]any{"name": "Mine"}, http.StatusForbidden, "only decide")
 	a.refused("POST", "/api/runs", map[string]any{"flow": b.flow.ID}, http.StatusForbidden, "only decide")
+	a.refused("POST", fmt.Sprintf("/api/flows/%d/assistant", b.flow.ID), map[string]any{"message": "Make it mine."}, http.StatusForbidden, "only decide")
+	a.refused("POST", fmt.Sprintf("/api/runs/%d/steps/%d/rerun", rn.ID, review.ID), map[string]any{}, http.StatusForbidden, "only decide")
+	a.refused("POST", fmt.Sprintf("/api/runs/%d/steps/%d/loop", rn.ID, review.ID), map[string]any{"go": true}, http.StatusForbidden, "only decide")
 	humanMustDecide(a, rn.ID, review.ID, map[string]any{"state": b.approved.ID})
 	if r := onlyStep(t, a.finish(rn.ID), "Review"); r.DecidedBy != "Bob" {
 		t.Errorf("decided by %q", r.DecidedBy)

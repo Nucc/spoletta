@@ -89,4 +89,4 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: webapp/frontend/package-lock.json
-      - run: npm ci && npm run build
+      - run: npm ci && npm run build && npm test

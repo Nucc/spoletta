@@ -331,9 +331,6 @@ func (x exporter) process(p process) setupProcess {
 		sp.Connector = &setupConnector{Server: x.mcpNames[c.Server], Operation: c.Operation, Args: c.Args}
 	}
 	sp.Repositories = st.Repositories
-	if st.Sentry != nil {
-		sp.Sentry = (*setupSentry)(st.Sentry)
-	}
 	sp.Rounds, sp.Loops, sp.Timeout, sp.Retries, sp.Quorum, sp.DescribeFlow = st.Rounds, st.Loops, st.Timeout, st.Retries, st.Quorum, st.DescribeFlow
 
 	for _, l := range x.e.s.Links {

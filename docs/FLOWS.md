@@ -31,7 +31,6 @@ A process is carried out by one of these:
 | `agent` (the default) | an AI coding agent (pi) in the worker, optionally in git checkouts of the flow's repositories and with MCP servers | write, analyse, fix code, decide, review |
 | `script` | bash in the worker, with `curl` and `jq` | fetch from an API, run a build, transform JSON |
 | `human` | a person in the Spoletta UI | approve or send back work, fill in what a run starts from |
-| `sentry` | Spoletta itself, calling Sentry's issues API | fetch issues to process |
 | `connector` | Spoletta itself, carrying out an operation of a connector built into it (GitHub, Slack, Telegram, Google Sheets and Docs, Home Assistant, or any HTTP API), with the token an admin set | list issues, post to Slack, append a spreadsheet row, turn a light on |
 | `flow` | its own board of processes, zoomed into | group steps, run steps once per item of a list |
 | `subflow` | another flow (a procedure), run as a run of its own | reuse a flow across jobs |
@@ -183,12 +182,11 @@ A state can have a **rule** saying when an object is in it, such as
   `data contains "urgent"`;
 - the right side is a JSON value, and anything that isn't JSON is a string.
 
-When a script, an agent, a Sentry or connector step or a person generates an
+When a script, an agent, a connector step or a person generates an
 object **in no state**, it comes out in the **first** of its states, in the
 order they are listed, whose rule holds. If none holds, it comes out in no
-state. Rules are how a script, a Sentry or a connector step (which can't
-decide states) still routes
-work, and how an agent's numeric judgement turns into a branch.
+state. Rules are how a script or a connector step (which can't decide
+states) still routes work, and how an agent's numeric judgement turns into a branch.
 
 Order states from most to least specific. A last state without a rule is not
 a catch-all, because a state without a rule never matches. Give a catch-all
@@ -242,19 +240,11 @@ by kind:
   fills in objects, or both (section 5.4). It can take a person object, the
   one who carries it out.
 
-**sentry**
-- `sentry: {organization, project, environment, query, sort, limit}`.
-  `organization` and `project` are slugs. `query` is Sentry search syntax
-  (default `is:unresolved`). `sort` is one of `date`, `new`, `freq`,
-  `user`, `trends`, `inbox`, `recommended` (default `date`). `limit`
-  defaults to 10.
-- It yields a list (section 5.5).
-
 **connector**
 - `connector: {server, operation, args}`. `server` names an installed
   connector among the `mcpServers`, `operation` one of its operations, and
   `args` its arguments as text, in which `{{Object}}` and
-  `{{Object.attribute}}` stand for what the step takes (section 5.6).
+  `{{Object.attribute}}` stand for what the step takes (section 5.5).
 - GitHub's operations that read: `list_issues`, `search_issues`,
   `get_issue`, `list_comments`, `list_pull_requests`, `get_pull_request`,
   `list_pull_request_files`, `get_file`. Those that change GitHub:
@@ -292,7 +282,7 @@ by kind:
 - `runs:` the name of a procedure. Its links name the procedure's top-board
   objects by name (section 3.8).
 
-Settings for agent, script, Sentry and connector processes:
+Settings for agent, script and connector processes:
 - `timeout` in seconds (1 to 86400): the step fails after it.
 - `retries` (0 to 5): how many more times a failed step is tried, each a
   step of its own.
@@ -306,7 +296,7 @@ Settings for any process:
   least 1).
 - `next:` processes that run right after it succeeds.
 - `onFailure:` processes that handle its failure. The source must be an
-  agent, script, Sentry or connector process.
+  agent, script or connector process.
 
 ### 3.4 Links
 
@@ -406,7 +396,7 @@ off. After an agent step ends, a person can send it follow-up messages
   one store of **records**, told apart by the unique attribute, as a table
   the flows have in common. Use it when one flow adds things and another
   works on them, such as one fetching Sentry issues and another fixing them.
-  - A process that only **generates** it (a Sentry or fetching script) adds
+  - A process that only **generates** it (one fetching the issues) adds
     the records that are new, in the state its link names, and refreshes
     the fields of those it knows, **keeping their state**. Fetching an issue
     again doesn't undo how far it got. Name the state new records start in
@@ -447,7 +437,8 @@ the timezone is an IANA zone given separately. A time is skipped if the
 flow's last run is still going (for example, waiting on a person), and times
 missed while the server was down are skipped too. A scheduled flow can't
 have a human fill in what it starts from and still run unattended, so start
-it with a Sentry or script process instead.
+it with an agent, script or connector process that fetches what it works
+on instead.
 
 ---
 
@@ -466,8 +457,9 @@ inside the flow:
 
 - a **human** process that has a person fill it in ("Which Jira ticket?"),
   the usual first step of a hand-started flow;
-- a **Sentry** or **script** process that fetches it, the usual first step
-  of a scheduled flow;
+- a **connector**, **script** or **agent** process that fetches it, the
+  usual first step of a scheduled flow: Sentry's issues, say, through
+  Sentry's MCP server or the `http` connector installed at its API;
 - an agent that finds it itself (with MCP servers or in the repositories).
 
 A first agent that "takes the request" when nothing produces the request
@@ -558,7 +550,7 @@ state they chose.
 
 ### 4.5 Failure
 
-- An agent, script, Sentry or connector step fails on an error, a non-zero exit, a reply
+- An agent, script or connector step fails on an error, a non-zero exit, a reply
   that doesn't match its contract after it was told so, its `timeout`, or a
   stop by a person.
 - `retries` tries it again, each try a step of its own. A stopped step isn't
@@ -658,7 +650,7 @@ definitions do that.
 - It gets none of the instance's secrets: no model keys, no Sentry or Jira
   token. A variable such as `$JIRA_TOKEN` is there only if the instance
   passes it to every script with `CHILD_ENV`; for a service built in, use a
-  connector or a Sentry step instead. In a workspace, its git (as an agent's)
+  connector step instead, or an agent with the service's MCP server. In a workspace, its git (as an agent's)
   has a token for the run's repositories, which can push.
 - Where steps run in containers of their own, a script (as an agent's
   tools) reaches the internet only at the hosts an admin allowed in the
@@ -687,17 +679,7 @@ curl -fsS "https://jira.example.com/rest/api/2/issue/$key" \
   same step.
 - A person object it takes (`Editor`) says who carries it out.
 
-### 5.5 A Sentry step
-
-It yields a **list**. Each attribute of the list takes the issue field it is
-named after: `id`, `shortId`, `title`, `culprit`, `level`, `status`,
-`count`, `userCount`, `firstSeen`, `lastSeen`, `permalink` and `project`
-(the project's slug). A dotted name reaches into a field, such as
-`metadata.value` for an error's message. A list without attributes gets all
-the fields above. It needs `SENTRY_AUTH_TOKEN` (with `event:read`) in the
-server's environment.
-
-### 5.6 A connector step
+### 5.5 A connector step
 
 It carries out its one operation with the token an admin set for the
 connector, and generates one object, what the service answered:
@@ -760,7 +742,7 @@ check that each one is what you meant.
 
 | Construct | Sentence |
 |---|---|
-| kind | `"Fix" is an agent process, which an AI agent carries out.` (also: a script process / a human process, which a person carries out / a flow process, made of processes of its own / a Sentry process, which fetches issues / a connector process, which carries out an operation on a service such as GitHub) |
+| kind | `"Fix" is an agent process, which an AI agent carries out.` (also: a script process / a human process, which a person carries out / a flow process, made of processes of its own / a connector process, which carries out an operation on a service such as GitHub) |
 | subflow | `"Triage" is a procedure, which runs the flow "Triage ticket".` |
 | agent link | `"Editor" handles "Review".` |
 | event | `"Post" entering "weak" triggers "Write".` |
@@ -1155,7 +1137,9 @@ loops.
 > opened. Never work on the same issue twice."
 
 Design:
-- A schedule, so no human can come first: a **Sentry** process does.
+- A schedule, so no human can come first: an agent with Sentry's MCP
+  server fetches the issues. The `http` connector, installed at Sentry's
+  API with a token, would do as a connector process.
 - **Exceptions** is a persistent list with a unique `id`, so each issue is
   claimed by one run only. Issues whose runs failed are released and tried
   again.
@@ -1196,13 +1180,12 @@ flows:
         many: true
     processes:
       - name: Fetch
-        kind: sentry
-        sentry:
-          organization: acme
-          project: shop
-          query: is:unresolved level:error
-          sort: freq
-          limit: 5
+        prompt: |
+          List the 5 unresolved errors of the acme organization's shop
+          project in Sentry with the most events (is:unresolved
+          level:error), and reply with them.
+        mcpServers: [Sentry]
+        repositories: []
         yields: [Exceptions]
       - name: Each exception
         kind: flow
@@ -1500,13 +1483,12 @@ Check them before you import.
 - A named state must be one of that object's states.
 
 **Processes**
-- `onFailure` only from an agent, script or Sentry process.
+- `onFailure` only from an agent, script or connector process.
 - A process can't `next` or `onFailure` to itself. Connections stay within
   one flow.
 - A subflow can't, directly or through other subflows, run its own flow.
 - `rounds` from 1 to 20; `loops` from 1 to 100; `timeout` from 1 to 86400;
   `retries` from 0 to 5; `quorum` at least 1.
-- Sentry `organization` and `project` are slugs (letters, digits, `-`, `_`).
 - `thinking` is one of the listed levels.
 
 **Objects**
@@ -1529,7 +1511,7 @@ Check them before you import.
    (8.1).
 3. Rejoining branches **without** a quorum or condition links: the join never
    runs, because the branch not taken never generates its object.
-4. Expecting a **script or Sentry** step to decide a state. Use rules.
+4. Expecting a **script or connector** step to decide a state. Use rules.
 5. A **rule-less catch-all state**: a state without a rule never matches.
 6. An agent reviewer **without an `onFailure`** when hitting its rounds
    should not fail the run.
@@ -1598,7 +1580,7 @@ missing sentences.
 2. Read back the OPL (`GET /api/flows/{id}/opl`, flow ids from
    `GET /api/flows`) and compare it with your draft sentence by sentence.
 3. Tell the user what needs their hands: signing in to any new MCP server in
-   the settings, secrets such as `SENTRY_AUTH_TOKEN`, and the first run.
+   the settings, a connector's token, and the first run.
 4. Suggest a first run by hand, even for a scheduled flow, and watching its
    steps.
 

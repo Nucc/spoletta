@@ -223,7 +223,6 @@ var kindPhrases = map[string]string{
 	kindScript:    "a script process",
 	kindHuman:     "a human process, which a person carries out",
 	kindFlow:      "a flow process, made of processes of its own",
-	kindSentry:    "a Sentry process, which fetches issues",
 	kindConnector: "a connector process, which carries out an operation on a service such as GitHub",
 }
 

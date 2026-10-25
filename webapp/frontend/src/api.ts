@@ -5,10 +5,9 @@
 // process runs another flow, so flows can reuse each other: the objects it
 // takes are given to the objects of the same names on that flow's top board,
 // and it generates what that flow's run leaves of the objects named like the
-// ones it generates. A Sentry process fetches issues from Sentry. A
-// connector process carries out an operation of a connector built into the
-// webapp, such as commenting on a GitHub issue.
-export type ProcessKind = 'agent' | 'script' | 'human' | 'flow' | 'subflow' | 'sentry' | 'connector'
+// ones it generates. A connector process carries out an operation of a
+// connector built into the webapp, such as commenting on a GitHub issue.
+export type ProcessKind = 'agent' | 'script' | 'human' | 'flow' | 'subflow' | 'connector'
 
 // The operation a connector process carries out, on a connector's installed
 // server. Its arguments are text in which {{Object}} and
@@ -19,30 +18,8 @@ export type ConnectorSettings = {
   args?: Record<string, string>
 }
 
-// Which of Sentry's issues a Sentry process fetches.
-export type SentrySettings = {
-  organization: string
-  // Slug or id; empty fetches from every project the token can see.
-  project: string
-  environment: string
-  // Sentry's search syntax.
-  query: string
-  sort: string
-  limit: number
-}
-
-export const DEFAULT_SENTRY: SentrySettings = {
-  organization: '',
-  project: '',
-  environment: '',
-  query: 'is:unresolved',
-  sort: 'date',
-  limit: 10,
-}
-
 // Settings of the kinds that take more than a prompt or a script, by kind.
 export type ProcessSettings = {
-  sentry?: SentrySettings
   // The MCP servers an agent process may use, by id; none when absent.
   mcpServers?: number[]
   // The tools it keeps to of each, by server id. Without picking, it has
@@ -64,7 +41,7 @@ export type ProcessSettings = {
   // between before someone is asked whether it goes on; DEFAULT_LOOPS when
   // absent.
   loops?: number
-  // How long an agent, script, Sentry or connector step may take, in seconds; the
+  // How long an agent, script or connector step may take, in seconds; the
   // worker's own limit when absent.
   timeout?: number
   // How many more times a failed step is tried; none when absent.
@@ -897,11 +874,6 @@ export function listDirectory(): Promise<DirectoryEntry[]> {
   return request('/api/connectors')
 }
 
-// Whether the webapp has a token for Sentry, set in its environment.
-export function sentryConfigured(): Promise<boolean> {
-  return request<{ configured: boolean }>('/api/sentry').then((r) => r.configured)
-}
-
 export function updateMCPServer(id: number, patch: Partial<Pick<MCPServer, 'name' | 'url' | 'description'>>): Promise<MCPServer> {
   return request(`/api/mcp-servers/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
@@ -1292,7 +1264,7 @@ export function stopRun(id: number): Promise<FlowRun> {
   return request(`/api/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'interrupted' }) })
 }
 
-// Stops an agent, script, Sentry or connector step still going. It fails, which ends its
+// Stops an agent, script or connector step still going. It fails, which ends its
 // branch; the rest of the run goes on.
 export function stopStep(run: number, id: number): Promise<void> {
   return request(`/api/runs/${run}/steps/${id}/stop`, { method: 'POST' })

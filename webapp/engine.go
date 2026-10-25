@@ -32,7 +32,7 @@ import (
 //     takes without a state exist. Several such links are alternatives, not
 //     all required.
 //
-// An object an agent, script, Sentry or connector step, or a person, generates in no
+// An object an agent, script or connector step, or a person, generates in no
 // state comes out in the first of its states whose rule holds of it, if
 // any; see rules.go. That state goes on as any other, in the same pass.
 //
@@ -58,7 +58,7 @@ import (
 // to a process that ran already fails it instead, which ends its branch.
 //
 // A failure stops its branch, and every process runs at most once per pass,
-// so cycles end. An agent, script, Sentry or connector step stopped while it goes
+// so cycles end. An agent, script or connector step stopped while it goes
 // fails, so stops its branch the same way; the rest of the run goes on. Such
 // a step can have a timeout, after which it fails, and retries, each a step
 // of its own, before it fails for good; a stopped one isn't retried. A
@@ -116,9 +116,8 @@ type decision struct {
 type engine struct {
 	db        *sql.DB
 	workerURL string
-	sentry    sentryConfig
 	mcp       *mcpBroker
-	// A slot per agent, script, Sentry or connector step that can run at once, across
+	// A slot per agent, script or connector step that can run at once, across
 	// all runs; reviews waiting take none.
 	slots chan struct{}
 	mu    sync.Mutex
@@ -139,12 +138,12 @@ type liveRun struct {
 	failWith context.CancelCauseFunc
 	// The reviews waiting for a decision, by step id.
 	reviews map[int64]chan decision
-	// What stops each agent, script, Sentry or connector step going, by step id.
+	// What stops each agent, script or connector step going, by step id.
 	steps map[int64]context.CancelFunc
 }
 
-func newEngine(db *sql.DB, workerURL string, sentry sentryConfig, mcp *mcpBroker, parallelSteps int) *engine {
-	e := &engine{db: db, workerURL: workerURL, sentry: sentry, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{},
+func newEngine(db *sql.DB, workerURL string, mcp *mcpBroker, parallelSteps int) *engine {
+	e := &engine{db: db, workerURL: workerURL, mcp: mcp, slots: make(chan struct{}, parallelSteps), runs: map[int64]*liveRun{},
 		stepEnded: make(chan struct{})}
 	e.takeCommands()
 	return e
@@ -1147,7 +1146,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 	all(next)
 }
 
-// Executes an agent, script, Sentry or connector process; returns what it generated, each
+// Executes an agent, script or connector process; returns what it generated, each
 // object in the state its link names. False if it failed or found a
 // duplicate, which terminates the run and so still returns what it generated.
 func (w *walk) runStep(id int64, p *pass, given []runInput, cr *changeRequest) (map[int64]value, bool) {
@@ -1671,7 +1670,7 @@ func (w *walk) setState(id, stepID int64, d decision) []func() {
 	return next
 }
 
-// Executes an agent, script, Sentry or connector process as a step of the run, once a
+// Executes an agent, script or connector process as a step of the run, once a
 // slot is free; the step can be stopped on its own while it goes. False if
 // it failed or was stopped, and whether it was stopped, by a person or with
 // its run, rather than failed; a duplicate is a result, and terminates the
@@ -1697,7 +1696,7 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 	defer cancel()
 	ctx := stop
 	if t := w.settings[id].timeout(); t > 0 {
-		if w.kinds[id] != kindSentry && w.kinds[id] != kindConnector {
+		if w.kinds[id] != kindConnector {
 			t += timeoutGrace
 		}
 		var end context.CancelFunc
@@ -1724,8 +1723,6 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 			about = w.fr.opl(ctx, w.e.db)
 		}
 		res, err = runAgentStep(ctx, w.e.db, w.e.workerURL, w.e.mcp, w.ws, w.run, id, inputs, cr, about, started)
-	case kindSentry:
-		res, err = runSentryStep(ctx, w.e.db, w.e.sentry, w.run, id, inputs, started)
 	case kindConnector:
 		res, err = runConnectorStep(ctx, w.e.db, w.run, id, inputs, started)
 	default:

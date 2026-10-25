@@ -1188,9 +1188,6 @@ func (b *builder) resolveProcess(bp *bproc) error {
 		return problemf("%s: %s", at, invalidWidthMessage)
 	}
 	s := processSettings{Repositories: p.Repositories, Rounds: p.Rounds, Loops: p.Loops, Timeout: p.Timeout, Retries: p.Retries, Quorum: p.Quorum, DescribeFlow: p.DescribeFlow}
-	if p.Sentry != nil {
-		s.Sentry = (*sentrySettings)(p.Sentry)
-	}
 	for _, m := range p.MCPServers {
 		id, ok := b.mcp[mcpNameKey(m)]
 		if !ok {

@@ -333,6 +333,11 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 
 	// Ids are never shared between flows, so these only ever update the flow's own rows.
 	for _, p := range parentsFirst(s.Processes) {
+		// Sentry processes, which versions from before they were retired
+		// hold, come back as agent processes, as the database's became.
+		if p.Kind == "sentry" {
+			p.Kind = kindAgent
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, kind = saved.kind, prompt = saved.prompt, script = saved.script,

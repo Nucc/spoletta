@@ -12,8 +12,8 @@ package main
 //   - user_month_spend: what a person's runs, follow-ups and assistant
 //     replies may spend in a calendar month (UTC), after which the proxy
 //     refuses their calls until the next.
-//   - user_parallel_steps: how many agent, script, Sentry and connector
-//     steps of a person's runs go at once, of the engine's PARALLEL_STEPS,
+//   - user_parallel_steps: how many agent, script and connector steps of
+//     a person's runs go at once, of the engine's PARALLEL_STEPS,
 //     so one person's runs can't take every slot; the rest wait their turn
 //     (engine.go's personSlot). Runs nobody started, without sign-in, have
 //     no person.

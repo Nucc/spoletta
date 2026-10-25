@@ -127,12 +127,12 @@ func main() {
 	registerQueryRoutes(mux, db)
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
-	// How many agent, script and Sentry steps run at once.
+	// How many agent, script and connector steps run at once.
 	parallelSteps, err := strconv.Atoi(env("PARALLEL_STEPS", "3"))
 	if err != nil || parallelSteps < 1 {
 		log.Fatalf("PARALLEL_STEPS must be a positive number")
 	}
-	log.Printf("runs up to %d agent, script and Sentry steps at once at this replica (PARALLEL_STEPS)", parallelSteps)
+	log.Printf("runs up to %d agent, script and connector steps at once at this replica (PARALLEL_STEPS)", parallelSteps)
 	// Where the worker reaches this webapp's proxies, for MCP servers and for
 	// models; MCP_PROXY_URL is its old name.
 	proxyURL := env("PROXY_URL", env("MCP_PROXY_URL", "http://127.0.0.1:"+env("PORT", "8080")))
@@ -154,12 +154,7 @@ func main() {
 	go clearExpiredGrants(context.Background(), db)
 	registerSkillRoutes(mux, db)
 	registerConnectorRoutes(mux, db)
-	sentry := sentryConfig{url: os.Getenv("SENTRY_URL"), token: os.Getenv("SENTRY_AUTH_TOKEN")}
-	if sentry.url != "" {
-		log.Printf("Sentry processes fetch from %s", sentry.url)
-	}
-	registerSentryRoutes(mux, sentry)
-	eng := newEngine(db, workerURL, sentry, mcp, parallelSteps)
+	eng := newEngine(db, workerURL, mcp, parallelSteps)
 	llm.overspent = eng.fail
 	registerRunRoutes(mux, db, eng)
 	registerRecordRunRoutes(mux, db, eng)

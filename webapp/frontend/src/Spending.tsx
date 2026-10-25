@@ -181,7 +181,7 @@ export function SpendingSection({
                 invalid={!stepsOk}
                 inputMode="numeric"
               >
-                Agent, script, Sentry and connector steps, of the instance's{" "}
+                Agent, script and connector steps, of the instance's{" "}
                 <code>PARALLEL_STEPS</code>, so one person's runs can't take
                 every slot; the rest wait their turn.
               </LimitField>

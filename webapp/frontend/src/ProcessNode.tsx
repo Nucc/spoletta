@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Handle, Position, useNodeConnections, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { ProcessKind, ProcessSettings, RunInput, ThinkingLevel } from './api'
-import { AgentIcon, ConnectorIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, RerunIcon, ScriptIcon, SentryIcon, StopIcon, SubflowIcon, TrashIcon, ZoomInIcon } from './icons'
+import { AgentIcon, ConnectorIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, RerunIcon, ScriptIcon, StopIcon, SubflowIcon, TrashIcon, ZoomInIcon } from './icons'
 import { stoppable } from './Runs'
 import WidthResizer from './WidthResizer'
 
@@ -41,7 +41,6 @@ export const KIND_ICONS: Record<ProcessKind, () => ReactNode> = {
   human: HumanIcon,
   flow: FlowIcon,
   subflow: SubflowIcon,
-  sentry: SentryIcon,
   connector: ConnectorIcon,
 }
 
@@ -51,7 +50,6 @@ const KIND_LABELS: Record<ProcessKind, string> = {
   human: 'Human',
   flow: 'Flow',
   subflow: 'Procedure',
-  sentry: 'Sentry',
   connector: 'Connector',
 }
 
@@ -67,10 +65,6 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 // What the card says under the name: the kind, and an agent's model.
 function subtitle(data: ProcessNodeData): string {
   if (data.kind === 'flow') return data.recording ? 'Flow · recorded' : 'Flow'
-  if (data.kind === 'sentry') {
-    const s = data.settings.sentry
-    return s?.organization ? `Sentry · ${s.project || s.organization}` : 'Sentry'
-  }
   if (data.kind === 'connector') {
     const op = data.settings.connector?.operation
     return op ? `Connector · ${op.replaceAll('_', ' ')}` : 'Connector'

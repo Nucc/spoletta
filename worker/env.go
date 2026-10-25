@@ -2,9 +2,9 @@ package main
 
 // The environment the worker starts pi, bash and git in. It is built from
 // a list of the variables they need, never the worker's own environment
-// whole: that holds what compose passes through, such as tokens for the
-// webapp's Sentry or a git host, and whatever an agent or a script can see
-// it can print. What a step needs beyond the list is added by name where
+// whole: that holds what compose passes through, such as a token for a
+// git host, and whatever an agent or a script can see it can print. What
+// a step needs beyond the list is added by name where
 // the step starts: the cloud credentials Bedrock signs in with, for pi
 // only (see host_providers.go), and the git token only for the git
 // commands the worker runs itself (see workspace.go). Model keys never

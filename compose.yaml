@@ -109,10 +109,6 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      # For Sentry processes: a token with event:read, and the address of a
-      # self-hosted Sentry if not sentry.io.
-      SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
-      SENTRY_URL: ${SENTRY_URL:-}
       # Signing in over OpenID Connect with your identity provider, with
       # Google, or with either; without OIDC_ISSUER or GOOGLE_CLIENT_ID
       # nobody signs in and anyone reaching the webapp can do anything.

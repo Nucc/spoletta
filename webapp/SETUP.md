@@ -99,7 +99,7 @@ Flows and procedures have the same shape:
 
 ```yaml
 - name: Fetch
-  kind: agent           # agent (default), script, human, flow, subflow, sentry or connector
+  kind: agent           # agent (default), script, human, flow, subflow or connector
   prompt: |
     Fetch the newest ticket.
   script: echo hi       # for script processes
@@ -118,7 +118,6 @@ Flows and procedures have the same shape:
   describeFlow: true    # agent: tell it the flow it works in, in OPL
   recording: true       # flow process: each time it runs is a run of its own
   runs: Summarize       # subflow: the procedure it runs
-  sentry: {organization: acme, project: web, query: "is:unresolved", sort: date, limit: 10}
   connector:            # connector process: an operation of an installed connector
     server: github
     operation: add_comment

@@ -504,10 +504,6 @@ body {
   background: #1f2328;
 }
 
-.palette-logo.sentry {
-  background: #362d59;
-}
-
 .palette-logo.subflow {
   background: #1b7c83;
 }
@@ -729,6 +725,7 @@ body {
   background: #fff1e5;
 }
 
+/* Steps of Sentry processes, from runs before they were retired. */
 .process-kind.sentry {
   color: #6639ba;
   background: #fbefff;
@@ -2166,10 +2163,6 @@ body {
 
 .process-node.subflow .node-icon {
   background: #1b7c83;
-}
-
-.process-node.sentry .node-icon {
-  background: #6639ba;
 }
 
 .end-node .node-icon {

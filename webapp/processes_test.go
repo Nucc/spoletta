@@ -7,17 +7,16 @@ import (
 	"time"
 )
 
-// Settings left out have their defaults: no timeout or retries, the default
-// rounds, and Sentry's default query.
+// Settings left out have their defaults: no timeout or retries, and the
+// default rounds.
 func TestProcessSettingsDefaults(t *testing.T) {
 	var s processSettings
-	if s.timeout() != 0 || s.retries() != 0 || s.rounds() != defaultRounds || s.sentry() != defaultSentrySettings() {
-		t.Errorf("defaults = %v, %d, %d, %+v", s.timeout(), s.retries(), s.rounds(), s.sentry())
+	if s.timeout() != 0 || s.retries() != 0 || s.rounds() != defaultRounds {
+		t.Errorf("defaults = %v, %d, %d", s.timeout(), s.retries(), s.rounds())
 	}
-	sentry := sentrySettings{Organization: "acme", Limit: 3}
-	s = processSettings{Timeout: count(90), Retries: count(2), Rounds: count(5), Sentry: &sentry}
-	if s.timeout() != 90*time.Second || s.retries() != 2 || s.rounds() != 5 || s.sentry() != sentry {
-		t.Errorf("set = %v, %d, %d, %+v", s.timeout(), s.retries(), s.rounds(), s.sentry())
+	s = processSettings{Timeout: count(90), Retries: count(2), Rounds: count(5)}
+	if s.timeout() != 90*time.Second || s.retries() != 2 || s.rounds() != 5 {
+		t.Errorf("set = %v, %d, %d", s.timeout(), s.retries(), s.rounds())
 	}
 }
 
@@ -36,8 +35,6 @@ func TestProcessSettingsProblem(t *testing.T) {
 		{processSettings{Retries: count(-1)}, "retries must be from 0 to 5"},
 		{processSettings{Retries: count(maxRetries + 1)}, "retries"},
 		{processSettings{Quorum: count(0)}, "quorum must be at least 1"},
-		{processSettings{Sentry: &sentrySettings{Organization: "acme"}}, ""},
-		{processSettings{Sentry: &sentrySettings{Organization: "ac me"}}, "slugs"},
 	} {
 		msg := c.s.problem()
 		if (c.problem == "") != (msg == "") || !strings.Contains(msg, c.problem) {
@@ -67,7 +64,7 @@ func TestProcessSettingsScan(t *testing.T) {
 	for _, in := range []processSettings{
 		{},
 		{Repositories: &none},
-		{Sentry: &sentrySettings{Organization: "acme", Sort: "new", Limit: 4}, MCPServers: []int64{1, 2},
+		{MCPServers: []int64{1, 2},
 			Repositories: &[]string{"app"}, Flow: ptr(9), Rounds: count(2), Timeout: count(60), Retries: count(1), Quorum: count(3), DescribeFlow: true},
 	} {
 		v, err := in.Value()
@@ -85,12 +82,12 @@ func TestProcessSettingsScan(t *testing.T) {
 }
 
 func TestValidKind(t *testing.T) {
-	for _, k := range []string{kindAgent, kindScript, kindHuman, kindFlow, kindSubflow, kindSentry} {
+	for _, k := range []string{kindAgent, kindScript, kindHuman, kindFlow, kindSubflow, kindConnector} {
 		if !validKind(k) {
 			t.Errorf("validKind(%q) = false", k)
 		}
 	}
-	for _, k := range []string{"", "Agent", "module", "struct"} {
+	for _, k := range []string{"", "Agent", "module", "struct", "sentry"} {
 		if validKind(k) {
 			t.Errorf("validKind(%q) = true", k)
 		}

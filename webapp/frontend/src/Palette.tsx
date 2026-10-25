@@ -38,16 +38,6 @@ export const BUILDING_BLOCKS: Block[] = [
 // A tile of the connectors, with its service's logo.
 export type ConnectorBlock = Block & { logo: () => ReactNode }
 
-// A Sentry process, offered once the webapp's environment gives it a token.
-export const SENTRY_BLOCK: ConnectorBlock = {
-  id: 'sentry',
-  label: 'Sentry',
-  title: 'Fetches issues from Sentry as a list',
-  type: 'process',
-  kind: 'sentry',
-  logo: () => <ServiceLogo name="sentry" title="Sentry" size={32} />,
-}
-
 // What the tile of each built-in connector says, by its name in the
 // directory. Each new connector is one more entry.
 const CONNECTOR_TILES: Record<string, { label: string; title: string }> = {
@@ -132,7 +122,7 @@ export function BlockPalette({
   )
 }
 
-// The connectors installed, and Sentry once it is set up; installing more
+// The connectors installed; installing more
 // is for admins, in the settings.
 export function ConnectorPalette({
   blocks,

@@ -24,11 +24,9 @@ const kindHuman = "human"
 const kindInput = "input"
 const kindLoop = "loop"
 const kindScript = "script"
-const kindSentry = "sentry"
 const kindSubflow = "subflow"
 const maxItems = 50
 const maxRouteLanes = 64
-const maxSentryIssues = maxItems
 const relationAggregation = "aggregation"
 const relationExhibition = "exhibition"
 const runDone = "done"
@@ -185,7 +183,7 @@ const (
 	connectionFailure = "failure"
 )
 
-const failureSourceMessage = "only an agent, script, Sentry or connector process fails, so only one leads to what handles its failure"
+const failureSourceMessage = "only an agent, script or connector process fails, so only one leads to what handles its failure"
 
 // A flow is a board of its own with everything on it: its processes and
 // objects, the boards of its flow processes, its versions and its runs. Each
@@ -403,7 +401,6 @@ type process struct {
 // The settings of kinds that take more than a prompt or a script, by kind,
 // so switching kinds back and forth loses none.
 type processSettings struct {
-	Sentry *sentrySettings `json:"sentry,omitempty"`
 	// The MCP servers an agent process may use, by id; none by default. See mcp.go.
 	MCPServers []int64 `json:"mcpServers,omitempty"`
 	// The skills an agent process is given, by id; see skills.go.
@@ -421,10 +418,10 @@ type processSettings struct {
 	// in between before someone is asked whether it goes on; defaultLoops
 	// when absent. See loops.go.
 	Loops *int `json:"loops,omitempty"`
-	// How long an agent, script or Sentry step may take, in seconds, before
+	// How long an agent, script or connector step may take, in seconds, before
 	// it fails; the worker's own limit when absent.
 	Timeout *int `json:"timeout,omitempty"`
-	// How many more times a failed agent, script or Sentry step is tried, as
+	// How many more times a failed agent, script or connector step is tried, as
 	// a step of its own each time; none when absent.
 	Retries *int `json:"retries,omitempty"`
 	// How many of the objects a process takes without waiting for a state
@@ -611,19 +608,6 @@ type scriptRun struct {
 	// When its schedule's last run that got through started, as a Unix
 	// timestamp, which $SINCE and $LAST_RUN hold.
 	Since *int64 `json:"since,omitempty"`
-}
-
-type sentrySettings struct {
-	Organization string `json:"organization"`
-	// Slug or id; empty fetches from all projects the token can see.
-	Project     string `json:"project"`
-	Environment string `json:"environment"`
-	// Sentry's search syntax, e.g. is:unresolved level:error; empty is
-	// is:unresolved.
-	Query string `json:"query"`
-	// How Sentry orders the issues before the limit applies.
-	Sort  string `json:"sort"`
-	Limit int    `json:"limit"`
 }
 
 type snapshot struct {

@@ -124,7 +124,6 @@ type setupProcess struct {
 	MCPTools     map[string][]string `yaml:"mcpTools,omitempty"`
 	Skills       []string            `yaml:"skills,omitempty"`
 	Repositories *[]string           `yaml:"repositories,omitempty"`
-	Sentry       *setupSentry        `yaml:"sentry,omitempty"`
 	Connector    *setupConnector     `yaml:"connector,omitempty"`
 	Rounds       *int                `yaml:"rounds,omitempty"`
 	Loops        *int                `yaml:"loops,omitempty"`
@@ -152,15 +151,6 @@ type setupConnector struct {
 	Server    string            `yaml:"server"`
 	Operation string            `yaml:"operation"`
 	Args      map[string]string `yaml:"args,omitempty"`
-}
-
-type setupSentry struct {
-	Organization string `yaml:"organization,omitempty"`
-	Project      string `yaml:"project,omitempty"`
-	Environment  string `yaml:"environment,omitempty"`
-	Query        string `yaml:"query,omitempty"`
-	Sort         string `yaml:"sort,omitempty"`
-	Limit        int    `yaml:"limit,omitempty"`
 }
 
 // A link from a process to an object it takes or yields. Written as just

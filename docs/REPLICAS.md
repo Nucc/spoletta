@@ -47,7 +47,7 @@ update leaves runs going, except those of the pods it replaces.
 
 ## Settings that are each replica's own
 
-- `PARALLEL_STEPS` is how many agent, script, Sentry and connector steps
+- `PARALLEL_STEPS` is how many agent, script and connector steps
   one replica runs at once; with three replicas, three times as many run in
   all. A person's limit on steps going at once counts across replicas.
 - `PROXY_URL` is where the worker reaches the proxies. Point it at the

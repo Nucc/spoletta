@@ -67,7 +67,6 @@ import {
   flowBlock,
   FlowPalette,
   structBlock,
-  SENTRY_BLOCK,
   StructPalette,
   type Block,
 } from './Palette'
@@ -115,7 +114,6 @@ import {
   listModels,
   listMCPServers,
   listSkills,
-  sentryConfigured,
   listBoards,
   listObjects,
   listProcesses,
@@ -395,8 +393,6 @@ export default function Board({
   // The skills and commands the flow's agents may use; see Skills.tsx.
   const [skills, setSkills] = useState<Skill[] | null>(null)
   const [commands, setCommands] = useState<Skill[] | null>(null)
-  // Whether Sentry is set up, offering Sentry processes.
-  const [sentry, setSentry] = useState(false)
   const [mcpOpen, setMCPOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [oplOpen, setOPLOpen] = useState(false)
@@ -762,7 +758,6 @@ export default function Board({
 
   useEffect(() => {
     listModels().then(setModels).catch(report)
-    sentryConfigured().then(setSentry).catch(report)
     listFlows()
       .then((fs) => setOtherFlows(fs.filter((f) => f.id !== flowId)))
       .catch(report)
@@ -1060,8 +1055,8 @@ export default function Board({
   const flowBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.module).map(flowBlock), [otherFlows])
   const structBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.struct).map(structBlock), [otherFlows])
   const connectorTiles = useMemo(
-    () => (mcpServers === null ? null : [...(sentry ? [SENTRY_BLOCK] : []), ...connectorBlocks(mcpServers)]),
-    [mcpServers, sentry],
+    () => (mcpServers === null ? null : connectorBlocks(mcpServers)),
+    [mcpServers],
   )
   const structFlows = useMemo(() => new Set((otherFlows ?? []).filter((f) => f.struct).map((f) => f.id)), [otherFlows])
 
@@ -1302,7 +1297,7 @@ export default function Board({
     // A process dropped on another handles its failure, if it can fail.
     if (isProcess(source) && isProcess(target)) {
       const node = getNode(source)
-      const fails = node?.type === 'process' && ['agent', 'script', 'sentry', 'connector'].includes(node.data.kind)
+      const fails = node?.type === 'process' && ['agent', 'script', 'connector'].includes(node.data.kind)
       return fails && source !== target && !edges.some((e) => e.source === source && e.target === target)
     }
     if (!isProcess(source) || !isObject(target)) return false
@@ -2335,7 +2330,7 @@ export default function Board({
         ) : (
           <span
             className="hint"
-            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, readOnly the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or Sentry process onto another process to run that one when it fails. Select an object's link into a process to pick how the process takes it: just takes it, uses it as an instrument it doesn't change, or consumes it; for a link from a state, whether the process runs when the object enters it, or only if the object is in it once the process is ready, being skipped otherwise. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
+            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, readOnly the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or connector process onto another process to run that one when it fails. Select an object's link into a process to pick how the process takes it: just takes it, uses it as an instrument it doesn't change, or consumes it; for a link from a state, whether the process runs when the object enters it, or only if the object is in it once the process is ready, being skipped otherwise. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
           >
             Processes connect through the objects they generate and take. Right-click a node for more.
           </span>

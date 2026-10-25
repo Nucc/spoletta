@@ -160,17 +160,13 @@ func TestEditProcessFields(t *testing.T) {
 	}{
 		{map[string]any{"name": "  "}, "name"},
 		{map[string]any{"kind": "robot"}, "kind must be"},
+		// Sentry is reached through its MCP server or the HTTP API connector.
+		{map[string]any{"kind": "sentry"}, "kind must be"},
 		{map[string]any{"model": "--help"}, "invalid model"},
 		{map[string]any{"model": strings.Repeat("m", 256)}, "invalid model"},
 		{map[string]any{"thinking": "huge"}, "invalid model or thinking"},
 		{map[string]any{"width": 79}, "width must be"},
 		{map[string]any{"width": 2001}, "width must be"},
-		{map[string]any{"settings": map[string]any{"sentry": map[string]any{"organization": "acme corp"}}}, "slugs"},
-		{map[string]any{"settings": map[string]any{"sentry": map[string]any{"organization": "acme", "project": "a/b"}}}, "slugs"},
-		{map[string]any{"settings": map[string]any{"sentry": map[string]any{"organization": "acme", "sort": "random"}}}, "sort must be"},
-		{map[string]any{"settings": map[string]any{"sentry": map[string]any{"organization": "acme", "limit": -1}}}, "limit must be"},
-		{map[string]any{"settings": map[string]any{"sentry": map[string]any{"organization": "acme", "limit": maxSentryIssues + 1}}}, "limit must be"},
-		{map[string]any{"settings": map[string]any{"sentry": map[string]any{"organization": "acme", "query": strings.Repeat("q", 2001)}}}, "too long"},
 	} {
 		create := map[string]any{"flow": f.ID, "name": "Refused"}
 		for k, v := range c.body {
@@ -182,28 +178,26 @@ func TestEditProcessFields(t *testing.T) {
 	if _, ok := editProcesses(a, f.ID)["Refused"]; ok {
 		t.Error("a refused process was stored")
 	}
-	if got := editProcesses(a, f.ID)["Sort"]; got.Kind != kindScript || got.Model != "" || *got.Width != 2000 || got.Settings.Sentry != nil {
+	if got := editProcesses(a, f.ID)["Sort"]; got.Kind != kindScript || got.Model != "" || *got.Width != 2000 || got.Settings.Timeout != nil {
 		t.Errorf("refused patches changed the process: %+v", got)
 	}
 	a.refused("POST", "/api/processes", map[string]any{"flow": f.ID, "name": "Bad", "x": "left"}, http.StatusBadRequest, "invalid JSON")
 	a.refused("POST", "/api/processes", map[string]any{"flow": 1 << 40, "name": "Lost"}, http.StatusBadRequest, "flow not found")
 
 	// Settings round-trip whole, and a patch replaces them all.
-	sentry := map[string]any{"organization": "acme", "project": "web_1", "environment": "prod", "query": "is:unresolved", "sort": "freq", "limit": 5}
-	sp := editPatchProcess(a, p.ID, map[string]any{"kind": kindSentry, "settings": map[string]any{"sentry": sentry, "repositories": []string{"api"}}})
-	if sp.Settings.Sentry == nil || *sp.Settings.Sentry != (sentrySettings{Organization: "acme", Project: "web_1", Environment: "prod", Query: "is:unresolved", Sort: "freq", Limit: 5}) ||
-		sp.Settings.Repositories == nil || !slices.Equal(*sp.Settings.Repositories, []string{"api"}) {
+	sp := editPatchProcess(a, p.ID, map[string]any{"kind": kindAgent, "settings": map[string]any{"rounds": 3, "repositories": []string{"api"}}})
+	if sp.Settings.Rounds == nil || *sp.Settings.Rounds != 3 || sp.Settings.Repositories == nil || !slices.Equal(*sp.Settings.Repositories, []string{"api"}) {
 		t.Errorf("settings = %+v", sp.Settings)
 	}
 	sp = editPatchProcess(a, p.ID, map[string]any{"settings": map[string]any{"repositories": []string{}}})
-	if sp.Settings.Sentry != nil || sp.Settings.Repositories == nil || len(*sp.Settings.Repositories) != 0 {
-		t.Errorf("settings after replacing = %+v, want no Sentry settings and no repositories", sp.Settings)
+	if sp.Settings.Rounds != nil || sp.Settings.Repositories == nil || len(*sp.Settings.Repositories) != 0 {
+		t.Errorf("settings after replacing = %+v, want no rounds and no repositories", sp.Settings)
 	}
 	// Switching kinds keeps the settings of the others.
-	sp = editPatchProcess(a, p.ID, map[string]any{"settings": map[string]any{"sentry": sentry}})
-	sp = editPatchProcess(a, p.ID, map[string]any{"kind": kindAgent})
-	if sp.Kind != kindAgent || sp.Settings.Sentry == nil {
-		t.Errorf("switching to an agent lost the Sentry settings: %+v", sp)
+	sp = editPatchProcess(a, p.ID, map[string]any{"settings": map[string]any{"rounds": 3}})
+	sp = editPatchProcess(a, p.ID, map[string]any{"kind": kindScript})
+	if sp.Kind != kindScript || sp.Settings.Rounds == nil {
+		t.Errorf("switching to a script lost the agent's rounds: %+v", sp)
 	}
 
 	a.refused("PATCH", fmt.Sprintf("/api/processes/%d", 1<<40), map[string]any{"name": "Ghost"}, http.StatusNotFound, "process not found")

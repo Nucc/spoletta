@@ -292,9 +292,9 @@ export function RunPanel({
 // was copied from an earlier run or its process is gone.
 export const rerunnableFrom = (run: FlowRunDetail, s: RunStep) => run.status !== 'running' && s.process !== null && s.kind !== 'copied'
 
-// Agent, script, Sentry and connector steps can be stopped while they go.
+// Agent, script and connector steps can be stopped while they go.
 export const stoppable = (s: { kind: ProcessKind | 'copied' | 'input' | 'loop'; status: StepStatus }) =>
-  s.status === 'active' && (s.kind === 'agent' || s.kind === 'script' || s.kind === 'sentry' || s.kind === 'connector')
+  s.status === 'active' && (s.kind === 'agent' || s.kind === 'script' || s.kind === 'connector')
 
 function Step({
   run,
@@ -403,7 +403,7 @@ function Step({
         {s.prompt && s.kind !== 'loop' && (
           <details className="step-prompt">
             <summary>
-              {s.kind === 'script' ? 'Script it ran' : s.kind === 'sentry' ? 'Request sent to Sentry' : s.kind === 'connector' ? 'Operation it carried out' : 'Prompt sent to the agent'}
+              {s.kind === 'script' ? 'Script it ran' : s.kind === 'connector' ? 'Operation it carried out' : 'Prompt sent to the agent'}
             </summary>
             <pre>{s.prompt}</pre>
           </details>

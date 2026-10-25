@@ -9,7 +9,7 @@ import (
 )
 
 // Script processes run in the worker with bash, which has curl and jq to
-// fetch from APIs such as Sentry's. Each object the script takes is a file in
+// fetch from public APIs. Each object the script takes is a file in
 // the directory $INPUTS points to, named after the object, and what it prints
 // is its output, which must follow the interface of what it generates as an
 // agent's output does: {"data": ...} for an object without attributes, a

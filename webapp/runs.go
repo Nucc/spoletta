@@ -667,7 +667,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		writeJSON(w, http.StatusOK, rn)
 	})
 
-	// Stops an agent, script, Sentry or connector step still going. It fails, which ends
+	// Stops an agent, script or connector step still going. It fails, which ends
 	// its branch; the rest of the run goes on.
 	mux.HandleFunc("POST /api/runs/{run}/steps/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		runID, err1 := strconv.ParseInt(r.PathValue("run"), 10, 64)

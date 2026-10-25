@@ -240,7 +240,6 @@ func TestRestoreBringsBackTheWholeBoard(t *testing.T) {
 		"settings": map[string]any{"repositories": []string{"api"}}})
 	lint := a.newProcess(f.ID, map[string]any{"name": "Lint", "kind": kindScript, "script": "echo ok"})
 	review := a.newProcess(f.ID, map[string]any{"name": "Review", "kind": kindHuman, "prompt": "Check it."})
-	a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindSentry})
 	inner := a.newProcess(f.ID, map[string]any{"name": "Inner", "kind": kindFlow, "recording": true})
 	a.newProcess(f.ID, map[string]any{"name": "Call", "kind": kindSubflow, "settings": map[string]any{"flow": callee.ID}})
 

@@ -2,8 +2,9 @@
 
 Spoletta is a visual builder and engine for agent workflows. You draw a flow
 on a board, made of the things that happen and the things they work on, and
-Spoletta runs it: AI coding agents, bash scripts, people and Sentry fetches
-each carry out their part, and every run is recorded step by step.
+Spoletta runs it: AI coding agents, bash scripts, people and built-in
+connectors such as GitHub and Slack each carry out their part, and every run
+is recorded step by step.
 
 The full documentation is at **[spoletta.com/docs](https://spoletta.com/docs)**.
 
@@ -34,9 +35,9 @@ next.
 | Agent | an AI coding agent ([pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)), optionally in git checkouts of the flow's repositories and with MCP servers |
 | Script | bash, with `curl` and `jq` |
 | Human | a person in the Spoletta UI, approving, sending work back or filling something in |
-| Sentry | Spoletta itself, fetching issues from Sentry |
 | Flow | a board of its own, zoomed into, which can run once per item of a list |
 | Subflow | another flow, a procedure reused across jobs |
+| Connector | Spoletta itself, carrying out an operation of a built-in connector, such as commenting on a GitHub issue or calling an HTTP API |
 
 Objects hold JSON. Their attributes give it a shape, their parts nest other
 objects, and persistent objects remember what earlier runs handled, so the
@@ -76,7 +77,7 @@ podman compose up --build
 then open http://localhost:8080.
 
 The worker uses the models in your pi config (`~/.pi/agent/models.json` and
-`settings.json`, or `PI_CONFIG_DIR`). Model API keys, a Sentry token, a
+`settings.json`, or `PI_CONFIG_DIR`). Model API keys, a
 token to clone the flows' repositories and the OpenID Connect settings for
 signing in, with your identity provider, Google or both, go in a `.env` file
 next to `compose.yaml`; the comments in [compose.yaml](compose.yaml) list

@@ -1,0 +1,92 @@
+# Builds and tests the webapp, its frontend and the worker on every push to
+# main and every pull request, as AGENTS.md's Build & test section runs them
+# by hand. A newer push to the same pull request cancels the run before it.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  webapp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webapp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: webapp/go.mod
+          cache-dependency-path: webapp/go.sum
+      - run: go build ./... && go vet ./... && go test .
+
+  # The webapp started for real on MySQL, driven over HTTP with the worker
+  # faked, on the MySQL compose.yaml runs.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: docker.io/library/mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: rootpass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -prootpass"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: webapp
+    env:
+      # Named, so the tests fail rather than skip when MySQL isn't there.
+      TEST_DB_ADDR: 127.0.0.1:3306
+      TEST_DB_USER: root
+      TEST_DB_PASSWORD: rootpass
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: webapp/go.mod
+          cache-dependency-path: webapp/go.sum
+      - run: go test -race -timeout 25m ./tests
+
+  # Tests needing podman (SANDBOX_TEST) skip; git and bash are on the runner.
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: worker/go.mod
+          # The worker has no dependencies, so no go.sum to key a cache on.
+          cache: false
+      - run: go build ./... && go vet ./... && go test -race .
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webapp/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webapp/frontend/package-lock.json
+      - run: npm ci && npm run build

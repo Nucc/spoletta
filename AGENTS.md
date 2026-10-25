@@ -49,6 +49,7 @@ Visual builder and engine for agent workflows, modeled on OPM (Object-Process Me
 - Unit tests: `cd webapp && go test .`
 - E2E tests: `cd webapp && go test -race ./tests` need compose MySQL on 127.0.0.1:3306 (`podman compose up -d mysql`; `MYSQL_PUBLISH` and `TEST_DB_ADDR` move it); otherwise skipped. They build and start the real webapp, drive it over HTTP, and fake the worker. New behavior gets an e2e test in `tests/*_e2e_test.go`.
 - Full stack: `podman compose up --build`, app on http://localhost:8080.
+- CI (`.github/workflows/ci.yml`) runs all of the above but the full stack on every push to main and pull request, the e2e tests on a MySQL service like compose's.
 
 ## Conventions
 - Comments are plain English prose explaining what and why, in the domain's vocabulary; every file starts with one describing its concept. Match that.

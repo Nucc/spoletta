@@ -65,6 +65,20 @@ type searchNode struct {
 
 var allRows = &searchNode{kind: "all"}
 
+// What separates terms: the characters both Go's unicode.IsSpace and
+// JavaScript's \s take as space, spelled out so query.ts can list the very
+// same ones. U+0085, which only Go counts, and U+FEFF, which only
+// JavaScript does, are text.
+const searchSpaces = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+
+func isSearchSpace(r rune) bool { return strings.ContainsRune(searchSpaces, r) }
+
+// What splits a range's bounds: TO with space on either side.
+var rangeTo = regexp.MustCompile(`[` + searchSpaces + `]+TO[` + searchSpaces + `]+`)
+
+// What at gives past either end of the query, which no character in it is.
+const noRune rune = -1
+
 type searchParser struct {
 	s []rune
 	i int
@@ -96,13 +110,13 @@ func parseSearch(text string) *searchNode {
 
 func (p *searchParser) at(i int) rune {
 	if i < 0 || i >= len(p.s) {
-		return 0
+		return noRune
 	}
 	return p.s[i]
 }
 
 func (p *searchParser) ws() {
-	for p.i < len(p.s) && unicode.IsSpace(p.s[p.i]) {
+	for p.i < len(p.s) && isSearchSpace(p.s[p.i]) {
 		p.i++
 	}
 }
@@ -113,7 +127,7 @@ func (p *searchParser) word(w string) bool {
 		return false
 	}
 	next := p.at(p.i + len(w))
-	return next == 0 || unicode.IsSpace(next) || next == '(' || (w != "NOT" && next == ')')
+	return next == noRune || isSearchSpace(next) || next == '(' || (w != "NOT" && next == ')')
 }
 
 func (p *searchParser) or() *searchNode {
@@ -166,7 +180,7 @@ func (p *searchParser) and() *searchNode {
 
 func (p *searchParser) unary() *searchNode {
 	next := p.at(p.i + 1)
-	if p.s[p.i] == '-' && next != 0 && !unicode.IsSpace(next) && next != ')' {
+	if p.s[p.i] == '-' && next != noRune && !isSearchSpace(next) && next != ')' {
 		p.i++
 		n := p.primary()
 		if n.kind == "all" {
@@ -207,7 +221,7 @@ func (p *searchParser) primary() *searchNode {
 	}
 	// A key runs up to its colon; a term without one is text.
 	j := p.i
-	for j < len(p.s) && !unicode.IsSpace(p.s[j]) && !strings.ContainsRune("():", p.s[j]) {
+	for j < len(p.s) && !isSearchSpace(p.s[j]) && !strings.ContainsRune("():", p.s[j]) {
 		if p.s[j] == '\\' {
 			j++
 		}
@@ -230,7 +244,7 @@ func (p *searchParser) primary() *searchNode {
 func (p *searchParser) value(key string) *searchNode {
 	term := func(t searchTest) *searchNode { return &searchNode{kind: "term", key: key, hasKey: true, test: t} }
 	c := p.at(p.i)
-	if c == 0 || unicode.IsSpace(c) || c == ')' {
+	if c == noRune || isSearchSpace(c) || c == ')' {
 		return allRows
 	}
 	switch c {
@@ -249,8 +263,14 @@ func (p *searchParser) value(key string) *searchNode {
 		if closed {
 			p.i++
 		}
-		from, to, _ := strings.Cut(inner, " TO ")
-		from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+		// The bounds are split at the first TO with space around it; a
+		// second TO stays in the upper bound as written, and a range
+		// without one has only its lower bound.
+		from, to := inner, ""
+		if at := rangeTo.FindStringIndex(inner); at != nil {
+			from, to = inner[:at[0]], inner[at[1]:]
+		}
+		from, to = strings.TrimFunc(from, isSearchSpace), strings.TrimFunc(to, isSearchSpace)
 		if from == "" {
 			from = "*"
 		}
@@ -262,6 +282,10 @@ func (p *searchParser) value(key string) *searchNode {
 	for _, op := range []string{">=", "<=", ">", "<"} {
 		if strings.HasPrefix(string(p.s[p.i:]), op) {
 			p.i += len(op)
+			// Nothing after it yet narrows nothing, as with a bare colon.
+			if c := p.at(p.i); c == noRune || isSearchSpace(c) || c == ')' {
+				return allRows
+			}
 			var v string
 			if p.at(p.i) == '"' {
 				v = p.quoted()
@@ -284,18 +308,17 @@ func (p *searchParser) value(key string) *searchNode {
 // Text up to a space or a bracket, with a backslash keeping what follows it.
 func (p *searchParser) bare() string {
 	start := p.i
-	for p.i < len(p.s) && !unicode.IsSpace(p.s[p.i]) && p.s[p.i] != '(' && p.s[p.i] != ')' {
+	for p.i < len(p.s) && !isSearchSpace(p.s[p.i]) && p.s[p.i] != '(' && p.s[p.i] != ')' {
 		if p.s[p.i] == '\\' {
 			p.i++
 		}
 		p.i++
 	}
 	p.i = min(p.i, len(p.s))
-	if p.i == start {
-		p.i++ // A stray character, taken as text of its own.
-		if p.i > len(p.s) {
-			return ""
-		}
+	// A stray character, taken as text of its own; past the end there is
+	// none, and going there would leave the rest reading out of bounds.
+	if p.i == start && p.i < len(p.s) {
+		p.i++
 	}
 	return unescapeSearch(string(p.s[start:p.i]))
 }
@@ -316,7 +339,8 @@ func (p *searchParser) quoted() string {
 	return string(out)
 }
 
-var searchEscape = regexp.MustCompile(`\\(.)`)
+// A backslash keeps any character after it, a line break too.
+var searchEscape = regexp.MustCompile(`(?s)\\(.)`)
 
 func unescapeSearch(s string) string { return searchEscape.ReplaceAllString(s, "$1") }
 

@@ -6,6 +6,15 @@ import type { SearchFacet } from './api'
 // facets' values, and rewrites it as facets are ticked, so the query stays
 // the only thing saying what shows. See search.go for what a query says.
 
+// What separates terms: the characters both Go's unicode.IsSpace and
+// JavaScript's \s take as space, the same ones search.go lists. U+0085,
+// which only Go counts, and U+FEFF, which only JavaScript does, are text.
+const spaces = '\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000'
+const space = new RegExp(`[${spaces}]`)
+// What splits a range's bounds: TO with space on either side.
+const rangeTo = new RegExp(`[${spaces}]+TO[${spaces}]+`)
+const trim = (s: string) => s.replace(new RegExp(`^[${spaces}]+|[${spaces}]+$`, 'g'), '')
+
 // The facets a search found, by their key in lower case; two objects can
 // share a name.
 export type Facets = { list: SearchFacet[]; byKey: Map<string, number[]> }
@@ -29,10 +38,13 @@ export function resolve(facets: Facets, key: string): number[] {
   return [...facets.byKey].filter(([f]) => f.startsWith('@') && f.endsWith(tail)).flatMap(([, i]) => i)
 }
 
+// What a value can hold and still be written as it is.
+const plain = new RegExp(`^[^${spaces}():"\\\\[\\]<>*]+$`)
+
 // A value as a query takes it: quoted where it holds what would end it,
 // or a * that would stand for any text.
 export function quote(value: string): string {
-  return /^[^\s():"\\[\]<>*]+$/.test(value) && !/^(OR|AND|NOT)$/.test(value) && !value.startsWith('-')
+  return plain.test(value) && !/^(OR|AND|NOT)$/.test(value) && !value.startsWith('-')
     ? value
     : `"${value.replace(/["\\]/g, (c) => '\\' + c)}"`
 }
@@ -55,8 +67,6 @@ export type Node = { from: number; to: number } & (
 
 // A stretch of the query's text by what it is, for colouring it.
 export type Mark = { from: number; to: number; kind: 'key' | 'value' | 'op' | 'text' }
-
-const space = /\s/
 
 class Parser {
   i = 0
@@ -195,13 +205,21 @@ class Parser {
       const inner = this.s.slice(this.i + 1, end < 0 ? this.s.length : end)
       this.i = end < 0 ? this.s.length : end + 1
       this.mark(at, this.i, 'value')
-      const [from, to] = inner.split(/\s+TO\s+/)
-      return term({ op: 'range', from: (from ?? '').trim() || '*', to: (to ?? '').trim() || '*' })
+      // The bounds are split at the first TO with space around it; a
+      // second TO stays in the upper bound as written, and a range
+      // without one has only its lower bound.
+      const sep = rangeTo.exec(inner)
+      const from = sep ? inner.slice(0, sep.index) : inner
+      const to = sep ? inner.slice(sep.index + sep[0].length) : ''
+      return term({ op: 'range', from: trim(from) || '*', to: trim(to) || '*' })
     }
     const op = /^(>=|<=|>|<)/.exec(this.s.slice(this.i))?.[1] as '<' | '<=' | '>' | '>=' | undefined
     if (op) {
       this.mark(at, at + op.length, 'op')
       this.i += op.length
+      // Nothing after it yet narrows nothing, as with a bare colon.
+      const n = this.s[this.i]
+      if (n === undefined || space.test(n) || n === ')') return { kind: 'all', from: start, to: this.i }
       const v = this.s[this.i] === '"' ? this.quoted() : this.bare()
       this.mark(at + op.length, this.i, 'value')
       return v === '' ? { kind: 'all', from: start, to: this.i } : term({ op, value: v })
@@ -217,7 +235,9 @@ class Parser {
     while (this.i < this.s.length && !space.test(this.s[this.i]) && !'()'.includes(this.s[this.i]))
       this.i += this.s[this.i] === '\\' ? 2 : 1
     this.i = Math.min(this.i, this.s.length)
-    if (this.i === start) this.i++ // A stray character, taken as text of its own.
+    // A stray character, taken as text of its own; past the end there is
+    // none.
+    if (this.i === start && this.i < this.s.length) this.i++
     return unescape(this.s.slice(start, this.i))
   }
 
@@ -233,7 +253,8 @@ class Parser {
   }
 }
 
-const unescape = (s: string) => s.replace(/\\(.)/g, '$1')
+// A backslash keeps any character after it, a line break too.
+const unescape = (s: string) => s.replace(/\\([\s\S])/g, '$1')
 
 // The query as a tree, and its text marked by what each part is. Brackets
 // closing nothing are skipped, so the rest still counts.

@@ -275,7 +275,12 @@ tunnels as the step ends. The proxy reaches:
 
 It dials only public addresses, unless an admin allowed the host by name, so
 neither an allowed name nor a repository URL can lead to the webapp's
-database or neighbours. Every connection goes in the run's log.
+database or neighbours. An IPv6 address carrying an IPv4 one (NAT64's
+`64:ff9b::/96` and `64:ff9b:1::/48`, the IPv4-compatible `::/96`, 6to4's
+`2002::/16`) is judged as the IPv4 address it carries, so the metadata
+service at `169.254.169.254` is out of reach written either way, while a
+public address behind NAT64 is dialled; Teredo's `2001::/32` is never
+dialled. Every connection goes in the run's log.
 
 So under a sandbox, a script that calls an API or installs packages needs its
 host allowed. pi's own requests go to the webapp directly. Bedrock without a

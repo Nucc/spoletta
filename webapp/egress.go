@@ -403,10 +403,45 @@ func (b *egressBroker) logConnection(g *egressGrant, format string, args ...any)
 // 198.18.0.0/15 is for benchmarking networks, and 240.0.0.0/4, broadcast
 // with it, is reserved. IPNet.Contains takes an IPv4 address written as
 // IPv6 (::ffff:100.64.0.1) as the IPv4 one, so neither form gets past.
+//
+// IPv6 has ranges of its own like them: the deprecated site-local
+// fec0::/10 is reached only by a host allowed, as unique local fc00::/7
+// is, and Teredo's 2001::/32 never, since the IPv4 addresses it carries are
+// obfuscated and the range is all but unused.
 var (
-	unreachableNets = parseNets("0.0.0.0/8")
-	internalNets    = parseNets("100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4")
+	unreachableNets = parseNets("0.0.0.0/8", "2001::/32")
+	internalNets    = parseNets("100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4", "fec0::/10")
 )
+
+// The IPv6 ranges that carry an IPv4 address inside, which a NAT64
+// gateway, a 6to4 relay or the system itself may turn into a connection to
+// that IPv4 address: NAT64's well-known 64:ff9b::/96 and local-use
+// 64:ff9b:1::/48 and the deprecated IPv4-compatible ::/96 in their last 32
+// bits, 6to4's 2002::/16 in the 32 after its first 16. Such an address is
+// judged as the IPv4 one it carries, so 64:ff9b::a9fe:a9fe is the metadata
+// service, never reached, while a public IPv4 address behind NAT64, how an
+// IPv6-only cluster reaches the IPv4 internet, is dialled as it would be
+// written plainly. Refusing the ranges outright would cut such clusters off
+// from most of the internet for nothing the IPv4 rules don't already catch.
+var (
+	nat64Nets     = parseNets("64:ff9b::/96", "64:ff9b:1::/48", "::/96")
+	sixToFourNets = parseNets("2002::/16")
+)
+
+// The IPv4 address an IPv6 address carries, or the address itself when it
+// carries none.
+func embeddedIPv4(ip net.IP) net.IP {
+	if ip.To4() != nil || len(ip) != net.IPv6len {
+		return ip
+	}
+	switch {
+	case inNets(ip, nat64Nets):
+		return net.IPv4(ip[12], ip[13], ip[14], ip[15])
+	case inNets(ip, sixToFourNets):
+		return net.IPv4(ip[2], ip[3], ip[4], ip[5])
+	}
+	return ip
+}
 
 func parseNets(cidrs ...string) []*net.IPNet {
 	nets := make([]*net.IPNet, len(cidrs))
@@ -435,11 +470,14 @@ func refusePrivate(listed, loopback bool) func(network, address string, _ syscal
 		if ip == nil || loopback && ip.IsLoopback() {
 			return nil
 		}
+		// Judged as the IPv4 address it carries, if any, though named as written.
+		shown := ip
+		ip = embeddedIPv4(ip)
 		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || inNets(ip, unreachableNets) {
-			return fmt.Errorf("%s isn't an address steps may reach", ip)
+			return fmt.Errorf("%s isn't an address steps may reach", shown)
 		}
 		if (ip.IsPrivate() || inNets(ip, internalNets)) && !listed {
-			return fmt.Errorf("%s is a private address, which only a host an admin allowed may be at", ip)
+			return fmt.Errorf("%s is a private address, which only a host an admin allowed may be at", shown)
 		}
 		return nil
 	}

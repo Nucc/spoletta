@@ -49,6 +49,8 @@ func TestRefusePrivateInternalRanges(t *testing.T) {
 		"198.18.0.1:443", "198.19.255.1:80", // benchmarking
 		"240.0.0.1:443", "255.255.255.255:80", // reserved, and broadcast
 		"[::ffff:100.64.0.1]:443", "[::ffff:10.0.0.5]:443", "[::ffff:198.18.0.1]:443", // IPv4 written as IPv6
+		"[64:ff9b::a00:5]:443", "[64:ff9b:1::6440:1]:443", "[::a00:5]:443", "[2002:a00:5::1]:443", // private IPv4 carried in IPv6
+		"[fec0::1]:443", "[fc00::1]:443", "[fd12:3456::1]:443", // site-local, and unique local
 	}
 	for _, addr := range internal {
 		if refusePrivate(false, false)("tcp", addr, nil) == nil {
@@ -58,12 +60,19 @@ func TestRefusePrivateInternalRanges(t *testing.T) {
 			t.Errorf("%s was refused for a host an admin allowed: %v", addr, err)
 		}
 	}
-	for _, addr := range []string{"127.0.0.1:443", "[::ffff:127.0.0.1]:443", "0.0.0.0:443", "0.1.2.3:443", "[::ffff:169.254.169.254]:80"} {
+	for _, addr := range []string{
+		"127.0.0.1:443", "[::ffff:127.0.0.1]:443", "0.0.0.0:443", "0.1.2.3:443", "[::ffff:169.254.169.254]:80",
+		"[64:ff9b::a9fe:a9fe]:80", "[64:ff9b::7f00:1]:443", "[64:ff9b:1::a9fe:a9fe]:80", // the metadata service and loopback behind NAT64
+		"[::a9fe:a9fe]:80", "[::7f00:1]:443", "[2002:a9fe:a9fe::1]:80", "[2002:7f00:1::1]:443", // IPv4-compatible, and 6to4
+		"[2001:0:4136:e378:8000:63bf:3fff:fdd2]:443", // Teredo
+	} {
 		if refusePrivate(true, false)("tcp", addr, nil) == nil {
 			t.Errorf("%s was dialled for a host an admin allowed", addr)
 		}
 	}
-	for _, addr := range []string{"93.184.216.34:443", "100.128.0.1:443", "198.20.0.1:443", "192.0.1.1:443", "[2606:2800:220:1::1]:443"} {
+	for _, addr := range []string{"93.184.216.34:443", "100.128.0.1:443", "198.20.0.1:443", "192.0.1.1:443", "[2606:2800:220:1::1]:443",
+		"[2606:4700::1111]:443", "[64:ff9b::5db8:d822]:443", "[64:ff9b:1::5db8:d822]:443", "[2002:5db8:d822::1]:443", // public IPv6, and public IPv4 carried in it
+	} {
 		if err := refusePrivate(false, false)("tcp", addr, nil); err != nil {
 			t.Errorf("the public %s was refused: %v", addr, err)
 		}

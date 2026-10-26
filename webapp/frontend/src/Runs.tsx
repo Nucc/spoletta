@@ -315,6 +315,7 @@ export function RunPanel({
   onCompare,
   onStop,
   onStopStep,
+  onOpenStep,
   onOpenRun,
   onRerun,
   onTryAgain,
@@ -334,6 +335,8 @@ export function RunPanel({
   onCompare: () => void
   onStop: () => void
   onStopStep: (id: number) => void
+  // Opens a step of a run in its panel, such as one a move to another server cut short.
+  onOpenStep: (run: number, step: number) => void
   // Opens another run: the one a recording flow process ran as, or the one it ran in.
   onOpenRun: (id: number) => void
   // Opens the dialog re-running this run from the step's process; see RerunDialog.

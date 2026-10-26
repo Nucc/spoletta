@@ -3658,6 +3658,7 @@ export default function Board({
             run={runDetail}
             onStop={() => onStop(runDetail.id)}
             onStopStep={(step) => onStopStep(runDetail.id, step)}
+            onOpenStep={openStep}
             focus={runFocus}
             onClearFocus={() => setRunFocus(null)}
             onLogs={() => setRunWindow('logs')}

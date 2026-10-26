@@ -13,7 +13,8 @@ import (
 // keeps the whole board as a version does. The newest step not undone is
 // the board as it is; undoing goes back a step and redoing forward again,
 // rewriting the board as versions do. A change made after undoing drops the
-// steps undone, so they can't be redone.
+// steps undone, so they can't be redone. Each step added or gone to is a
+// change of the board, which the others with it open load (presence.go).
 
 // How many steps a flow's history keeps.
 const historySteps = 100
@@ -48,8 +49,9 @@ func boardStep(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error) {
 }
 
 // Adds the board as it is as a step, unless the board is on the step it
-// already is; a step added drops the steps undone. Says whether it added one.
-func recordStep(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
+// already is; a step added drops the steps undone, and is a change by by.
+// Says whether it added one.
+func recordStep(ctx context.Context, tx *sql.Tx, flow int64, by boardChanger) (bool, error) {
 	s, err := boardStep(ctx, tx, flow)
 	if err != nil {
 		return false, err
@@ -73,6 +75,9 @@ func recordStep(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
 	if _, err := tx.ExecContext(ctx, "INSERT INTO flow_history (flow_id, snapshot) VALUES (?, ?)", flow, body); err != nil {
 		return false, err
 	}
+	if err := noteBoardChange(ctx, tx, flow, by); err != nil {
+		return false, err
+	}
 	var oldest int64
 	err = tx.QueryRowContext(ctx, "SELECT id FROM flow_history WHERE flow_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?", flow, historySteps-1).Scan(&oldest)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -87,8 +92,8 @@ func recordStep(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
 
 // Rewrites the board as step has it. The step then keeps the board as it
 // came out, with copies following what they copy as it is now, so that the
-// board is on it.
-func goToStep(ctx context.Context, tx *sql.Tx, flow, step int64) error {
+// board is on it. It is a change by by.
+func goToStep(ctx context.Context, tx *sql.Tx, flow, step int64, by boardChanger) error {
 	var body []byte
 	if err := tx.QueryRowContext(ctx, "SELECT snapshot FROM flow_history WHERE id = ?", step).Scan(&body); err != nil {
 		return err
@@ -105,14 +110,16 @@ func goToStep(ctx context.Context, tx *sql.Tx, flow, step int64) error {
 	} else if body, err = json.Marshal(s); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, "UPDATE flow_history SET snapshot = ? WHERE id = ?", body, step)
-	return err
+	if _, err := tx.ExecContext(ctx, "UPDATE flow_history SET snapshot = ? WHERE id = ?", body, step); err != nil {
+		return err
+	}
+	return noteBoardChange(ctx, tx, flow, by)
 }
 
 // Goes back a step, if there is one before the board's.
-func undoStep(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
+func undoStep(ctx context.Context, tx *sql.Tx, flow int64, by boardChanger) (bool, error) {
 	// A change not called for yet is the step undone.
-	if _, err := recordStep(ctx, tx, flow); err != nil {
+	if _, err := recordStep(ctx, tx, flow, by); err != nil {
 		return false, err
 	}
 	current, _, err := currentStep(ctx, tx, flow)
@@ -130,13 +137,13 @@ func undoStep(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
 	if _, err := tx.ExecContext(ctx, "UPDATE flow_history SET undone = TRUE WHERE id = ?", current); err != nil {
 		return false, err
 	}
-	return true, goToStep(ctx, tx, flow, previous)
+	return true, goToStep(ctx, tx, flow, previous, by)
 }
 
 // Goes forward to the step undone last, if any.
-func redoStep(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
+func redoStep(ctx context.Context, tx *sql.Tx, flow int64, by boardChanger) (bool, error) {
 	// A change since undoing drops the steps undone.
-	if recorded, err := recordStep(ctx, tx, flow); err != nil || recorded {
+	if recorded, err := recordStep(ctx, tx, flow, by); err != nil || recorded {
 		return false, err
 	}
 	var next int64
@@ -150,7 +157,7 @@ func redoStep(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
 	if _, err := tx.ExecContext(ctx, "UPDATE flow_history SET undone = FALSE WHERE id = ?", next); err != nil {
 		return false, err
 	}
-	return true, goToStep(ctx, tx, flow, next)
+	return true, goToStep(ctx, tx, flow, next, by)
 }
 
 // Whether the flow's history has a step to undo, and one to redo.
@@ -162,8 +169,10 @@ func historyOf(ctx context.Context, tx *sql.Tx, flow int64) (historyState, error
 }
 
 func registerHistoryRoutes(mux *http.ServeMux, db *sql.DB) {
-	// Each changes the board's history, and says what it holds then.
-	for path, step := range map[string]func(context.Context, *sql.Tx, int64) (bool, error){
+	// Each changes the board's history, and says what it holds then. The
+	// board names itself with ?client=, so that it isn't told of its own
+	// changes; see presence.go.
+	for path, step := range map[string]func(context.Context, *sql.Tx, int64, boardChanger) (bool, error){
 		"POST /api/history":      recordStep,
 		"POST /api/history/undo": undoStep,
 		"POST /api/history/redo": redoStep,
@@ -195,7 +204,7 @@ func registerHistoryRoutes(mux *http.ServeMux, db *sql.DB) {
 				http.Error(w, "can't undo or redo while the flow is running", http.StatusConflict)
 				return
 			}
-			changed, err := step(ctx, tx, f)
+			changed, err := step(ctx, tx, f, requestChanger(r))
 			if err != nil {
 				serverError(w, err)
 				return

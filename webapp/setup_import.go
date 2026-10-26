@@ -442,7 +442,7 @@ func (im *importer) importEntry(e *setupEntry) error {
 		if before, err = saveVersion(ctx, tx, fi.id, true, im.saved); err != nil {
 			return err
 		}
-		if _, err := recordStep(ctx, tx, fi.id); err != nil {
+		if _, err := recordStep(ctx, tx, fi.id, boardChanger{user: im.saved.by}); err != nil {
 			return err
 		}
 		if !isStruct {
@@ -494,7 +494,7 @@ func (im *importer) importEntry(e *setupEntry) error {
 	if err := setTags(ctx, tx, fi.id, tags); err != nil {
 		return err
 	}
-	if _, err := recordStep(ctx, tx, fi.id); err != nil {
+	if _, err := recordStep(ctx, tx, fi.id, boardChanger{user: im.saved.by}); err != nil {
 		return err
 	}
 	im.res.Flows = append(im.res.Flows, importedFlow{ID: fi.id, Name: e.name, Created: !exists, Version: before})

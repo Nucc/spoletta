@@ -16,7 +16,11 @@ payload starts, as the API's requests are by their `Idempotency-Key`, and
 the GitHub payloads they ignored), the tokens steps are handed for the proxies (only their SHA-256,
 [webapp/grants.go](../webapp/grants.go)), what runs and people spent, the
 steps each person has going, MCP sign-ins under way, and the limits, which
-each replica reads again every five seconds.
+each replica reads again every five seconds. So is who has a board open,
+each browser tab saying so every few seconds, and what changed boards
+lately, which tells the other tabs to load them again
+([webapp/presence.go](../webapp/presence.go)); both go by the database's
+clock.
 
 What is going on isn't: a run is walked by the replica that started it, or
 took it over, which holds its steps' connections to the worker, its reviews

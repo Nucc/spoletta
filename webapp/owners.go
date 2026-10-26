@@ -147,10 +147,11 @@ func flowAccess(ctx context.Context, db querier, u *user, flow int64) (string, e
 var decidePattern = regexp.MustCompile(`^/api/runs/\d+/steps/\d+$`)
 
 // The access a request needs to the flows it is about. Starring a flow as
-// a favourite changes nothing in it, so seeing it is enough.
+// a favourite, or saying one has its board open, changes nothing in it, so
+// seeing it is enough.
 func neededAccess(r *http.Request) string {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead || (r.Method == http.MethodPatch && decidePattern.MatchString(r.URL.Path)) ||
-		favouritePattern.MatchString(r.URL.Path) {
+		favouritePattern.MatchString(r.URL.Path) || presencePattern.MatchString(r.URL.Path) {
 		return accessReview
 	}
 	return accessEdit

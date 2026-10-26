@@ -79,6 +79,10 @@ func planRerun(ctx context.Context, tx *sql.Tx, src run, stepID int64, board sna
 	if src.Status == runRunning {
 		return p, fmt.Sprintf("run #%d is still going; stop it or wait for it to end", src.ID), nil
 	}
+	// A re-run would go on past the process, as a real run; see trials.go.
+	if src.TrialOf != nil {
+		return p, fmt.Sprintf("run #%d is a trial of %s; try it again instead", src.ID, src.TrialOfName), nil
+	}
 	// The run of a recording flow process walks its board; any other run,
 	// such as that of the flow a subflow process ran, its flow's top board.
 	on := src.Process

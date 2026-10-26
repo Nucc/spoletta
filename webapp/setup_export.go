@@ -377,6 +377,34 @@ func (x exporter) process(p process) setupProcess {
 			sp.Next = append(sp.Next, x.e.procIDs[c.Target])
 		}
 	}
+	// What a sample gives an object the process no longer takes, or one
+	// deleted since, stays out, as the file couldn't have it.
+	takes := map[int64]bool{}
+	for _, l := range x.e.s.Links {
+		if l.Process == p.ID && l.Direction == directionInput {
+			takes[l.Object] = true
+		}
+	}
+	for _, sm := range x.e.s.Samples {
+		if sm.Process != p.ID {
+			continue
+		}
+		ss := setupSample{Name: sm.Name}
+		for _, in := range sm.Inputs {
+			if !takes[in.Object] {
+				continue
+			}
+			si := setupSampleInput{Object: x.e.objIDs[in.Object], Content: in.Content}
+			if in.State != 0 {
+				si.State = x.e.stateIDs[in.State]
+			}
+			ss.Inputs = append(ss.Inputs, si)
+		}
+		if sp.Samples == nil {
+			sp.Samples = &[]setupSample{}
+		}
+		*sp.Samples = append(*sp.Samples, ss)
+	}
 	if p.Kind == kindFlow {
 		b := x.board(&p.ID)
 		sp.Board = &b

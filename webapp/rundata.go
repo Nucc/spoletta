@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,6 +73,9 @@ type dataResult struct {
 	Matched   int  `json:"matched"`
 	Searched  int  `json:"searched"`
 	Truncated bool `json:"truncated"`
+	// How many of those read were trials the query left out, not naming the
+	// trial facet; see trials.go.
+	Trials int `json:"trials"`
 }
 
 // The flow's runs the query matches, newest first or as sorted, and what
@@ -106,6 +110,7 @@ func flowData(ctx context.Context, db *sql.DB, flow int64, query, sortBy string)
 	startedBy := t.facet("started_by", facet{Key: "started_by", Label: "Started by", Group: "Run"})
 	item := t.facet("item", facet{Key: "item", Label: "Item", Group: "Run"})
 	parent := t.facet("parent", facet{Key: "parent", Label: "In run", Group: "Run"})
+	trial := t.facet("trial", facet{Key: "trial", Label: "Trial of", Group: "Run"})
 	names := map[string]string{}
 	// The board's objects first, so their facets go in its order.
 	for _, o := range objects {
@@ -133,6 +138,9 @@ func flowData(ctx context.Context, db *sql.DB, flow int64, query, sortBy string)
 			if rn.Parent != nil {
 				r[parent] = []string{strconv.FormatInt(*rn.Parent, 10)}
 			}
+			if rn.TrialOf != nil {
+				r[trial] = []string{rn.TrialOfName}
+			}
 			for _, c := range rn.Cells {
 				cellFacets(t, r, names, c)
 			}
@@ -143,6 +151,14 @@ func flowData(ctx context.Context, db *sql.DB, flow int64, query, sortBy string)
 
 	s := t.search()
 	q := parseSearch(query)
+	if !s.names(q, s.idOf("trial")) {
+		q = withoutTrials(q)
+		for _, rn := range runs {
+			if rn.TrialOf != nil {
+				out.Trials++
+			}
+		}
+	}
 	key, desc := sortParam(sortBy)
 	matched := s.run(q, key, desc)
 	s.count(q, matched)
@@ -151,6 +167,15 @@ func flowData(ctx context.Context, db *sql.DB, flow int64, query, sortBy string)
 		out.Rows = append(out.Rows, runs[i])
 	}
 	return out, runCells(ctx, db, objects, out.Rows)
+}
+
+// The query with trials left out, as a query naming the trial facet
+// doesn't leave them: -trial:* among its terms, which the facet's own
+// counts leave out, as they do any term ticking its values, so they still
+// say how many trials there are.
+func withoutTrials(q *searchNode) *searchNode {
+	none := &searchNode{kind: "not", nodes: []*searchNode{{kind: "term", key: "trial", hasKey: true, test: searchTest{op: "exists"}}}}
+	return &searchNode{kind: "and", nodes: append(slices.Clone(clauses(q)), none)}
 }
 
 // What tells a run's objects apart: their id, or for one deleted before ids

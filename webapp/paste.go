@@ -12,8 +12,9 @@ import (
 // board, of the same flow or of another. Copying only remembers what was
 // selected; pasting copies it as it is by then, with what it takes along: a
 // flow process's board with all on it, an object's states, attributes and
-// the objects making it up, and the links, decisions and connections between
-// what is copied. Links to anything left behind are left behind too.
+// the objects making it up, the links, decisions and connections between
+// what is copied, and the samples its processes are tried on. Links to
+// anything left behind are left behind too, as is what samples give it.
 //
 // The copies are new rows of their own. A copy of a module's object stays a
 // copy of it, following it, unless it is pasted into that module. An object
@@ -313,6 +314,27 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 			if _, err := tx.ExecContext(ctx, "INSERT INTO connections (source_id, target_id, kind) VALUES (?, ?, ?)", source, target, c.Kind); err != nil {
 				return res, "", err
 			}
+		}
+	}
+
+	// The samples of the processes copied go along, with what they give the
+	// objects copied along; one giving none of those any more stays behind.
+	for _, sm := range s.Samples {
+		process, ok := p.procMap[sm.Process]
+		if !ok {
+			continue
+		}
+		inputs := sampleInputs{}
+		for _, in := range sm.Inputs {
+			if object, ok := p.objMap[in.Object]; ok {
+				inputs = append(inputs, sampleInput{Object: object, State: p.stateMap[in.State], Content: in.Content})
+			}
+		}
+		if len(inputs) == 0 && len(sm.Inputs) > 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO process_samples (process_id, name, inputs) VALUES (?, ?, ?)", process, sm.Name, inputs); err != nil {
+			return res, "", err
 		}
 	}
 

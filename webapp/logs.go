@@ -133,6 +133,9 @@ func logRunStarted(db *sql.DB, id int64) {
 	if rn.RerunOf != nil {
 		msg += fmt.Sprintf("; a re-run of run %d from %s", *rn.RerunOf, rn.RerunFromName)
 	}
+	if rn.TrialOf != nil {
+		msg += "; a trial of " + rn.TrialOfName + " alone, which stores nothing real runs see"
+	}
 	if rn.Parent != nil {
 		msg += fmt.Sprintf("; within run %d", *rn.Parent)
 		if rn.ProcessName != "" {

@@ -122,6 +122,24 @@ func TestSearchCountsFacetsWithoutTheirOwnTicks(t *testing.T) {
 	}
 }
 
+// A term leaving out every row with a value of a facet, -tags:*, ticks
+// none of its values, but its counts leave it out all the same.
+func TestSearchCountsFacetsWithoutTheirOwnExclusions(t *testing.T) {
+	tb := searchFixture()
+	s := tb.search()
+	q := parseSearch("-tags:*")
+	if got := s.run(q, "", false); fmt.Sprint(got) != "[1 3]" {
+		t.Fatalf("-tags:* matches rows %v, want the second and fourth", got)
+	}
+	s.count(q, s.run(q, "", false))
+	if got := fmt.Sprint(tb.facets[5].Values); got != "[{b 2} {a 1}]" {
+		t.Errorf("tags counts = %s, want those of every row", got)
+	}
+	if got := fmt.Sprint(tb.facets[1].Values); got != "[{done 1} {failed 1}]" {
+		t.Errorf("status counts = %s, want those of the rows without tags", got)
+	}
+}
+
 // Content reads as the board's cells read it: in a code fence, or with
 // strings holding JSON again.
 func TestContentValueUnwrapsTwiceEncodedJSON(t *testing.T) {

@@ -164,6 +164,7 @@ func main() {
 	registerLoopRoutes(mux, db, eng)
 	registerLogRoutes(mux, db)
 	registerRerunRoutes(mux, db, eng)
+	registerTrialRoutes(mux, db, eng)
 	registerAPIRoutes(mux, db, eng, auth != nil)
 	registerDataRoutes(mux, db)
 	registerScheduleRoutes(mux, db)

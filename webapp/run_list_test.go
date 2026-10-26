@@ -34,9 +34,15 @@ func TestParseRunFilter(t *testing.T) {
 }
 
 func TestRunFilterQuery(t *testing.T) {
+	// Unfiltered, the list leaves trials out.
 	where, args := runFilter{limit: runPage}.query(7)
-	if where != " WHERE flow_id = ? ORDER BY id DESC LIMIT ?" || !reflect.DeepEqual(args, []any{int64(7), runPage}) {
+	if where != " WHERE flow_id = ? AND trial_of IS NULL ORDER BY id DESC LIMIT ?" || !reflect.DeepEqual(args, []any{int64(7), runPage}) {
 		t.Errorf("unfiltered: %q %v", where, args)
+	}
+	// Asked for, they are listed as runs started some other way are.
+	where, args = runFilter{origins: []string{"trial", "person"}, limit: runPage}.query(7)
+	if strings.Contains(where, "trial_of IS NULL") || !strings.Contains(where, "WHEN trial_of IS NOT NULL THEN 'trial'") || !reflect.DeepEqual(args, []any{int64(7), "trial", "person", runPage}) {
+		t.Errorf("trials: %q %v", where, args)
 	}
 
 	where, args = runFilter{statuses: []string{"waiting", "failed", "done"}, origins: []string{"rerun"}, before: 9, limit: 3}.query(7)

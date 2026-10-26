@@ -14,16 +14,17 @@ import (
 //     person, a review or a loop's question, is waiting rather than running,
 //     so the two pick apart the runs going.
 //   - started: how it started. Each run started one way, the first its
-//     markers say in this order: a re-run of another, on records a person
-//     picked, through the API, by a schedule, in another run (a flow
-//     process's board, an item of a list, a subflow), or else by a person,
-//     with the Run button. A re-run of a scheduled run is a re-run, and a
-//     run without sign-in a person's.
+//     markers say in this order: a trial of one process alone (trials.go),
+//     a re-run of another, on records a person picked, through the API, by
+//     a schedule, in another run (a flow process's board, an item of a
+//     list, a subflow), or else by a person, with the Run button. A re-run
+//     of a scheduled run is a re-run, and a run without sign-in a person's.
 //
 // Several values of either, repeated or comma-separated, are alternatives,
-// and a run must hold to both. before=<id> gives the runs older than that
-// one, the page after a page ending with it, and limit how many, at most
-// runPage.
+// and a run must hold to both. Picking no way it started picks every way
+// but a trial: trials stay out of the list unless asked for, as they do of
+// the Data page. before=<id> gives the runs older than that one, the page
+// after a page ending with it, and limit how many, at most runPage.
 
 // As many runs as a page of the list holds, and the most one may.
 const runPage = 200
@@ -32,14 +33,14 @@ const runPage = 200
 const runWaiting = "EXISTS (SELECT 1 FROM run_steps ws WHERE ws.run_id = runs.id AND ws.status = 'waiting')"
 
 // How a run started, as the list tells runs apart; runs unaliased.
-const runOrigin = `CASE WHEN rerun_of IS NOT NULL THEN 'rerun' WHEN record_id IS NOT NULL THEN 'record'
+const runOrigin = `CASE WHEN trial_of IS NOT NULL THEN 'trial' WHEN rerun_of IS NOT NULL THEN 'rerun' WHEN record_id IS NOT NULL THEN 'record'
 	WHEN api_key_id IS NOT NULL THEN 'api' WHEN schedule_id IS NOT NULL THEN 'schedule'
 	WHEN parent_run_id IS NOT NULL THEN 'run' ELSE 'person' END`
 
 // What the list can be narrowed by, in the order the board offers them.
 var (
 	runStatuses = []string{"running", "waiting", runDone, runFailed, runInterrupted, runTerminated}
-	runOrigins  = []string{"person", "schedule", "api", "rerun", "record", "run"}
+	runOrigins  = []string{"person", "schedule", "api", "rerun", "record", "run", "trial"}
 )
 
 // What narrows a page of the list.
@@ -124,6 +125,8 @@ func (f runFilter) query(flow int64) (string, []any) {
 		for _, o := range f.origins {
 			args = append(args, o)
 		}
+	} else {
+		where = append(where, "trial_of IS NULL")
 	}
 	if f.before > 0 {
 		where = append(where, "id < ?")

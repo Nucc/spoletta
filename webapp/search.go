@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -794,6 +795,15 @@ func (s *search) ticks(n *searchNode, facets string) bool {
 	return false
 }
 
+// Whether a term of the query is about the facets, ticking their values
+// or not.
+func (s *search) names(n *searchNode, facets string) bool {
+	if n.kind == "term" {
+		return n.hasKey && s.idOf(n.key) == facets
+	}
+	return slices.ContainsFunc(n.nodes, func(c *searchNode) bool { return s.names(c, facets) })
+}
+
 // The values the term ticks.
 func ticked(n *searchNode) []string {
 	switch n.kind {
@@ -883,14 +893,17 @@ func (s *search) count(q *searchNode, matched []int) {
 		rows := matched
 		var rest []*searchNode
 		var tick []string
+		// -status:* ticks no value, but is left out all the same.
+		ticking := false
 		for _, c := range clauses(q) {
 			if s.ticks(c, id) {
 				tick = append(tick, ticked(c)...)
+				ticking = true
 			} else {
 				rest = append(rest, c)
 			}
 		}
-		if len(tick) > 0 {
+		if ticking {
 			rows = nil
 			restNode := &searchNode{kind: "and", nodes: rest}
 			for j, r := range t.rows {

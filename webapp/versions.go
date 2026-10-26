@@ -15,9 +15,9 @@ import (
 
 // A version is a saved snapshot of a flow's whole board: its processes, objects
 // with their states and attributes, links, connections and start node, and
-// the flow's settings. Saving always adds a version on top, and jumping to
-// one rewrites the board as it was, leaving the settings, so no version is
-// ever lost. The board
+// the samples its processes are tried on, and the flow's settings. Saving
+// always adds a version on top, and jumping to one rewrites the board as it
+// was, leaving the settings, so no version is ever lost. The board
 // keeps its rows' ids across jumps: runs refer to processes and objects by
 // id, and persistent objects remember what runs stored by object and
 // attribute id. A flow may publish one of its versions for the runs nobody
@@ -127,6 +127,9 @@ type snapshot struct {
 	// have none. Bringing the board back to a version, or undoing, leaves
 	// the flow's settings as they are, and history steps keep none.
 	Settings *flowSettings `json:"settings,omitempty"`
+	// What processes are tried on (see trials.go); left out while there are
+	// none, as in versions from before them.
+	Samples []processSample `json:"samples,omitempty"`
 }
 
 // Scans every row of query with scan, which reads the current row.
@@ -256,6 +259,16 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 		s.Boards = append(s.Boards, b)
 		return err
 	}, flow)
+	if err != nil {
+		return s, err
+	}
+	err = scanAll(ctx, tx, `SELECT sm.id, sm.process_id, sm.name, sm.inputs FROM process_samples sm
+		JOIN processes p ON p.id = sm.process_id WHERE p.flow_id = ? ORDER BY sm.id`, func(rows *sql.Rows) error {
+		var sm processSample
+		err := rows.Scan(&sm.ID, &sm.Process, &sm.Name, &sm.Inputs)
+		s.Samples = append(s.Samples, sm)
+		return err
+	}, flow)
 	return s, err
 }
 
@@ -347,6 +360,7 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		"DELETE a FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ?",
 		"DELETE st FROM object_states st JOIN objects o ON o.id = st.object_id WHERE o.flow_id = ?",
 		"DELETE b FROM inner_boards b JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ?",
+		"DELETE sm FROM process_samples sm JOIN processes p ON p.id = sm.process_id WHERE p.flow_id = ?",
 	} {
 		if _, err := tx.ExecContext(ctx, del, flow); err != nil {
 			return err
@@ -466,6 +480,16 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			if err := ensureBoard(ctx, tx, p.ID); err != nil {
 				return err
 			}
+		}
+	}
+	for _, sm := range s.Samples {
+		// One new to the board, as from a setup file, gets an id of its own.
+		var id any
+		if sm.ID != 0 {
+			id = sm.ID
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO process_samples (id, process_id, name, inputs) VALUES (?, ?, ?, ?)", id, sm.Process, sm.Name, sm.Inputs); err != nil {
+			return err
 		}
 	}
 	var endX, endY *float64

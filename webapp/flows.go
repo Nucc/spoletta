@@ -67,8 +67,9 @@ func flowHealths(ctx context.Context, db rowsQuerier, ids []int64) (map[int64]*f
 		return health[id]
 	}
 	in := placeholders(len(ids))
+	// A trial is no run of the flow's; see trials.go.
 	err := scanAll(ctx, db, `SELECT flow_id, COUNT(*), SUM(status = ?) FROM runs
-		WHERE parent_run_id IS NULL AND started_at >= ? AND flow_id IN `+in+` GROUP BY flow_id`, func(rows *sql.Rows) error {
+		WHERE parent_run_id IS NULL AND started_at >= ? AND trial_of IS NULL AND flow_id IN `+in+` GROUP BY flow_id`, func(rows *sql.Rows) error {
 		var id int64
 		var h flowHealth
 		err := rows.Scan(&id, &h.Runs, &h.Failed)
@@ -79,7 +80,7 @@ func flowHealths(ctx context.Context, db rowsQuerier, ids []int64) (map[int64]*f
 		return nil, err
 	}
 	err = scanAll(ctx, db, `SELECT flow_id, COUNT(*) FROM runs
-		WHERE status = ? AND parent_run_id IS NULL AND flow_id IN `+in+` GROUP BY flow_id`, func(rows *sql.Rows) error {
+		WHERE status = ? AND parent_run_id IS NULL AND trial_of IS NULL AND flow_id IN `+in+` GROUP BY flow_id`, func(rows *sql.Rows) error {
 		var id int64
 		var n int
 		err := rows.Scan(&id, &n)
@@ -188,7 +189,8 @@ func getFlow(ctx context.Context, db *sql.DB, id int64) (flow, error) {
 		return f, err
 	}
 	var rn run
-	err = scanRun(db.QueryRowContext(ctx, "SELECT "+runColumns+" FROM runs WHERE flow_id = ? AND parent_run_id IS NULL ORDER BY id DESC LIMIT 1", id), &rn)
+	// A trial is no run of the flow's; see trials.go.
+	err = scanRun(db.QueryRowContext(ctx, "SELECT "+runColumns+" FROM runs WHERE flow_id = ? AND parent_run_id IS NULL AND trial_of IS NULL ORDER BY id DESC LIMIT 1", id), &rn)
 	if err == nil {
 		f.LastRun = &rn
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -248,7 +250,7 @@ func listFlows(ctx context.Context, db *sql.DB, u *user) ([]flow, error) {
 		return nil, err
 	}
 	last := map[int64]*run{}
-	err = scanAll(ctx, db, "SELECT "+runColumns+" FROM (SELECT MAX(id) AS last_id FROM runs WHERE parent_run_id IS NULL GROUP BY flow_id) l JOIN runs ON runs.id = l.last_id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, "SELECT "+runColumns+" FROM (SELECT MAX(id) AS last_id FROM runs WHERE parent_run_id IS NULL AND trial_of IS NULL GROUP BY flow_id) l JOIN runs ON runs.id = l.last_id", func(rows *sql.Rows) error {
 		var rn run
 		err := scanRun(rows, &rn)
 		last[rn.Flow] = &rn

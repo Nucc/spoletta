@@ -20,6 +20,8 @@ package main
 // counted in the run and flow they ran in, so a procedure's process failing
 // inside another flow's run counts toward the procedure; the steps a re-run
 // copied, what a run was given, and the questions of loops aren't counted.
+// Nor is a trial of one process alone (trials.go), nor its step, though
+// what it spent counts toward what its flow spent: it cost that money.
 //
 // Only the flows the person sees count; see visibleFlows. Days are the
 // person's, in the time zone their browser names, else UTC: each starts at
@@ -220,7 +222,7 @@ func loadActivity(ctx context.Context, db *sql.DB, u *user, p period) (activity,
 	flows := map[int64]*flowActivity{}
 	day, dayArgs := p.dayOf("started_at")
 	of, ofArgs := ofFlows("flow_id", seen)
-	err = scanAll(ctx, db, "SELECT flow_id, "+day+` AS d, COUNT(*), SUM(status = ?), SUM(spent_micros), SUM(unpriced_calls)
+	err = scanAll(ctx, db, "SELECT flow_id, "+day+` AS d, SUM(trial_of IS NULL), SUM(status = ? AND trial_of IS NULL), SUM(spent_micros), SUM(unpriced_calls)
 		FROM runs WHERE parent_run_id IS NULL AND started_at >= ? AND `+of+` GROUP BY flow_id, d`, func(rows *sql.Rows) error {
 		var id, micros, unpriced int64
 		var d, runs, failed int
@@ -242,10 +244,10 @@ func loadActivity(ctx context.Context, db *sql.DB, u *user, p period) (activity,
 	if err != nil {
 		return a, err
 	}
-	if a.Running, err = listRuns(ctx, db, "status = ? AND parent_run_id IS NULL AND "+of, append([]any{runRunning}, ofArgs...)); err != nil {
+	if a.Running, err = listRuns(ctx, db, "status = ? AND parent_run_id IS NULL AND trial_of IS NULL AND "+of, append([]any{runRunning}, ofArgs...)); err != nil {
 		return a, err
 	}
-	if a.Failed, err = listRuns(ctx, db, "status = ? AND parent_run_id IS NULL AND started_at >= ? AND "+of,
+	if a.Failed, err = listRuns(ctx, db, "status = ? AND parent_run_id IS NULL AND trial_of IS NULL AND started_at >= ? AND "+of,
 		append([]any{runFailed, time.Now().Add(-recentFailures)}, ofArgs...)); err != nil {
 		return a, err
 	}
@@ -391,6 +393,7 @@ func failingProcesses(ctx context.Context, db *sql.DB, p period, seen []int64) (
 	err := scanAll(ctx, db, `SELECT r.flow_id, g.process_ref, g.steps, g.failed, g.last FROM (
 			SELECT s.process_ref, COUNT(*) AS steps, SUM(s.status = ?) AS failed, MAX(IF(s.status = ?, s.id, NULL)) AS last, MAX(s.run_id) AS run
 			FROM run_steps s WHERE s.kind IN `+placeholders(len(workKinds))+` AND s.started_at >= ? AND s.process_ref IS NOT NULL
+				AND s.run_id NOT IN (SELECT id FROM runs WHERE trial_of IS NOT NULL)
 			GROUP BY s.process_ref HAVING failed > 0
 		) g JOIN runs r ON r.id = g.run
 		WHERE `+of+` ORDER BY g.failed DESC, g.steps DESC, g.process_ref LIMIT ?`, func(rows *sql.Rows) error {
@@ -434,7 +437,7 @@ func reviewsDecided(ctx context.Context, db *sql.DB, p period, seen []int64) ([]
 	err := scanAll(ctx, db, `WITH d AS (
 			SELECT r.flow_id, s.process_ref, s.id, UNIX_TIMESTAMP(s.finished_at) - UNIX_TIMESTAMP(s.started_at) AS secs, s.instructions <> '' AS asked
 			FROM run_steps s JOIN runs r ON r.id = s.run_id
-			WHERE s.kind = ? AND s.started_at >= ? AND s.status = ? AND s.finished_at IS NOT NULL AND s.process_ref IS NOT NULL AND `+of+`
+			WHERE s.kind = ? AND s.started_at >= ? AND s.status = ? AND s.finished_at IS NOT NULL AND s.process_ref IS NOT NULL AND r.trial_of IS NULL AND `+of+`
 		), c AS (
 			SELECT d.*, CUME_DIST() OVER (PARTITION BY process_ref ORDER BY secs) AS cd, CUME_DIST() OVER (ORDER BY secs) AS cd_all FROM d
 		)

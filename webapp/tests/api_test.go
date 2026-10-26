@@ -510,9 +510,12 @@ type run struct {
 	// The name of the API key that started it, if one did.
 	APIKey string `json:"apiKey"`
 	// The shared record a person started it on, if one did.
-	Record     *int64     `json:"record"`
-	StartedAt  time.Time  `json:"startedAt"`
-	FinishedAt *time.Time `json:"finishedAt"`
+	Record *int64 `json:"record"`
+	// For a trial: the process a person tried in it.
+	TrialOf     *int64     `json:"trialOf"`
+	TrialOfName string     `json:"trialOfName"`
+	StartedAt   time.Time  `json:"startedAt"`
+	FinishedAt  *time.Time `json:"finishedAt"`
 }
 
 type schedule struct {

@@ -47,14 +47,18 @@ type run struct {
 	// The name of the API key that started it, if one did; see api.go.
 	APIKey string `json:"apiKey"`
 	// The shared record a person started it on, if one did; see record_runs.go.
-	Record     *int64     `json:"record"`
-	StartedAt  time.Time  `json:"startedAt"`
-	FinishedAt *time.Time `json:"finishedAt"`
+	Record *int64 `json:"record"`
+	// For a trial: the process a person tried in it, kept after it is
+	// deleted; see trials.go.
+	TrialOf     *int64     `json:"trialOf"`
+	TrialOfName string     `json:"trialOfName"`
+	StartedAt   time.Time  `json:"startedAt"`
+	FinishedAt  *time.Time `json:"finishedAt"`
 }
 
 // What scanRun reads of a run, selected from runs unaliased, which runWaiting
 // refers to.
-var runColumns = "id, flow_id, status, status = '" + runRunning + "' AND " + runWaiting + ", version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), record_id, started_at, finished_at"
+var runColumns = "id, flow_id, status, status = '" + runRunning + "' AND " + runWaiting + ", version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), record_id, trial_of, trial_of_name, started_at, finished_at"
 
 // The tokens a step's model calls took in and gave out, and what they cost
 // at the models' catalog prices, in dollars.
@@ -89,7 +93,7 @@ func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage,
 }
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Waiting, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.Record, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Waiting, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.Record, &rn.TrialOf, &rn.TrialOfName, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -236,9 +240,10 @@ var errNotFound = errors.New("not found")
 // it fills in. Objects with attributes hold their part of the output, given
 // in contents by object id; the others hold all of it.
 //
-// While the run goes on, persistent objects are stored too. If one holds a
-// unique value another run stored, nothing is stored, the step ends as a
-// duplicate and its run as terminated; the duplicate is returned.
+// While the run goes on, persistent objects are stored too, as are the
+// records of shared ones, unless the run is a trial. If one holds a unique
+// value another run stored, nothing is stored, the step ends as a duplicate
+// and its run as terminated; the duplicate is returned.
 func finishStep(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, status, output, errMsg string, contents map[int64]string) (*duplicate, error) {
 	// Parallel steps storing values can still deadlock; the loser rolled
 	// back everything, so it can go again.
@@ -267,9 +272,10 @@ func finishStepOnce(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, 
 	var runID int64
 	var runStatus, kind string
 	var process sql.NullInt64
+	var trial bool
 	err = tx.QueryRowContext(ctx,
-		"SELECT r.id, r.status, s.kind, s.process_ref FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
-		Scan(&runID, &runStatus, &kind, &process)
+		"SELECT r.id, r.status, s.kind, s.process_ref, r.trial_of IS NOT NULL FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
+		Scan(&runID, &runStatus, &kind, &process, &trial)
 	if err != nil {
 		return nil, err
 	}
@@ -294,8 +300,9 @@ func finishStepOnce(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, 
 		}
 	}
 	// A step finishing after its run ended stores nothing, nor does a flow
-	// process's: the processes inside it stored what it generates.
-	if runStatus != runRunning || kind == kindFlow {
+	// process's: the processes inside it stored what it generates. Nor does
+	// a trial's, which real runs mustn't see; see trials.go.
+	if runStatus != runRunning || kind == kindFlow || trial {
 		return nil, tx.Commit()
 	}
 

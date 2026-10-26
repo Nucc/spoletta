@@ -139,12 +139,29 @@ type setupProcess struct {
 	Takes        []setupLink         `yaml:"takes,omitempty"`
 	Yields       []setupLink         `yaml:"yields,omitempty"`
 	// The processes that run after it, and those that run instead once it fails.
-	Next      []string    `yaml:"next,omitempty"`
-	OnFailure []string    `yaml:"onFailure,omitempty"`
-	X         *float64    `yaml:"x,omitempty"`
-	Y         *float64    `yaml:"y,omitempty"`
-	Width     *float64    `yaml:"width,omitempty"`
-	Board     *setupBoard `yaml:"board,omitempty"`
+	Next      []string `yaml:"next,omitempty"`
+	OnFailure []string `yaml:"onFailure,omitempty"`
+	// What it is tried on; see trials.go. Absent, it keeps the samples it
+	// has; empty, it has none.
+	Samples *[]setupSample `yaml:"samples,omitempty"`
+	X       *float64       `yaml:"x,omitempty"`
+	Y       *float64       `yaml:"y,omitempty"`
+	Width   *float64       `yaml:"width,omitempty"`
+	Board   *setupBoard    `yaml:"board,omitempty"`
+}
+
+// Inputs a process is tried on, under a name of their own.
+type setupSample struct {
+	Name   string             `yaml:"name"`
+	Inputs []setupSampleInput `yaml:"inputs,omitempty"`
+}
+
+// What a sample gives an object the process takes: what it holds, and the
+// state it is in, if any.
+type setupSampleInput struct {
+	Object  string `yaml:"object"`
+	State   string `yaml:"state,omitempty"`
+	Content string `yaml:"content"`
 }
 
 // What a connector process carries out: an operation of a connector's
@@ -254,6 +271,25 @@ func (s *setupState) UnmarshalYAML(n *yaml.Node) error {
 	}
 	type plain setupState
 	return decodeKnown(n, (*plain)(s))
+}
+
+// Leaves out what the processes on every board are tried on; imported
+// so, each keeps the samples it has.
+func (f *setupFile) dropSamples() {
+	var drop func(b *setupBoard)
+	drop = func(b *setupBoard) {
+		for i := range b.Processes {
+			b.Processes[i].Samples = nil
+			if b.Processes[i].Board != nil {
+				drop(b.Processes[i].Board)
+			}
+		}
+	}
+	for _, flows := range [][]setupFlow{f.Procedures, f.Flows} {
+		for i := range flows {
+			drop(&flows[i].setupBoard)
+		}
+	}
 }
 
 // Decodes n into v, turning down fields v doesn't have, as the decoder

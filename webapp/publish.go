@@ -25,6 +25,9 @@ import (
 //     people start by hand from the board: the board as it is, saved as a
 //     version first if it changed. A person can run the version published
 //     by hand too.
+//   - a trial of one process alone (trials.go): the board as it is, always,
+//     since what is tried is what is being built; never the version
+//     published.
 //   - a schedule's run, one over the API (POST /v1/flows/{id}/runs), and a
 //     run a person starts on records: the version published, or the board
 //     as it is if there is none. What the API says a flow takes, and which

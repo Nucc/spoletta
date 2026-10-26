@@ -36,6 +36,7 @@ type flowData struct {
 	Matched   int           `json:"matched"`
 	Searched  int           `json:"searched"`
 	Truncated bool          `json:"truncated"`
+	Trials    int           `json:"trials"`
 }
 
 // A column rows are searched by, with its values' counts.

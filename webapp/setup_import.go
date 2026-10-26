@@ -1270,6 +1270,9 @@ func (b *builder) resolveProcess(bp *bproc) error {
 	}
 	b.out.Processes = append(b.out.Processes, process{ID: bp.id, Name: p.Name, Kind: p.Kind, Prompt: p.Prompt, Script: p.Script,
 		Model: p.Model, Thinking: p.Thinking, X: bp.x, Y: bp.y, Width: p.Width, Parent: bp.parent, Recording: p.Recording, Settings: s})
+	if err := b.resolveSamples(bp); err != nil {
+		return err
+	}
 
 	for _, l := range p.Takes {
 		if err := b.resolveLink(bp, l, directionInput); err != nil {
@@ -1289,6 +1292,54 @@ func (b *builder) resolveProcess(bp *bproc) error {
 			}
 			b.conns = append(b.conns, connection{Source: bp.id, Target: tp.id, Kind: kind})
 		}
+	}
+	return nil
+}
+
+// The samples the process is tried on: the file's, or without any there,
+// those it has, which keep their ids.
+func (b *builder) resolveSamples(bp *bproc) error {
+	p, at := bp.p, bp.where
+	if p.Samples == nil {
+		if bp.cur != nil {
+			for _, sm := range b.cur.Samples {
+				if sm.Process == bp.cur.ID {
+					sm.Process = bp.id
+					b.out.Samples = append(b.out.Samples, sm)
+				}
+			}
+		}
+		return nil
+	}
+	names := map[string]bool{}
+	for _, ss := range *p.Samples {
+		name := strings.TrimSpace(ss.Name)
+		if msg := sampleNameProblem(name); msg != "" {
+			return problemf("%s: %s", at, msg)
+		}
+		if names[name] {
+			return problemf("%s: two samples are named %s", at, quote(name))
+		}
+		names[name] = true
+		where := fmt.Sprintf("%s: sample %s", at, quote(name))
+		sm := processSample{Process: bp.id, Name: name, Inputs: sampleInputs{}}
+		for _, in := range ss.Inputs {
+			bo := b.objs[in.Object]
+			if bo == nil || !slices.ContainsFunc(p.Takes, func(l setupLink) bool { return b.objs[l.Object] == bo }) {
+				return problemf("%s: the process takes no object %s", where, quote(in.Object))
+			}
+			si := sampleInput{Object: bo.id, Content: in.Content}
+			if in.State != "" {
+				if si.State = bo.states[in.State]; si.State == 0 {
+					return problemf("%s: %s has no state %s", where, quote(in.Object), quote(in.State))
+				}
+			}
+			sm.Inputs = append(sm.Inputs, si)
+		}
+		b.out.Samples = append(b.out.Samples, sm)
+	}
+	if len(names) > maxSamples {
+		return problemf("%s: a process keeps at most %d samples", at, maxSamples)
 	}
 	return nil
 }

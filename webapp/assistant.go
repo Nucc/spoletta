@@ -357,6 +357,9 @@ func loadAssistantFlow(ctx context.Context, db *sql.DB, id int64) (assistantFlow
 	if err != nil {
 		return af, err
 	}
+	// What processes are tried on is no part of what they do; left out, the
+	// flow it replies with keeps them.
+	f.dropSamples()
 	cond, args, err := flowSkills(ctx, tx, id)
 	if err != nil {
 		return af, err

@@ -1157,15 +1157,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 // object in the state its link names. False if it failed or found a
 // duplicate, which terminates the run and so still returns what it generated.
 func (w *walk) runStep(id int64, p *pass, given []runInput, cr *changeRequest) (map[int64]value, bool) {
-	var res runResult
-	var ok, stopped bool
-	var stepID int64
-	for try := 0; ; try++ {
-		res, ok, stopped, stepID = w.execute(id, given, cr, try+1)
-		if ok || stopped || w.stopped() || try >= w.settings[id].retries() {
-			break
-		}
-	}
+	res, ok, stopped, stepID := w.attempt(id, given, cr)
 	if !ok {
 		if stopped {
 			w.fail()
@@ -1174,6 +1166,32 @@ func (w *walk) runStep(id int64, p *pass, given []runInput, cr *changeRequest) (
 		}
 		return nil, false
 	}
+	out := w.outcome(id, stepID, res)
+	if res.Duplicate != nil {
+		w.mu.Lock()
+		w.terminated = true
+		w.mu.Unlock()
+		w.terminate()
+	}
+	return out, true
+}
+
+// Executes an agent, script or connector process as execute does, again as
+// a step of its own after each failure, as many times as its retries say;
+// returns how its last step went.
+func (w *walk) attempt(id int64, given []runInput, cr *changeRequest) (runResult, bool, bool, int64) {
+	for try := 0; ; try++ {
+		res, ok, stopped, stepID := w.execute(id, given, cr, try+1)
+		if ok || stopped || w.stopped() || try >= w.settings[id].retries() {
+			return res, ok, stopped, stepID
+		}
+	}
+}
+
+// What a step of the process that succeeded generated: each object in the
+// state its link names, the one the agent decided, or else the one its
+// rules say.
+func (w *walk) outcome(id, stepID int64, res runResult) map[int64]value {
 	out := map[int64]value{}
 	for _, end := range w.outputs[id] {
 		content, ok := res.Objects[end.object]
@@ -1190,13 +1208,7 @@ func (w *walk) runStep(id int64, p *pass, given []runInput, cr *changeRequest) (
 		out[end.object] = v
 	}
 	w.applyRules(stepID, out)
-	if res.Duplicate != nil {
-		w.mu.Lock()
-		w.terminated = true
-		w.mu.Unlock()
-		w.terminate()
-	}
-	return out, true
+	return out
 }
 
 // Runs a flow process's board with the objects it takes as they are here,

@@ -217,12 +217,13 @@ export type Link = {
 const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default']
 
 // What is told of each change the server took that may change a board.
-const changeListeners = new Set<() => void>()
+const changeListeners = new Set<(url: string) => void>()
 // The changes sent and not answered yet.
 const changing = new Set<Promise<unknown>>()
 
-// Calls back after each change the server took that may change a board.
-export function onChanged(callback: () => void): () => void {
+// Calls back after each change the server took that may change a board,
+// with the change's path.
+export function onChanged(callback: (url: string) => void): () => void {
   changeListeners.add(callback)
   return () => changeListeners.delete(callback)
 }
@@ -263,7 +264,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } finally {
       changing.delete(sent)
     }
-    changeListeners.forEach((l) => l())
+    changeListeners.forEach((l) => l(url))
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
@@ -1102,8 +1103,10 @@ export function listRuns(flow: number): Promise<FlowRun[]> {
   return request(`/api/runs?flow=${flow}`)
 }
 
-export function startRun(flow: number): Promise<FlowRun> {
-  return request(`/api/runs?flow=${flow}`, { method: 'POST' })
+// Starts a run on the board as it is, or with published on the version the
+// flow published.
+export function startRun(flow: number, published = false): Promise<FlowRun> {
+  return request(`/api/runs?flow=${flow}`, { method: 'POST', body: JSON.stringify({ published }) })
 }
 
 // An object the process a run is re-run from takes, as it took it in the
@@ -1289,8 +1292,10 @@ export type AssistantMessage = {
   // A reply is active while the agent works on it, then done or error.
   status: 'active' | 'done' | 'error'
   error: string
-  // Whether the reply changed the flow; the board before is saved as a version.
+  // Whether the reply changed the flow, and the version the board was saved
+  // as first, which the board shows what it changed against.
   applied: boolean
+  version: number | null
   createdAt: string
   finishedAt: string | null
 }
@@ -1338,19 +1343,32 @@ export function answerLoop(run: number, id: number, goOn: boolean): Promise<void
   return request(`/api/runs/${run}/steps/${id}/loop`, { method: 'POST', body: JSON.stringify({ goOn }) })
 }
 
-// A saved snapshot of the whole board. Saving always adds a version on top;
-// jumping to an older one keeps every other version.
+// A saved snapshot of the whole board and the flow's settings. Saving always
+// adds a version on top; jumping to an older one keeps every other version.
 export type Version = {
   id: number
   // The version the board was on when this one was saved; older than the
   // previous version when saved after jumping back.
   basedOn: number | null
   createdAt: string
+  // Who saved it, empty when nobody signs in, and why it was saved: empty
+  // when a person saved it, or what saved it on its own first. The note is
+  // the person's, saying why.
+  savedBy: string
+  reason: '' | 'run' | 'assistant' | 'import'
+  note: string
 }
 
 export type Versions = {
   // The version the board was last saved as or jumped to; null before the first save.
   current: number | null
+  // The version published, which the runs nobody starts from the board run,
+  // when and by whom; null while none is. Draft says whether the board
+  // differs from it in more than where things sit.
+  published: number | null
+  publishedAt: string | null
+  publishedBy: string
+  draft: boolean
   // Newest first.
   versions: Version[]
 }
@@ -1359,8 +1377,68 @@ export function listVersions(flow: number): Promise<Versions> {
   return request(`/api/versions?flow=${flow}`)
 }
 
-export function saveVersion(flow: number): Promise<Version> {
-  return request(`/api/versions?flow=${flow}`, { method: 'POST' })
+// Saves the board as a new version, with a note saying why, if any.
+export function saveVersion(flow: number, note = ''): Promise<Version> {
+  return request(`/api/versions?flow=${flow}`, { method: 'POST', body: JSON.stringify({ note }) })
+}
+
+// Publishes the board as it is: saved as a version if it changed, which
+// the note goes with, and that version published.
+export function publishBoard(flow: number, note = ''): Promise<Version> {
+  return request(`/api/versions?flow=${flow}`, { method: 'POST', body: JSON.stringify({ note, publish: true }) })
+}
+
+// Publishes a version saved before, such as an older one to roll back to;
+// the board stays as it is.
+export function publishVersion(id: number): Promise<void> {
+  return request(`/api/versions/${id}/publish`, { method: 'POST' })
+}
+
+// Stops publishing any version: the flow's runs take its board as it is again.
+export function unpublish(flow: number): Promise<void> {
+  return request(`/api/versions/published?flow=${flow}`, { method: 'DELETE' })
+}
+
+// One thing changed of something, as it was and as it is.
+export type DiffField = { field: string; before: string; after: string }
+
+// A process, object, state, attribute, link or connection added, removed
+// or changed. Its id is on the newer board, or on the older for one
+// removed; board is the flow process whose board it is on. A state's or
+// attribute's object is the one it is of, an object's the one it is part
+// of, a link's its object; a link's process and a connection's ends are
+// its process and target. A board's start is a connection without an id.
+export type DiffItem = {
+  change: 'added' | 'removed' | 'changed'
+  id: number
+  name: string
+  board: number | null
+  object?: number
+  process?: number
+  target?: number
+  fields?: DiffField[]
+}
+
+// What changed between two boards; layout says whether anything moved,
+// which the lists leave out.
+export type BoardDiff = {
+  from: number
+  // The newer version, null for the board as it is.
+  to: number | null
+  processes: DiffItem[]
+  objects: DiffItem[]
+  states: DiffItem[]
+  attributes: DiffItem[]
+  links: DiffItem[]
+  connections: DiffItem[]
+  settings: DiffField[]
+  layout: boolean
+}
+
+// What changed from a version to another of the same flow, or to the board
+// as it is without one.
+export function diffVersions(from: number, to: number | null = null): Promise<BoardDiff> {
+  return request(`/api/versions/${from}/diff${to === null ? '' : `?to=${to}`}`)
 }
 
 // Rewrites the board as the version has it.

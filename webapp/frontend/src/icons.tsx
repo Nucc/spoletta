@@ -231,6 +231,14 @@ export const SaveIcon = () => (
   </Icon>
 )
 
+// Publishing a version: an arrow up out of a tray.
+export const PublishIcon = () => (
+  <Icon>
+    <path d="M8 10.25v-7.5M5.25 5.5 8 2.75l2.75 2.75" />
+    <path d="M2.75 9.75v3.5h10.5v-3.5" />
+  </Icon>
+)
+
 export const HistoryIcon = () => (
   <Icon>
     <path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9" />

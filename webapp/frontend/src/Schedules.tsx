@@ -42,7 +42,7 @@ const ZONES: string[] = (() => {
 const REFRESH_MS = 5000
 
 // Every schedule, each running a flow on its own when its cron expression
-// comes round, as the Run button would.
+// comes round: the version the flow published, or its board as it is.
 export default function Schedules() {
   const [schedules, setSchedules] = useState<Schedule[] | null>(null)
   const [flows, setFlows] = useState<Flow[] | null>(null)
@@ -107,7 +107,8 @@ export default function Schedules() {
             <ClockIcon /> Schedules
           </h2>
           <p className="flows-note">
-            Each runs a flow on its own whenever its time comes round, on the board as it is, as the Run button does.
+            Each runs a flow on its own whenever its time comes round: the version the flow published, or its board as it
+            is while it publishes none, so publish a flow to go on editing it without a schedule running a half-made board.
             While its last run is still going, such as one waiting on a person, the times that come round are skipped.
           </p>
           {runnable && (

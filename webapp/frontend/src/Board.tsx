@@ -30,6 +30,7 @@ import {
   FlowIcon,
   GearIcon,
   HistoryIcon,
+  PublishIcon,
   LayoutIcon,
   PasteIcon,
   PencilIcon,
@@ -77,7 +78,8 @@ import CodePanel from './CodePanel'
 import Assistant from './Assistant'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { SharedRecords } from './Records'
-import { VersionPanel } from './Versions'
+import { NoteDialog, VersionPanel } from './Versions'
+import { DiffPanel, diffCount, highlightsOf, noHighlights, type Highlights } from './Diff'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
 import { configures, useMe } from './Account'
@@ -108,6 +110,7 @@ import {
   getEnd,
   listFlows,
   getStart,
+  diffVersions,
   getVersionBoard,
   listConnections,
   listLinks,
@@ -125,6 +128,8 @@ import {
   recordHistory,
   redoHistory,
   renameState,
+  publishBoard,
+  publishVersion,
   restoreVersion,
   undoHistory,
   saveVersion,
@@ -136,6 +141,7 @@ import {
   setLinkRole,
   setLinkStates,
   startRun,
+  unpublish,
   stopRun,
   stopStep,
   updateAttribute,
@@ -145,6 +151,7 @@ import {
   updateStart,
   wrapProcesses,
   type BoardContents,
+  type BoardDiff,
   type BoardId,
   type Connection,
   type Copied,
@@ -247,6 +254,9 @@ const isObject = (id: string) => id.startsWith(OBJECT_PREFIX)
 const isProcess = (id: string) => id !== START_ID && id !== END_ID && !isObject(id) && !isDraft(id)
 
 const objectNodeId = (id: number) => `${OBJECT_PREFIX}${id}`
+
+// How many things a comparison found changed, as its banner says it.
+const changesText = (n: number) => (n === 0 ? 'Nothing changed but the layout, if anything' : n === 1 ? 'One change' : `${n} changes`)
 const objectIdOf = (nodeId: string) => Number(nodeId.slice(OBJECT_PREFIX.length))
 
 // A step can be inserted into the start edge and into links, except a human
@@ -405,8 +415,17 @@ export default function Board({
   const [runDetail, setRunDetail] = useState<FlowRunDetail | null>(null)
   // Bumped to load the open run again straight away, such as after a decision.
   const [runReload, setRunReload] = useState(0)
-  const [versions, setVersions] = useState<Versions>({ current: null, versions: [] })
+  const [versions, setVersions] = useState<Versions>({ current: null, published: null, publishedAt: null, publishedBy: '', draft: false, versions: [] })
   const [versionsOpen, setVersionsOpen] = useState(false)
+  // Which note the toolbar asks for: to save the board, or to publish it.
+  const [noting, setNoting] = useState<'save' | 'publish' | null>(null)
+  // What the board compares, highlighting what changed: from a version to
+  // the board as it is, or to another version, which the board shows
+  // instead; after the assistant changed the flow, from the version saved
+  // before. Listed says whether its panel lists the changes. See Diff.tsx.
+  const [compare, setCompare] = useState<{ from: number; to: number | null; assistant?: boolean } | null>(null)
+  const [diff, setDiff] = useState<BoardDiff | null>(null)
+  const [diffListed, setDiffListed] = useState(false)
   // Set while a save or a jump to another version is under way.
   const [versioning, setVersioning] = useState(false)
   // The board shown: the top board, or a flow process's. The ref has it for
@@ -820,10 +839,11 @@ export default function Board({
     setCodeOpen(open)
   }
 
-  const onSave = async () => {
+  // Does something to the flow's versions, which are read again after.
+  const versionChange = async (change: () => Promise<unknown>) => {
     setVersioning(true)
     try {
-      await saveVersion(flowId)
+      await change()
       await refreshVersions()
     } catch (err) {
       report(err)
@@ -831,9 +851,15 @@ export default function Board({
       setVersioning(false)
     }
   }
+  const onSave = (note: string) => versionChange(() => saveVersion(flowId, note))
+  // Publishing saves the board as a version if it changed; see publish.go.
+  const onPublish = (note: string) => versionChange(() => publishBoard(flowId, note))
+  const onPublishVersion = (id: number) => versionChange(() => publishVersion(id))
+  const onUnpublish = () => versionChange(() => unpublish(flowId))
 
-  // Brings the board back to a saved version. The run shown on the board
-  // belongs to the board it left, so it closes.
+  // Brings the board back to a saved version, with the flow's settings it
+  // kept. The run shown on the board belongs to the board it left, so it
+  // closes, as does a comparison with the board.
   const onRestore = async (id: number) => {
     setVersioning(true)
     try {
@@ -841,12 +867,55 @@ export default function Board({
       setPanelId(null)
       setMenu(null)
       setRunId(null)
-      await Promise.all([loadBoard(), refreshVersions()])
+      setCompare(null)
+      await Promise.all([loadBoard(), refreshVersions(), onReload()])
     } catch (err) {
       report(err)
     } finally {
       setVersioning(false)
     }
+  }
+
+  // Compares a version with another, or with the board as it is, listing
+  // what changed; the board shows the newer one.
+  const onCompare = (from: number, to: number | null) => {
+    setPanelId(null)
+    setMenu(null)
+    setVersionsOpen(false)
+    setCompare({ from, to })
+    setDiffListed(true)
+  }
+
+  // The diff of what the board compares, worked out again when the board
+  // it compares with changes.
+  const [diffSeq, setDiffSeq] = useState(0)
+  useEffect(() => setDiff(null), [compare])
+  useEffect(() => {
+    if (!compare) return
+    let stale = false
+    diffVersions(compare.from, compare.to)
+      .then((d) => !stale && setDiff(d))
+      .catch(report)
+    return () => {
+      stale = true
+    }
+  }, [compare, diffSeq, report])
+  // The assistant's changes are highlighted until the person changes the
+  // board; saving or publishing it changes nothing on it.
+  useEffect(() => {
+    if (!compare?.assistant) return
+    return onChanged((url) => {
+      if (!/^\/api\/versions(\?|\/\d+\/publish|\/published)/.test(url)) setCompare(null)
+    })
+  }, [compare])
+  // Once a change is kept: whether the board differs from what is
+  // published is read again, and a comparison with the board worked out
+  // again. Undoing or redoing ends showing what the assistant changed.
+  const boardChanged = useRef((_undone: boolean) => {})
+  boardChanged.current = (undone) => {
+    if (versions.published !== null) refreshVersions()
+    if (compare?.assistant && undone) setCompare(null)
+    else if (compare?.to === null) setDiffSeq((n) => n + 1)
   }
 
   // Loads the open run, and keeps refreshing it while it goes on. Once it
@@ -892,6 +961,9 @@ export default function Board({
   const shownRun = runDetail?.id === runId ? runDetail : null
   const openRun = runs.find((r) => r.id === runId)
   const runVersion = openRun?.version ?? null
+  // Comparing shows the newer board instead: the version compared to, or
+  // the board as it is.
+  const viewVersion = compare ? compare.to : runVersion
   // The version the board shows, null for the board itself, and which of
   // its boards it shows.
   const [shownVersion, setShownVersion] = useState<number | null>(null)
@@ -903,15 +975,15 @@ export default function Board({
   const readOnly = reviewing || viewOnly
   const runShown = shownRun !== null
   useEffect(() => {
-    if (runVersion === shownVersion && boardId === shownBoard && unfolded === shownUnfolded) return
+    if (viewVersion === shownVersion && boardId === shownBoard && unfolded === shownUnfolded) return
     let stale = false
-    ;(runVersion === null ? fetchBoard(flowId) : getVersionBoard(flowId, runVersion))
+    ;(viewVersion === null ? fetchBoard(flowId) : getVersionBoard(flowId, viewVersion))
       .then((c) => {
         if (stale) return
         setPanelId(null)
         setMenu(null)
         showBoard(c, boardId, unfolded)
-        setShownVersion(runVersion)
+        setShownVersion(viewVersion)
         setShownBoard(boardId)
         setShownUnfolded(unfolded)
         // Another board is a different place; show all of it once its nodes are measured.
@@ -921,14 +993,14 @@ export default function Board({
     return () => {
       stale = true
     }
-  }, [runVersion, shownVersion, boardId, shownBoard, unfolded, shownUnfolded, showBoard, fitView, report, flowId])
+  }, [viewVersion, shownVersion, boardId, shownBoard, unfolded, shownUnfolded, showBoard, fitView, report, flowId])
 
   // Shows the open run on the board: each process as its last step in the
   // run left it, each object with the content and state it last got. A
   // review waiting for a decision shows in the middle of the screen, unless
   // another does, and opens its process's panel, unless another panel is open.
   useEffect(() => {
-    if (!shownRun || shownVersion !== runVersion) return
+    if (!shownRun || compare || shownVersion !== runVersion) return
     const steps = new Map(shownRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
     const rerunnable = new Set(shownRun.steps.flatMap((s) => (rerunnableFrom(shownRun, s) ? [String(s.process)] : [])))
     const objects = new Map(shownRun.objects.flatMap((o) => (o.object === null ? [] : [[objectNodeId(o.object), o] as const])))
@@ -970,7 +1042,7 @@ export default function Board({
         return n
       }),
     )
-  }, [shownRun, shownVersion, runVersion, shownSeq, getNode, setNodes])
+  }, [shownRun, compare, shownVersion, runVersion, shownSeq, getNode, setNodes])
 
   // A process takes the block's kind, such as a connector's.
   const addDraft = useCallback(
@@ -1885,11 +1957,12 @@ export default function Board({
   const canRun = (reviewing || boardId !== null || startTarget !== undefined) && !starting && !viewOnly
 
   // Starts a run of the board, which the server executes, and opens it. The
-  // board shows the run on its version, which is the board as it is.
-  const onPlay = async () => {
+  // board shows the run on its version, which is the board as it is, or
+  // with published the version the flow published.
+  const onPlay = async (published = false) => {
     setStarting(true)
     try {
-      const run = await startRun(flowId)
+      const run = await startRun(flowId, published)
       // Starting the run may have saved the board as a new version.
       refreshVersions()
       setRuns((rs) => [run, ...rs])
@@ -2028,7 +2101,9 @@ export default function Board({
     let pending = false
     const record = () => {
       pending = false
-      queueHistory(() => recordHistory(flowId)).catch(report)
+      queueHistory(() => recordHistory(flowId))
+        .then(() => boardChanged.current(false))
+        .catch(report)
     }
     record()
     const off = onChanged(() => {
@@ -2060,7 +2135,11 @@ export default function Board({
         await changesSettled()
         return undo ? undoHistory(flowId) : redoHistory(flowId)
       })
-      if (h.changed) await loadBoard()
+      // The flow's settings come back with the board.
+      if (h.changed) {
+        await Promise.all([loadBoard(), onReload()])
+        boardChanged.current(true)
+      }
     } catch (err) {
       report(err)
     }
@@ -2083,11 +2162,23 @@ export default function Board({
     await new Promise((resolve) => window.setTimeout(resolve))
     await changesSettled()
   }, [closePanels])
-  const assistantApplied = useCallback(async () => {
-    closePanels()
-    window.clearTimeout(recordTimer.current)
-    await Promise.all([loadBoard(), refreshVersions(), onReload()])
-  }, [closePanels, loadBoard, refreshVersions, onReload])
+  // What it changed is highlighted against the version saved before.
+  const assistantApplied = useCallback(
+    async (version: number | null) => {
+      closePanels()
+      window.clearTimeout(recordTimer.current)
+      await Promise.all([loadBoard(), refreshVersions(), onReload()])
+      if (version !== null) {
+        setCompare({ from: version, to: null, assistant: true })
+        setDiffListed(false)
+      }
+    },
+    [closePanels, loadBoard, refreshVersions, onReload],
+  )
+  const showAssistantChanges = useCallback((version: number) => {
+    setCompare({ from: version, to: null, assistant: true })
+    setDiffListed(true)
+  }, [])
 
   // Cmd or Ctrl and C copies the selection, and with V pastes it, but not
   // while typing or with text selected, which they copy and paste as ever.
@@ -2293,6 +2384,42 @@ export default function Board({
 
   const panelColumn = useColumnWidth(PANEL_COLUMN)
 
+  // What the comparison highlights on the board shown, if it shows the
+  // newer board; the nodes and edges are drawn with it, so loading the
+  // board again keeps it.
+  const highlights = useMemo<Highlights>(() => {
+    if (!diff || !compare || shownVersion !== compare.to) return noHighlights
+    const parents = new Map(contents?.processes.map((p) => [p.id, p.parent]) ?? [])
+    return highlightsOf(diff, boardId, {
+      process: (id) => String(id),
+      object: objectNodeId,
+      link: (id) => `${LINK_PREFIX}${id}`,
+      connection: (id) => `${CONNECTION_PREFIX}${id}`,
+      start: START_EDGE_ID,
+      parentOf: (p) => parents.get(p),
+    })
+  }, [diff, compare, shownVersion, boardId, contents])
+  const shownNodes = useMemo(
+    () =>
+      highlights.nodes.size === 0
+        ? nodes
+        : nodes.map((n) => {
+            const change = highlights.nodes.get(n.id)
+            return change ? { ...n, className: `${n.className ?? ''} diff-${change}`.trim() } : n
+          }),
+    [nodes, highlights],
+  )
+  const shownEdges = useMemo(
+    () =>
+      highlights.edges.size === 0
+        ? edges
+        : edges.map((e) => {
+            const change = highlights.edges.get(e.id)
+            return change ? { ...e, className: `${e.className ?? ''} diff-${change}`.trim() } : e
+          }),
+    [edges, highlights],
+  )
+
   return (
     <div className="board">
       <header className="toolbar">
@@ -2336,9 +2463,60 @@ export default function Board({
           </span>
         )}
         <div className="versioning">
-          <button onClick={onSave} disabled={versioning || readOnly} title="Save the board as a new version">
-            <SaveIcon /> Save
-          </button>
+          <span className="note-anchor">
+            <button
+              onClick={() => setNoting(noting === 'save' ? null : 'save')}
+              disabled={versioning || readOnly}
+              aria-expanded={noting === 'save'}
+              title="Save the board as a new version, with a note saying why if you like"
+            >
+              <SaveIcon /> Save
+            </button>
+            {noting === 'save' && (
+              <NoteDialog
+                title="Save a version"
+                hint="Keeps the board as it is now as a version to come back to."
+                action="Save"
+                onSubmit={(note) => {
+                  setNoting(null)
+                  onSave(note)
+                }}
+                onClose={() => setNoting(null)}
+              />
+            )}
+          </span>
+          {!structBoard && (
+            <span className="note-anchor">
+              <button
+                className={`publish-toggle${versions.published === null ? '' : versions.draft ? ' draft' : ' published'}`}
+                onClick={() => setNoting(noting === 'publish' ? null : 'publish')}
+                disabled={versioning || readOnly}
+                aria-expanded={noting === 'publish'}
+                title={
+                  versions.published === null
+                    ? 'Not published: schedules, the API and runs on records run the board as it is. Publish to have them run it as it is now while you go on editing.'
+                    : versions.draft
+                      ? `Version ${versions.published} is published, and the board has changed since. Publish to have schedules, the API and runs on records run the board as it is now.`
+                      : `Version ${versions.published} is published, the board as it is: schedules, the API and runs on records run it.`
+                }
+              >
+                <PublishIcon />
+                {versions.published === null ? 'Publish' : versions.draft ? 'Publish changes' : 'Published'}
+              </button>
+              {noting === 'publish' && (
+                <NoteDialog
+                  title="Publish the board"
+                  hint="Schedules, the API and runs on records run the board as it is now, until you publish again; the board stays yours to edit, and Run runs it as it is."
+                  action="Publish"
+                  onSubmit={(note) => {
+                    setNoting(null)
+                    onPublish(note)
+                  }}
+                  onClose={() => setNoting(null)}
+                />
+              )}
+            </span>
+          )}
           <button
             className={`version-toggle${versionsOpen ? ' open' : ''}`}
             aria-expanded={versionsOpen}
@@ -2409,7 +2587,7 @@ export default function Board({
         {!structBoard && (
           <button
             className="play"
-            onClick={onPlay}
+            onClick={() => onPlay()}
             disabled={!canRun}
             aria-label="Run flow"
             title={
@@ -2481,8 +2659,8 @@ export default function Board({
           <BoardActionsContext.Provider value={actions}>
             <StructFlowsContext.Provider value={structFlows}>
               <ReactFlow
-                nodes={nodes}
-                edges={edges}
+                nodes={shownNodes}
+                edges={shownEdges}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
                 onNodesChange={onNodesChange}
@@ -2537,7 +2715,19 @@ export default function Board({
               You decide this flow's reviews, so you see it, but only its owner{flow.owner.kind !== 'global' && `, ${flow.owner.name},`} changes it.
             </div>
           )}
-          {reviewing && openRun && (
+          {compare && shownVersion === compare.to && (
+            <div className="review-banner diff-banner" role="status">
+              {compare.assistant
+                ? 'Highlighted is what the assistant changed.'
+                : compare.to === null
+                  ? `Highlighted is what changed since version ${compare.from}.`
+                  : `This is version ${compare.to}, highlighting what changed since version ${compare.from}.`}
+              {diff && ` ${changesText(diffCount(diff))}.`}
+              {!diffListed && <button onClick={() => setDiffListed(true)}>List the changes</button>}
+              <button onClick={() => setCompare(null)}>{compare.to === null ? 'Dismiss' : 'Back to the board'}</button>
+            </div>
+          )}
+          {reviewing && openRun && !compare && (
             <div className="review-banner" role="status">
               {openRun.status === 'running'
                 ? `Run #${openRun.id} is running on version ${shownVersion}.`
@@ -2550,6 +2740,7 @@ export default function Board({
             disabled={readOnly}
             beforeSend={beforeAssistant}
             onApplied={assistantApplied}
+            onShowChanges={showAssistantChanges}
             onError={report}
           />
           {menu && (
@@ -2694,14 +2885,40 @@ export default function Board({
         )}
         {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && versionsOpen && (
           <VersionPanel
-            versions={versions.versions}
-            current={versions.current}
+            versions={versions}
             disabled={versioning}
             onRestore={onRestore}
+            onPublish={onPublishVersion}
+            onUnpublish={onUnpublish}
+            onRunPublished={() => onPlay(true)}
+            onCompare={onCompare}
             onClose={() => setVersionsOpen(false)}
           />
         )}
-        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && !versionsOpen && runDetail && (
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && !versionsOpen && compare && diffListed && (
+          <DiffPanel
+            diff={diff}
+            title={
+              compare.assistant
+                ? `What the assistant changed, against version ${compare.from}, saved before.`
+                : compare.to === null
+                  ? `What changed from version ${compare.from} to the board as it is.`
+                  : `What changed from version ${compare.from} to version ${compare.to}, which the board shows.`
+            }
+            boardName={(board) => contents?.processes.find((p) => p.id === board)?.name ?? 'a flow process'}
+            onBack={
+              compare.assistant
+                ? undefined
+                : () => {
+                    setCompare(null)
+                    refreshVersions()
+                    setVersionsOpen(true)
+                  }
+            }
+            onClose={() => setCompare(null)}
+          />
+        )}
+        {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && !versionsOpen && !(compare && diffListed) && runDetail && (
           <RunPanel
             run={runDetail}
             onStop={() => onStop(runDetail.id)}

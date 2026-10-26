@@ -10,7 +10,8 @@ const POLL_MS = 1500
 // The flow's assistant, behind a button at the bottom right of the board: an
 // agent the person talks to to have it set the flow up, such as build a flow
 // that processes Jira tickets. A reply that changes the flow has the board
-// reloaded, and the board before is saved as a version, so it can be undone.
+// reloaded, highlighting what it changed, and the board before is saved as
+// a version, so it can be undone.
 // The conversation is kept with the flow; a reply goes on in the server, so
 // closing the widget or the page doesn't stop it.
 export default function Assistant({
@@ -18,6 +19,7 @@ export default function Assistant({
   disabled,
   beforeSend,
   onApplied,
+  onShowChanges,
   onError,
 }: {
   flowId: number
@@ -25,7 +27,10 @@ export default function Assistant({
   disabled: boolean
   // Settles what the board is sending, so the assistant sees the board as it is.
   beforeSend: () => Promise<void>
-  onApplied: () => Promise<void>
+  // With the version saved before the reply changed the flow, to show what
+  // it changed against.
+  onApplied: (version: number | null) => Promise<void>
+  onShowChanges: (version: number) => void
   onError: (err: unknown) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -50,7 +55,7 @@ export default function Assistant({
       }
       const reply = msgs.find((m) => m.id === waiting.current)
       waiting.current = null
-      if (reply?.applied) onApplied().catch(onError)
+      if (reply?.applied) onApplied(reply.version).catch(onError)
     },
     [onApplied, onError],
   )
@@ -131,7 +136,7 @@ export default function Assistant({
             before changing it, so you can always go back.
           </p>
         )}
-        {messages?.map((m) => <Message key={m.id} message={m} />)}
+        {messages?.map((m) => <Message key={m.id} message={m} onShowChanges={onShowChanges} />)}
       </div>
       <form
         className="assistant-form"
@@ -169,9 +174,10 @@ export default function Assistant({
   )
 }
 
-function Message({ message: m }: { message: AssistantMessage }) {
+function Message({ message: m, onShowChanges }: { message: AssistantMessage; onShowChanges: (version: number) => void }) {
   if (m.role === 'person') return <div className="assistant-message from-person">{m.content}</div>
   if (m.status === 'active') return <div className="assistant-message from-assistant working">Working on it…</div>
+  const version = m.version
   return (
     <div className="assistant-message from-assistant">
       {m.content && (
@@ -185,7 +191,17 @@ function Message({ message: m }: { message: AssistantMessage }) {
         </div>
       )}
       {m.applied && (
-        <p className="assistant-applied">Changed the flow. The board before is saved as a version; Cmd-Z undoes it.</p>
+        <p className="assistant-applied">
+          Changed the flow. The board before is saved as a version; Cmd-Z undoes it.
+          {version !== null && (
+            <>
+              {' '}
+              <button className="link-button" onClick={() => onShowChanges(version)}>
+                Show what changed
+              </button>
+            </>
+          )}
+        </p>
       )}
       {m.error && <p className="assistant-error">{m.error}</p>}
     </div>

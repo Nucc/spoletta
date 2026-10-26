@@ -132,7 +132,8 @@ export function FlowAPISection({ flowId, onError }: { flowId: number; onError: (
           <p className="panel-note">
             Other systems start it with a POST to <code>{api.url}</code> and an API key from{' '}
             <a href="#/settings/api">the settings</a>, and read the run back from the <code>Location</code> it answers
-            with.{' '}
+            with. A run started this way runs the version the flow published, or its board as it is while it publishes
+            none, and takes what that version takes.{' '}
             {api.inputs.length > 0
               ? 'It takes the objects its processes start from, each by name:'
               : 'Its processes start from nothing, so it takes no inputs. Objects some process takes and none generates would be its inputs.'}

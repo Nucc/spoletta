@@ -33,16 +33,24 @@ import (
 //
 // Where things sit, their widths and how links are routed are layout: the
 // diff only says whether any changed, and never lists them.
+//
+// The samples processes are tried on (trials.go) are listed too, matched by
+// id, then by name on the process matched, each change saying what it
+// gives each object differently. Like layout, they don't make a draft
+// differ from what it published: a trial tries the board as it is, and no
+// run of a version reads them.
 
 // What changed, by kind of thing, and of the flow's settings.
 type boardDiff struct {
-	Processes   []diffItem  `json:"processes"`
-	Objects     []diffItem  `json:"objects"`
-	States      []diffItem  `json:"states"`
-	Attributes  []diffItem  `json:"attributes"`
-	Links       []diffItem  `json:"links"`
-	Connections []diffItem  `json:"connections"`
-	Settings    []diffField `json:"settings"`
+	Processes   []diffItem `json:"processes"`
+	Objects     []diffItem `json:"objects"`
+	States      []diffItem `json:"states"`
+	Attributes  []diffItem `json:"attributes"`
+	Links       []diffItem `json:"links"`
+	Connections []diffItem `json:"connections"`
+	// For a sample: its process, as Process, and what it gives each object.
+	Samples  []diffItem  `json:"samples"`
+	Settings []diffField `json:"settings"`
 	// Whether anything moved, was resized or rerouted.
 	Layout bool `json:"layout"`
 }
@@ -94,7 +102,7 @@ type diffMatch struct {
 // What changed from board a to board b.
 func diffSnapshots(a, b snapshot) boardDiff {
 	d := boardDiff{Processes: []diffItem{}, Objects: []diffItem{}, States: []diffItem{}, Attributes: []diffItem{},
-		Links: []diffItem{}, Connections: []diffItem{}, Settings: []diffField{}}
+		Links: []diffItem{}, Connections: []diffItem{}, Samples: []diffItem{}, Settings: []diffField{}}
 	m := matchSnapshots(a, b)
 	d.diffProcesses(a, b, m)
 	d.diffObjects(a, b, m)
@@ -102,6 +110,7 @@ func diffSnapshots(a, b snapshot) boardDiff {
 	d.diffAttributes(a, b, m)
 	d.diffLinks(a, b, m)
 	d.diffConnections(a, b, m)
+	d.diffSamples(a, b, m)
 	d.Settings = diffSettings(a.Settings, b.Settings)
 	if a.Start.X != b.Start.X || a.Start.Y != b.Start.Y || !sameJSON(a.Start.Route, b.Start.Route) || !sameEnd(a.End, b.End) {
 		d.Layout = true
@@ -473,6 +482,104 @@ func (d *boardDiff) diffStates(a, b snapshot, m diffMatch) {
 	for _, st := range a.States {
 		if _, ok := m.states[st.ID]; !ok {
 			d.States = append(d.States, item(a, diffRemoved, st))
+		}
+	}
+}
+
+func (d *boardDiff) diffSamples(a, b snapshot, m diffMatch) {
+	procs := func(s snapshot) map[int64]process {
+		out := map[int64]process{}
+		for _, p := range s.Processes {
+			out[p.ID] = p
+		}
+		return out
+	}
+	pa, pb := procs(a), procs(b)
+	item := func(on map[int64]process, change string, sm processSample) diffItem {
+		p := on[sm.Process]
+		process := sm.Process
+		return diffItem{Change: change, ID: sm.ID, Name: p.Name + ": " + sm.Name, Board: p.Parent, Process: &process}
+	}
+	// What a sample gives each object, by the object's name on its board,
+	// matched to the newer's: what it holds, and its state's name.
+	given := func(s snapshot, sm processSample, objs map[int64]int64) map[int64][2]string {
+		out := map[int64][2]string{}
+		for _, in := range sm.Inputs {
+			state := ""
+			for _, st := range s.States {
+				if st.ID == in.State {
+					state = st.Name
+				}
+			}
+			o := in.Object
+			if objs != nil {
+				if now, ok := objs[o]; ok {
+					o = now
+				} else {
+					o = -o
+				}
+			}
+			out[o] = [2]string{in.Content, state}
+		}
+		return out
+	}
+	objectName := func(o int64) string {
+		if o < 0 {
+			name, _ := objectOn(a, -o)
+			return name
+		}
+		name, _ := objectOn(b, o)
+		return name
+	}
+
+	matched := map[int64]bool{}
+	ids := map[int64]processSample{}
+	for _, sm := range a.Samples {
+		ids[sm.ID] = sm
+	}
+	for _, sm := range b.Samples {
+		old, ok := ids[sm.ID]
+		if !ok || matched[old.ID] || m.procs[old.Process] != sm.Process {
+			old, ok = processSample{}, false
+			for _, w := range a.Samples {
+				if !matched[w.ID] && w.Name == sm.Name && m.procs[w.Process] == sm.Process {
+					old, ok = w, true
+					break
+				}
+			}
+		}
+		if !ok {
+			d.Samples = append(d.Samples, item(pb, diffAdded, sm))
+			continue
+		}
+		matched[old.ID] = true
+		var fs diffFields
+		fs.add("name", old.Name, sm.Name)
+		was, now := given(a, old, m.objs), given(b, sm, nil)
+		var objects []int64
+		for o := range was {
+			objects = append(objects, o)
+		}
+		for o := range now {
+			if _, ok := was[o]; !ok {
+				objects = append(objects, o)
+			}
+		}
+		slices.Sort(objects)
+		for _, o := range objects {
+			name := objectName(o)
+			fs.add(name, was[o][0], now[o][0])
+			fs.add(name+" state", was[o][1], now[o][1])
+		}
+		if len(fs) > 0 {
+			it := item(pb, diffChanged, sm)
+			it.Fields = fs
+			d.Samples = append(d.Samples, it)
+		}
+	}
+	for _, sm := range a.Samples {
+		if !matched[sm.ID] {
+			d.Samples = append(d.Samples, item(pa, diffRemoved, sm))
 		}
 	}
 }

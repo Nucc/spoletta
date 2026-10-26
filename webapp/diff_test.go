@@ -273,3 +273,52 @@ func TestDiffOfInnerBoards(t *testing.T) {
 		t.Error("moving the inner board's end isn't layout")
 	}
 }
+
+// A process's samples are listed: matched by id, or by name on its process
+// when made anew, as an import does, each change saying what it gives each
+// object differently. They don't make the board differ from what it was.
+func TestDiffOfSamples(t *testing.T) {
+	a := diffBoard()
+	a.Samples = []processSample{
+		{ID: 60, Process: 1, Name: "Short", Inputs: sampleInputs{{Object: 10, Content: "one line"}}},
+		{ID: 61, Process: 1, Name: "Long", Inputs: sampleInputs{{Object: 10, Content: "many lines"}}},
+		{ID: 62, Process: 3, Name: "Approved", Inputs: sampleInputs{{Object: 11, State: 20, Content: "draft"}}},
+		{ID: 63, Process: 1, Name: "Gone", Inputs: sampleInputs{}},
+	}
+	b := cloneBoard(t, a)
+	b.Samples[0].Inputs[0].Content = "two lines"
+	b.Samples[1].Name = "Longest"
+	// Made anew under the same name, with the state left out.
+	b.Samples[2] = processSample{ID: 70, Process: 3, Name: "Approved", Inputs: sampleInputs{{Object: 11, Content: "draft"}}}
+	b.Samples[3] = processSample{ID: 71, Process: 2, Name: "Reviewed", Inputs: sampleInputs{}}
+
+	d := diffSnapshots(a, b)
+	want := []diffSummary{
+		{diffChanged, 60, "Write: Short"},
+		{diffChanged, 61, "Write: Longest"},
+		{diffChanged, 70, "Publish: Approved"},
+		{diffAdded, 71, "Review: Reviewed"},
+		{diffRemoved, 63, "Write: Gone"},
+	}
+	if got := summarize(d.Samples); !reflect.DeepEqual(got, want) {
+		t.Fatalf("samples = %v, want %v", got, want)
+	}
+	if got := d.Samples[0].Fields; len(got) != 1 || got[0] != (diffField{"Brief", "one line", "two lines"}) {
+		t.Errorf("Short's fields = %+v, want what it gives Brief", got)
+	}
+	if got := fieldNames(d.Samples[1]); !slices.Equal(got, []string{"name"}) {
+		t.Errorf("Long's fields = %v, want its name", got)
+	}
+	if got := d.Samples[2].Fields; len(got) != 1 || got[0] != (diffField{"Draft state", "approved", ""}) {
+		t.Errorf("Approved's fields = %+v, want Draft's state gone", got)
+	}
+	if p := d.Samples[3].Process; p == nil || *p != 2 {
+		t.Errorf("the sample added is of process %v, want Review", p)
+	}
+	if d.changed() || d.Layout {
+		t.Errorf("samples alone changed the board: %+v", d)
+	}
+	if d := diffSnapshots(a, a); len(d.Samples) != 0 {
+		t.Errorf("the same samples differ: %+v", d.Samples)
+	}
+}

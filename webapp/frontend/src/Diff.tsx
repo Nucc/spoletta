@@ -59,18 +59,26 @@ export function highlightsOf(d: BoardDiff, board: BoardId, ids: BoardIds): Highl
     if (it.board !== board) inside(it.board)
     else if (!d.objects.some((o) => o.id === it.object && o.change === 'removed')) mark(h.nodes, ids.object(it.object), 'changed')
   }
+  // A sample added, removed or changed changes its process, unless that
+  // was removed.
+  for (const it of d.samples) {
+    if (it.process === undefined) continue
+    if (it.board !== board) inside(it.board)
+    else if (!d.processes.some((p) => p.id === it.process && p.change === 'removed')) mark(h.nodes, ids.process(it.process), 'changed')
+  }
   each(d.links, (it) => mark(h.edges, ids.link(it.id), it.change))
   each(d.connections, (it) => mark(h.edges, it.id === 0 ? ids.start : ids.connection(it.id), it.change))
   return h
 }
 
-const KINDS: [keyof Pick<BoardDiff, 'processes' | 'objects' | 'states' | 'attributes' | 'links' | 'connections'>, string][] = [
+const KINDS: [keyof Pick<BoardDiff, 'processes' | 'objects' | 'states' | 'attributes' | 'links' | 'connections' | 'samples'>, string][] = [
   ['processes', 'Processes'],
   ['objects', 'Objects'],
   ['states', 'States'],
   ['attributes', 'Attributes'],
   ['links', 'Links'],
   ['connections', 'Connections'],
+  ['samples', 'Samples tried on'],
 ]
 
 const CHANGES: Record<Change, string> = { added: 'Added', removed: 'Removed', changed: 'Changed' }

@@ -62,6 +62,7 @@ type pubDiff struct {
 	Attributes  []pubItem `json:"attributes"`
 	Links       []pubItem `json:"links"`
 	Connections []pubItem `json:"connections"`
+	Samples     []pubItem `json:"samples"`
 	Settings    []struct {
 		Field string `json:"field"`
 		After string `json:"after"`

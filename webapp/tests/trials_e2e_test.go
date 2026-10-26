@@ -560,3 +560,46 @@ func sumCost(xs []float64) float64 {
 	}
 	return s
 }
+
+// A trial tries the board as it is, the draft, even while the flow has
+// published a version of it. Samples changed since a version show in its
+// diff, but don't make the board a draft of what it published.
+func TestTrialsTryTheDraft(t *testing.T) {
+	a := newApp(t)
+	r := newRerunFlow(a)
+	published := pubPublish(a, r.f.ID, "counting characters")
+	a.call("PATCH", fmt.Sprintf("/api/processes/%d", r.count.ID), map[string]any{"script": "wc -l"}, http.StatusOK, nil)
+	var mu sync.Mutex
+	var scripts []string
+	a.worker.onScript("Count", func(_ context.Context, run scriptRun) runResult {
+		mu.Lock()
+		defer mu.Unlock()
+		scripts = append(scripts, run.Script)
+		return runResult{OK: true, Output: `{"data": 1}`}
+	})
+	d := a.finish(tryProcess(a, r.count.ID, trialValue{Object: r.ticket.ID, Content: `{"data": "Fix the login"}`}).ID)
+	mu.Lock()
+	if d.Status != runDone || d.Version == nil || *d.Version == published.ID || len(scripts) != 1 || scripts[0] != "wc -l" {
+		t.Errorf("trial %s on version %v ran %q, want the draft's script on a version after the published %d", d.Status, d.Version, scripts, published.ID)
+	}
+	mu.Unlock()
+
+	// With the draft published, a sample saved changes nothing a run of it
+	// would do, but the diff lists it.
+	pubPublish(a, r.f.ID, "counting lines")
+	saveSample(a, r.count.ID, "Long", trialValue{Object: r.ticket.ID, Content: "a long ticket"})
+	l := pubList(a, r.f.ID)
+	if l.Draft {
+		t.Errorf("a sample saved made the board a draft of what it published")
+	}
+	if got := pubNames(pubDiffOf(a, fmt.Sprintf("/api/versions/%d/diff", *l.Published)).Samples); !slices.Equal(got, []string{"added Count: Long"}) {
+		t.Errorf("samples changed since the version published = %v, want Long added", got)
+	}
+	v := verSave(a, r.f.ID)
+	saveSample(a, r.count.ID, "Long", trialValue{Object: r.ticket.ID, Content: "a longer ticket"})
+	got := pubDiffOf(a, fmt.Sprintf("/api/versions/%d/diff", v.ID)).Samples
+	if len(got) != 1 || got[0].Change != "changed" || len(got[0].Fields) != 1 || got[0].Fields[0].Field != "Ticket" ||
+		got[0].Fields[0].Before != "a long ticket" || got[0].Fields[0].After != "a longer ticket" {
+		t.Errorf("samples changed since version %d = %+v, want what Long gives the ticket", v.ID, got)
+	}
+}

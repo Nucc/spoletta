@@ -1523,12 +1523,13 @@ export function unpublish(flow: number): Promise<void> {
 // One thing changed of something, as it was and as it is.
 export type DiffField = { field: string; before: string; after: string }
 
-// A process, object, state, attribute, link or connection added, removed
-// or changed. Its id is on the newer board, or on the older for one
+// A process, object, state, attribute, link, connection or sample added,
+// removed or changed. Its id is on the newer board, or on the older for one
 // removed; board is the flow process whose board it is on. A state's or
 // attribute's object is the one it is of, an object's the one it is part
-// of, a link's its object; a link's process and a connection's ends are
-// its process and target. A board's start is a connection without an id.
+// of, a link's its object; a link's or sample's process and a connection's
+// ends are its process and target. A board's start is a connection without
+// an id.
 export type DiffItem = {
   change: 'added' | 'removed' | 'changed'
   id: number
@@ -1552,6 +1553,9 @@ export type BoardDiff = {
   attributes: DiffItem[]
   links: DiffItem[]
   connections: DiffItem[]
+  // What processes are tried on; they don't make a draft differ from what
+  // it published, as no run of a version reads them.
+  samples: DiffItem[]
   settings: DiffField[]
   layout: boolean
 }

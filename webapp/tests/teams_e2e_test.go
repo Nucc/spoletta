@@ -118,7 +118,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 		ID int64 `json:"id"`
 	}
 	send := a.agent(f.ID, "Send", "Send it.")
-	var conn, attr, sched, ver, strct row
+	var conn, attr, sched, ver, strct, hook row
 	a.call("POST", "/api/connections", map[string]any{"source": proc.ID, "target": send.ID}, http.StatusCreated, &conn)
 	state := a.newState(obj.ID, "Sent")
 	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", obj.ID), map[string]any{"name": "total", "definition": "The total"}, http.StatusCreated, &attr)
@@ -128,6 +128,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 		a.do("DELETE", fmt.Sprintf("/api/schedules/%d", sched.ID), nil)
 	})
 	a.call("POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), nil, http.StatusCreated, &ver)
+	a.call("POST", "/api/webhooks", map[string]any{"flow": f.ID, "name": "Invoices in", "kind": "generic", "verify": "token", "header": "X-Token"}, http.StatusCreated, &hook)
 	a.call("POST", "/api/flows", map[string]any{"name": fmt.Sprint("Ledger", bobRow.ID), "struct": true, "owner": map[string]any{"kind": "user", "id": bobRow.ID}}, http.StatusCreated, &strct)
 
 	usersSignIn(a, p, carl)
@@ -183,6 +184,9 @@ func TestTeamsFlowOwners(t *testing.T) {
 		{"POST", stepPath("/loop"), map[string]any{"go": true}},
 		{"PATCH", fmt.Sprintf("/api/schedules/%d", sched.ID), map[string]any{"cron": "0 10 * * *"}},
 		{"DELETE", fmt.Sprintf("/api/schedules/%d", sched.ID), nil},
+		{"PUT", fmt.Sprintf("/api/webhooks/%d", hook.ID), map[string]any{"name": "Mine", "kind": "generic", "verify": "token", "header": "X-Token"}},
+		{"DELETE", fmt.Sprintf("/api/webhooks/%d", hook.ID), nil},
+		{"GET", fmt.Sprintf("/api/webhooks/%d/deliveries", hook.ID), nil},
 		{"GET", fmt.Sprintf("/api/versions/%d", ver.ID), nil},
 		{"POST", fmt.Sprintf("/api/versions/%d/restore", ver.ID), nil},
 		{"POST", fmt.Sprintf("/api/versions/%d/publish", ver.ID), nil},
@@ -191,6 +195,8 @@ func TestTeamsFlowOwners(t *testing.T) {
 		// Ids in the query or the body; whatever else they name is Carl's.
 		{"GET", fmt.Sprintf("/api/processes?flow=%d", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/schedules?flow=%d", f.ID), nil},
+		{"GET", fmt.Sprintf("/api/webhooks?flow=%d", f.ID), nil},
+		{"POST", "/api/webhooks", map[string]any{"flow": f.ID, "name": "Sneak", "kind": "generic", "verify": "token", "header": "X-Token"}},
 		{"POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), nil},
 		{"DELETE", fmt.Sprintf("/api/versions/published?flow=%d", f.ID), nil},
 		{"POST", "/api/processes", map[string]any{"flow": f.ID, "name": "Sneak", "kind": "agent"}},
@@ -219,7 +225,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 	// flow's id from has a row above; keep these lists in step with its
 	// flowPaths and flowFields, and with bodyRefs' source, target and
 	// settings, the run files of /api/files and the version a diff is to.
-	for _, kind := range []string{"flows", "structs", "processes", "objects", "links", "connections", "states", "attributes", "runs", "schedules", "versions"} {
+	for _, kind := range []string{"flows", "structs", "processes", "objects", "links", "connections", "states", "attributes", "runs", "schedules", "webhooks", "versions"} {
 		if !slices.ContainsFunc(cases, func(c struct {
 			method, path string
 			body         map[string]any

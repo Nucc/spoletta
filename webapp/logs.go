@@ -122,10 +122,18 @@ func logRunStarted(db *sql.DB, id int64) {
 		msg += ", by " + rn.StartedBy
 	case rn.APIKey != "":
 		msg += fmt.Sprintf(", through the API key %q", rn.APIKey)
+	case rn.Webhook != nil:
+		// Which webhook is said below.
 	case rn.Schedule != nil:
 		msg += fmt.Sprintf(", by schedule %d", *rn.Schedule)
 	case rn.Parent == nil:
 		msg += ", by someone unknown, as nobody signs in"
+	}
+	switch {
+	case rn.Webhook != nil && *rn.Webhook != "":
+		msg += fmt.Sprintf(", for a delivery to the webhook %q", *rn.Webhook)
+	case rn.Webhook != nil:
+		msg += ", for a delivery to a webhook since removed"
 	}
 	if rn.Record != nil {
 		msg += fmt.Sprintf(", on record %d", *rn.Record)

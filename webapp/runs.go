@@ -46,6 +46,9 @@ type run struct {
 	StartedBy string `json:"startedBy"`
 	// The name of the API key that started it, if one did; see api.go.
 	APIKey string `json:"apiKey"`
+	// The name of the webhook that started it, if one did, empty once it
+	// is removed; null for a run no webhook started. See webhooks.go.
+	Webhook *string `json:"webhook"`
 	// The shared record a person started it on, if one did; see record_runs.go.
 	Record *int64 `json:"record"`
 	// For a trial: the process a person tried in it, kept after it is
@@ -58,7 +61,7 @@ type run struct {
 
 // What scanRun reads of a run, selected from runs unaliased, which runWaiting
 // refers to.
-var runColumns = "id, flow_id, status, status = '" + runRunning + "' AND " + runWaiting + ", version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), record_id, trial_of, trial_of_name, started_at, finished_at"
+var runColumns = "id, flow_id, status, status = '" + runRunning + "' AND " + runWaiting + ", version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), CASE WHEN webhook_id IS NOT NULL THEN COALESCE((SELECT h.name FROM webhooks h WHERE h.id = webhook_id), '') END, record_id, trial_of, trial_of_name, started_at, finished_at"
 
 // The tokens a step's model calls took in and gave out, and what they cost
 // at the models' catalog prices, in dollars.
@@ -93,7 +96,7 @@ func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage,
 }
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Waiting, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.Record, &rn.TrialOf, &rn.TrialOfName, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Waiting, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.Webhook, &rn.Record, &rn.TrialOf, &rn.TrialOfName, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several

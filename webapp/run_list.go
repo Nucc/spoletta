@@ -16,7 +16,7 @@ import (
 //   - started: how it started. Each run started one way, the first its
 //     markers say in this order: a trial of one process alone (trials.go),
 //     a re-run of another, on records a person picked, through the API, by
-//     a schedule, in another run (a flow process's board, an item of a
+//     a webhook (webhooks.go), by a schedule, in another run (a flow process's board, an item of a
 //     list, a subflow), or else by a person, with the Run button. A re-run
 //     of a scheduled run is a re-run, and a run without sign-in a person's.
 //
@@ -34,13 +34,13 @@ const runWaiting = "EXISTS (SELECT 1 FROM run_steps ws WHERE ws.run_id = runs.id
 
 // How a run started, as the list tells runs apart; runs unaliased.
 const runOrigin = `CASE WHEN trial_of IS NOT NULL THEN 'trial' WHEN rerun_of IS NOT NULL THEN 'rerun' WHEN record_id IS NOT NULL THEN 'record'
-	WHEN api_key_id IS NOT NULL THEN 'api' WHEN schedule_id IS NOT NULL THEN 'schedule'
+	WHEN api_key_id IS NOT NULL THEN 'api' WHEN webhook_id IS NOT NULL THEN 'webhook' WHEN schedule_id IS NOT NULL THEN 'schedule'
 	WHEN parent_run_id IS NOT NULL THEN 'run' ELSE 'person' END`
 
 // What the list can be narrowed by, in the order the board offers them.
 var (
 	runStatuses = []string{"running", "waiting", runDone, runFailed, runInterrupted, runTerminated}
-	runOrigins  = []string{"person", "schedule", "api", "rerun", "record", "run", "trial"}
+	runOrigins  = []string{"person", "schedule", "api", "webhook", "rerun", "record", "run", "trial"}
 )
 
 // What narrows a page of the list.

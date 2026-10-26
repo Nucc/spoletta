@@ -22,7 +22,9 @@ package main
 // so the run shows it, a re-run starts from it, and a persistent object it
 // gives holding a unique value another run stored ends the run as a
 // duplicate before it starts, as a flow fetching what it handled before
-// does; see instances.go.
+// does; see instances.go. A webhook's delivery starts a run the same way
+// (startGivenRun), with what its mapping takes from the payload; see
+// webhooks.go.
 //
 // A key is someone's: the runs it starts are theirs, using their model keys
 // and MCP connections, and it starts only the flows they may run and reads
@@ -398,14 +400,32 @@ type apiRefusal struct {
 	msg    string
 }
 
-// Starts a run of the flow for the key, given what the request gives, for
-// whom the key is; see startRun. A request sent again with the same
-// idempotency key returns the run it started, with created false.
-func startAPIRun(ctx context.Context, db *sql.DB, eng *engine, flow, key int64, startedBy *int64, idempotency string, req apiRunRequest) (id int64, created bool, refused *apiRefusal, err error) {
+// What started a run from elsewhere: an API key, or a webhook (see
+// webhooks.go). Either keeps the runs it started apart by its idempotency
+// keys, so a request or a delivery sent again starts no second run.
+type runSource struct {
+	// The column of runs naming it, api_key_id or webhook_id.
+	column string
+	id     int64
+	// What the step holding what the run was given is called.
+	given string
+}
+
+func apiKeySource(key int64) runSource {
+	return runSource{column: "api_key_id", id: key, given: "Given through the API"}
+}
+
+// Starts a run of the flow for what started it from elsewhere, given what
+// ask makes of the objects the flow starts from, for whom that is; see
+// startRun. A request sent again with the same idempotency key returns the
+// run it started, with created false. The run takes the version the flow
+// published, if any, and what it is given is checked against what that
+// version starts from.
+func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src runSource, startedBy *int64, idempotency string, ask func([]givenObject) (apiRunRequest, error)) (id int64, created bool, refused *apiRefusal, err error) {
 	var idem *string
 	if idempotency != "" {
 		idem = &idempotency
-		if id, refused, err := idempotentRun(ctx, db, flow, key, idempotency); id != 0 || refused != nil || err != nil {
+		if id, refused, err := idempotentRun(ctx, db, flow, src, idempotency); id != 0 || refused != nil || err != nil {
 			return id, false, refused, err
 		}
 	}
@@ -432,21 +452,25 @@ func startAPIRun(ctx context.Context, db *sql.DB, eng *engine, flow, key int64, 
 	if msg != "" {
 		return 0, false, &apiRefusal{http.StatusUnprocessableEntity, msg}, nil
 	}
+	req, err := ask(in)
+	if err != nil {
+		return 0, false, &apiRefusal{http.StatusBadRequest, err.Error()}, nil
+	}
 	given, err := givenValues(in, req)
 	if err != nil {
 		return 0, false, &apiRefusal{http.StatusBadRequest, err.Error()}, nil
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE runs SET api_key_id = ?, idempotency_key = ? WHERE id = ?", key, idem, nr.id)
+	_, err = tx.ExecContext(ctx, "UPDATE runs SET "+src.column+" = ?, idempotency_key = ? WHERE id = ?", src.id, idem, nr.id)
 	if mysqlErrorIs(err, mysqlErrDuplicate) {
 		// Another request with the same idempotency key started it meanwhile.
 		tx.Rollback()
-		id, refused, err := idempotentRun(ctx, db, flow, key, idempotency)
+		id, refused, err := idempotentRun(ctx, db, flow, src, idempotency)
 		return id, false, refused, err
 	}
 	if err != nil {
 		return 0, false, nil, err
 	}
-	dup, err := recordGiven(ctx, tx, b, nr.id, in, given)
+	dup, err := recordGiven(ctx, tx, b, nr.id, src.given, in, given)
 	if err != nil {
 		return 0, false, nil, err
 	}
@@ -459,11 +483,11 @@ func startAPIRun(ctx context.Context, db *sql.DB, eng *engine, flow, key int64, 
 	return nr.id, true, nil, nil
 }
 
-// The run the key started with the idempotency key, if any; refused if it
-// is of another flow.
-func idempotentRun(ctx context.Context, db *sql.DB, flow, key int64, idempotency string) (int64, *apiRefusal, error) {
+// The run the source started with the idempotency key, if any; refused if
+// it is of another flow.
+func idempotentRun(ctx context.Context, db *sql.DB, flow int64, src runSource, idempotency string) (int64, *apiRefusal, error) {
 	var id, of int64
-	err := db.QueryRowContext(ctx, "SELECT id, flow_id FROM runs WHERE api_key_id = ? AND idempotency_key = ?", key, idempotency).Scan(&id, &of)
+	err := db.QueryRowContext(ctx, "SELECT id, flow_id FROM runs WHERE "+src.column+" = ? AND idempotency_key = ?", src.id, idempotency).Scan(&id, &of)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, nil, nil
@@ -475,17 +499,17 @@ func idempotentRun(ctx context.Context, db *sql.DB, flow, key int64, idempotency
 	return id, nil, nil
 }
 
-// Records what a run was given as a step before the others, and stores the
-// persistent objects among it. A unique value another run stored ends the
-// run as terminated, and is returned.
-func recordGiven(ctx context.Context, tx *sql.Tx, b *runBoard, run int64, in []givenObject, given map[int64]value) (*duplicate, error) {
+// Records what a run was given as a step before the others, called name,
+// and stores the persistent objects among it. A unique value another run
+// stored ends the run as terminated, and is returned.
+func recordGiven(ctx context.Context, tx *sql.Tx, b *runBoard, run int64, name string, in []givenObject, given map[int64]value) (*duplicate, error) {
 	if len(given) == 0 {
 		return nil, nil
 	}
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO run_steps (run_id, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at)
-		VALUES (?, 'Given through the API', ?, '', '[]', ?, '', '', '', CURRENT_TIMESTAMP(3))`,
-		run, kindInput, stepDone)
+		VALUES (?, ?, ?, '', '[]', ?, '', '', '', CURRENT_TIMESTAMP(3))`,
+		run, truncate(name, 255), kindInput, stepDone)
 	if err != nil {
 		return nil, err
 	}
@@ -737,7 +761,8 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 		if u != nil {
 			startedBy = &u.ID
 		}
-		run, created, refused, err := startAPIRun(r.Context(), db, eng, id, key, startedBy, idempotency, req)
+		run, created, refused, err := startGivenRun(r.Context(), db, eng, id, apiKeySource(key), startedBy, idempotency,
+			func([]givenObject) (apiRunRequest, error) { return req, nil })
 		if err != nil {
 			serverError(w, err)
 			return

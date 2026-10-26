@@ -177,6 +177,7 @@ func main() {
 	registerRerunRoutes(mux, db, eng)
 	registerTrialRoutes(mux, db, eng)
 	registerAPIRoutes(mux, db, eng, auth != nil)
+	registerWebhookRoutes(mux, db, eng, auth != nil)
 	registerDataRoutes(mux, db)
 	registerScheduleRoutes(mux, db)
 	go runSchedules(context.Background(), db, eng, time.Second)

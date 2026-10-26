@@ -13,8 +13,9 @@ import (
 // selected; pasting copies it as it is by then, with what it takes along: a
 // flow process's board with all on it, an object's states, attributes and
 // the objects making it up, the links, decisions and connections between
-// what is copied, and the samples its processes are tried on. Links to
-// anything left behind are left behind too, as is what samples give it.
+// what is copied, the samples its processes are tried on, and the notes on
+// the boards copied. Links to anything left behind are left behind too, as
+// is what samples give it and what notes point at.
 //
 // The copies are new rows of their own. A copy of a module's object stays a
 // copy of it, following it, unless it is pasted into that module. An object
@@ -27,6 +28,7 @@ type pasteRequest struct {
 	From      int64   `json:"from"`
 	Processes []int64 `json:"processes"`
 	Objects   []int64 `json:"objects"`
+	Notes     []int64 `json:"notes"`
 	// The board pasted onto: a flow process's, or with none the flow's top board.
 	Flow  int64  `json:"flow"`
 	Board *int64 `json:"board"`
@@ -39,6 +41,7 @@ type pasteRequest struct {
 type pasteResult struct {
 	Processes []int64 `json:"processes"`
 	Objects   []int64 `json:"objects"`
+	Notes     []int64 `json:"notes"`
 }
 
 // How deep objects can make each other up before pasting gives up on them.
@@ -112,7 +115,7 @@ type paster struct {
 
 // Pastes what req says, in tx. Says what is wrong, if anything.
 func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (pasteResult, string, error) {
-	res := pasteResult{Processes: []int64{}, Objects: []int64{}}
+	res := pasteResult{Processes: []int64{}, Objects: []int64{}, Notes: []int64{}}
 	s, err := takeSnapshot(ctx, tx, req.From)
 	if errors.Is(err, sql.ErrNoRows) {
 		return res, "the flow copied from is gone", nil
@@ -181,7 +184,18 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 			}
 		}
 	}
-	if len(topProcs) == 0 && len(topObjs) == 0 {
+	selNotes := map[int64]bool{}
+	for _, id := range req.Notes {
+		selNotes[id] = true
+	}
+	var topNotes []note
+	for _, n := range s.Notes {
+		if selNotes[n.ID] && !p.takenAlong(n.Parent) {
+			topNotes = append(topNotes, n)
+			onBoard(n.Parent)
+		}
+	}
+	if len(topProcs) == 0 && len(topObjs) == 0 && len(topNotes) == 0 {
 		return res, "nothing to paste: what was copied is gone", nil
 	}
 	if len(boards) > 1 {
@@ -335,6 +349,43 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO process_samples (process_id, name, inputs) VALUES (?, ?, ?)", process, sm.Name, inputs); err != nil {
 			return res, "", err
+		}
+	}
+
+	// The notes selected, and those on the boards of the flow processes
+	// copied, pointing at what they pointed at if that was copied too.
+	for _, n := range s.Notes {
+		top := selNotes[n.ID] && !p.takenAlong(n.Parent)
+		if !top && !p.takenAlong(n.Parent) {
+			continue
+		}
+		parent, x, y := req.Board, n.X+req.DX, n.Y+req.DY
+		if !top {
+			mapped := p.procMap[*n.Parent]
+			parent, x, y = &mapped, n.X, n.Y
+		}
+		var process, object *int64
+		if n.Process != nil {
+			if c, ok := p.procMap[*n.Process]; ok {
+				process = &c
+			}
+		}
+		if n.Object != nil {
+			if c, ok := p.objMap[*n.Object]; ok {
+				object = &c
+			}
+		}
+		r, err := tx.ExecContext(ctx, "INSERT INTO notes (flow_id, parent_id, x, y, width, height, text, colour, process_id, object_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			req.Flow, parent, x, y, n.Width, n.Height, n.Text, n.Colour, process, object)
+		if err != nil {
+			return res, "", err
+		}
+		if top {
+			id, err := r.LastInsertId()
+			if err != nil {
+				return res, "", err
+			}
+			res.Notes = append(res.Notes, id)
 		}
 	}
 

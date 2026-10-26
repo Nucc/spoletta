@@ -470,6 +470,17 @@ object) the words the flow list finds it by and narrows to. They change
 nothing in how it runs. Each is at most 64 characters, a flow has at most
 20, and two differing only in case are one.
 
+### 3.11 Notes
+
+A board's `notes` are boxes of Markdown text placed on it, each optionally
+pointing at a process or an object (`process: Fetch` or `object: Ticket`),
+for saying what the board doesn't: why the flow is built so, what is
+unfinished, what someone should look at. They change nothing in how it
+runs: no step sees them, and OPL leaves them out. Write one when a choice
+in the flow needs explaining to whoever changes it next, such as why a
+review sends work back at most three rounds. A board whose `notes` the
+file leaves out keeps the notes it has; `notes: []` leaves it none.
+
 ---
 
 ## 4. How a run executes
@@ -966,6 +977,9 @@ Conventions that matter when writing one:
   leaves them out. The user can press Tidy afterwards.
 - Shorthands: a link with nothing but its object is just the name; a state
   without a key or rule is just the name; `kind` defaults to `agent`.
+- **Notes** (§3.11) are listed per board under `notes:`. Leaving them out
+  keeps a board's notes as they are, so a file changing processes never
+  loses them.
 
 Import: `POST /api/setup` with the YAML (or JSON) as the body, or the Import
 button on the flow list page. It replies with the flows it created and those

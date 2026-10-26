@@ -335,3 +335,36 @@ func TestDiffOfSamples(t *testing.T) {
 		t.Errorf("the same samples differ: %+v", d.Samples)
 	}
 }
+
+// Notes are listed, matched by id, then by text on the board matched, as
+// after an import gave them new ids; moving or resizing them is layout, and
+// none of it makes the board differ from what a run reads.
+func TestDiffNotes(t *testing.T) {
+	a := diffBoard()
+	a.Notes = []note{
+		{ID: 60, Text: "Why we draft", Colour: "yellow", Width: 240, Height: 140, Process: versionID(1)},
+		{ID: 61, Text: "## Unfinished\nReview needs a rule", Colour: "pink", Width: 240, Height: 140},
+		{ID: 62, Text: "Gone soon", Colour: "yellow", Width: 240, Height: 140},
+	}
+	b := cloneBoard(t, a)
+	b.Notes = []note{
+		{ID: 70, Text: "Why we draft", Colour: "yellow", Width: 240, Height: 140, X: 50, Process: versionID(1)},
+		{ID: 61, Text: "## Unfinished\nReview needs a rule", Colour: "blue", Width: 240, Height: 140, Object: versionID(11)},
+		{ID: 71, Text: "", Colour: "yellow", Width: 240, Height: 140},
+	}
+	d := diffSnapshots(a, b)
+	want := []diffSummary{{diffChanged, 61, "Unfinished"}, {diffAdded, 71, "an empty note"}, {diffRemoved, 62, "Gone soon"}}
+	if got := summarize(d.Notes); !reflect.DeepEqual(got, want) {
+		t.Errorf("notes = %+v, want %+v", got, want)
+	}
+	if len(d.Notes) > 0 && !slices.Equal(fieldNames(d.Notes[0]), []string{"colour", "points at"}) {
+		t.Errorf("the changed note's fields = %+v", d.Notes[0].Fields)
+	}
+	if d.changed() || !d.Layout {
+		t.Errorf("a change to notes alone: changed %v, layout %v", d.changed(), d.Layout)
+	}
+	long := note{Text: "\n  - A very long first line of a note that goes on and on past what fits in a list"}
+	if got := noteName(long); got != "A very long first line of a note that goes on and on past wh…" {
+		t.Errorf("a long note is named %q", got)
+	}
+}

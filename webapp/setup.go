@@ -97,6 +97,23 @@ type setupBoard struct {
 	End       *setupPoint    `yaml:"end,omitempty"`
 	Processes []setupProcess `yaml:"processes,omitempty"`
 	Objects   []setupObject  `yaml:"objects,omitempty"`
+	// The notes on it; see notes.go. Absent, the board keeps the notes it
+	// has; empty, it has none.
+	Notes *[]setupNote `yaml:"notes,omitempty"`
+}
+
+// A note on a board, and what it points at, if anything: a process or an
+// object of the flow, by name, or key where names are shared.
+type setupNote struct {
+	Text string `yaml:"text"`
+	// yellow when absent.
+	Colour  string   `yaml:"colour,omitempty"`
+	Process string   `yaml:"process,omitempty"`
+	Object  string   `yaml:"object,omitempty"`
+	X       *float64 `yaml:"x,omitempty"`
+	Y       *float64 `yaml:"y,omitempty"`
+	Width   *float64 `yaml:"width,omitempty"`
+	Height  *float64 `yaml:"height,omitempty"`
 }
 
 type setupStart struct {

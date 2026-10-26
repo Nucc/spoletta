@@ -1213,6 +1213,9 @@ func (b *builder) resolveBoard(board *setupBoard, parent *int64, where string) e
 			return err
 		}
 	}
+	if err := b.resolveNotes(board, parent, where); err != nil {
+		return err
+	}
 	if parent == nil {
 		b.out.Start, b.out.End = start, end
 	} else {
@@ -1711,5 +1714,74 @@ func (b *builder) write() error {
 		objs[k] = bo.id
 	}
 	b.objects[b.flow] = objs
+	return nil
+}
+
+// The board's notes: the file's, each keeping the id of a note the board
+// had with the same text, or without any in the file, the ones it had.
+// What a note points at is named as next names processes, but may be on
+// another board of the flow. Where the file doesn't place a note, it keeps
+// the place of the one it matched, or else goes in a column left of the
+// board, level with what it points at.
+func (b *builder) resolveNotes(board *setupBoard, parent *int64, where string) error {
+	var had []note
+	for _, n := range b.cur.Notes {
+		if sameBoard(n.Parent, parent) {
+			had = append(had, n)
+		}
+	}
+	if board.Notes == nil {
+		b.out.Notes = append(b.out.Notes, had...)
+		return nil
+	}
+	const left, top, gap = -260.0, 40.0, 180.0
+	used := map[int64]bool{}
+	for i, sn := range *board.Notes {
+		at := fmt.Sprintf("%s: note %d", where, i+1)
+		n := note{Parent: parent, Text: sn.Text, Colour: sn.Colour, X: left, Y: top + float64(i)*gap, Width: newNoteWidth, Height: newNoteHeight}
+		if n.Colour == "" {
+			n.Colour = noteColours[0]
+		}
+		var y *float64
+		switch {
+		case sn.Process != "" && sn.Object != "":
+			return problemf("%s: points at a process or an object, not both", at)
+		case sn.Process != "":
+			bp := b.procs[sn.Process]
+			if bp == nil {
+				return problemf("%s: points at %s, which isn't a process of the flow", at, quote(sn.Process))
+			}
+			n.Process, y = &bp.id, &bp.y
+		case sn.Object != "":
+			bo := b.objs[sn.Object]
+			if bo == nil {
+				return problemf("%s: points at %s, which isn't an object of the flow", at, quote(sn.Object))
+			}
+			n.Object, y = &bo.id, &bo.y
+		}
+		if y != nil {
+			n.Y = *y
+		}
+		for _, h := range had {
+			if !used[h.ID] && h.Text == n.Text {
+				used[h.ID] = true
+				n.ID, n.X, n.Y, n.Width, n.Height = h.ID, h.X, h.Y, h.Width, h.Height
+				break
+			}
+		}
+		if sn.X != nil && sn.Y != nil {
+			n.X, n.Y = *sn.X, *sn.Y
+		}
+		if sn.Width != nil {
+			n.Width = *sn.Width
+		}
+		if sn.Height != nil {
+			n.Height = *sn.Height
+		}
+		if msg := n.problem(); msg != "" {
+			return problemf("%s: %s", at, msg)
+		}
+		b.out.Notes = append(b.out.Notes, n)
+	}
 	return nil
 }

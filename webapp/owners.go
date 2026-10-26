@@ -303,6 +303,7 @@ var flowPaths = []struct {
 	{regexp.MustCompile(`^/api/connections/(\d+)(/|$)`), "SELECT p.flow_id FROM connections c JOIN processes p ON p.id = c.source_id WHERE c.id = ?"},
 	{regexp.MustCompile(`^/api/states/(\d+)(/|$)`), "SELECT o.flow_id FROM object_states s JOIN objects o ON o.id = s.object_id WHERE s.id = ?"},
 	{regexp.MustCompile(`^/api/attributes/(\d+)(/|$)`), "SELECT o.flow_id FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE a.id = ?"},
+	{regexp.MustCompile(`^/api/notes/(\d+)(/|$)`), "SELECT flow_id FROM notes WHERE id = ?"},
 	{regexp.MustCompile(`^/api/runs/(\d+)(/|$)`), "SELECT flow_id FROM runs WHERE id = ?"},
 	{regexp.MustCompile(`^/api/schedules/(\d+)(/|$)`), "SELECT flow_id FROM schedules WHERE id = ?"},
 	{regexp.MustCompile(`^/api/webhooks/(\d+)(/|$)`), "SELECT flow_id FROM webhooks WHERE id = ?"},

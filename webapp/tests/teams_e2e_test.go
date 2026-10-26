@@ -118,8 +118,9 @@ func TestTeamsFlowOwners(t *testing.T) {
 		ID int64 `json:"id"`
 	}
 	send := a.agent(f.ID, "Send", "Send it.")
-	var conn, attr, sched, ver, strct, hook row
+	var conn, attr, sched, ver, strct, hook, nt row
 	a.call("POST", "/api/connections", map[string]any{"source": proc.ID, "target": send.ID}, http.StatusCreated, &conn)
+	a.call("POST", "/api/notes", map[string]any{"flow": f.ID, "text": "Bob's"}, http.StatusCreated, &nt)
 	state := a.newState(obj.ID, "Sent")
 	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", obj.ID), map[string]any{"name": "total", "definition": "The total"}, http.StatusCreated, &attr)
 	a.call("POST", "/api/schedules", map[string]any{"flow": f.ID, "cron": "0 9 * * 1-5", "timezone": "UTC"}, http.StatusCreated, &sched)
@@ -172,6 +173,8 @@ func TestTeamsFlowOwners(t *testing.T) {
 		{"DELETE", fmt.Sprintf("/api/connections/%d", conn.ID), nil},
 		{"PATCH", fmt.Sprintf("/api/states/%d", state.ID), map[string]any{"name": "Mine"}},
 		{"DELETE", fmt.Sprintf("/api/attributes/%d", attr.ID), nil},
+		{"PATCH", fmt.Sprintf("/api/notes/%d", nt.ID), map[string]any{"text": "Mine"}},
+		{"DELETE", fmt.Sprintf("/api/notes/%d", nt.ID), nil},
 		{"GET", runPath(""), nil},
 		{"GET", runPath("/logs"), nil},
 		{"GET", stepPath("/output"), nil},
@@ -198,6 +201,8 @@ func TestTeamsFlowOwners(t *testing.T) {
 		{"GET", fmt.Sprintf("/api/schedules?flow=%d", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/webhooks?flow=%d", f.ID), nil},
 		{"POST", "/api/webhooks", map[string]any{"flow": f.ID, "name": "Sneak", "kind": "generic", "verify": "token", "header": "X-Token"}},
+		{"GET", fmt.Sprintf("/api/notes?flow=%d", f.ID), nil},
+		{"POST", "/api/notes", map[string]any{"flow": own.ID, "text": "Sneak", "process": proc.ID}},
 		{"POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), nil},
 		{"DELETE", fmt.Sprintf("/api/versions/published?flow=%d", f.ID), nil},
 		{"POST", "/api/processes", map[string]any{"flow": f.ID, "name": "Sneak", "kind": "agent"}},
@@ -226,7 +231,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 	// flow's id from has a row above; keep these lists in step with its
 	// flowPaths and flowFields, and with bodyRefs' source, target and
 	// settings, the run files of /api/files and the version a diff is to.
-	for _, kind := range []string{"flows", "structs", "processes", "objects", "links", "connections", "states", "attributes", "runs", "schedules", "webhooks", "versions"} {
+	for _, kind := range []string{"flows", "structs", "processes", "objects", "links", "connections", "states", "attributes", "notes", "runs", "schedules", "webhooks", "versions"} {
 		if !slices.ContainsFunc(cases, func(c struct {
 			method, path string
 			body         map[string]any

@@ -38,7 +38,9 @@ import (
 // id, then by name on the process matched, each change saying what it
 // gives each object differently. Like layout, they don't make a draft
 // differ from what it published: a trial tries the board as it is, and no
-// run of a version reads them.
+// run of a version reads them. Nor do notes (notes.go), listed too, matched
+// by id, then by their text on the board matched; where they sit and how
+// large they are is layout.
 
 // What changed, by kind of thing, and of the flow's settings.
 type boardDiff struct {
@@ -49,7 +51,9 @@ type boardDiff struct {
 	Links       []diffItem `json:"links"`
 	Connections []diffItem `json:"connections"`
 	// For a sample: its process, as Process, and what it gives each object.
-	Samples  []diffItem  `json:"samples"`
+	Samples []diffItem `json:"samples"`
+	// A note is named by its first line.
+	Notes    []diffItem  `json:"notes"`
 	Settings []diffField `json:"settings"`
 	// Whether anything moved, was resized or rerouted.
 	Layout bool `json:"layout"`
@@ -89,7 +93,8 @@ type diffField struct {
 
 type diffFields []diffField
 
-// Whether the boards differ in more than their layout.
+// Whether the boards differ in more than their layout, the samples their
+// processes are tried on and their notes, none of which a run reads.
 func (d boardDiff) changed() bool {
 	return len(d.Processes)+len(d.Objects)+len(d.States)+len(d.Attributes)+len(d.Links)+len(d.Connections)+len(d.Settings) > 0
 }
@@ -102,7 +107,7 @@ type diffMatch struct {
 // What changed from board a to board b.
 func diffSnapshots(a, b snapshot) boardDiff {
 	d := boardDiff{Processes: []diffItem{}, Objects: []diffItem{}, States: []diffItem{}, Attributes: []diffItem{},
-		Links: []diffItem{}, Connections: []diffItem{}, Samples: []diffItem{}, Settings: []diffField{}}
+		Links: []diffItem{}, Connections: []diffItem{}, Samples: []diffItem{}, Notes: []diffItem{}, Settings: []diffField{}}
 	m := matchSnapshots(a, b)
 	d.diffProcesses(a, b, m)
 	d.diffObjects(a, b, m)
@@ -111,6 +116,7 @@ func diffSnapshots(a, b snapshot) boardDiff {
 	d.diffLinks(a, b, m)
 	d.diffConnections(a, b, m)
 	d.diffSamples(a, b, m)
+	d.diffNotes(a, b, m)
 	d.Settings = diffSettings(a.Settings, b.Settings)
 	if a.Start.X != b.Start.X || a.Start.Y != b.Start.Y || !sameJSON(a.Start.Route, b.Start.Route) || !sameEnd(a.End, b.End) {
 		d.Layout = true
@@ -581,6 +587,90 @@ func (d *boardDiff) diffSamples(a, b snapshot, m diffMatch) {
 	for _, sm := range a.Samples {
 		if !matched[sm.ID] {
 			d.Samples = append(d.Samples, item(pa, diffRemoved, sm))
+		}
+	}
+}
+
+// How the diff names a note: by its first line with words, cut short.
+func noteName(n note) string {
+	for _, line := range strings.Split(n.Text, "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#>*-+ "))
+		if line == "" {
+			continue
+		}
+		if r := []rune(line); len(r) > 60 {
+			line = strings.TrimSpace(string(r[:60])) + "…"
+		}
+		return line
+	}
+	return "an empty note"
+}
+
+// What a note points at, as the diff names it.
+func noteTarget(s snapshot, n note) string {
+	switch {
+	case n.Process != nil:
+		for _, p := range s.Processes {
+			if p.ID == *n.Process {
+				return p.Name
+			}
+		}
+	case n.Object != nil:
+		name, _ := objectOn(s, *n.Object)
+		return name
+	}
+	return ""
+}
+
+func (d *boardDiff) diffNotes(a, b snapshot, m diffMatch) {
+	item := func(change string, n note) diffItem {
+		return diffItem{Change: change, ID: n.ID, Name: noteName(n), Board: n.Parent}
+	}
+	onBoard := func(old, now *int64) bool {
+		if old == nil || now == nil {
+			return old == nil && now == nil
+		}
+		n, ok := m.procs[*old]
+		return ok && n == *now
+	}
+	matched := map[int64]bool{}
+	ids := map[int64]note{}
+	for _, n := range a.Notes {
+		ids[n.ID] = n
+	}
+	for _, n := range b.Notes {
+		old, ok := ids[n.ID]
+		if !ok || matched[old.ID] {
+			old, ok = note{}, false
+			for _, w := range a.Notes {
+				if !matched[w.ID] && w.Text == n.Text && onBoard(w.Parent, n.Parent) {
+					old, ok = w, true
+					break
+				}
+			}
+		}
+		if !ok {
+			d.Notes = append(d.Notes, item(diffAdded, n))
+			continue
+		}
+		matched[old.ID] = true
+		var fs diffFields
+		fs.add("text", old.Text, n.Text)
+		fs.add("colour", old.Colour, n.Colour)
+		fs.add("board", boardName(a, old.Parent), boardName(b, n.Parent))
+		fs.add("points at", noteTarget(a, old), noteTarget(b, n))
+		if old.X != n.X || old.Y != n.Y || old.Width != n.Width || old.Height != n.Height {
+			d.Layout = true
+		}
+		if len(fs) > 0 {
+			it := item(diffChanged, n)
+			it.Fields = fs
+			d.Notes = append(d.Notes, it)
+		}
+	}
+	for _, n := range a.Notes {
+		if !matched[n.ID] {
+			d.Notes = append(d.Notes, item(diffRemoved, n))
 		}
 	}
 }

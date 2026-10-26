@@ -314,6 +314,25 @@ func (x exporter) board(parent *int64) setupBoard {
 			b.Objects = append(b.Objects, x.object(o))
 		}
 	}
+	for _, n := range s.Notes {
+		if !sameBoard(n.Parent, parent) {
+			continue
+		}
+		sn := setupNote{Text: n.Text, X: addrOf(n.X), Y: addrOf(n.Y), Width: addrOf(n.Width), Height: addrOf(n.Height)}
+		if n.Colour != noteColours[0] {
+			sn.Colour = n.Colour
+		}
+		if n.Process != nil {
+			sn.Process = x.e.procIDs[*n.Process]
+		}
+		if n.Object != nil {
+			sn.Object = x.e.objIDs[*n.Object]
+		}
+		if b.Notes == nil {
+			b.Notes = &[]setupNote{}
+		}
+		*b.Notes = append(*b.Notes, sn)
+	}
 	return b
 }
 

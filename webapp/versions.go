@@ -131,6 +131,9 @@ type snapshot struct {
 	// What processes are tried on (see trials.go); left out while there are
 	// none, as in versions from before them.
 	Samples []processSample `json:"samples,omitempty"`
+	// The notes on its boards (see notes.go); left out while there are
+	// none, as in versions from before them, so those match boards as they are.
+	Notes []note `json:"notes,omitempty"`
 }
 
 // Scans every row of query with scan, which reads the current row.
@@ -270,6 +273,15 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 		s.Samples = append(s.Samples, sm)
 		return err
 	}, flow)
+	if err != nil {
+		return s, err
+	}
+	err = scanAll(ctx, tx, "SELECT "+noteColumns+" FROM notes WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
+		var n note
+		err := scanNote(rows, &n)
+		s.Notes = append(s.Notes, n)
+		return err
+	}, flow)
 	return s, err
 }
 
@@ -362,6 +374,7 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		"DELETE st FROM object_states st JOIN objects o ON o.id = st.object_id WHERE o.flow_id = ?",
 		"DELETE b FROM inner_boards b JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ?",
 		"DELETE sm FROM process_samples sm JOIN processes p ON p.id = sm.process_id WHERE p.flow_id = ?",
+		"DELETE FROM notes WHERE flow_id = ?",
 	} {
 		if _, err := tx.ExecContext(ctx, del, flow); err != nil {
 			return err
@@ -492,6 +505,9 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		if _, err := tx.ExecContext(ctx, "INSERT INTO process_samples (id, process_id, name, inputs) VALUES (?, ?, ?, ?)", id, sm.Process, sm.Name, sm.Inputs); err != nil {
 			return err
 		}
+	}
+	if err := restoreNotes(ctx, tx, flow, s); err != nil {
+		return err
 	}
 	var endX, endY *float64
 	if s.End != nil {

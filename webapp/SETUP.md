@@ -1,6 +1,6 @@
 # Setup files
 
-A setup file describes everything built in the app as YAML. That covers the MCP servers, the skills and commands, the structs, the procedures and the flows, with every board, process, object, link and schedule on them. You can keep it under version control, edit it by hand, or have an LLM write it, and then import it into any instance of the app.
+A setup file describes everything built in the app as YAML. That covers the MCP servers, the skills and commands, the structs, the procedures and the flows, with every board, process, object, link, note and schedule on them. You can keep it under version control, edit it by hand, or have an LLM write it, and then import it into any instance of the app.
 
 It leaves out what runs produce: runs, versions and which of them a flow published, undo history, and the values that persistent objects stored. MCP servers' sign-ins and tokens stay out too, so after importing a server you sign in to it again, or an admin sets its token. Who a flow, skill or command belongs to stays out as well.
 
@@ -97,7 +97,26 @@ Flows and procedures have the same shape:
   end: {x: 40, y: 600}          # where the board's end is drawn
   processes: [...]
   objects: [...]
+  notes: [...]
 ```
+
+### Notes
+
+```yaml
+notes:
+  - text: |             # Markdown
+      Why we **fetch** first: the API pages from the newest.
+    colour: blue        # yellow (default), blue, green, pink, purple or grey
+    process: Fetch      # what it points at: a process or an object of the flow, by name or key
+    x: -260             # where it is drawn, and how large; see Positions
+    y: 140
+    width: 240
+    height: 140
+```
+
+A board's notes say what the board doesn't, such as why it is built so or what is unfinished. They change nothing in how the flow runs: no step sees them. A note points at a `process` or an `object`, or at nothing; what it points at may be on another board of the flow. A flow process's `board` has notes of its own.
+
+A board the file gives no `notes` keeps those it has; `notes: []` leaves it none. A note with the text of one the board has keeps that one's place and size when the file doesn't give them. One placed by nothing goes in a column left of the board, level with what it points at. Export writes a board's notes when it has any.
 
 ### Processes
 
@@ -138,7 +157,7 @@ Flows and procedures have the same shape:
       inputs:           # objects it takes, each with what it holds and maybe one of its states
         - {object: Ticket, state: open, content: '{"data": "The login page loops"}'}
   board: {...}          # flow process: its own board, shaped like a flow's
-                        # (start, end, processes, objects)
+                        # (start, end, processes, objects, notes)
   x: 40                 # where it is drawn; see Positions
   y: 140
   width: 240
@@ -245,10 +264,10 @@ Export does this by itself.
 
 ### Positions
 
-`x`, `y`, `width`, `route` and `at` say where things are drawn, and all of them are optional:
+`x`, `y`, `width`, `route` and `at` say where things are drawn, and a note's `height` how tall it is; all of them are optional:
 
 - Something the board already has keeps its place, width and `at` when the file doesn't give them. A link's `route` left out goes back to the default route.
-- Something new is laid out in rows down from the start, following `next`. Each object goes beside the first process that links to it.
+- Something new is laid out in rows down from the start, following `next`. Each object goes beside the first process that links to it, and each note to the left of the board.
 
 Use the board's Tidy button afterwards for a better layout.
 

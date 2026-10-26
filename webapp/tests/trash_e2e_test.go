@@ -236,7 +236,8 @@ func TestTrashStopsRunsGoingOn(t *testing.T) {
 	if inInbox() {
 		t.Error("the review of a flow in the trash is in the inbox")
 	}
-	trashRestore(a, b.flow.ID, "")
+	// Under a name of its own, as other tests' flows are called Review too.
+	trashRestore(a, b.flow.ID, "Review stopped by the trash")
 	if d := a.finish(review.ID); d.Status != runInterrupted {
 		t.Errorf("the run waiting on the review is %s", d.Status)
 	}
@@ -274,9 +275,11 @@ func TestTrashBreaksCallsOfAProcedure(t *testing.T) {
 	}
 	logLineWith(t, a.runLogs(rn.ID, 0), "moved the procedure")
 
-	// Run again, the call fails saying why.
+	// Run again: the board's problems keep a person from starting it, and
+	// a run another system starts fails at the call, saying why.
 	slow = false
-	d = a.finish(a.startRun(s.caller.ID).ID)
+	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", s.caller.ID), nil, http.StatusConflict, `The procedure "Call" runs is in the trash`)
+	d = a.finish(apiStart(a, apiNewKey(a, "Trashed").Key, s.caller.ID, nil, http.StatusCreated).ID)
 	if call := onlyStep(t, d, "Call"); d.Status != runFailed || !strings.Contains(call.Error, "is in the trash") {
 		t.Errorf("calling a procedure in the trash: run %s, Call %s %q", d.Status, call.Status, call.Error)
 	}

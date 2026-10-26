@@ -15,6 +15,8 @@ RUN go mod download
 COPY *.go SETUP.md ./
 # The migrations are embedded in the binary.
 COPY migrations ./migrations
+# The ready flows are embedded too.
+COPY templates ./templates
 RUN CGO_ENABLED=0 go build -o /out/webapp .
 
 FROM docker.io/library/alpine:3.20

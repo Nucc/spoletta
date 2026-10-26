@@ -6,6 +6,7 @@ package tests
 // it published.
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -338,5 +339,39 @@ func TestNotesInDiffs(t *testing.T) {
 		if fields["colour"] != "yellow → blue" || fields["points at"] != " → Fetch" || len(fields) != 2 {
 			t.Errorf("the changed note's fields = %v", fields)
 		}
+	}
+}
+
+// The assistant sees a board's notes in the flow's setup file, and a reply
+// leaving them out keeps them, as one writing them changes them.
+func TestNotesSeenByTheAssistant(t *testing.T) {
+	a := newApp(t)
+	name := fmt.Sprint("Board notes assisted ", time.Now().UnixNano())
+	f := a.newFlow(name)
+	a.agent(f.ID, "Fetch", "Fetch it.")
+	notesNew(a, map[string]any{"flow": f.ID, "text": "Fetch pages from the newest"})
+
+	a.worker.onAgent("Assistant", func(context.Context, agentRun) runResult {
+		return replyWithSetup("I added Summarize.", name, `"processes": [{"name": "Fetch", "prompt": "Fetch it."}, {"name": "Summarize", "prompt": "Sum it up."}]`)
+	})
+	askAssistant(a, f.ID, "Add a summary")
+	if reply := assistantReply(a, f.ID); !reply.Applied {
+		t.Fatalf("the reply = %+v", reply)
+	}
+	runs := a.worker.runsOf("Assistant")
+	if len(runs) != 1 || !strings.Contains(runs[0].Prompt, "text: Fetch pages from the newest") {
+		t.Errorf("the assistant wasn't shown the note:\n%s", runs[len(runs)-1].Prompt)
+	}
+	if got := notesTexts(notesOf(a, f.ID)); len(got) != 1 || got[0] != "Fetch pages from the newest" {
+		t.Errorf("after a reply leaving notes out, notes = %v", got)
+	}
+
+	a.worker.onAgent("Assistant", func(context.Context, agentRun) runResult {
+		return replyWithSetup("I noted why.", name, `"processes": [{"name": "Fetch", "prompt": "Fetch it."}], "notes": [{"text": "Summaries come later", "process": "Fetch"}]`)
+	})
+	askAssistant(a, f.ID, "Drop the summary and say why")
+	assistantReply(a, f.ID)
+	if ns := notesOf(a, f.ID); len(ns) != 1 || ns[0].Text != "Summaries come later" || ns[0].Process == nil {
+		t.Errorf("after the assistant wrote a note, notes = %+v", ns)
 	}
 }

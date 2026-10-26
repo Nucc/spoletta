@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -205,6 +206,7 @@ func TestSecretFirst(t *testing.T) {
 		"key=forged&q=a%20b&key": "key=s%2Bt&q=a%20b",
 		"k%65y=forged&x=1;key=2": "key=s%2Bt",
 		"a=%zz&b=1":              "key=s%2Bt&b=1",
+		"KEY=forged&Key=2&b=1":   "key=s%2Bt&b=1",
 	} {
 		if got := secretFirst("key", "s+t", raw); got != want {
 			t.Errorf("%q became %q, want %q", raw, got, want)
@@ -392,7 +394,7 @@ func TestPassedHeaders(t *testing.T) {
 	}
 	for _, bad := range []string{"X-Original-URL", "Authorization", "x-forwarded-prefix", "Range", "Accept-Encoding", "Proxy-Foo", "X-Http-Method-Override",
 		"X-Original-URI", "X-Host", "X-Original-Host", "X-Forwarded-For", "X_Forwarded_Host", "X_Original_URL", "x_http_method_override", "proxy_authorization",
-		"Accept-Charset", "accept_charset"} {
+		"X-Forwarded", "X-Middleware-Subrequest", "Via", "X-Url-Scheme", "Front-End-Https", "Accept-Charset", "accept_charset"} {
 		f := credentialFields{Name: "Jira", BaseURL: "https://x.example.com", Auth: credentialHeader, Secret: "s", Everyone: true, Headers: []string{bad}}
 		if msg := f.check(true); msg == "" {
 			t.Errorf("a credential lets steps send %s", bad)
@@ -485,6 +487,32 @@ func TestAnswerHeaders(t *testing.T) {
 		if answerHeader(c, k) {
 			t.Errorf("%s comes back", k)
 		}
+	}
+}
+
+// How fast an answer streams through, in 32 KB reads of JSON-like text,
+// with the pieces of a query credential's secret and with whole forms only.
+func BenchmarkCredentialRedactor(b *testing.B) {
+	var body []byte
+	for i := 0; len(body) < 4<<20; i++ {
+		body = append(body, fmt.Sprintf(`{"id": %d, "key": "PROJ-%d", "summary": "Fix the thing in the module, again", "url": "https://jira.example.com/browse/PROJ-%d"},`+"\n", i, i, i)...)
+	}
+	c := credential{Auth: credentialQuery, Param: "key"}
+	secret := "Zq8Lw2Xv9Kp4Rt6Ym1Nc-0123456789"
+	for name, make := range map[string]func() *redactor{
+		"pieces": func() *redactor { return credentialRedactor(c, secret) },
+		"whole":  func() *redactor { return newRedactor(secretForms(c, secret)...) },
+	} {
+		b.Run(name, func(b *testing.B) {
+			b.SetBytes(int64(len(body)))
+			for range b.N {
+				r := make()
+				for at := 0; at < len(body); at += 32 << 10 {
+					r.next(body[at:min(at+32<<10, len(body))])
+				}
+				r.flush()
+			}
+		})
 	}
 }
 

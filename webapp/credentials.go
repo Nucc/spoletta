@@ -51,12 +51,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
@@ -594,12 +596,14 @@ var credentialPassedHeaders = []string{"Accept", "Accept-Language", "Cache-Contr
 // Headers a credential can't let steps send: those that carry the step's
 // token or are HTTP's own, those having the answer encoded or written in
 // a charset the secret can't be found in, and those some servers and
-// gateways take as another URL, host, method or client to answer for, as
-// do those starting with Proxy-, X-Forwarded-, X-Original- and X-Envoy-.
+// gateways take as another URL, host, scheme, method, client or hop to
+// answer for, as do those starting with Proxy-, X-Forwarded-, X-Original-
+// and X-Envoy-.
 var unpassableHeaders = []string{"Authorization", "Cookie", "Host", "Connection", "Keep-Alive", "Te", "Trailer",
 	"Transfer-Encoding", "Upgrade", "Content-Length", "Range", "If-Range", "Accept-Encoding", "Accept-Charset", "Forwarded",
-	"X-Host", "X-Http-Host", "X-Real-Ip", "X-Rewrite-Url", "X-Http-Method-Override", "X-Http-Method", "X-Method-Override",
-	"X-Client-Ip", "True-Client-Ip", "Client-Ip", "X-Cluster-Client-Ip", "Cf-Connecting-Ip", "Fastly-Client-Ip"}
+	"X-Forwarded", "Via", "X-Host", "X-Http-Host", "X-Real-Ip", "X-Rewrite-Url", "X-Url-Scheme", "Front-End-Https",
+	"X-Http-Method-Override", "X-Http-Method", "X-Method-Override", "X-Middleware-Subrequest", "X-Client-Ip",
+	"True-Client-Ip", "Client-Ip", "X-Cluster-Client-Ip", "Cf-Connecting-Ip", "Fastly-Client-Ip"}
 
 // A header's name as it is compared: canonical, with _ read as -, as nginx
 // and CGI read it.
@@ -827,7 +831,10 @@ type redactor struct {
 	// Each in lower case.
 	secrets [][]byte
 	longest int
-	pieces  map[[secretPiece]byte]bool
+	// Each piece as its bytes make a little-endian uint64, and a filter
+	// in front of them most windows of an answer go no further than.
+	pieces map[uint64]bool
+	filter *[1 << pieceFilterBits / 64]uint64
 	// What a piece starts with, shorter than one, which a tail waits on.
 	starts map[string]bool
 
@@ -850,6 +857,14 @@ func newRedactor(secrets ...string) *redactor {
 	return r
 }
 
+// How many bits the filter in front of a redactor's pieces has, as a
+// power of two: a few thousand pieces set few enough of 64K that most
+// windows are let through by it alone.
+const pieceFilterBits = 16
+
+// Where in the filter a window of secretPiece bytes falls.
+func pieceSlot(w uint64) uint64 { return (w * 0x9e3779b97f4a7c15) >> (64 - pieceFilterBits) }
+
 // Has the redactor blank out any secretPiece characters in a row of the
 // forms too.
 func (r *redactor) withPieces(forms ...string) *redactor {
@@ -857,9 +872,12 @@ func (r *redactor) withPieces(forms ...string) *redactor {
 		b := lowerASCII([]byte(f))
 		for i := 0; i+secretPiece <= len(b); i++ {
 			if r.pieces == nil {
-				r.pieces, r.starts = map[[secretPiece]byte]bool{}, map[string]bool{}
+				r.pieces, r.starts, r.filter = map[uint64]bool{}, map[string]bool{}, new([1 << pieceFilterBits / 64]uint64)
 			}
-			r.pieces[[secretPiece]byte(b[i:i+secretPiece])] = true
+			w := binary.LittleEndian.Uint64(b[i:])
+			r.pieces[w] = true
+			slot := pieceSlot(w)
+			r.filter[slot/64] |= 1 << (slot % 64)
 			for k := 1; k < secretPiece; k++ {
 				r.starts[string(b[i:i+k])] = true
 			}
@@ -905,9 +923,16 @@ func (r *redactor) marks(lower []byte, pre int) []bool {
 		}
 	}
 	if len(r.pieces) > 0 {
-		for i := 0; i+secretPiece <= len(lower); i++ {
-			if r.pieces[[secretPiece]byte(lower[i:i+secretPiece])] {
-				mark(i, i+secretPiece)
+		// The last secretPiece bytes read, the first lowest, rolled on a
+		// byte at a time.
+		var w uint64
+		for i, c := range lower {
+			w = w>>8 | uint64(c)<<56
+			if i < secretPiece-1 {
+				continue
+			}
+			if slot := pieceSlot(w); r.filter[slot/64]&(1<<(slot%64)) != 0 && r.pieces[w] {
+				mark(i+1-secretPiece, i+1)
 			}
 		}
 	}
@@ -1101,12 +1126,14 @@ func (b *credentialBroker) link(c credential, at *url.URL, v string, blank *reda
 // so a step can't pad what comes before it in the query to have a service
 // echoing it cut short cut the secret; what a step pads the path with
 // before it, the redactor keeps to a few characters. The step's own
-// values of the parameter are left out, as are pairs that don't parse,
-// which a service might read for it.
+// values of the parameter are left out, in whatever case, as some
+// services read names, as are pairs that don't parse, which a service
+// might read for it.
 func secretFirst(param, secret, raw string) string {
 	out := url.QueryEscape(param) + "=" + url.QueryEscape(secret)
 	for _, pair := range strings.Split(raw, "&") {
-		if q, err := url.ParseQuery(pair); pair != "" && err == nil && !q.Has(param) {
+		q, err := url.ParseQuery(pair)
+		if pair != "" && err == nil && !slices.ContainsFunc(slices.Collect(maps.Keys(q)), func(k string) bool { return strings.EqualFold(k, param) }) {
 			out += "&" + pair
 		}
 	}

@@ -380,10 +380,12 @@ can't:
   header, but for any the request's `Connection` names. A credential can't
   name its own header, its token's, the connection's, `Range`,
   `Accept-Charset`, or the headers some servers and gateways take as
-  another URL, host, method or client (`X-Original-URL`, `X-Original-URI`,
-  `X-Original-*`, `X-Rewrite-URL`, `X-Host`, `X-Forwarded-*`, `Forwarded`,
-  `X-HTTP-Method-Override` and the like), with `_` read as `-`, as nginx
-  and CGI read it (`X_Forwarded_Host`).
+  another URL, host, scheme, method, client or hop (`X-Original-URL`,
+  `X-Original-URI`, `X-Original-*`, `X-Rewrite-URL`, `X-Host`,
+  `X-Forwarded`, `X-Forwarded-*`, `Forwarded`, `Via`, `X-Url-Scheme`,
+  `Front-End-Https`, `X-HTTP-Method-Override`, `X-Middleware-Subrequest`
+  and the like), with `_` read as `-`, as nginx and CGI read it
+  (`X_Forwarded_Host`).
 - **be redirected with it.** The proxy never follows a redirect. One within
   the base URL comes back as the proxy's URL, so following it goes through
   the proxy again; one elsewhere comes back without the secret's query
@@ -463,6 +465,12 @@ What this leaves:
 - An answer's headers wait for the first byte of its body, which is read
   as far as it could still be a byte order mark: for an event stream, its
   first event.
+- Blanking out pieces of the secret blanks out what else shares eight
+  characters in a row with one of its forms: other keys of the same kind,
+  when the secret starts with a fixed prefix such as `sk_live_` or
+  `github_pat_`; every HS256 JWT, whose header is the same, when the secret
+  is one, so a service handing out JWTs has the others blanked out too;
+  and the words of a password made of them, wherever they show up.
 
 ## Limits and the audit log
 

@@ -24,7 +24,8 @@ package main
 // duplicate before it starts, as a flow fetching what it handled before
 // does; see instances.go. A webhook's delivery starts a run the same way
 // (startGivenRun), with what its mapping takes from the payload; see
-// webhooks.go.
+// webhooks.go. So does a person giving what the flow starts from by hand,
+// from Run's menu on the board, which may run the board as it is.
 //
 // A key is someone's: the runs it starts are theirs, using their model keys
 // and MCP connections, and it starts only the flows they may run and reads
@@ -261,6 +262,41 @@ func publicOrigin(r *http.Request) string {
 	return requestOrigin(r)
 }
 
+// What the flow starts from, on the board a run of it would take: with
+// published the version it published, if any, else the board as it is;
+// and why it can't be given anything, if it can't.
+func flowInputsOf(ctx context.Context, db *sql.DB, flow int64, published bool) (in []givenObject, problem string, err error) {
+	err = inTx(ctx, db, func(tx *sql.Tx) error {
+		var board snapshot
+		var err error
+		if published {
+			board, err = boardToRun(ctx, tx, flow)
+		} else {
+			board, err = takeSnapshot(ctx, tx, flow)
+		}
+		if err != nil {
+			return err
+		}
+		in, problem = flowInputs(ctx, flow, board)
+		return nil
+	})
+	return in, problem, err
+}
+
+// The objects a flow starts from as they are described, each with a JSON
+// Schema of what to give of it.
+func apiInputs(in []givenObject) []apiInput {
+	out := []apiInput{}
+	for _, g := range in {
+		i := apiInput{Name: g.name, Many: g.many, States: []string{}, Schema: g.schema()}
+		for _, st := range g.states {
+			i.States = append(i.States, st.Name)
+		}
+		out = append(out, i)
+	}
+	return out
+}
+
 // How the flow is started over the API; sql.ErrNoRows without it.
 func describeFlowAPI(ctx context.Context, db *sql.DB, r *http.Request, flow int64) (flowAPI, error) {
 	d := flowAPI{ID: flow, URL: publicOrigin(r) + "/v1/flows/" + strconv.FormatInt(flow, 10) + "/runs", Inputs: []apiInput{}}
@@ -269,35 +305,24 @@ func describeFlowAPI(ctx context.Context, db *sql.DB, r *http.Request, flow int6
 		return d, err
 	}
 	// What a run over the API takes is what the version it runs takes.
-	var in []givenObject
-	err := inTx(ctx, db, func(tx *sql.Tx) error {
-		board, err := boardToRun(ctx, tx, flow)
-		if err != nil {
-			return err
-		}
-		in, d.Problem = flowInputs(ctx, flow, board)
-		return nil
-	})
+	in, problem, err := flowInputsOf(ctx, db, flow, true)
 	if err != nil {
 		return d, err
 	}
+	d.Problem = problem
 	if structFlow {
 		d.Problem = notInStruct
 	}
+	d.Inputs = apiInputs(in)
 	props := map[string]any{}
 	required := []string{}
 	states := map[string]any{}
-	for _, g := range in {
-		i := apiInput{Name: g.name, Many: g.many, States: []string{}, Schema: g.schema()}
-		for _, st := range g.states {
-			i.States = append(i.States, st.Name)
-		}
+	for _, i := range d.Inputs {
 		if len(i.States) > 0 {
-			states[g.name] = map[string]any{"enum": i.States}
+			states[i.Name] = map[string]any{"enum": i.States}
 		}
-		d.Inputs = append(d.Inputs, i)
-		props[g.name] = i.Schema
-		required = append(required, g.name)
+		props[i.Name] = i.Schema
+		required = append(required, i.Name)
 	}
 	body := map[string]any{
 		"inputs": map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false},
@@ -400,11 +425,13 @@ type apiRefusal struct {
 	msg    string
 }
 
-// What started a run from elsewhere: an API key, or a webhook (see
-// webhooks.go). Either keeps the runs it started apart by its idempotency
-// keys, so a request or a delivery sent again starts no second run.
+// What started a run given what it starts from: an API key, a webhook (see
+// webhooks.go), or a person by hand. A key or a webhook keeps the runs it
+// started apart by its idempotency keys, so a request or a delivery sent
+// again starts no second run.
 type runSource struct {
-	// The column of runs naming it, api_key_id or webhook_id.
+	// The column of runs naming it, api_key_id or webhook_id; none for a
+	// person, whose run is started_by them as any run from the board.
 	column string
 	id     int64
 	// What the step holding what the run was given is called.
@@ -415,13 +442,17 @@ func apiKeySource(key int64) runSource {
 	return runSource{column: "api_key_id", id: key, given: "Given through the API"}
 }
 
-// Starts a run of the flow for what started it from elsewhere, given what
-// ask makes of the objects the flow starts from, for whom that is; see
-// startRun. A request sent again with the same idempotency key returns the
-// run it started, with created false. The run takes the version the flow
-// published, if any, and what it is given is checked against what that
-// version starts from.
-func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src runSource, startedBy *int64, idempotency string, ask func([]givenObject) (apiRunRequest, error)) (id int64, created bool, refused *apiRefusal, err error) {
+// A person giving what the flow starts from by hand, from Run's menu.
+var handSource = runSource{given: "Given by hand"}
+
+// Starts a run of the flow for what started it, given what ask makes of the
+// objects the flow starts from, for whom that is; see startRun. A request
+// sent again with the same idempotency key returns the run it started, with
+// created false. With published the run takes the version the flow
+// published, if any, as one started from elsewhere does, else the board as
+// it is, and what it is given is checked against what that board starts
+// from.
+func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src runSource, startedBy *int64, idempotency string, published bool, ask func([]givenObject) (apiRunRequest, error)) (id int64, created bool, refused *apiRefusal, err error) {
 	var idem *string
 	if idempotency != "" {
 		idem = &idempotency
@@ -440,7 +471,7 @@ func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src
 		}
 		return 0, false, nil, err
 	}
-	nr, err := newRun(ctx, tx, flow, nil, startedBy, true)
+	nr, err := newRun(ctx, tx, flow, nil, startedBy, published)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, &apiRefusal{http.StatusNotFound, "flow not found"}, nil
 	}
@@ -460,15 +491,17 @@ func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src
 	if err != nil {
 		return 0, false, &apiRefusal{http.StatusBadRequest, err.Error()}, nil
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE runs SET "+src.column+" = ?, idempotency_key = ? WHERE id = ?", src.id, idem, nr.id)
-	if mysqlErrorIs(err, mysqlErrDuplicate) {
-		// Another request with the same idempotency key started it meanwhile.
-		tx.Rollback()
-		id, refused, err := idempotentRun(ctx, db, flow, src, idempotency)
-		return id, false, refused, err
-	}
-	if err != nil {
-		return 0, false, nil, err
+	if src.column != "" {
+		_, err = tx.ExecContext(ctx, "UPDATE runs SET "+src.column+" = ?, idempotency_key = ? WHERE id = ?", src.id, idem, nr.id)
+		if mysqlErrorIs(err, mysqlErrDuplicate) {
+			// Another request with the same idempotency key started it meanwhile.
+			tx.Rollback()
+			id, refused, err := idempotentRun(ctx, db, flow, src, idempotency)
+			return id, false, refused, err
+		}
+		if err != nil {
+			return 0, false, nil, err
+		}
 	}
 	dup, err := recordGiven(ctx, tx, b, nr.id, src.given, in, given)
 	if err != nil {
@@ -701,6 +734,41 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 		writeJSON(w, http.StatusOK, d)
 	})
 
+	// What a run started by hand from the board is given, as Run's menu
+	// asks for it: what the board as it is starts from, or with
+	// ?published=true what the version published does, if any.
+	mux.HandleFunc("GET /api/flows/{id}/inputs", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var structFlow bool
+		err = db.QueryRowContext(r.Context(), "SELECT is_struct FROM flows WHERE id = ?", id).Scan(&structFlow)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "flow not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		out := struct {
+			Inputs []apiInput `json:"inputs"`
+			// Why it can't be given anything, if it can't.
+			Problem string `json:"problem,omitempty"`
+		}{Inputs: []apiInput{}, Problem: notInStruct}
+		if !structFlow {
+			in, problem, err := flowInputsOf(r.Context(), db, id, r.URL.Query().Get("published") == "true")
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			out.Inputs, out.Problem = apiInputs(in), problem
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+
 	// The routes keys reach.
 	flowID := func(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -761,7 +829,7 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 		if u != nil {
 			startedBy = &u.ID
 		}
-		run, created, refused, err := startGivenRun(r.Context(), db, eng, id, apiKeySource(key), startedBy, idempotency,
+		run, created, refused, err := startGivenRun(r.Context(), db, eng, id, apiKeySource(key), startedBy, idempotency, true,
 			func([]givenObject) (apiRunRequest, error) { return req, nil })
 		if err != nil {
 			serverError(w, err)

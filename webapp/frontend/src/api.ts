@@ -1358,8 +1358,22 @@ export function listRuns(flow: number, filter?: RunFilter, before?: number, limi
 
 // Starts a run on the board as it is, or with published on the version the
 // flow published.
-export function startRun(flow: number, published = false): Promise<FlowRun> {
-  return request(`/api/runs?flow=${flow}`, { method: 'POST', body: JSON.stringify({ published }) })
+// Starts a run of the flow, given what it starts from if Run's menu asks
+// for it: each object by name, holding its text, or the JSON its attributes
+// make, and the states some of them are in.
+export function startRun(flow: number, published = false, given?: StartGiven): Promise<FlowRun> {
+  return request(`/api/runs?flow=${flow}`, { method: 'POST', body: JSON.stringify({ published, ...given }) })
+}
+
+export type StartGiven = { inputs: Record<string, unknown>; states: Record<string, string> }
+
+// What a run started by hand is given: the objects the board as it is
+// starts from, or with published the version published's, each with a JSON
+// Schema of what to give of it, or why it can't be given anything.
+export type FlowInputs = { inputs: FlowAPI['inputs']; problem?: string }
+
+export function getFlowInputs(flow: number, published = false): Promise<FlowInputs> {
+  return request(`/api/flows/${flow}/inputs?published=${published}`)
 }
 
 // An object the process a run is re-run from takes, as it took it in the

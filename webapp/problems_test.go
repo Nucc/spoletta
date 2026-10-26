@@ -162,7 +162,7 @@ func TestBoardProblems(t *testing.T) {
 			s.Objects = append(s.Objects, snapshotObject{ID: 14, Name: "Request"})
 			s.Processes = append(s.Processes, process{ID: 6, Name: "Answer", Kind: kindAgent})
 			s.Links = append(s.Links, snapshotLink{ID: 50, Process: 6, Object: 14, Direction: directionInput})
-		}, level: problemWarning, rule: "generated", object: 14, says: `never runs "Answer"; only a run over the API`},
+		}, level: problemWarning, rule: "generated", object: 14, says: `never runs "Answer"; only a run given "Request", over the API or with Start with inputs`},
 		{name: "process nothing leads to", change: func(s *snapshot, f *problemFacts) {
 			s.Processes = append(s.Processes, process{ID: 6, Name: "Archive", Kind: kindScript})
 			s.Links = append(s.Links, snapshotLink{ID: 50, Process: 6, Object: 11, Direction: directionInput, State: 21})

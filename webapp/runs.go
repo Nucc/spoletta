@@ -549,8 +549,9 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	})
 
 	// Starts a run on the board as it is, or with {"published": true} on the
-	// version the flow published, if any; see startRun. One with errors is
-	// refused, saying them.
+	// version the flow published, if any; see startRun. With inputs, it is
+	// given what it starts from, as a run over the API is (startGivenRun).
+	// One with errors is refused, saying them.
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
 		if !ok || refuseInStruct(w, r, db, f) {
@@ -558,8 +559,13 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		var body struct {
 			Published bool `json:"published"`
+			// What the flow starts from, by name, and the states of any of
+			// it, given by hand from Run's menu as a request to /v1 gives
+			// them; see api.go. Without either the run starts from nothing.
+			Inputs map[string]json.RawMessage `json:"inputs"`
+			States map[string]string          `json:"states"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAPIBody)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -573,7 +579,20 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			http.Error(w, msg, http.StatusConflict)
 			return
 		}
-		id, err := startRun(r.Context(), db, eng, f, nil, requestUserID(r), body.Published)
+		var id int64
+		if body.Inputs != nil || body.States != nil {
+			var refused *apiRefusal
+			id, _, refused, err = startGivenRun(r.Context(), db, eng, f, handSource, requestUserID(r), "", body.Published,
+				func([]givenObject) (apiRunRequest, error) {
+					return apiRunRequest{Inputs: body.Inputs, States: body.States}, nil
+				})
+			if err == nil && refused != nil {
+				http.Error(w, refused.msg, refused.status)
+				return
+			}
+		} else {
+			id, err = startRun(r.Context(), db, eng, f, nil, requestUserID(r), body.Published)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return

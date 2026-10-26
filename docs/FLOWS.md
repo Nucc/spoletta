@@ -520,6 +520,13 @@ end what the caller should get back: `GET /v1/runs/<id>` returns what the run
 left of those objects. A flow starting from a human or a fetching process
 takes no inputs.
 
+**A person can give them by hand too.** Run's menu on the board has *Start
+with inputs…*, which asks for the same objects, each as its text or its
+attributes' JSON, with a state if it has states, checked as an API request's
+inputs are, and starts the board as it is, or the version published if the
+person picks it (`POST /api/runs` with `inputs` and `states`). So a flow
+meant for the API can be run from the board while it is built.
+
 **A run started by a webhook is given its inputs from the event.** Services
 sending events, GitHub, Slack, a monitoring alert, can't call the API, so a
 flow's settings can add **webhooks**: each a URL of its own that the service

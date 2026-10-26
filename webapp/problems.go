@@ -500,10 +500,10 @@ func (c *problemCheck) objects() {
 		case o.Parent != nil:
 			c.onObject(problemWarning, "generated", o, "Nothing generates %s, so %s never gets it: have a process generate it, or a person fill it in.", quote(o.Name), who)
 		case !slices.ContainsFunc(takers, func(t int64) bool { return reached[t] }):
-			c.onObject(problemWarning, "generated", o, "Nothing generates %s, so a run started with Run or a schedule never runs %s; only a run over the API, which is given %s, does. Have a person fill it in first, or a process fetch it.",
+			c.onObject(problemWarning, "generated", o, "Nothing generates %s, so a run started with Run alone or a schedule never runs %s; only a run given %s, over the API or with Start with inputs in Run's menu, does. Have a person fill it in first, or a process fetch it.",
 				quote(o.Name), who, quote(o.Name))
 		default:
-			c.onObject(problemWarning, "generated", o, "Nothing generates %s, so a run started with Run or a schedule never gives it to %s; only a run over the API is given it. Have a person fill it in first, or a process fetch it.",
+			c.onObject(problemWarning, "generated", o, "Nothing generates %s, so a run started with Run alone or a schedule never gives it to %s; only a run over the API, or started with inputs from Run's menu, is given it. Have a person fill it in first, or a process fetch it.",
 				quote(o.Name), who)
 		}
 	}

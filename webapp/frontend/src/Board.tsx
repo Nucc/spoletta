@@ -35,6 +35,7 @@ import {
   HistoryIcon,
   PublishIcon,
   LayoutIcon,
+  ObjectIcon,
   PanelIcon,
   PasteIcon,
   PencilIcon,
@@ -82,6 +83,7 @@ import {
 import { decisionText, formatTime, ORIGIN_LABELS, rerunnableFrom, RunList, RunPanel, STANDING_LABELS, type RunFocus } from './Runs'
 import RerunDialog from './RerunDialog'
 import TrialDialog from './TrialDialog'
+import StartDialog from './StartDialog'
 import RunLogs from './RunLogs'
 import RunTimeline from './RunTimeline'
 import BoardFind from './BoardFind'
@@ -2344,6 +2346,9 @@ export default function Board({
 
   // The process being tried on its own; see TrialDialog.
   const [trying, setTrying] = useState<number | null>(null)
+  // Whether the run being started is given what the flow starts from; see
+  // StartDialog.
+  const [startingWith, setStartingWith] = useState(false)
   // The step of the open run it is being re-run from; see RerunDialog.
   const [rerunning, setRerunning] = useState<number | null>(null)
   useEffect(() => setRerunning(null), [runId])
@@ -2477,9 +2482,9 @@ export default function Board({
     })
   }, [focusing, nodes, boardId, shownBoard, shownVersion, unfolded, getInternalNode, setCenter, getViewport, setNodes])
 
-  // A re-run started from the open run, or a trial of a process; it opens
-  // as a run started with play does, having saved the board as a new version
-  // if it changed.
+  // A re-run started from the open run, a trial of a process, or a run
+  // started with inputs; it opens as a run started with play does, having
+  // saved the board as a new version if it changed.
   const onRerun = (run: FlowRun) => {
     refreshVersions()
     if (runMatches(run, runFilter)) setRuns((rs) => [run, ...rs])
@@ -3166,6 +3171,15 @@ export default function Board({
         })
       }
     }
+    if (!structBoard)
+      add({
+        id: 'board:start-with',
+        title: 'Start with inputs…',
+        hint: 'Give the run the objects the flow starts from',
+        words: 'run given objects',
+        disabled: runnable ? undefined : viewOnly ? cannotChange : 'Starting…',
+        run: () => setStartingWith(true),
+      })
     if (triable)
       add({
         id: 'board:try',
@@ -3597,6 +3611,14 @@ export default function Board({
       hint: 'As schedules, the API and runs on records run it',
       disabled: cannotRun ?? (versions.published === null ? 'Nothing is published yet' : undefined),
       onSelect: () => void onRunClicked(true),
+    },
+    {
+      id: 'start-with',
+      label: 'Start with inputs…',
+      icon: <ObjectIcon />,
+      hint: 'Give the run the objects the flow starts from, as a request over the API does',
+      disabled: cannotRun,
+      onSelect: () => setStartingWith(true),
     },
     {
       id: 'try',
@@ -4107,6 +4129,17 @@ export default function Board({
       {runWindow === 'logs' && runDetail && <RunLogs run={runDetail} onClose={() => setRunWindow(null)} />}
       {runWindow === 'timeline' && runDetail && (
         <RunTimeline run={runDetail} processes={contents?.processes} onOpenStep={openStep} onClose={() => setRunWindow(null)} />
+      )}
+      {startingWith && (
+        <StartDialog
+          flowId={flowId}
+          published={versions.published}
+          onStarted={(r) => {
+            setStartingWith(false)
+            onRerun(r)
+          }}
+          onClose={() => setStartingWith(false)}
+        />
       )}
       {trying !== null && (
         <TrialDialog

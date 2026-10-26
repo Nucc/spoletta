@@ -1094,7 +1094,7 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 			serverError(w, err)
 			return
 		}
-		run, created, refused, err := startGivenRun(ctx, db, eng, h.flow, src, who, p.key, func(in []givenObject) (apiRunRequest, error) {
+		run, created, refused, err := startGivenRun(ctx, db, eng, h.flow, src, who, p.key, true, func(in []givenObject) (apiRunRequest, error) {
 			return h.mapping.request(in, p.value)
 		})
 		if err != nil {

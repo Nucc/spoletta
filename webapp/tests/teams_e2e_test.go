@@ -160,6 +160,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 		{"GET", fmt.Sprintf("/api/flows/%d/opl", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/flows/%d/setup", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/flows/%d/problems", f.ID), nil},
+		{"GET", fmt.Sprintf("/api/flows/%d/inputs", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/flows/%d/assistant", f.ID), nil},
 		{"POST", fmt.Sprintf("/api/flows/%d/assistant", f.ID), map[string]any{"message": "Make it mine."}},
 		{"PUT", fmt.Sprintf("/api/flows/%d/owner", f.ID), map[string]any{"kind": "global"}},

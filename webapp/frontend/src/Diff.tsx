@@ -18,6 +18,7 @@ export const noHighlights: Highlights = { nodes: new Map(), edges: new Map() }
 export type BoardIds = {
   process: (id: number) => string
   object: (id: number) => string
+  note: (id: number) => string
   link: (id: number) => string
   connection: (id: number) => string
   start: string
@@ -52,6 +53,7 @@ export function highlightsOf(d: BoardDiff, board: BoardId, ids: BoardIds): Highl
     })
   each(d.processes, (it) => mark(h.nodes, ids.process(it.id), it.change))
   each(d.objects, (it) => mark(h.nodes, ids.object(it.id), it.change))
+  each(d.notes, (it) => mark(h.nodes, ids.note(it.id), it.change))
   // A state or attribute added or removed changes its object; removed
   // ones are left out above, so they are marked here.
   for (const it of [...d.states, ...d.attributes]) {
@@ -71,7 +73,7 @@ export function highlightsOf(d: BoardDiff, board: BoardId, ids: BoardIds): Highl
   return h
 }
 
-const KINDS: [keyof Pick<BoardDiff, 'processes' | 'objects' | 'states' | 'attributes' | 'links' | 'connections' | 'samples'>, string][] = [
+const KINDS: [keyof Pick<BoardDiff, 'processes' | 'objects' | 'states' | 'attributes' | 'links' | 'connections' | 'samples' | 'notes'>, string][] = [
   ['processes', 'Processes'],
   ['objects', 'Objects'],
   ['states', 'States'],
@@ -79,6 +81,7 @@ const KINDS: [keyof Pick<BoardDiff, 'processes' | 'objects' | 'states' | 'attrib
   ['links', 'Links'],
   ['connections', 'Connections'],
   ['samples', 'Samples tried on'],
+  ['notes', 'Notes'],
 ]
 
 const CHANGES: Record<Change, string> = { added: 'Added', removed: 'Removed', changed: 'Changed' }

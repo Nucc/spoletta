@@ -725,7 +725,8 @@ export function wrapProcesses(w: { name: string; processes: number[]; objects: n
 
 // What was copied from a board: the processes and objects selected on it,
 // and the top left of where they were.
-export type Copied = { flow: number; processes: number[]; objects: number[]; at: { x: number; y: number } }
+// Notes are left out of what was copied before notes were.
+export type Copied = { flow: number; processes: number[]; objects: number[]; notes?: number[]; at: { x: number; y: number } }
 
 // Copies what was copied onto a board of a flow, moved by dx and dy, with
 // what it takes along: a flow process's board, what makes an object up, and
@@ -736,11 +737,54 @@ export function pasteCopied(
   board: BoardId,
   dx: number,
   dy: number,
-): Promise<{ processes: number[]; objects: number[] }> {
+): Promise<{ processes: number[]; objects: number[]; notes: number[] }> {
   return request('/api/paste', {
     method: 'POST',
-    body: JSON.stringify({ from: c.flow, processes: c.processes, objects: c.objects, flow, board, dx, dy }),
+    body: JSON.stringify({ from: c.flow, processes: c.processes, objects: c.objects, notes: c.notes ?? [], flow, board, dx, dy }),
   })
+}
+
+// The colours a note comes in, the first a new one's; see notes.go.
+export const NOTE_COLOURS = ['yellow', 'blue', 'green', 'pink', 'purple', 'grey'] as const
+export type NoteColour = (typeof NOTE_COLOURS)[number]
+
+// A box of Markdown text on a board, saying what the board doesn't, such as
+// why it is built so; no run reads it. It may point at a process or an
+// object of the flow, drawn as a line to it while both are on the board shown.
+export type Note = {
+  id: number
+  // The flow process whose board it is on; null on the top board.
+  parent: number | null
+  x: number
+  y: number
+  width: number
+  height: number
+  text: string
+  colour: NoteColour
+  process: number | null
+  object: number | null
+}
+
+export function listNotes(flow: number): Promise<Note[]> {
+  return request(`/api/notes?flow=${flow}`)
+}
+
+// A new note, on the flow's top board or a flow process's.
+export function createNote(n: { flow: number; parent: number | null; x: number; y: number; text: string; colour?: NoteColour }): Promise<Note> {
+  return request('/api/notes', { method: 'POST', body: JSON.stringify(n) })
+}
+
+// Changes what the patch gives; giving process or object points the note at
+// it, or with null at nothing.
+export function updateNote(
+  id: number,
+  patch: Partial<Pick<Note, 'x' | 'y' | 'width' | 'height' | 'text' | 'colour' | 'process' | 'object'>>,
+): Promise<Note> {
+  return request(`/api/notes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function deleteNote(id: number): Promise<void> {
+  return request(`/api/notes/${id}`, { method: 'DELETE' })
 }
 
 // The flow's board in OPL, OPM's Object-Process Language, as it is now.
@@ -1749,9 +1793,10 @@ export type BoardDiff = {
   attributes: DiffItem[]
   links: DiffItem[]
   connections: DiffItem[]
-  // What processes are tried on; they don't make a draft differ from what
-  // it published, as no run of a version reads them.
+  // What processes are tried on, and notes; they don't make a draft differ
+  // from what it published, as no run of a version reads them.
   samples: DiffItem[]
+  notes: DiffItem[]
   settings: DiffField[]
   layout: boolean
 }
@@ -1798,6 +1843,7 @@ export type BoardContents = {
   connections: Connection[]
   links: Link[]
   boards: InnerBoard[]
+  notes: Note[]
 }
 
 // Versions from before boards have no parents, recording or boards,
@@ -1826,6 +1872,8 @@ type Snapshot = {
   start: Start
   end?: End
   boards?: InnerBoard[]
+  // Left out while a board has none, as in versions from before notes.
+  notes?: Note[]
 }
 
 // The flow's board as its version has it, without changing the board.
@@ -1859,6 +1907,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
     start: s.start,
     end: s.end ?? null,
     boards: s.boards ?? [],
+    notes: s.notes ?? [],
     connections: s.connections.map((c) => ({ ...c, kind: c.kind ?? '' })),
     links: s.links.map((l) => ({
       ...l,

@@ -9,7 +9,7 @@ export type Block = {
   id: string
   label: string
   title: string
-  type: 'process' | 'object'
+  type: 'process' | 'object' | 'note'
   // The kind a new process gets.
   kind?: ProcessKind
   // A new object is a person; see FlowObject.
@@ -33,6 +33,7 @@ export const BUILDING_BLOCKS: Block[] = [
     type: 'object',
     human: true,
   },
+  { id: 'note', label: 'Note', title: 'Text on the board saying why it is built so, or what to look at; no run reads it', type: 'note' },
 ]
 
 // A tile of the connectors, with its service's logo.

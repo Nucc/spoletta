@@ -679,12 +679,14 @@ body {
 /* What a comparison highlights on the board: added in green, changed in
    amber, around the node or along the edge. */
 .react-flow__node.diff-added .process-node,
-.react-flow__node.diff-added .object-node {
+.react-flow__node.diff-added .object-node,
+.react-flow__node.diff-added .note-node {
   box-shadow: 0 0 0 3px rgba(45, 164, 78, 0.55);
 }
 
 .react-flow__node.diff-changed .process-node,
-.react-flow__node.diff-changed .object-node {
+.react-flow__node.diff-changed .object-node,
+.react-flow__node.diff-changed .note-node {
   box-shadow: 0 0 0 3px rgba(212, 167, 44, 0.7);
 }
 
@@ -1013,6 +1015,15 @@ body {
 /* A person: an object drawn with a thicker edge, as OPM draws physical ones. */
 .palette-shape.object.human {
   border-width: 3px;
+}
+
+/* A note: a square of its colour, its corner folded. */
+.palette-shape.note {
+  width: 30px;
+  height: 26px;
+  border-color: #d4a72c;
+  background: linear-gradient(225deg, transparent 6px, var(--note-yellow) 6px);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
 }
 
 /* A connector shows its service's logo. */
@@ -2645,6 +2656,157 @@ body {
 
 .react-flow__resize-control.line.width-resizer:hover {
   border-color: #1f6feb;
+}
+
+/* A note on the board: Markdown on a card of its colour, of the size it
+   was given, scrolling when it says more than fits. */
+:root {
+  --note-yellow: #fff8c5;
+  --note-blue: #ddf4ff;
+  --note-green: #dafbe1;
+  --note-pink: #ffeff7;
+  --note-purple: #fbefff;
+  --note-grey: #eff2f5;
+}
+
+.note-node {
+  width: 100%;
+  height: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(31, 35, 40, 0.15);
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(31, 35, 40, 0.12);
+  font-size: 13px;
+  line-height: 1.45;
+  color: #1f2328;
+  overflow: hidden;
+}
+
+.note-node.selected {
+  border-color: #1f6feb;
+}
+
+.note-yellow {
+  background: var(--note-yellow);
+}
+
+.note-blue {
+  background: var(--note-blue);
+}
+
+.note-green {
+  background: var(--note-green);
+}
+
+.note-pink {
+  background: var(--note-pink);
+}
+
+.note-purple {
+  background: var(--note-purple);
+}
+
+.note-grey {
+  background: var(--note-grey);
+}
+
+.note-markdown {
+  height: 100%;
+  overflow: auto;
+}
+
+.note-empty {
+  margin: 0;
+  color: #6e7781;
+  font-style: italic;
+}
+
+.note-text {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+}
+
+/* The dot dragged onto a process or an object to point at it. */
+.react-flow__handle.note-handle {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #fff;
+  background: #8c959f;
+  opacity: 0;
+}
+
+.react-flow__node:hover .react-flow__handle.note-handle,
+.react-flow__node.selected .react-flow__handle.note-handle {
+  opacity: 1;
+}
+
+.react-flow__edge.react-flow__edge-note .react-flow__edge-path,
+.note-edge {
+  stroke: #8c959f;
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.react-flow__resize-control.note-resizer-line {
+  border-color: rgba(31, 111, 235, 0.35);
+}
+
+.react-flow__resize-control.note-resizer-handle {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: #fff;
+  border: 1px solid #1f6feb;
+}
+
+/* A selected note's colours, and what else it does, above it. */
+.note-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(31, 35, 40, 0.12);
+}
+
+.note-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(31, 35, 40, 0.25);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.note-swatch.current {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3px #1f6feb;
+}
+
+.note-tool {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  color: #57606a;
+  cursor: pointer;
+}
+
+.note-tool:hover {
+  background: #f3f5f7;
+  color: #1f2328;
 }
 
 /* Says the board shows the version an open run ran on, which can't be edited. */

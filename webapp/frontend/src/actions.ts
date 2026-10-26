@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { LinkRole } from './api'
+import type { LinkRole, NoteColour } from './api'
 import type { Quantity } from './quantity'
 
 // The flows that are structs, which say where a copy of an object comes from.
@@ -35,6 +35,13 @@ export type BoardActions = {
   // Saves a node's width after it was resized, with its x, which a resize
   // from the left moves.
   resize: (id: string, x: number, width: number) => void
+  // Saves a note's place and size after it was resized.
+  resizeNote: (id: string, box: { x: number; y: number; width: number; height: number }) => void
+  // Saves what a note says, and its colour.
+  setNoteText: (id: string, text: string) => void
+  setNoteColour: (id: string, colour: NoteColour) => void
+  // Points a note at a process or an object, by node id, or at nothing.
+  pointNote: (id: string, target: string | null) => void
   // Replaces the states a human's link to an object decides between.
   setDecisionStates: (edgeId: string, states: number[]) => void
   // Sets how an input link's process takes its object.

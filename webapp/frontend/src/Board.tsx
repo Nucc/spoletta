@@ -53,6 +53,8 @@ import ObjectNode, {
   type ObjectNodeType,
 } from './ObjectNode'
 import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
+import NoteNode, { type NoteNodeType } from './NoteNode'
+import NoteEdge from './NoteEdge'
 import ObjectPanel from './ObjectPanel'
 import ProcessPanel, { type EntryObject, type QueryLink, type Review } from './ProcessPanel'
 import ReviewDialog from './ReviewDialog'
@@ -106,6 +108,10 @@ import {
   createAttribute,
   createConnection,
   createLink,
+  createNote,
+  deleteNote,
+  listNotes,
+  updateNote,
   copyStruct,
   createObject,
   createProcess,
@@ -187,6 +193,8 @@ import {
   type LinkQuery,
   type LinkRole,
   type Models,
+  type Note,
+  type NoteColour,
   type ObjectAttribute,
   type ObjectState,
   type Process,
@@ -196,11 +204,11 @@ import {
   type Start,
 } from './api'
 
-type FlowNode = ProcessNodeType | ObjectNodeType | StartNodeType | EndNodeType
+type FlowNode = ProcessNodeType | ObjectNodeType | StartNodeType | EndNodeType | NoteNodeType
 type FlowEdge = Edge<LinkEdgeData & { kind?: StructureKind }>
 
-const nodeTypes = { process: ProcessNode, object: ObjectNode, start: StartNode, end: EndNode }
-const edgeTypes = { link: LinkEdge, structure: StructureEdge }
+const nodeTypes = { process: ProcessNode, object: ObjectNode, start: StartNode, end: EndNode, note: NoteNode }
+const edgeTypes = { link: LinkEdge, structure: StructureEdge, note: NoteEdge }
 
 // The column on the right of the board that holds the open panel.
 const PANEL_COLUMN = { storageKey: 'panel-width', min: 320, max: 1600, initial: 420, edge: 'left' } as const
@@ -239,6 +247,12 @@ const LINK_PREFIX = 'link-'
 const END_EDGE_PREFIX = 'ends-'
 // Objects and processes have separate id sequences, so object node ids are prefixed.
 const OBJECT_PREFIX = 'obj-'
+// Notes have one of their own too; see notes.go.
+const NOTE_PREFIX = 'note-'
+// The lines from notes to what they point at.
+const POINTER_PREFIX = 'points-'
+// Where a note is placed when added, its top left from the middle of where it goes.
+const NOTE_SIZE = { width: 240, height: 140 }
 // The structural links on an unfolded object's board.
 const STRUCTURE_PREFIX = 'struct-'
 // Where an unfolded object sits on its own board, and how far from it the
@@ -277,9 +291,12 @@ const stateOfHandle = (handle: string | null | undefined): number | null => {
 
 const isDraft = (id: string) => id.startsWith(DRAFT_PREFIX)
 const isObject = (id: string) => id.startsWith(OBJECT_PREFIX)
-const isProcess = (id: string) => id !== START_ID && id !== END_ID && !isObject(id) && !isDraft(id)
+const isNote = (id: string) => id.startsWith(NOTE_PREFIX)
+const isProcess = (id: string) => id !== START_ID && id !== END_ID && !isObject(id) && !isNote(id) && !isDraft(id)
 
 const objectNodeId = (id: number) => `${OBJECT_PREFIX}${id}`
+const noteNodeId = (id: number) => `${NOTE_PREFIX}${id}`
+const noteIdOf = (nodeId: string) => Number(nodeId.slice(NOTE_PREFIX.length))
 
 // How many things a comparison found changed, as its banner says it.
 const changesText = (n: number) => (n === 0 ? 'Nothing changed but the layout, if anything' : n === 1 ? 'One change' : `${n} changes`)
@@ -338,7 +355,8 @@ const fetchBoard = (flow: number): Promise<BoardContents> =>
     listConnections(flow),
     listLinks(flow),
     listBoards(flow),
-  ]).then(([processes, objects, start, end, connections, links, boards]) => ({
+    listNotes(flow),
+  ]).then(([processes, objects, start, end, connections, links, boards, notes]) => ({
     processes,
     objects,
     start,
@@ -346,7 +364,33 @@ const fetchBoard = (flow: number): Promise<BoardContents> =>
     connections,
     links,
     boards,
+    notes,
   }))
+
+// A note, drawn under what is on the board; one just added opens for writing.
+const toNoteNode = (n: Note, fresh = false): NoteNodeType => ({
+  id: noteNodeId(n.id),
+  type: 'note',
+  position: { x: n.x, y: n.y },
+  width: n.width,
+  height: n.height,
+  data: { text: n.text, colour: n.colour, pointing: n.process !== null || n.object !== null, fresh },
+})
+
+// The node a note points at, by its id on the board.
+const pointedAt = (n: Pick<Note, 'process' | 'object'>): string | null =>
+  n.process !== null ? String(n.process) : n.object !== null ? objectNodeId(n.object) : null
+
+// The line from a note to what it points at.
+const pointerEdge = (note: string, target: string): FlowEdge => ({
+  id: `${POINTER_PREFIX}${note}`,
+  type: 'note',
+  source: note,
+  target,
+  selectable: false,
+  deletable: false,
+  focusable: false,
+})
 
 // From the whole to what makes it up, or from the general to what specializes it.
 const structureEdge = (source: number, target: number, kind: StructureKind): FlowEdge => ({
@@ -546,7 +590,7 @@ export default function Board({
   const setEditing = useCallback(
     (id: string, editing: boolean) =>
       setNodes((ns) =>
-        ns.map((n) => (n.id === id && n.type !== 'start' && n.type !== 'end' ? ({ ...n, data: { ...n.data, editing } } as FlowNode) : n)),
+        ns.map((n) => (n.id === id && (n.type === 'process' || n.type === 'object') ? ({ ...n, data: { ...n.data, editing } } as FlowNode) : n)),
       ),
     [setNodes],
   )
@@ -563,7 +607,7 @@ export default function Board({
   const commitName = useCallback(
     async (id: string, name: string) => {
       const node = getNode(id)
-      if (!node || node.type === 'start' || node.type === 'end') return
+      if (!node || (node.type !== 'process' && node.type !== 'object')) return
       setNodes((ns) => ns.map((n) => (n.id === id ? ({ ...n, data: { ...n.data, name, editing: false } } as FlowNode) : n)))
       try {
         if (!isDraft(id)) {
@@ -814,7 +858,11 @@ export default function Board({
           return o ? [toObjectNode(o, false, side, placed(id) ?? { x, y: at.y }, c.objects)] : []
         })
 
+      // Notes go first, so what they are written about is drawn over them.
+      const notes = structBoard ? [] : c.notes.filter((n) => n.parent === board)
+      const shown = new Set([...ps.map((p) => String(p.id)), ...[...own.map((o) => o.id), ...ins, ...outs].map(objectNodeId)])
       setNodes([
+        ...notes.map((n) => toNoteNode(n)),
         ...(structBoard ? [] : [toStartNode(start), toEndNode(end, !inner)]),
         ...ps.map((p) => toNode(p)),
         ...own.map((o) => toObjectNode(o, false, undefined, undefined, c.objects)),
@@ -828,6 +876,10 @@ export default function Board({
         ...ins.map((o) => boundaryEdge(objectNodeId(o), START_ID)),
         ...ends.map((o) => boundaryEdge(objectNodeId(o), END_ID)),
         ...(inner ? [] : own.filter((o) => o.end).map((o) => endEdge(o.id))),
+        ...notes.flatMap((n) => {
+          const target = pointedAt(n)
+          return target !== null && shown.has(target) ? [pointerEdge(noteNodeId(n.id), target)] : []
+        }),
       ])
     },
     [setNodes, setEdges, toNode, toObjectNode, showObject, structBoard],
@@ -1183,8 +1235,8 @@ export default function Board({
   // A process takes the block's kind, such as a connector's.
   const addDraft = useCallback(
     ({ type, kind = 'agent', human = false, name = '', settings = {} }: Block, screenX: number, screenY: number) => {
-      // What makes up an object is objects.
-      if (unfoldedRef.current !== null && (type !== 'object' || human)) return
+      // What makes up an object is objects; a note is added at once instead.
+      if (type === 'note' || (unfoldedRef.current !== null && (type !== 'object' || human))) return
       const center = screenToFlowPosition({ x: screenX, y: screenY })
       const { width, height } = NODE_SIZE[type]
       const base = {
@@ -1217,7 +1269,11 @@ export default function Board({
   }
 
   const addBlock = (block: Block, screenX: number, screenY: number) =>
-    block.struct === undefined ? addDraft(block, screenX, screenY) : addStruct(block.struct, screenX, screenY)
+    block.type === 'note'
+      ? addNote(screenX, screenY)
+      : block.struct === undefined
+        ? addDraft(block, screenX, screenY)
+        : addStruct(block.struct, screenX, screenY)
 
   const addAtViewportCenter = (block: Block) => {
     const rect = wrapper.current?.getBoundingClientRect()
@@ -1282,7 +1338,7 @@ export default function Board({
   // object unfolds from its menu or button; a person has nothing in a run.
   const onNodeDoubleClick: NodeMouseHandler<FlowNode> = (_, node) => {
     if (node.type === 'process' && zoomable(node.id)) zoomIn(node.id)
-    else if (isDraft(node.id) || node.type === 'start' || node.type === 'end') return
+    else if (isDraft(node.id) || node.type === 'start' || node.type === 'end' || node.type === 'note') return
     else if (shownRun && (node.type === 'process' || (node.type === 'object' && !node.data.human))) showInRun(node.id, node.data.name)
     else setPanelId(node.id)
   }
@@ -1396,6 +1452,7 @@ export default function Board({
       if (id === START_ID) updateStart(flowId, boardId, { x, y }).catch(report)
       else if (id === END_ID) updateEnd(flowId, boardId, { x, y }).catch(report)
       else if (isDraft(id) || isFixed(id)) continue
+      else if (isNote(id)) updateNote(noteIdOf(id), { x, y }).catch(report)
       // An object outside keeps its place here on its links to the board's process.
       else if (isBoundary(id)) {
         for (const l of contents?.links ?? [])
@@ -1431,6 +1488,58 @@ export default function Board({
     req.catch(report)
   }
 
+  // A note keeps the size and place it was given, which a resize from the
+  // left or top moves.
+  const resizeNote = (id: string, { x, y, width, height }: { x: number; y: number; width: number; height: number }) =>
+    updateNote(noteIdOf(id), { x, y, width, height }).catch(report)
+
+  const setNoteData = (id: string, data: Partial<NoteNodeType['data']>) =>
+    setNodes((ns) => ns.map((n) => (n.id === id && n.type === 'note' ? { ...n, data: { ...n.data, ...data } } : n)))
+
+  const setNoteText = (id: string, text: string) => {
+    setNoteData(id, { text })
+    updateNote(noteIdOf(id), { text }).catch(report)
+  }
+
+  const setNoteColour = (id: string, colour: NoteColour) => {
+    setNoteData(id, { colour })
+    updateNote(noteIdOf(id), { colour }).catch(report)
+  }
+
+  // Points a note at a process or an object on the board, or at nothing.
+  const pointNote = async (id: string, target: string | null) => {
+    if (readOnly) return
+    try {
+      await updateNote(
+        noteIdOf(id),
+        target === null ? { process: null, object: null } : isObject(target) ? { object: objectIdOf(target) } : { process: Number(target) },
+      )
+    } catch (err) {
+      report(err)
+      return
+    }
+    setNoteData(id, { pointing: target !== null })
+    setEdges((es) => [...es.filter((e) => e.id !== `${POINTER_PREFIX}${id}`), ...(target === null ? [] : [pointerEdge(id, target)])])
+  }
+
+  // A note lands empty where it goes, open for writing.
+  const addNote = async (screenX: number, screenY: number) => {
+    if (unfoldedRef.current !== null || structBoard) return
+    const center = screenToFlowPosition({ x: screenX, y: screenY })
+    try {
+      const n = await createNote({
+        flow: flowId,
+        parent: boardRef.current,
+        x: center.x - NOTE_SIZE.width / 2,
+        y: center.y - NOTE_SIZE.height / 2,
+        text: '',
+      })
+      setNodes((ns) => [{ ...toNoteNode(n, true), selected: true }, ...ns.map((x) => ({ ...x, selected: false }))])
+    } catch (err) {
+      report(err)
+    }
+  }
+
   // Sets where an edge's segments run, null for the default route, and saves
   // it if asked.
   const setRoute = (edgeId: string, route: number[] | null, save: boolean) => {
@@ -1450,14 +1559,24 @@ export default function Board({
       tidyObject()
       return
     }
-    const nodes = getNodes()
-    const leads = edges.some((e) => e.target === END_ID)
+    // Notes stay out of the layout, and move with what they point at.
+    const nodes = getNodes().filter((n) => n.type !== 'note')
+    const links = edges.filter((e) => !e.id.startsWith(POINTER_PREFIX))
+    const leads = links.some((e) => e.target === END_ID)
       ? []
       : nodes
-          .filter((n) => n.id !== START_ID && n.id !== END_ID && !edges.some((e) => e.source === n.id))
+          .filter((n) => n.id !== START_ID && n.id !== END_ID && !links.some((e) => e.source === n.id))
           .map((n) => ({ id: `${BOUNDARY_PREFIX}${n.id}-${END_ID}`, source: n.id, target: END_ID }))
-    moveNodes(tidy(nodes, [...edges, ...leads]))
-    for (const e of edges) if (e.data?.route) setRoute(e.id, null, true)
+    const laid = tidy(nodes, [...links, ...leads])
+    for (const e of edges) {
+      const note = getNode(e.source)
+      const was = getNode(e.target)?.position
+      const now = laid.get(e.target)
+      if (e.id.startsWith(POINTER_PREFIX) && note && was && now)
+        laid.set(note.id, { x: note.position.x + now.x - was.x, y: note.position.y + now.y - was.y })
+    }
+    moveNodes(laid)
+    for (const e of links) if (e.data?.route) setRoute(e.id, null, true)
     window.requestAnimationFrame(() => fitView(FIT_VIEW))
   }
 
@@ -1492,6 +1611,9 @@ export default function Board({
   const isValidConnection: IsValidConnection = ({ source, target, sourceHandle, targetHandle }) => {
     // An unfolded object's links come from what makes it up.
     if (objectBoard || isDraft(source) || isDraft(target)) return false
+    // A note points at a process or an object, other than the one it does.
+    if (isNote(source)) return (isProcess(target) || isObject(target)) && !edges.some((e) => e.source === source && e.target === target)
+    if (isNote(target)) return false
     const same = (a: string | null | undefined, b: string | null | undefined) => (a ?? null) === (b ?? null)
     if (edges.some((e) => e.source === source && e.target === target && same(e.sourceHandle, sourceHandle) && same(e.targetHandle, targetHandle))) {
       return false
@@ -1515,6 +1637,10 @@ export default function Board({
   }
 
   const onConnect: OnConnect = async ({ source, target, sourceHandle, targetHandle }) => {
+    if (isNote(source)) {
+      pointNote(source, target)
+      return
+    }
     try {
       if (source === START_ID) {
         // The initial node has a single outgoing transition; a new one replaces it.
@@ -1556,7 +1682,7 @@ export default function Board({
   // Whether it is drawn from a state, which a tip explains.
   const [fromState, setFromState] = useState(false)
   const onConnectStart: OnConnectStart = (_, { nodeId, handleId, handleType }) => {
-    if (!nodeId) return
+    if (!nodeId || isNote(nodeId)) return
     setFromState(stateOfHandle(handleId) !== null)
     if (handleType === 'source') setLinkingTo(isProcess(nodeId) ? 'object' : 'process')
     else if (stateOfHandle(handleId) !== null) setLinkingTo('process')
@@ -1592,8 +1718,11 @@ export default function Board({
     }
   }
 
-  const onEdgesDelete: OnEdgesDelete<FlowEdge> = (gone) => {
+  const onEdgesDelete: OnEdgesDelete<FlowEdge> = (removed) => {
     const told = removing.current
+    // A note's line goes with it.
+    const gone = removed.filter((e) => !e.id.startsWith(POINTER_PREFIX))
+    if (gone.length === 0) return
     const reqs = gone.map((e) =>
       e.id === START_EDGE_ID
         ? updateStart(flowId, boardId, { target: null })
@@ -1625,7 +1754,7 @@ export default function Board({
   // node starts out being named.
   const append = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || node.type === 'end' || readOnly || objectBoard) return
+    if (!node || node.type === 'start' || node.type === 'end' || node.type === 'note' || readOnly || objectBoard) return
     try {
       if (node.type === 'process') {
         const o = await createObject({ flow: flowId, name: NEW_OBJECT, parent: boardId, ...below(node, 'object') })
@@ -1753,6 +1882,8 @@ export default function Board({
   // notice offering to undo it, or while a run holds the board once asked;
   // then whatever else was to go with them goes too (confirmed), such as the
   // links selected beside them, links many, told of in the same notice.
+  // Notes go as they do, counted in the notice, and those pointing at what
+  // went point at nothing.
   const removeNodes = async (ids: string[], confirmed?: () => void, links = 0) => {
     let chosen = ids.filter(removable).map((id) => getNode(id)!)
     // What an object deleted is made of goes with it.
@@ -1761,24 +1892,35 @@ export default function Board({
       chosen = chosen.filter((n) => !ownersOf(contents?.objects ?? [], objectIdOf(n.id)).some((o) => all.has(objectNodeId(o.id))))
     }
     if (chosen.length === 0) return
-    const node = chosen[0]
-    const one = chosen.length === 1
-    const flowsInside = chosen.some((n) => n.type === 'process' && n.data.kind === 'flow')
+    const shapes = chosen.filter((n) => n.type === 'process' || n.type === 'object')
+    const notes = chosen.length - shapes.length
+    const node = shapes[0]
+    const one = shapes.length === 1
+    const flowsInside = shapes.some((n) => n.type === 'process' && n.data.kind === 'flow')
     const goes =
-      one && flowsInside
-        ? 'Its links go with it, and everything on its board.'
-        : one && node.type === 'object' && objectBoard
-          ? 'Everything it is made of goes with it.'
-          : one
-            ? 'Its links go with it.'
-            : flowsInside
-              ? 'Their links go with them, and everything on their boards.'
-              : objectBoard
-                ? 'Everything they are made of goes with them.'
-                : 'Their links go with them.'
-    const what =
-      (one && node.type !== 'start' && node.type !== 'end' ? `“${node.data.name}”` : `${chosen.length} processes and objects`) +
-      (links === 0 ? '' : links === 1 ? ' and a link' : ` and ${links} links`)
+      shapes.length === 0
+        ? ''
+        : one && flowsInside
+          ? 'Its links go with it, and everything on its board.'
+          : one && node.type === 'object' && objectBoard
+            ? 'Everything it is made of goes with it.'
+            : one
+              ? 'Its links go with it.'
+              : flowsInside
+                ? 'Their links go with them, and everything on their boards.'
+                : objectBoard
+                  ? 'Everything they are made of goes with them.'
+                  : 'Their links go with them.'
+    const parts = [
+      shapes.length === 0
+        ? ''
+        : one && (node.type === 'process' || node.type === 'object')
+          ? `“${node.data.name}”`
+          : `${shapes.length} processes and objects`,
+      notes === 0 ? '' : notes === 1 ? 'a note' : `${notes} notes`,
+      links === 0 ? '' : links === 1 ? 'a link' : `${links} links`,
+    ].filter(Boolean)
+    const what = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]
     if (!(await mayDelete(what, goes))) return
     removing.current = true
     const gone = new Set<string>()
@@ -1786,7 +1928,8 @@ export default function Board({
       confirmed?.()
       for (const n of chosen) {
         try {
-          if (n.type === 'object') await deleteObject(objectIdOf(n.id))
+          if (n.type === 'note') await deleteNote(noteIdOf(n.id))
+          else if (n.type === 'object') await deleteObject(objectIdOf(n.id))
           else await deleteProcess(Number(n.id))
           gone.add(n.id)
         } catch (err) {
@@ -1797,7 +1940,13 @@ export default function Board({
     } finally {
       removing.current = false
     }
-    setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
+    // The notes pointing at what went point at nothing.
+    const pointing = new Set(edges.filter((e) => gone.has(e.target) && e.id.startsWith(POINTER_PREFIX)).map((e) => e.source))
+    setNodes((ns) =>
+      ns.flatMap((n) =>
+        gone.has(n.id) ? [] : n.type === 'note' && pointing.has(n.id) ? [{ ...n, data: { ...n.data, pointing: false } }] : [n],
+      ),
+    )
     setEdges((es) => es.filter((e) => !gone.has(e.source) && !gone.has(e.target)))
     setPanelId((open) => (open !== null && gone.has(open) ? null : open))
     // The object they made up has fields less.
@@ -1809,7 +1958,7 @@ export default function Board({
   // A copy without links, next to the original.
   const duplicate = async (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || node.type === 'end') return
+    if (!node || node.type === 'start' || node.type === 'end' || node.type === 'note') return
     const position = { x: node.position.x + DUPLICATE_OFFSET, y: node.position.y + DUPLICATE_OFFSET }
     try {
       const { name } = node.data
@@ -2088,7 +2237,7 @@ export default function Board({
     if (!readOnly || zoomable(node.id)) setMenu({ id: node.id, x: e.clientX, y: e.clientY })
   }
 
-  const menuItems = (id: string): MenuItem[] => [
+  const menuItems = (id: string): MenuItem[] => isNote(id) ? noteMenuItems(id) : [
     ...(zoomable(id) ? [{ label: isObject(id) ? 'Unfold' : 'Zoom in', icon: <ZoomInIcon />, onSelect: () => zoomIn(id) }] : []),
     {
       label: 'Rename',
@@ -2120,6 +2269,14 @@ export default function Board({
       disabled: readOnly || isBoundary(id) || isFixed(id) || isStructRoot(id),
       onSelect: () => remove(id),
     },
+  ]
+
+  const noteMenuItems = (id: string): MenuItem[] => [
+    { label: 'Copy', icon: <CopyIcon />, disabled: readOnly, onSelect: () => copySelection(id) },
+    ...(edges.some((e) => e.id === `${POINTER_PREFIX}${id}`)
+      ? [{ label: 'Point at nothing', icon: <PlugIcon />, disabled: readOnly, onSelect: () => pointNote(id, null) }]
+      : []),
+    { label: 'Delete', icon: <TrashIcon />, danger: true, disabled: readOnly, onSelect: () => remove(id) },
   ]
 
   const onStopStep = async (run: number, step: number) => {
@@ -2169,8 +2326,8 @@ export default function Board({
 
   // Nodes and edges reach the board through a context whose functions stay
   // the same, so they don't all re-render whenever the board does.
-  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess })
-  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess }
+  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, resizeNote, setNoteText, setNoteColour, pointNote })
+  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, resizeNote, setNoteText, setNoteColour, pointNote }
   const actions = useMemo<BoardActions>(
     () => ({
       commitName: (id, name) => latest.current.commitName(id, name),
@@ -2192,6 +2349,10 @@ export default function Board({
       setQuantity: (objectId, quantity) => latest.current.setQuantity(objectId, quantity),
       setRoute: (edgeId, route, save) => latest.current.setRoute(edgeId, route, save),
       resize: (id, x, width) => latest.current.resize(id, x, width),
+      resizeNote: (id, box) => latest.current.resizeNote(id, box),
+      setNoteText: (id, text) => latest.current.setNoteText(id, text),
+      setNoteColour: (id, colour) => latest.current.setNoteColour(id, colour),
+      pointNote: (id, target) => latest.current.pointNote(id, target),
       editable: !readOnly,
       runShown,
     }),
@@ -2367,13 +2528,15 @@ export default function Board({
 
   // What copying the nodes remembers, if any of them can be copied.
   const copiedOf = (nodes: FlowNode[]): Copied | null => {
-    const copyable = (n: FlowNode) => !isDraft(n.id) && (n.type === 'process' || (n.type === 'object' && n.data.boundary === undefined))
+    const copyable = (n: FlowNode) =>
+      !isDraft(n.id) && (n.type === 'process' || n.type === 'note' || (n.type === 'object' && n.data.boundary === undefined))
     const chosen = nodes.filter(copyable)
     if (chosen.length === 0) return null
     return {
       flow: flowId,
       processes: chosen.filter((n) => n.type === 'process').map((n) => Number(n.id)),
       objects: chosen.filter((n) => n.type === 'object').map((n) => objectIdOf(n.id)),
+      notes: chosen.filter((n) => n.type === 'note').map((n) => noteIdOf(n.id)),
       at: { x: Math.min(...chosen.map((n) => n.position.x)), y: Math.min(...chosen.map((n) => n.position.y)) },
     }
   }
@@ -2395,7 +2558,7 @@ export default function Board({
     try {
       const res = await pasteCopied(c, flowId, boardId, dx, dy)
       await loadBoard()
-      const ids = new Set([...res.processes.map(String), ...res.objects.map(objectNodeId)])
+      const ids = new Set([...res.processes.map(String), ...res.objects.map(objectNodeId), ...res.notes.map(noteNodeId)])
       setNodes((ns) => ns.map((n) => ({ ...n, selected: ids.has(n.id) })))
     } catch (err) {
       report(err)
@@ -3083,6 +3246,7 @@ export default function Board({
     return highlightsOf(diff, boardId, {
       process: (id) => String(id),
       object: objectNodeId,
+      note: noteNodeId,
       link: (id) => `${LINK_PREFIX}${id}`,
       connection: (id) => `${CONNECTION_PREFIX}${id}`,
       start: START_EDGE_ID,

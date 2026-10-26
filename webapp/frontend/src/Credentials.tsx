@@ -122,11 +122,12 @@ function howItGoes(c: Credential): string {
   }
 }
 
-// A URL's scheme, host and port, as the server compares them.
-function originOf(raw: string): string {
+// A base URL as the server compares them: its scheme, host and port, then
+// its path.
+function baseOf(raw: string): string {
   try {
     const u = new URL(raw.trim())
-    return `${u.protocol}//${u.hostname}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`
+    return `${u.protocol}//${u.hostname}:${u.port || (u.protocol === 'https:' ? '443' : '80')}${u.pathname || '/'}`
   } catch {
     return raw.trim()
   }
@@ -169,7 +170,7 @@ function CredentialEditor({
   // A kept secret never goes elsewhere than it was given for.
   const elsewhere =
     !!initial &&
-    (originOf(baseUrl) !== originOf(initial.baseUrl) ||
+    (baseOf(baseUrl) !== baseOf(initial.baseUrl) ||
       auth !== initial.auth ||
       (auth === 'header' && header.trim().toLowerCase() !== (initial.header ?? '').toLowerCase()) ||
       (auth === 'query' && param.trim() !== (initial.param ?? '')))
@@ -278,7 +279,7 @@ function CredentialEditor({
         />
         <small className="panel-note">
           {elsewhere
-            ? 'Give it again: the kept one never goes to another service, or another place on its requests, than it was given for.'
+            ? 'Give it again: the kept one never goes to another base URL, or another place on its requests, than it was given for.'
             : 'Sealed in the database and never shown again.'}
         </small>
       </label>

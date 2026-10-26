@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"io"
 	"maps"
 	"net/http"
@@ -47,10 +48,13 @@ type credentialsSeen struct {
 
 // A service that records what it gets and answers with it; under
 // /redirect it redirects to where its query's to says, under /echo it
-// answers with the headers it got, a cookie, and what looks like the
-// credential, and under /echo-body with the URL and credential it got,
-// plainly, gzipped under /gzip, and in an encoding the proxy can't read
-// under /br.
+// answers with the headers it got, a cookie, what looks like the
+// credential and headers a browser would act on, and under /echo-body
+// with the URL and credential it got, plainly, gzipped under /gzip, said
+// to be encoded twice under /twice and /gzip-twice, and in an encoding the
+// proxy can't read under /br; under /cut it echoes the URL it got cut
+// short, and under /encoded its key parameter in the ways a service could
+// write it.
 type credentialsService struct {
 	srv  *httptest.Server
 	mu   sync.Mutex
@@ -73,9 +77,27 @@ func newCredentialsService(t *testing.T) *credentialsService {
 			gz := gzip.NewWriter(w)
 			fmt.Fprint(gz, echo)
 			gz.Close()
+		case strings.HasSuffix(r.URL.Path, "/twice"):
+			w.Header().Add("Content-Encoding", "identity")
+			w.Header().Add("Content-Encoding", "gzip")
+			gz := gzip.NewWriter(w)
+			fmt.Fprint(gz, echo)
+			gz.Close()
+		case strings.HasSuffix(r.URL.Path, "/gzip-twice"):
+			w.Header().Set("Content-Encoding", "gzip, gzip")
+			gz := gzip.NewWriter(w)
+			fmt.Fprint(gz, echo)
+			gz.Close()
 		case strings.HasSuffix(r.URL.Path, "/br"):
 			w.Header().Set("Content-Encoding", "br")
 			fmt.Fprint(w, echo)
+		case strings.Contains(r.URL.Path, "/cut/"):
+			self := r.URL.String()
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such page: " + self[:min(len(self), 80)]})
+		case strings.HasSuffix(r.URL.Path, "/encoded"):
+			key := r.URL.Query().Get("key")
+			b64 := base64.StdEncoding.EncodeToString([]byte(key))
+			fmt.Fprintf(w, "<p>%s</p> %s %s %s %s", html.EscapeString(key), strings.ToLower(url.QueryEscape(key)), b64, b64[:len(b64)/2], b64[len(b64)/2:])
 		case strings.HasSuffix(r.URL.Path, "/redirect"):
 			w.Header().Set("Location", r.URL.Query().Get("to"))
 			w.WriteHeader(http.StatusFound)
@@ -83,7 +105,15 @@ func newCredentialsService(t *testing.T) *credentialsService {
 			w.Header().Set("Set-Cookie", "session=got-with-the-secret")
 			w.Header().Set("X-Echo", r.Header.Get("Authorization"))
 			w.Header().Set("Authorization", r.Header.Get("Authorization"))
-			w.Header().Set("X-Kept", "kept")
+			w.Header().Set("X-Request-Id", "req-1")
+			w.Header().Set("X-RateLimit-Remaining", "41")
+			w.Header().Set("X-Request-Echo", strings.TrimPrefix(r.Header.Get("Authorization"), "token ")[:12])
+			for _, h := range []string{"Clear-Site-Data", "Refresh", "WWW-Authenticate", "Service-Worker-Allowed", "Access-Control-Allow-Origin",
+				"Alt-Svc", "Digest", "X-Kept"} {
+				w.Header().Set(h, "x")
+			}
+			w.Header().Add("Link", "<"+s.srv.URL+r.URL.Path+"?page=2>; rel=\"next\"")
+			w.Header().Add("Link", "<https://docs.example.com/"+r.Header.Get("Authorization")[6:]+">; rel=\"help\"")
 			fmt.Fprint(w, "echoed")
 		default:
 			writeJSON(w, http.StatusOK, map[string]string{"path": r.URL.Path})
@@ -205,15 +235,19 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 		http.StatusConflict, "named "+jira.Name+" already")
 	a.refused("POST", "/api/credentials", map[string]any{"name": credentialsName(t, "Plain"), "baseUrl": "http://jira.example.com", "auth": "header", "secret": "s", "everyone": true},
 		http.StatusBadRequest, "must be https")
+	a.refused("POST", "/api/credentials", map[string]any{"name": credentialsName(t, "Forwarded"), "baseUrl": "https://x.example.com", "auth": "header", "secret": "s",
+		"everyone": true, "headers": []string{"X_Forwarded_Host"}}, http.StatusBadRequest, "steps can't send X_forwarded_host")
 	// A change without a secret keeps it, unless it would send it elsewhere:
-	// to another origin, or in another place on the request.
+	// to another base URL, even at the same origin, or in another place on
+	// the request.
 	a.call("PUT", fmt.Sprintf("/api/credentials/%d", jira.ID), map[string]any{"name": jira.Name, "baseUrl": svc.srv.URL + "/jira/", "auth": "header",
 		"template": "token {secret}", "everyone": true, "headers": []string{"Notion-Version"}}, http.StatusOK, nil)
-	other := map[string]any{"name": unpicked.Name, "baseUrl": svc.srv.URL + "/other/v2", "auth": "header", "header": "X-Api-Key", "template": "{secret}", "everyone": true}
+	other := map[string]any{"name": unpicked.Name, "baseUrl": svc.srv.URL + "/other", "auth": "header", "header": "X-Api-Key", "template": "{secret}", "everyone": true,
+		"description": "Another."}
 	a.call("PUT", fmt.Sprintf("/api/credentials/%d", unpicked.ID), other, http.StatusOK, nil)
-	for change, to := range map[string]any{"baseUrl": "http://localhost:1/other", "header": "X-Echo", "auth": "basic"} {
+	for _, change := range [][2]string{{"baseUrl", "http://localhost:1/other"}, {"baseUrl", svc.srv.URL + "/other/v2"}, {"header", "X-Echo"}, {"auth", "basic"}} {
 		moved := maps.Clone(other)
-		moved[change] = to
+		moved[change[0]] = change[1]
 		a.refused("PUT", fmt.Sprintf("/api/credentials/%d", unpicked.ID), moved, http.StatusBadRequest, "give the secret again")
 	}
 	moved := maps.Clone(other)
@@ -258,8 +292,13 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 			credentialsCall(t, "GET", jiraURL+"/echo-body", token, false, ""),
 			credentialsCall(t, "GET", mapsURL+"/gzip", token, false, "", "Accept-Encoding: gzip"),
 			credentialsCall(t, "GET", mapsURL+"/br", token, false, ""),
+			// Said to be encoded more than once, it can't be read for the
+			// secret either.
+			credentialsCall(t, "GET", mapsURL+"/twice", token, false, ""),
+			credentialsCall(t, "GET", mapsURL+"/gzip-twice", token, false, ""),
 		)
-		for _, path := range []string{"/a%2F..%2F..%2Fother", "/a%2fb", "/..%2F..%2Fother", "/%2e%2e/%2e%2e/other", "/a%252F..%252Fother", "/a%5Cb", "/../../other"} {
+		for _, path := range []string{"/a%2F..%2F..%2Fother", "/a%2fb", "/..%2F..%2Fother", "/%2e%2e/%2e%2e/other", "/a%252F..%252Fother", "/a%5Cb", "/../../other",
+			"/..:/..:/other", "/..::$INDEX_ALLOCATION/..::$INDEX_ALLOCATION/other"} {
 			tricks = append(tricks, credentialsCall(t, "GET", jiraURL+path, token, false, ""))
 		}
 		return runResult{OK: true, Output: "fetched with " + token, Log: []logLine{{Time: time.Now(), Level: "info", Message: "bash ran with " + token}}}
@@ -330,9 +369,21 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 	if loc := calls[8].header.Get("Location"); calls[8].status != http.StatusFound || loc != "" {
 		t.Errorf("a redirect holding the secret came back as %d %q", calls[8].status, loc)
 	}
+	// Only the answer's headers saying what it is, and how many calls are
+	// left, come back, none holding a piece of the secret; its Link's pages
+	// within the base URL come back as the proxy's.
 	echo := calls[9]
-	if echo.body != "echoed" || echo.header.Get("X-Kept") != "kept" || echo.header.Get("Set-Cookie") != "" || echo.header.Get("X-Echo") != "" || echo.header.Get("Authorization") != "" {
+	if echo.body != "echoed" || echo.header.Get("X-Request-Id") != "req-1" || echo.header.Get("X-Ratelimit-Remaining") != "41" {
 		t.Errorf("the echo came back with %v", echo.header)
+	}
+	for _, h := range []string{"Set-Cookie", "X-Echo", "Authorization", "X-Request-Echo", "Clear-Site-Data", "Refresh", "Www-Authenticate",
+		"Service-Worker-Allowed", "Access-Control-Allow-Origin", "Alt-Svc", "Digest", "X-Kept"} {
+		if v := echo.header.Get(h); v != "" {
+			t.Errorf("the echo came back with %s: %s", h, v)
+		}
+	}
+	if links := echo.header.Values("Link"); len(links) != 1 || links[0] != fmt.Sprintf(`<%s/credentials/%d/echo?page=2>; rel="next"`, a.url, jira.ID) {
+		t.Errorf("the echo's links came back as %q", links)
 	}
 	if echo.header.Get("Content-Security-Policy") != "sandbox" || echo.header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("an answer came back without its sandbox: %v", echo.header)
@@ -346,8 +397,10 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 			t.Errorf("call %d came back %d %v: %s; want it to hold %s", i, c.status, c.header, c.body, want)
 		}
 	}
-	if c := calls[13]; c.status != http.StatusBadGateway || strings.Contains(c.body, "query") {
-		t.Errorf("an answer the proxy can't read came back %d: %s", c.status, c.body)
+	for _, c := range calls[13:16] {
+		if c.status != http.StatusBadGateway || strings.Contains(c.body, "query") {
+			t.Errorf("an answer the proxy can't read came back %d: %s", c.status, c.body)
+		}
 	}
 	for i, c := range tricks {
 		if c.status == http.StatusOK {
@@ -407,6 +460,64 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 	d = a.finish(a.startRun(f.ID).ID)
 	if s := onlyStep(t, d, "Fetch"); s.Status != "error" || !strings.Contains(s.Error, "credential the process uses was removed") {
 		t.Errorf("a step picking a removed credential: %s %s", s.Status, s.Error)
+	}
+}
+
+// A service echoing the URL it got cut short, wherever a step pads the
+// path to have it cut, hands back fewer than eight of the secret's
+// characters in a row, the secret's parameter coming first in the query;
+// and one echoing the secret as a service could write it, HTML-escaped,
+// URL-encoded in lower case or in base64, whole or in pieces, hands back
+// none of it.
+func TestCredentialsBlankOutEchoesCutShort(t *testing.T) {
+	a := newApp(t)
+	svc := newCredentialsService(t)
+	secret := `Zq8Lw2Xv9Kp4&Rt6<Ym1>Nc"Wd'5`
+	escaped := url.QueryEscape(secret)
+	echo := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Echo"), "baseUrl": svc.srv.URL + "/echo/v1", "auth": "query",
+		"param": "key", "secret": secret, "everyone": true})
+	f := a.newFlow("Echoes")
+	call := a.newProcess(f.ID, map[string]any{"name": "Call", "kind": kindScript, "script": "curl \"$CREDENTIAL_ECHO_URL\"",
+		"settings": map[string]any{"credentials": []int64{echo.ID}}})
+	a.startAt(f.ID, call.ID)
+	cut := map[int]credentialsAnswer{}
+	var encoded credentialsAnswer
+	a.worker.onScript("Call", func(_ context.Context, run scriptRun) runResult {
+		at := credentialsURL(t, run.Credentials, echo.Name)
+		// The service echoes 80 characters of /echo/v1/cut/<pad>?key=<secret>&a=1.
+		for k := 1; k < len(escaped); k++ {
+			pad := 80 - k - len("/echo/v1/cut/?key=")
+			cut[k] = credentialsCall(t, "GET", at+"/cut/"+strings.Repeat("a", pad)+"?a=1&key=forged", run.CredentialsToken, false, "")
+		}
+		encoded = credentialsCall(t, "GET", at+"/encoded", run.CredentialsToken, false, "")
+		return runResult{OK: true}
+	})
+	if d := a.finish(a.startRun(f.ID).ID); d.Status != runDone {
+		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
+	}
+	if len(cut) == 0 {
+		t.Fatal("the script made no calls")
+	}
+	for k, c := range cut {
+		if c.status != http.StatusNotFound || !strings.Contains(c.body, "no such page: /echo/v1/cut/aaa") {
+			t.Errorf("cut %d characters into the secret came back %d: %s", k, c.status, c.body)
+		}
+		for i := 0; i+8 <= len(escaped); i++ {
+			if strings.Contains(c.body, escaped[i:i+8]) {
+				t.Errorf("cut %d characters into the secret came back holding %s: %s", k, escaped[i:i+8], c.body)
+			}
+		}
+		if k >= 8 && !strings.Contains(c.body, "key=[redacted]") {
+			t.Errorf("cut %d characters into the secret came back as %s", k, c.body)
+		}
+	}
+	for _, s := range svc.requests() {
+		if strings.HasPrefix(s.path, "/echo/v1/cut/") && s.query != "key="+escaped+"&a=1" {
+			t.Errorf("the service got the query %s", s.query)
+		}
+	}
+	if want := "<p>[redacted]</p> [redacted] [redacted] [redacted] [redacted]"; encoded.status != http.StatusOK || encoded.body != want {
+		t.Errorf("the secret encoded came back %d as %s, want %s", encoded.status, encoded.body, want)
 	}
 }
 

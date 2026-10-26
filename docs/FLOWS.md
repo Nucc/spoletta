@@ -725,8 +725,10 @@ definitions do that.
   the proxy's URL, so `curl -L` follows it through the proxy. Only the usual
   request headers go on (`Accept`, `Content-Type`, `If-Match`,
   `User-Agent` and the like) and those the credential names, such as an
-  API's version header, which an admin adds to it. Every call goes in the
-  run's log. The service's host needn't be allowed for internet access, as
+  API's version header, which an admin adds to it, and only the answer's
+  headers saying what it is come back (`Content-Type`, `ETag`,
+  `Retry-After`, rate limits, pages' counts), a `Link` header's pages as
+  the proxy's URLs. Every call goes in the run's log. The service's host needn't be allowed for internet access, as
   the webapp makes the call.
 - A variable such as `$JIRA_TOKEN` is there only if the instance passes it
   to every script with `CHILD_ENV`, which agents read too; prefer a

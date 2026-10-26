@@ -319,15 +319,25 @@ can't:
 
 - **read the secret.** Neither the worker nor the step ever has it, and it
   is blanked out of what the service answers, headers and body, in each
-  form it went on the request in: as it is, URL-encoded either way, as the
-  header's whole value, as basic auth's `user:secret` in base64, and as a
-  JSON string would write it. The proxy asks the service for its answer
-  uncompressed, reads a gzipped one uncompressed all the same, refuses one
-  in another encoding, and doesn't pass on the step's `Range`, so a secret
-  can't come back cut in pieces or compressed out of sight. A service
-  handing it back in another form, such as hashed, re-encoded or split
-  across fields, hands it over; give credentials only for services that
-  don't.
+  form it went on the request in and those a service could echo it in, in
+  any case of their letters: as it is, URL-encoded either way (`%2f` as
+  `%2F`), as the header's whole value, as basic auth's `user:secret` in
+  base64, in a JSON string with HTML's characters and slashes escaped or
+  not (`\u003c`, `\/`), HTML-escaped (`&amp;`, `&quot;`, `&#39;`), and in
+  base64, either alphabet, alone or within something longer. Any eight of
+  its characters in a row, in any of those forms but the header's and
+  basic auth's, whose own text could be anybody's, are blanked out too, so
+  a service echoing what it got cut short, wherever a step pads the path to
+  have it cut, hands back at most seven at either end of the cut. A query
+  parameter credential's parameter goes first in the query, so the step's
+  own parameters can't move the cut. The proxy asks the service for its
+  answer uncompressed, reads one gzipped once uncompressed all the same,
+  refuses (502) one encoded any other way or more than once, however many
+  `Content-Encoding` values say it, and doesn't pass on the step's `Range`,
+  so a secret can't come back cut in pieces or compressed out of sight. A
+  service handing it back in another form, such as hashed, re-encoded or
+  split across fields, hands it over; give credentials only for services
+  that don't.
 - **hand its token to someone else.** What is kept of the step, what a
   script prints (stdout and stderr, as shown in its terminal window, a
   token printed a piece at a time included, as `set -x` does), an agent's
@@ -342,10 +352,11 @@ can't:
   the path, is refused. So is what some servers read as a step up: a `;`
   anywhere (Tomcat, Jetty and Spring take `..;` for `..`), a segment of
   only dots and spaces (IIS trims a segment's trailing ones, so `.. ` is
-  `..`), and any character outside ASCII (normalised, full-width `．．` is
-  `..`); `:` is kept, as APIs such as Google's use it. The step's query
-  goes on as it sent it, but for a query parameter credential's own, which
-  the secret replaces.
+  `..`), or of only those before a `:` (Windows reads `..:x` and
+  `..::$INDEX_ALLOCATION` as `..`), and any character outside ASCII
+  (normalised, full-width `．．` is `..`); `:` is kept otherwise, as APIs
+  such as Google's use it. The step's query goes on as it sent it, but for
+  a query parameter credential's own, which the secret replaces, first.
 - **send the call elsewhere, or as another method.** Only the headers a
   client sends to say what it sends and wants go on (`Accept`,
   `Accept-Charset`, `Accept-Language`, `Cache-Control`,
@@ -355,19 +366,32 @@ can't:
   `User-Agent`), and those the credential names, such as an API's version
   header, but for any the request's `Connection` names. A credential can't
   name its own header, its token's, the connection's, `Range`, or the
-  headers some servers and gateways take as another URL, method or client
-  (`X-Original-URL`, `X-Rewrite-URL`, `X-Forwarded-*`, `Forwarded`,
-  `X-HTTP-Method-Override` and the like).
+  headers some servers and gateways take as another URL, host, method or
+  client (`X-Original-URL`, `X-Original-URI`, `X-Original-*`,
+  `X-Rewrite-URL`, `X-Host`, `X-Forwarded-*`, `Forwarded`,
+  `X-HTTP-Method-Override` and the like), with `_` read as `-`, as nginx
+  and CGI read it (`X_Forwarded_Host`).
 - **be redirected with it.** The proxy never follows a redirect. One within
   the base URL comes back as the proxy's URL, so following it goes through
   the proxy again; one elsewhere comes back without the secret's query
   parameter, and with no `Location` at all if the secret is still in it.
-- **keep a session got with it.** `Set-Cookie`, `Authorization`-like
-  headers, the credential's own header and any header holding the secret,
-  as sent or encoded, are dropped from the answer. The step's `Cookie` and
-  forwarding headers stay with the proxy too. What comes back is
-  sandboxed (`Content-Security-Policy: sandbox`, `X-Content-Type-Options:
-  nosniff`), so an answer opened in a browser can't act as the app.
+- **keep a session got with it, or have a browser act on the webapp.**
+  Only the answer's headers saying what it is come back: `Content-Type`,
+  `Content-Disposition`, `Content-Language`, `Cache-Control`, `Expires`,
+  `Pragma`, `Age`, `Date`, `Vary`, `ETag`, `Last-Modified`, `Allow`,
+  `Accept-Patch`, `Retry-After`, `RateLimit*` and `X-RateLimit-*`,
+  `Deprecation`, `Sunset`, `X-Request-Id`, `Request-Id`,
+  `X-Correlation-Id`, and pages' counts (`X-Total`, `X-Total-Count`,
+  `X-Total-Pages`, `X-Page`, `X-Per-Page`, `X-Next-Page`, `X-Prev-Page`),
+  never the credential's own header, nor one holding the secret or a piece
+  of it. `Location` and each URL of `Link` come back as a redirect's do,
+  the proxy's within the base URL, so the next page is fetched through it
+  too. `Set-Cookie`, `WWW-Authenticate`, `Clear-Site-Data`, `Refresh`,
+  `Service-Worker-Allowed`, `Access-Control-*`, `Alt-Svc`, digests and the
+  rest stay with the proxy, as do the step's `Cookie` and forwarding
+  headers. What comes back is sandboxed (`Content-Security-Policy:
+  sandbox`, `X-Content-Type-Options: nosniff`), so an answer opened in a
+  browser can't act as the app.
 - **reach the webapp's neighbours through it.** The base URL is an admin's,
   https, or http only at the webapp's own machine (a sidecar), where the
   secret crosses no network. The proxy never dials a link-local or
@@ -380,8 +404,10 @@ can't:
   the next call of every step using it.
 
 Nor can an admin's edit send a kept secret elsewhere: changing a
-credential's base URL to another origin, or where its secret goes (the way,
-the header, the parameter), needs the secret again.
+credential's base URL, even only its path, as a path at an origin many
+share may be another's service (`script.google.com/macros/s/<id>`), or
+where its secret goes (the way, the header, the parameter), needs the
+secret again.
 
 A request may send at most 64 MB; a call may take ten minutes, two of them
 waiting for the service to start answering. Each call goes in the run's log
@@ -397,6 +423,22 @@ What this leaves:
   the service's.
 - Every call, and every refused one, is a line in the audit log, so a step
   calling in a loop, or anyone sending tokens at the proxy, makes many.
+- A service echoing what it got cut short hands back up to seven of the
+  secret's characters at the cut; one echoing a window of it cut at both
+  ends, seven a call wherever the step moves the window, so a step calling
+  over and over could piece together a secret such a service echoes.
+- How soon the proxy passes on the end of a piece of the answer says
+  whether it held it back as what could be the start of the secret, which
+  a step timing the answers could tell.
+- `ETag` comes back as the service made it, before the body is read, so
+  for a body that held the secret it is a hash a step could test guesses
+  of a short secret against.
+- Paths with a `;`, a character outside ASCII or an encoded slash are
+  refused, so an API needing one, such as GitLab's `projects/group%2Fname`,
+  is called by its numeric ids instead.
+- The step's `Range` doesn't go on, so a download comes whole.
+- A service answering only in brotli or zstd, never uncompressed, gets a
+  502.
 
 ## Limits and the audit log
 

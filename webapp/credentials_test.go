@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -95,6 +96,7 @@ func TestCredentialTargets(t *testing.T) {
 		{"https://gw.example.com/tenant/v1", "/", "", "", "https://gw.example.com/tenant/v1/"},
 		{"https://gw.example.com", "/a b/c", "/a%20b/c", "", "https://gw.example.com/a%20b/c"},
 		{"https://gw.example.com", "/models/x:generate", "", "", "https://gw.example.com/models/x:generate"},
+		{"https://gw.example.com", "/v1/:batchGet", "", "", "https://gw.example.com/v1/:batchGet"},
 	} {
 		escaped := c.escaped
 		if escaped == "" {
@@ -133,6 +135,10 @@ func TestCredentialTargets(t *testing.T) {
 		{"/a;b", "/a;b"},
 		{"/\uff0e\uff0e/admin", "/%EF%BC%8E%EF%BC%8E/admin"},
 		{"/caf\u00e9", "/caf%C3%A9"},
+		// What Windows reads as the file before a :, a stream of it.
+		{"/..:/admin", "/..:/admin"},
+		{"/..::$INDEX_ALLOCATION/admin", "/..::$INDEX_ALLOCATION/admin"},
+		{"/. .:x/admin", "/.%20.:x/admin"},
 	} {
 		if u, ok := credentialTarget("https://gw.example.com/tenant/v1", c.rest, c.escaped, ""); ok {
 			t.Errorf("%q (sent as %q) went to %s", c.rest, c.escaped, u)
@@ -147,7 +153,7 @@ func TestCredentialRedirects(t *testing.T) {
 	b := newCredentialBroker(nil, "http://webapp:8080/")
 	c := credential{ID: 7, BaseURL: "https://gw.example.com/tenant/v1", Auth: credentialQuery, Param: "key"}
 	secret := "s3cret+token/x"
-	forms := secretForms(c, secret)
+	blank := credentialRedactor(c, secret)
 	at, _ := url.Parse("https://gw.example.com/tenant/v1/things?key=" + url.QueryEscape(secret))
 	for loc, want := range map[string]string{
 		"/tenant/v1/things/2?page=2&key=" + url.QueryEscape(secret): "http://webapp:8080/credentials/7/things/2?page=2",
@@ -156,7 +162,7 @@ func TestCredentialRedirects(t *testing.T) {
 		"/tenant/v2/x":                     "https://gw.example.com/tenant/v2/x",
 		"https://login.example.com/?key=" + url.QueryEscape(secret) + "&next=1": "https://login.example.com/?next=1",
 	} {
-		got, ok := b.location(c, at, loc, forms)
+		got, ok := b.location(c, at, loc, blank)
 		if !ok || got != want {
 			t.Errorf("%s became %q (%v), want %s", loc, got, ok, want)
 		}
@@ -165,23 +171,85 @@ func TestCredentialRedirects(t *testing.T) {
 		"https://login.example.com/?token=" + url.QueryEscape(secret),
 		"https://login.example.com/" + url.PathEscape(secret),
 		"https://login.example.com/#" + secret,
+		// Cut short, or in another case.
+		"https://login.example.com/?token=" + url.QueryEscape(secret)[:9],
+		"https://login.example.com/?token=" + strings.ToLower(url.QueryEscape(secret)),
 	} {
-		if got, ok := b.location(c, at, loc, forms); ok {
+		if got, ok := b.location(c, at, loc, blank); ok {
 			t.Errorf("%s was passed on as %s", loc, got)
+		}
+	}
+	// A Link header's pages within the base URL are the proxy's too.
+	link := `<https://gw.example.com/tenant/v1/things?page=2&key=` + url.QueryEscape(secret) + `>; rel="next", <https://docs.example.com/paging>; rel="help"`
+	if got, ok := b.link(c, at, link, blank); !ok || got != `<http://webapp:8080/credentials/7/things?page=2>; rel="next", <https://docs.example.com/paging>; rel="help"` {
+		t.Errorf("the Link header became %q (%v)", got, ok)
+	}
+	if got, ok := b.link(c, at, `<https://docs.example.com/`+secret+`>; rel="help"`, blank); ok {
+		t.Errorf("a Link header holding the secret was passed on as %s", got)
+	}
+}
+
+// The secret's parameter goes first, without the step's own values of it.
+func TestSecretFirst(t *testing.T) {
+	for raw, want := range map[string]string{
+		"":                       "key=s%2Bt",
+		"a=aaaaaaaa&q=Rome":      "key=s%2Bt&a=aaaaaaaa&q=Rome",
+		"key=forged&q=a%20b&key": "key=s%2Bt&q=a%20b",
+		"k%65y=forged&x=1;key=2": "key=s%2Bt",
+		"a=%zz&b=1":              "key=s%2Bt&b=1",
+	} {
+		if got := secretFirst("key", "s+t", raw); got != want {
+			t.Errorf("%q became %q, want %q", raw, got, want)
 		}
 	}
 }
 
 func TestSecretForms(t *testing.T) {
-	basic := secretForms(credential{Auth: credentialBasic, Username: "me@example.com"}, "tok en")
+	basic := credentialRedactor(credential{Auth: credentialBasic, Username: "me@example.com"}, "tok en")
 	for _, want := range []string{"tok en", "tok+en", "tok%20en", "bWVAZXhhbXBsZS5jb206dG9rIGVu"} {
-		if !holdsSecret("x"+want+"y", basic) {
-			t.Errorf("basic auth's forms miss %q: %v", want, basic)
+		if !basic.holds("x" + want + "y") {
+			t.Errorf("basic auth's forms miss %q: %v", want, basic.secrets)
 		}
 	}
-	header := secretForms(credential{Auth: credentialHeader, Header: "Authorization", Template: "token {secret}"}, "abc")
-	if !holdsSecret("token abc", header) || holdsSecret("token ab", header) {
-		t.Errorf("a header's forms are %v", header)
+	header := credentialRedactor(credential{Auth: credentialHeader, Header: "Authorization", Template: "token {secret}"}, "abc")
+	if !header.holds("token abc") || header.holds("token ab") {
+		t.Errorf("a header's forms are %v", header.secrets)
+	}
+	// The template's own text is no piece of the secret's.
+	long := credentialRedactor(credential{Auth: credentialHeader, Header: "Authorization", Template: "Bearer {secret}"}, "0123456789abcdef")
+	if long.holds("Bearer another-token") || long.holds("Basic dXNlcjpvdGhlcg==") {
+		t.Errorf("the template's text is taken for the secret")
+	}
+}
+
+// A secret is found in an answer as a service could write it: URL-encoded
+// in either case, HTML-escaped, in base64 alone or within something
+// longer, and in JSON.
+func TestSecretFormsEncoded(t *testing.T) {
+	secret := `k<e>y&"1'/2+3 ab`
+	blank := credentialRedactor(credential{Auth: credentialQuery, Param: "key"}, secret)
+	for _, want := range []string{
+		strings.ToLower(url.QueryEscape(secret)),
+		strings.ToLower(url.PathEscape(secret)),
+		"k&lt;e&gt;y&amp;&#34;1&#39;/2+3 ab",
+		"k&lt;e&gt;y&amp;&quot;1&#x27;/2+3 ab",
+		`k\u003ce\u003ey\u0026\"1'/2+3 ab`,
+		`k\u003Ce\u003Ey\u0026\"1'\/2+3 ab`,
+		`k<e>y&\"1'\/2+3 ab`,
+		base64.StdEncoding.EncodeToString([]byte(secret)),
+		base64.RawURLEncoding.EncodeToString([]byte(secret)),
+	} {
+		if got := blank.text(`{"echo": "` + want + `"}`); got != `{"echo": "[redacted]"}` {
+			t.Errorf("%s came out as %s", want, got)
+		}
+	}
+	// Within what else is encoded with it, wherever it starts in a group,
+	// but for the groups it shares with what is around it.
+	for _, before := range []string{"", "u:", "us:", "use:"} {
+		enc := base64.StdEncoding.EncodeToString([]byte(before + secret + "!"))
+		if got := blank.text(enc); !strings.Contains(got, redacted) || len(got)-len(redacted) > (len(before)+2)/3*4+4 {
+			t.Errorf("base64 of %q came out as %s", before+secret, got)
+		}
 	}
 }
 
@@ -221,8 +289,44 @@ func TestRedactor(t *testing.T) {
 	if got := string(newRedactor().next([]byte("abcdefgh"))); got != "abcdefgh" {
 		t.Errorf("with nothing to blank out: %q", got)
 	}
-	if got := newRedactor("tok-123456").text("Bearer tok-123456 and tok-123456"); got != "Bearer [redacted] and [redacted]" {
+	if got := newRedactor("tok-123456").text("Bearer tok-123456 and TOK-123456"); got != "Bearer [redacted] and [redacted]" {
 		t.Errorf("the text became %q", got)
+	}
+	if got := newRedactor("tok-123456").text("tok-123456tok-123456"); got != "[redacted]" {
+		t.Errorf("secrets in a row became %q", got)
+	}
+}
+
+// An echo cut short keeps fewer than secretPiece of the secret's
+// characters in a row, wherever it is cut, at either end, in whatever
+// pieces it streams through, and with nothing more after them.
+func TestRedactorBlanksPiecesOfSecrets(t *testing.T) {
+	secret := "Zq8Lw2Xv9Kp4Rt6Ym1Nc"
+	for k := 1; k < len(secret); k++ {
+		for _, echo := range []string{
+			`{"error": "no such path /aaaa?key=` + secret[:k] + `", "x": 1}`,
+			`{"error": "no such path ` + secret[len(secret)-k:] + `&a=1"}`,
+			"...key=" + secret[:k],
+		} {
+			whole := credentialRedactor(credential{Auth: credentialQuery, Param: "key"}, secret).text(echo)
+			for split := 0; split <= len(echo); split++ {
+				r := credentialRedactor(credential{Auth: credentialQuery, Param: "key"}, secret)
+				got := string(r.next([]byte(echo[:split]))) + string(r.next([]byte(echo[split:]))) + string(r.flush())
+				if got != whole {
+					t.Fatalf("%q split at %d came out as %q, but whole as %q", echo, split, got, whole)
+				}
+			}
+			for i := 0; i+secretPiece <= len(secret); i++ {
+				if strings.Contains(whole, secret[i:i+secretPiece]) {
+					t.Errorf("%q came out as %q, holding %s", echo, whole, secret[i:i+secretPiece])
+				}
+			}
+		}
+	}
+	// What only looks like it, in a few characters, goes on.
+	r := credentialRedactor(credential{Auth: credentialQuery, Param: "key"}, secret)
+	if got := r.text("Zq8Lw2X and Zq8 and 1Nc"); got != "Zq8Lw2X and Zq8 and 1Nc" {
+		t.Errorf("fewer than a piece came out as %q", got)
 	}
 }
 
@@ -237,7 +341,8 @@ func TestPassedHeaders(t *testing.T) {
 		"Prefer": "return=minimal", "Connection": "Prefer, close", "X-Original-Url": "/admin", "X-Rewrite-Url": "/admin",
 		"X-Forwarded-Prefix": "/admin", "X-Forwarded-Host": "evil.example.com", "X-Http-Method-Override": "DELETE",
 		"Range": "bytes=0-3", "If-Range": `"x"`, "Accept-Encoding": "gzip", "Authorization": "Bearer step-token",
-		"Cookie": "a=1", "X-Api-Key": "the step's own", "X-Custom": "1", "Host": "evil.example.com",
+		"Cookie": "a=1", "X-Api-Key": "the step's own", "X-Custom": "1", "Host": "evil.example.com", "X_Api_Key": "theirs",
+		"Notion_Version": "2022-06-28",
 	} {
 		h.Set(k, v)
 	}
@@ -251,7 +356,8 @@ func TestPassedHeaders(t *testing.T) {
 			t.Errorf("%s didn't go on: %v", k, got)
 		}
 	}
-	for _, bad := range []string{"X-Original-URL", "Authorization", "x-forwarded-prefix", "Range", "Accept-Encoding", "Proxy-Foo", "X-Http-Method-Override"} {
+	for _, bad := range []string{"X-Original-URL", "Authorization", "x-forwarded-prefix", "Range", "Accept-Encoding", "Proxy-Foo", "X-Http-Method-Override",
+		"X-Original-URI", "X-Host", "X-Original-Host", "X-Forwarded-For", "X_Forwarded_Host", "X_Original_URL", "x_http_method_override", "proxy_authorization"} {
 		f := credentialFields{Name: "Jira", BaseURL: "https://x.example.com", Auth: credentialHeader, Secret: "s", Everyone: true, Headers: []string{bad}}
 		if msg := f.check(true); msg == "" {
 			t.Errorf("a credential lets steps send %s", bad)
@@ -262,22 +368,35 @@ func TestPassedHeaders(t *testing.T) {
 	if msg := f.check(true); msg == "" {
 		t.Errorf("a credential lets steps send the header its secret goes in")
 	}
+	f.Headers[3] = "X_Api_Key"
+	if msg := f.check(true); msg == "" {
+		t.Errorf("a credential lets steps send the header its secret goes in, with _ for -")
+	}
+	if f := (credentialFields{Name: "Jira", BaseURL: "https://x.example.com", Auth: credentialHeader, Header: "Content_Length", Secret: "s", Everyone: true}); f.check(true) == "" {
+		t.Errorf("the secret may go in Content_Length")
+	}
 	f.Headers = f.Headers[:3]
 	if msg := f.check(true); msg != "" || len(f.Headers) != 1 || f.Headers[0] != "Notion-Version" {
 		t.Errorf("headers checked into %v: %s", f.Headers, msg)
 	}
 }
 
-// Changing where a kept secret goes needs it again: another origin, or
-// another header, parameter or way; another path at the same origin, or
-// another template, doesn't.
+// Changing where a kept secret goes needs it again: another base URL, even
+// another path at the same origin, or another header, parameter or way;
+// another template, or the origin written another way, doesn't.
 func TestCredentialChangesSendingTheSecretElsewhere(t *testing.T) {
 	was := credential{BaseURL: "https://jira.example.com/rest", Auth: credentialHeader, Header: "Authorization", Template: "Bearer {secret}"}
-	same := credentialFields{BaseURL: "https://JIRA.example.com:443/other", Auth: credentialHeader, Header: "authorization", Template: "token {secret}"}
+	same := credentialFields{BaseURL: "https://JIRA.example.com:443/rest", Auth: credentialHeader, Header: "authorization", Template: "token {secret}"}
 	if sendsElsewhere(was, same) {
-		t.Errorf("another path at the same origin needs the secret again")
+		t.Errorf("the same base URL written another way needs the secret again")
+	}
+	if credentialBase("https://x.example.com") != credentialBase("https://x.example.com/") {
+		t.Errorf("a base URL without a path isn't the same as one with /")
 	}
 	for _, f := range []credentialFields{
+		{BaseURL: "https://jira.example.com/other", Auth: credentialHeader, Header: "Authorization"},
+		{BaseURL: "https://jira.example.com/rest/", Auth: credentialHeader, Header: "Authorization"},
+		{BaseURL: "https://jira.example.com/Rest", Auth: credentialHeader, Header: "Authorization"},
 		{BaseURL: "https://evil.example.com/rest", Auth: credentialHeader, Header: "Authorization"},
 		{BaseURL: "https://jira.example.com:8443/rest", Auth: credentialHeader, Header: "Authorization"},
 		{BaseURL: "http://localhost/rest", Auth: credentialHeader, Header: "Authorization"},
@@ -307,10 +426,29 @@ func TestCredentialClientsDialLoopbackOnlyWhenAsked(t *testing.T) {
 
 // A secret is found in an answer as JSON would write it, too.
 func TestSecretFormsInJSON(t *testing.T) {
-	forms := secretForms(credential{Auth: credentialQuery, Param: "key"}, `a/b"c`)
+	blank := credentialRedactor(credential{Auth: credentialQuery, Param: "key"}, `a/b"c`)
 	for _, want := range []string{`a/b\"c`, `a\/b\"c`, "a%2Fb%22c"} {
-		if !holdsSecret(`{"echo": "`+want+`"}`, forms) {
-			t.Errorf("the forms miss %s: %v", want, forms)
+		if !blank.holds(`{"echo": "` + want + `"}`) {
+			t.Errorf("the forms miss %s: %v", want, blank.secrets)
+		}
+	}
+}
+
+// Only the answer's headers saying what it is, and how many calls are
+// left, come back; never the credential's own, nor what would have a
+// browser act on the webapp's origin.
+func TestAnswerHeaders(t *testing.T) {
+	c := credential{Auth: credentialHeader, Header: "X-Request-Id"}
+	for _, k := range []string{"Content-Type", "Etag", "Retry-After", "X-Ratelimit-Remaining", "Ratelimit-Policy", "Ratelimit", "X-Total-Count"} {
+		if !answerHeader(c, k) {
+			t.Errorf("%s doesn't come back", k)
+		}
+	}
+	for _, k := range []string{"X-Request-Id", "Set-Cookie", "Www-Authenticate", "Clear-Site-Data", "Refresh", "Service-Worker-Allowed",
+		"Access-Control-Allow-Origin", "Alt-Svc", "Content-Length", "Content-Encoding", "Digest", "Content-Digest", "Content-Md5",
+		"Location", "Link", "X-Kept"} {
+		if answerHeader(c, k) {
+			t.Errorf("%s comes back", k)
 		}
 	}
 }

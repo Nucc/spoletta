@@ -29,17 +29,19 @@ package main
 // wants, and those the credential names, never the step's token, puts the
 // secret on the request as the credential says and passes it on,
 // streaming the answer back with the secret blanked out of it, as sent or
-// encoded. Redirects aren't followed: one within the base URL is turned
-// into the proxy's, and the secret is taken out of any other. Headers that
-// would hand the step the secret, or a session got with it, are dropped.
+// encoded, and any piece of it, as an echo cut short would hold. Redirects
+// aren't followed: one within the base URL is turned into the proxy's, and
+// the secret is taken out of any other. Only the answer's headers saying
+// what it is come back, never one handing the step the secret, or a
+// session got with it.
 // What is kept of the step, what it prints and says and logs, has its
 // tokens blanked out too, so nobody reading it can call the services while
 // the step goes. Every call goes in the run's log and the audit log by its
 // method and path, never its query, the secret or the token.
 //
 // A stored secret never goes elsewhere than where it was given for:
-// changing a credential's base URL to another origin, or where its secret
-// goes, needs the secret again.
+// changing a credential's base URL, or where its secret goes, needs the
+// secret again.
 
 import (
 	"bytes"
@@ -50,6 +52,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net"
@@ -228,7 +231,7 @@ func (f *credentialFields) check(creating bool) string {
 		switch {
 		case !headerName.MatchString(f.Header):
 			return "that isn't a header's name"
-		case slices.Contains(reservedHeaders, http.CanonicalHeaderKey(f.Header)):
+		case slices.Contains(reservedHeaders, headerKey(f.Header)):
 			return "the secret can't go in " + http.CanonicalHeaderKey(f.Header) + ", which HTTP itself sets"
 		case !strings.Contains(f.Template, secretPlaceholder):
 			return "the header's value says where the secret goes with " + secretPlaceholder + ", such as Bearer " + secretPlaceholder
@@ -257,7 +260,7 @@ func (f *credentialFields) check(creating bool) string {
 			continue
 		case !headerName.MatchString(h):
 			return fmt.Sprintf("%q isn't a header's name", h)
-		case !passableHeader(h) || f.Auth == credentialHeader && h == http.CanonicalHeaderKey(f.Header):
+		case !passableHeader(h) || f.Auth == credentialHeader && headerKey(h) == headerKey(f.Header):
 			return "steps can't send " + h + ": it carries their token, is the connection's, or could send the call elsewhere"
 		}
 		headers = append(headers, h)
@@ -584,15 +587,22 @@ var credentialPassedHeaders = []string{"Accept", "Accept-Charset", "Accept-Langu
 
 // Headers a credential can't let steps send: those that carry the step's
 // token or are HTTP's own, and those some servers and gateways take as
-// another URL, method or client to answer for.
-var unpassableHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "Host", "Connection", "Keep-Alive",
-	"Te", "Trailer", "Transfer-Encoding", "Upgrade", "Content-Length", "Range", "If-Range", "Accept-Encoding",
-	"Forwarded", "X-Real-Ip", "X-Original-Url", "X-Rewrite-Url", "X-Http-Method-Override", "X-Http-Method",
-	"X-Method-Override", "X-Original-Method", "X-Client-Ip", "True-Client-Ip", "X-Envoy-Original-Path"}
+// another URL, host, method or client to answer for, as do those starting
+// with Proxy-, X-Forwarded-, X-Original- and X-Envoy-.
+var unpassableHeaders = []string{"Authorization", "Cookie", "Host", "Connection", "Keep-Alive", "Te", "Trailer",
+	"Transfer-Encoding", "Upgrade", "Content-Length", "Range", "If-Range", "Accept-Encoding", "Forwarded", "X-Host",
+	"X-Http-Host", "X-Real-Ip", "X-Rewrite-Url", "X-Http-Method-Override", "X-Http-Method", "X-Method-Override",
+	"X-Client-Ip", "True-Client-Ip", "Client-Ip", "X-Cluster-Client-Ip", "Cf-Connecting-Ip", "Fastly-Client-Ip"}
 
-// Whether a credential may let steps send a header, by its canonical name.
+// A header's name as it is compared: canonical, with _ read as -, as nginx
+// and CGI read it.
+func headerKey(h string) string { return http.CanonicalHeaderKey(strings.ReplaceAll(h, "_", "-")) }
+
+// Whether a credential may let steps send a header.
 func passableHeader(h string) bool {
-	return !slices.Contains(unpassableHeaders, h) && !strings.HasPrefix(h, "Proxy-") && !strings.HasPrefix(h, "X-Forwarded-")
+	h = headerKey(h)
+	return !slices.Contains(unpassableHeaders, h) && !slices.ContainsFunc([]string{"Proxy-", "X-Forwarded-", "X-Original-", "X-Envoy-"},
+		func(p string) bool { return strings.HasPrefix(h, p) })
 }
 
 // The headers of the step's request that go on to the credential's service:
@@ -602,13 +612,13 @@ func passedHeaders(c credential, h http.Header) http.Header {
 	hop := map[string]bool{}
 	for _, v := range h.Values("Connection") {
 		for _, name := range strings.Split(v, ",") {
-			hop[http.CanonicalHeaderKey(strings.TrimSpace(name))] = true
+			hop[headerKey(strings.TrimSpace(name))] = true
 		}
 	}
 	out := http.Header{}
 	for k, v := range h {
 		k = http.CanonicalHeaderKey(k)
-		if hop[k] || !passableHeader(k) || c.Auth == credentialHeader && k == http.CanonicalHeaderKey(c.Header) {
+		if hop[headerKey(k)] || !passableHeader(k) || c.Auth == credentialHeader && headerKey(k) == headerKey(c.Header) {
 			continue
 		}
 		if slices.Contains(credentialPassedHeaders, k) || slices.Contains(c.Headers, k) {
@@ -618,21 +628,37 @@ func passedHeaders(c credential, h http.Header) http.Header {
 	return out
 }
 
-// Headers of the service's answer that stay here: those that could carry
-// a credential, or a session the step could go on with once its token
-// ended, the connection's, and those saying how long the answer is and
-// how it is encoded, which blanking out the secret and reading it
-// uncompressed change.
-var credentialAnswerDropped = []string{"Set-Cookie", "Set-Cookie2", "Authorization", "Proxy-Authorization",
-	"Proxy-Authenticate", "Connection", "Proxy-Connection", "Keep-Alive", "Te", "Trailer", "Transfer-Encoding", "Upgrade",
-	"Content-Length", "Content-Encoding", "Content-Range", "Accept-Ranges", "Content-Security-Policy", "X-Content-Type-Options"}
+// Headers of the service's answer that come back to the step: what says
+// what the answer is, how long it may be kept and whether it changed,
+// which methods are allowed, when to call again and how many calls are
+// left, ids to tell the service's people about a call, and pages' counts;
+// Location and Link come back as location makes them. The rest stay here:
+// what could carry a credential, or a session the step could go on with
+// once its token ended (Set-Cookie, WWW-Authenticate); what has a browser
+// opening the answer act on the webapp's origin (Clear-Site-Data, Refresh,
+// Service-Worker-Allowed, Access-Control-*, Alt-Svc); the connection's;
+// and what says how long the answer is, how it is encoded or what its
+// digest is, which reading it uncompressed and blanking out the secret
+// change.
+var credentialAnswerHeaders = []string{"Accept-Patch", "Age", "Allow", "Cache-Control", "Content-Disposition",
+	"Content-Language", "Content-Type", "Date", "Deprecation", "Etag", "Expires", "Last-Modified", "Pragma", "Request-Id",
+	"Retry-After", "Sunset", "Vary", "X-Correlation-Id", "X-Next-Page", "X-Page", "X-Per-Page", "X-Prev-Page",
+	"X-Request-Id", "X-Total", "X-Total-Count", "X-Total-Pages"}
 
-// The forms a secret goes on a request in, and those it would take in a
-// JSON string echoing it, which an answer must never hold.
+// Whether a header of the service's answer comes back to the step, by its
+// canonical name: one of credentialAnswerHeaders, or saying how many calls
+// are left (RateLimit-*, X-RateLimit-*), but never the credential's own.
+func answerHeader(c credential, k string) bool {
+	if c.Auth == credentialHeader && headerKey(k) == headerKey(c.Header) {
+		return false
+	}
+	return slices.Contains(credentialAnswerHeaders, k) || strings.HasPrefix(k, "Ratelimit") || strings.HasPrefix(k, "X-Ratelimit-")
+}
+
+// The forms a secret goes on a request in, and those a service echoing it
+// could write it in (secretEncodings), which an answer must never hold.
 func secretForms(c credential, secret string) []string {
-	quoted, _ := json.Marshal(secret)
-	inJSON := string(quoted[1 : len(quoted)-1])
-	forms := []string{secret, url.QueryEscape(secret), url.PathEscape(secret), inJSON, strings.ReplaceAll(inJSON, "/", `\/`)}
+	forms := secretEncodings(secret)
 	switch c.Auth {
 	case credentialHeader:
 		forms = append(forms, strings.ReplaceAll(c.Template, secretPlaceholder, secret))
@@ -643,71 +669,239 @@ func secretForms(c credential, secret string) []string {
 	return slices.Compact(forms)
 }
 
-func holdsSecret(s string, forms []string) bool {
-	return slices.ContainsFunc(forms, func(f string) bool { return f != "" && strings.Contains(s, f) })
+// HTML's escapes as some write them: Go's html.EscapeString writes &#34;
+// and &#39;, others &quot; and &#x27;.
+var htmlQuoted = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#x27;")
+
+// The ways a service could write a secret alone: as it is, URL-encoded
+// either way, in a JSON string with HTML's characters escaped or not and
+// slashes escaped or not, HTML-escaped, and in base64, either alphabet,
+// on its own or within something longer (base64Within). Each is matched
+// in any case (redactor), so %2f and < are too.
+func secretEncodings(secret string) []string {
+	forms := []string{secret, url.QueryEscape(secret), url.PathEscape(secret), html.EscapeString(secret), htmlQuoted.Replace(secret)}
+	for _, escapeHTML := range []bool{true, false} {
+		var b strings.Builder
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(escapeHTML)
+		enc.Encode(secret)
+		inJSON := strings.TrimSuffix(b.String(), "\n")
+		inJSON = inJSON[1 : len(inJSON)-1]
+		forms = append(forms, inJSON, strings.ReplaceAll(inJSON, "/", `\/`))
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding} {
+		forms = append(forms, enc.EncodeToString([]byte(secret)))
+	}
+	forms = append(forms, base64Within(secret)...)
+	slices.Sort(forms)
+	return slices.Compact(forms)
+}
+
+// What of s's base64 shows wherever s is encoded, whatever comes before or
+// after it, as in basic auth's user:secret: for each of the three places
+// s can start at in a group of three bytes, the characters its own whole
+// groups make, in either alphabet; none shorter than a piece
+// (secretPiece), which could be anybody's.
+func base64Within(s string) []string {
+	var out []string
+	for skip := 0; skip < 3 && skip < len(s); skip++ {
+		rest := s[skip:]
+		rest = rest[:len(rest)/3*3]
+		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding} {
+			if e := enc.EncodeToString([]byte(rest)); len(e) >= secretPiece {
+				out = append(out, e)
+			}
+		}
+	}
+	return out
+}
+
+// What blanks a credential's secret out of its service's answer, headers
+// and body: each of its forms whole, and any piece of one written alone
+// (secretEncodings), so an echo cut short, at either end, keeps fewer than
+// secretPiece of its characters in a row.
+func credentialRedactor(c credential, secret string) *redactor {
+	return newRedactor(secretForms(c, secret)...).withPieces(secretEncodings(secret)...)
 }
 
 // What stands for a secret or token taken out of what a step gets or
 // what is kept of it.
 const redacted = "[redacted]"
 
-// Takes secrets out of what streams through it, a piece at a time: each
-// piece goes on with every secret in it replaced, but for a tail that
-// could be the start of one, held back until the next piece says, so a
-// secret split across pieces is caught too.
+// The fewest characters in a row of a secret's that are blanked out where
+// they show up alone, as at the cut of an echo cut short: fewer say little
+// of a long secret, and more would let more through.
+const secretPiece = 8
+
+// Takes secrets out of what streams through it, a piece at a time, as
+// they are or in any case of their ASCII letters: each piece goes on with
+// every secret in it blanked out, but for a tail that could be the start
+// of one, held back until the next piece says, so a secret split across
+// pieces is caught too. Given the forms a service's secret could be
+// written in alone (withPieces), it blanks out any secretPiece characters
+// in a row of them as well. A run of what is blanked out is written once.
 type redactor struct {
-	// Longest first, so one holding another is replaced whole.
+	// Each in lower case.
 	secrets [][]byte
-	held    []byte
+	longest int
+	pieces  map[[secretPiece]byte]bool
+
+	held []byte
+	// How many of held's first bytes are blanked out already, by a secret
+	// or piece starting before them; and whether what went on last was.
+	heldBlank int
+	endsBlank bool
 }
 
 func newRedactor(secrets ...string) *redactor {
 	r := &redactor{}
 	for _, s := range secrets {
-		if s != "" && !slices.ContainsFunc(r.secrets, func(b []byte) bool { return string(b) == s }) {
-			r.secrets = append(r.secrets, []byte(s))
+		f := lowerASCII([]byte(s))
+		if len(f) > 0 && !slices.ContainsFunc(r.secrets, func(b []byte) bool { return bytes.Equal(b, f) }) {
+			r.secrets = append(r.secrets, f)
+			r.longest = max(r.longest, len(f))
 		}
 	}
-	slices.SortFunc(r.secrets, func(a, b []byte) int { return len(b) - len(a) })
 	return r
+}
+
+// Has the redactor blank out any secretPiece characters in a row of the
+// forms too.
+func (r *redactor) withPieces(forms ...string) *redactor {
+	for _, f := range forms {
+		b := lowerASCII([]byte(f))
+		for i := 0; i+secretPiece <= len(b); i++ {
+			if r.pieces == nil {
+				r.pieces = map[[secretPiece]byte]bool{}
+			}
+			r.pieces[[secretPiece]byte(b[i:i+secretPiece])] = true
+		}
+	}
+	return r
+}
+
+// b with its ASCII letters in lower case, the same length.
+func lowerASCII(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out[i] = c
+	}
+	return out
+}
+
+func (r *redactor) blanks() bool { return len(r.secrets) > 0 || len(r.pieces) > 0 }
+
+// Which bytes of a text, given in lower case, are a secret's or a piece of
+// one; the first pre are already.
+func (r *redactor) marks(lower []byte, pre int) []bool {
+	m := make([]bool, len(lower))
+	for i := range min(pre, len(lower)) {
+		m[i] = true
+	}
+	mark := func(from, to int) {
+		for i := from; i < to; i++ {
+			m[i] = true
+		}
+	}
+	for _, s := range r.secrets {
+		for at := 0; ; {
+			i := bytes.Index(lower[at:], s)
+			if i < 0 {
+				break
+			}
+			mark(at+i, at+i+len(s))
+			at += i + 1
+		}
+	}
+	if len(r.pieces) > 0 {
+		for i := 0; i+secretPiece <= len(lower); i++ {
+			if r.pieces[[secretPiece]byte(lower[i:i+secretPiece])] {
+				mark(i, i+secretPiece)
+			}
+		}
+	}
+	return m
+}
+
+// b as it goes on, each run of what m marks written as redacted once; one
+// going on from what went on before it, which continuing says ended
+// blanked out, not again. Also whether it ends blanked out.
+func blankOut(b []byte, m []bool, continuing bool) ([]byte, bool) {
+	out := make([]byte, 0, len(b))
+	ends := continuing
+	for i := 0; i < len(b); i++ {
+		if !m[i] {
+			out = append(out, b[i])
+			ends = false
+			continue
+		}
+		if !ends {
+			out = append(out, redacted...)
+		}
+		ends = true
+	}
+	return out, ends
+}
+
+// How many of the last bytes of a text, given in lower case, more could
+// make part of a secret, or of a piece of one, so they wait for it.
+func (r *redactor) tail(lower []byte) int {
+	keep := 0
+	if len(r.pieces) > 0 {
+		keep = min(secretPiece-1, len(lower))
+	}
+	for k := min(r.longest-1, len(lower)); k > keep; k-- {
+		if slices.ContainsFunc(r.secrets, func(s []byte) bool { return bytes.HasPrefix(s, lower[len(lower)-k:]) }) {
+			return k
+		}
+	}
+	return keep
 }
 
 // What of p, after what was held back, may go on.
 func (r *redactor) next(p []byte) []byte {
-	if len(r.secrets) == 0 {
+	if !r.blanks() {
 		return p
 	}
-	buf := r.replace(append(r.held, p...))
-	keep := 0
-	for k := min(len(r.secrets[0])-1, len(buf)); k > 0 && keep == 0; k-- {
-		if slices.ContainsFunc(r.secrets, func(s []byte) bool { return bytes.HasPrefix(s, buf[len(buf)-k:]) }) {
-			keep = k
-		}
+	buf := append(r.held, p...)
+	lower := lowerASCII(buf)
+	m := r.marks(lower, r.heldBlank)
+	cut := len(buf) - r.tail(lower)
+	out, ends := blankOut(buf[:cut], m[:cut], r.endsBlank)
+	r.endsBlank = ends
+	r.heldBlank = 0
+	for cut+r.heldBlank < len(buf) && m[cut+r.heldBlank] {
+		r.heldBlank++
 	}
-	r.held = slices.Clone(buf[len(buf)-keep:])
-	return buf[:len(buf)-keep]
-}
-
-// What was held back, once nothing more comes: never a whole secret.
-func (r *redactor) flush() []byte {
-	out := r.held
-	r.held = nil
+	r.held = slices.Clone(buf[cut:])
 	return out
 }
 
-func (r *redactor) replace(b []byte) []byte {
-	for _, s := range r.secrets {
-		b = bytes.ReplaceAll(b, s, []byte(redacted))
-	}
-	return b
+// What was held back, once nothing more comes: never a whole secret, nor
+// a piece of one.
+func (r *redactor) flush() []byte {
+	m := r.marks(lowerASCII(r.held), r.heldBlank)
+	out, _ := blankOut(r.held, m, r.endsBlank)
+	r.held, r.heldBlank, r.endsBlank = nil, 0, false
+	return out
 }
 
-// The text with every secret replaced.
+// The text with every secret, and piece of one, blanked out.
 func (r *redactor) text(s string) string {
-	if len(r.secrets) == 0 {
+	if !r.blanks() {
 		return s
 	}
-	return string(r.replace([]byte(s)))
+	b := []byte(s)
+	out, _ := blankOut(b, r.marks(lowerASCII(b), 0), false)
+	return string(out)
+}
+
+// Whether s holds a secret, or a piece of one.
+func (r *redactor) holds(s string) bool {
+	return slices.Contains(r.marks(lowerASCII([]byte(s)), 0), true)
 }
 
 // The URL a call at rest, what follows /credentials/{id} in its path,
@@ -718,8 +912,10 @@ func (r *redactor) text(s string) string {
 // the step sent it, to find encoded slashes in. Some servers read more as
 // a step up: Tomcat, Jetty and Spring drop what follows a ; in a segment
 // (..;x=1), IIS trims a segment's trailing dots and spaces (".. "), and
-// normalising Unicode makes full-width dots (．．) plain ones. So no ; or
-// non-ASCII character is taken, nor a segment of only dots and spaces.
+// normalising Unicode makes full-width dots (．．) plain ones, and Windows
+// reads what follows a : as a stream of the file before it (..:x). So no ;
+// or non-ASCII character is taken, nor a segment of only dots and spaces
+// before its first :, if any.
 func credentialTarget(base, rest, escaped, query string) (*url.URL, bool) {
 	lower := strings.ToLower(escaped)
 	if strings.Contains(lower, "%2f") || strings.Contains(lower, "%5c") {
@@ -734,7 +930,7 @@ func credentialTarget(base, rest, escaped, query string) (*url.URL, bool) {
 		}
 	}
 	for _, segment := range strings.Split(rest, "/") {
-		if segment != "" && strings.Trim(segment, ". ") == "" {
+		if head, _, _ := strings.Cut(segment, ":"); head != "" && strings.Trim(head, ". ") == "" {
 			return nil, false
 		}
 	}
@@ -751,11 +947,12 @@ func credentialTarget(base, rest, escaped, query string) (*url.URL, bool) {
 	return u, true
 }
 
-// The Location of a service's redirect as the step gets it: within the
-// base URL, the proxy's URL for it, so following it goes through the proxy
-// again; elsewhere, the service's, without the secret's query parameter.
-// False when it would still hold the secret, so it is dropped.
-func (b *credentialBroker) location(c credential, at *url.URL, loc string, forms []string) (string, bool) {
+// The Location of a service's redirect, or a URL of its Link header, as
+// the step gets it: within the base URL, the proxy's URL for it, so
+// following it goes through the proxy again; elsewhere, the service's,
+// without the secret's query parameter. False when it would still hold
+// the secret, or a piece of it, so it is dropped.
+func (b *credentialBroker) location(c credential, at *url.URL, loc string, blank *redactor) (string, bool) {
 	u, err := at.Parse(loc)
 	if err != nil {
 		return "", false
@@ -785,10 +982,41 @@ func (b *credentialBroker) location(c credential, at *url.URL, loc string, forms
 	} else {
 		loc = u.String()
 	}
-	if decoded, err := url.PathUnescape(loc); holdsSecret(loc, forms) || err == nil && holdsSecret(decoded, forms) {
+	if decoded, err := url.PathUnescape(loc); blank.holds(loc) || err == nil && blank.holds(decoded) {
 		return "", false
 	}
 	return loc, true
+}
+
+// The URLs in a Link header's value, such as the next page's.
+var linkURL = regexp.MustCompile(`<[^>]*>`)
+
+// A Link header's value as the step gets it, each URL in it as location
+// makes it; false when it would still hold the secret, so it is dropped.
+func (b *credentialBroker) link(c credential, at *url.URL, v string, blank *redactor) (string, bool) {
+	ok := true
+	out := linkURL.ReplaceAllStringFunc(v, func(m string) string {
+		u, fine := b.location(c, at, m[1:len(m)-1], blank)
+		ok = ok && fine
+		return "<" + u + ">"
+	})
+	return out, ok && !blank.holds(out)
+}
+
+// The step's query with the credential's parameter, the secret, put first,
+// so a step can't pad what comes before it in the query to have a service
+// echoing it cut short cut the secret; what a step pads the path with
+// before it, the redactor keeps to a few characters. The step's own
+// values of the parameter are left out, as are pairs that don't parse,
+// which a service might read for it.
+func secretFirst(param, secret, raw string) string {
+	out := url.QueryEscape(param) + "=" + url.QueryEscape(secret)
+	for _, pair := range strings.Split(raw, "&") {
+		if q, err := url.ParseQuery(pair); pair != "" && err == nil && !q.Has(param) {
+			out += "&" + pair
+		}
+	}
+	return out
 }
 
 // A call refused, which is audited, and logged in the run's log when its
@@ -867,9 +1095,7 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/credentials/"+r.PathValue("id"))
 	query := r.URL.RawQuery
 	if c.Auth == credentialQuery {
-		q := r.URL.Query()
-		q.Set(c.Param, secret)
-		query = q.Encode()
+		query = secretFirst(c.Param, secret, query)
 	}
 	target, ok := credentialTarget(c.BaseURL, rest, r.URL.EscapedPath(), query)
 	if !ok {
@@ -909,6 +1135,7 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	if loopbackHost(target.Hostname()) {
 		client = b.loopback
 	}
+	blank := credentialRedactor(c, secret)
 	resp, err := client.Do(req)
 	if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
 		b.logCall(g, c, "%s %s sent more than %d MB, so it went no further", r.Method, logPath, maxCredentialRequest>>20)
@@ -918,7 +1145,7 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Its URL may hold the secret, as a query parameter.
 		why := errorWithoutURL(err)
-		if holdsSecret(why, secretForms(c, secret)) {
+		if blank.holds(why) {
 			why = "the call failed"
 		}
 		b.logCall(g, c, "%s %s couldn't reach the service: %s", r.Method, logPath, why)
@@ -926,11 +1153,19 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	forms := secretForms(c, secret)
 	// A service compressing what it was asked for as it is is read
-	// uncompressed, if gzip; another encoding can't be read for the secret.
+	// uncompressed, if gzipped once; what else it is encoded in, however
+	// many of the header's values say it, can't be read for the secret.
+	var codings []string
+	for _, v := range resp.Header.Values("Content-Encoding") {
+		for _, enc := range strings.Split(v, ",") {
+			if enc = strings.ToLower(strings.TrimSpace(enc)); enc != "" {
+				codings = append(codings, enc)
+			}
+		}
+	}
 	answer := io.Reader(resp.Body)
-	switch enc := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))); enc {
+	switch enc := strings.Join(codings, ", "); enc {
 	case "", "identity":
 	case "gzip", "x-gzip":
 		gz, err := gzip.NewReader(resp.Body)
@@ -943,7 +1178,7 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		answer = gz
 	default:
 		// Named only when it is plainly an encoding's name.
-		if len(enc) > 32 || holdsSecret(enc, forms) || strings.ContainsFunc(enc, func(r rune) bool { return r > 0x7e || r < 0x20 }) {
+		if len(enc) > 32 || blank.holds(enc) || strings.ContainsFunc(enc, func(r rune) bool { return r > 0x7e || r < 0x20 }) {
 			enc = "an encoding of its own"
 		}
 		b.logCall(g, c, "%s %s answered %d in %s, which the proxy can't read for the secret, so it went no further", r.Method, logPath, resp.StatusCode, enc)
@@ -951,18 +1186,18 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for k, v := range resp.Header {
-		k = http.CanonicalHeaderKey(k)
-		if slices.Contains(credentialAnswerDropped, k) || c.Auth == credentialHeader && k == http.CanonicalHeaderKey(c.Header) || k == "Location" {
-			continue
+		if k = http.CanonicalHeaderKey(k); answerHeader(c, k) && !slices.ContainsFunc(v, blank.holds) {
+			w.Header()[k] = v
 		}
-		if slices.ContainsFunc(v, func(s string) bool { return holdsSecret(s, forms) }) {
-			continue
-		}
-		w.Header()[k] = v
 	}
 	if loc := resp.Header.Get("Location"); loc != "" {
-		if out, ok := b.location(c, target, loc, forms); ok {
+		if out, ok := b.location(c, target, loc, blank); ok {
 			w.Header().Set("Location", out)
+		}
+	}
+	for _, v := range resp.Header.Values("Link") {
+		if out, ok := b.link(c, target, v, blank); ok {
+			w.Header().Add("Link", out)
 		}
 	}
 	// What a service answers may be HTML; sandboxed, it can't act as the app.
@@ -970,7 +1205,6 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(resp.StatusCode)
 	b.logCall(g, c, "%s %s, answered %d", r.Method, logPath, resp.StatusCode)
-	blank := newRedactor(forms...)
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32<<10)
 	for {
@@ -1002,11 +1236,26 @@ func (b *credentialBroker) logCall(g *proxyGrant, c credential, format string, a
 }
 
 // Whether a change would send the credential's kept secret elsewhere than
-// it was given for: to another origin, or in another header or parameter,
-// or as basic auth where it was a header's.
+// it was given for: to another base URL, even at the same origin, which
+// may be another's (script.google.com/macros/s/<id>), or in another header
+// or parameter, or as basic auth where it was a header's.
 func sendsElsewhere(was credential, f credentialFields) bool {
-	return credentialOrigin(was.BaseURL) != credentialOrigin(f.BaseURL) || was.Auth != f.Auth ||
+	return credentialBase(was.BaseURL) != credentialBase(f.BaseURL) || was.Auth != f.Auth ||
 		!strings.EqualFold(was.Header, f.Header) || was.Param != f.Param
+}
+
+// A base URL as it is compared: its origin (credentialOrigin), then its
+// path as written, / for none.
+func credentialBase(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	return credentialOrigin(raw) + path
 }
 
 // A URL's scheme, host and port, its port said even when it is the
@@ -1089,7 +1338,7 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 				return 0, false
 			}
 			if err == nil && f.Secret == "" && sendsElsewhere(was, f) {
-				http.Error(w, "give the secret again: it goes to another service, or another place on its requests, than it was given for", http.StatusBadRequest)
+				http.Error(w, "give the secret again: it goes to another base URL, or another place on its requests, than it was given for", http.StatusBadRequest)
 				return 0, false
 			}
 			if err == nil {

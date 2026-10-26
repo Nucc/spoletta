@@ -401,6 +401,12 @@ func TestNotifyWhoMayDecide(t *testing.T) {
 		t.Errorf("Bob's failure message: %s", dm)
 	}
 
+	// A trial of the process failing tells him nothing: he is watching it.
+	trial := tryProcess(asBob, breaks.ID)
+	if d := a.finish(trial.ID); d.Status != runFailed {
+		t.Fatalf("the breaking trial %s", d.Status)
+	}
+
 	// Each went once; nobody else may decide them, so Ada and Carl heard
 	// nothing.
 	time.Sleep(1500 * time.Millisecond)

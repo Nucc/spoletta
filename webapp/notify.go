@@ -215,7 +215,8 @@ func (n *notifier) waiting(run, step int64) {
 	}
 }
 
-// Tells whoever started the run, if they want, that it failed.
+// Tells whoever started the run, if they want, that it failed; never of a
+// trial, which its maker is watching from the process's panel.
 func (n *notifier) runFailed(run int64) {
 	if n == nil || !n.signIn {
 		return
@@ -223,13 +224,14 @@ func (n *notifier) runFailed(run int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), noticeTimeout)
 	defer cancel()
 	var who sql.NullInt64
+	var trial bool
 	err := n.db.QueryRowContext(ctx,
-		"SELECT COALESCE(r.started_by, s.created_by) FROM runs r LEFT JOIN schedules s ON s.id = r.schedule_id WHERE r.id = ?", run).Scan(&who)
+		"SELECT COALESCE(r.started_by, s.created_by), r.trial_of IS NOT NULL FROM runs r LEFT JOIN schedules s ON s.id = r.schedule_id WHERE r.id = ?", run).Scan(&who, &trial)
 	if err != nil {
 		runLog(n.db, run, 0, logError, "who started it, to tell them it failed, couldn't be found: %v", err)
 		return
 	}
-	if !who.Valid {
+	if !who.Valid || trial {
 		return
 	}
 	id, err := claimNotice(ctx, n.db, run, 0, who.Int64, noticeFailed, 0)

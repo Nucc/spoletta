@@ -54,8 +54,10 @@ type importer struct {
 	// Credentials by their names as variables', so a file names one
 	// whatever its case or spacing.
 	credentials map[string]int64
-	// The flows in the app before the import, by name.
+	// The flows in the app before the import, by name, out of the trash.
 	existing map[string][]flowInfo
+	// Those in the trash, by id, which the file can't name; see keptInTrash.
+	trashed map[int64]bool
 	// The flows of the file imported so far, by name.
 	imported map[string]flowInfo
 	entries  map[string]*setupEntry
@@ -70,7 +72,7 @@ type importer struct {
 // nothing. A flow it makes over has its board saved as a version first, as
 // saved says.
 func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (setupResult, error) {
-	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, skills: map[string]int64{}, credentials: map[string]int64{}, existing: map[string][]flowInfo{},
+	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, skills: map[string]int64{}, credentials: map[string]int64{}, existing: map[string][]flowInfo{}, trashed: map[int64]bool{},
 		imported: map[string]flowInfo{}, entries: map[string]*setupEntry{}, objects: map[int64]map[string]int64{},
 		saved: saved, res: setupResult{Flows: []importedFlow{}}}
 	var entries []*setupEntry
@@ -104,11 +106,16 @@ func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (se
 
 	// A flow in the trash isn't made over; one of its name is made anew
 	// (trash.go).
-	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct FROM flows WHERE deleted_at IS NULL ORDER BY id FOR UPDATE", func(rows *sql.Rows) error {
+	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, deleted_at IS NOT NULL FROM flows ORDER BY id FOR UPDATE", func(rows *sql.Rows) error {
 		var fi flowInfo
 		var name string
-		err := rows.Scan(&fi.id, &name, &fi.module, &fi.isStruct)
-		im.existing[name] = append(im.existing[name], fi)
+		var trashed bool
+		err := rows.Scan(&fi.id, &name, &fi.module, &fi.isStruct, &trashed)
+		if trashed {
+			im.trashed[fi.id] = true
+		} else {
+			im.existing[name] = append(im.existing[name], fi)
+		}
 		return err
 	})
 	if err != nil {
@@ -832,6 +839,19 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 		}
 		return b.walkCopy(bo, source)
 	}
+	// A copy of an object in the trash is written out of files as one of
+	// its own (setup_export.go); a file writing it so keeps it a copy, made
+	// over as its source has it, to follow it again once it is restored.
+	if bo.cur != nil && bo.cur.Source != nil {
+		var inTrash bool
+		err := b.tx.QueryRowContext(b.ctx, "SELECT f.deleted_at IS NOT NULL FROM objects o JOIN flows f ON f.id = o.flow_id WHERE o.id = ?", *bo.cur.Source).Scan(&inTrash)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if inTrash {
+			bo.source = bo.cur.Source
+		}
+	}
 
 	for _, st := range o.States {
 		name := strings.TrimSpace(st.Name)
@@ -1307,6 +1327,11 @@ func (b *builder) resolveProcess(bp *bproc) error {
 			return problemf("%s: %s", at, err)
 		}
 		s.Flow = &fi.id
+	} else if p.Kind == kindSubflow && bp.cur != nil && bp.cur.Settings.Flow != nil && b.importer.trashed[*bp.cur.Settings.Flow] {
+		// A procedure in the trash is written out of files (setup_export.go),
+		// so a subflow process the file gives none keeps running it once it
+		// is restored, as if the file named it.
+		s.Flow = bp.cur.Settings.Flow
 	}
 	if msg := s.problem(); msg != "" {
 		return problemf("%s: %s", at, msg)

@@ -46,6 +46,12 @@ func trashListed(a *app, id int64) *trashedFlow {
 	return nil
 }
 
+// A name no other test's flow has, as they share a database and a flow
+// comes back from the trash only under a name none out of it has.
+func trashUnique(name string) string {
+	return fmt.Sprint(name, " ", time.Now().UnixNano())
+}
+
 func trashRestore(a *app, id int64, name string) flow {
 	a.t.Helper()
 	var body any
@@ -111,7 +117,7 @@ func TestTrashHidesAFlowUntilRestored(t *testing.T) {
 		{"POST", "/api/processes", map[string]any{"flow": f.ID, "name": "Sneak", "kind": "agent"}},
 		{"GET", fmt.Sprintf("/api/runs/%d", rn.ID), nil},
 		{"GET", fmt.Sprintf("/api/runs?flow=%d", f.ID), nil},
-		{"POST", "/api/runs", map[string]any{"flow": f.ID}},
+		{"POST", fmt.Sprintf("/api/runs?flow=%d", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/versions/%d", ver.ID), nil},
 		{"PATCH", fmt.Sprintf("/api/schedules/%d", sched.ID), map[string]any{"cron": "0 10 * * *"}},
 		{"GET", fmt.Sprintf("/api/credentials?flow=%d", f.ID), nil},
@@ -177,7 +183,7 @@ func TestTrashHidesAFlowUntilRestored(t *testing.T) {
 // asked for first; so are the reviews waiting in them, which leave the inbox.
 func TestTrashStopsRunsGoingOn(t *testing.T) {
 	a := newApp(t)
-	f := a.newFlow("Dawdling")
+	f := a.newFlow(trashUnique("Dawdling"))
 	slow := a.agent(f.ID, "Dawdle", "Take your time.")
 	a.startAt(f.ID, slow.ID)
 	cancelled := make(chan bool, 1)
@@ -236,8 +242,7 @@ func TestTrashStopsRunsGoingOn(t *testing.T) {
 	if inInbox() {
 		t.Error("the review of a flow in the trash is in the inbox")
 	}
-	// Under a name of its own, as other tests' flows are called Review too.
-	trashRestore(a, b.flow.ID, "Review stopped by the trash")
+	trashRestore(a, b.flow.ID, trashUnique("Review"))
 	if d := a.finish(review.ID); d.Status != runInterrupted {
 		t.Errorf("the run waiting on the review is %s", d.Status)
 	}
@@ -304,7 +309,7 @@ func TestTrashBreaksCallsOfAProcedure(t *testing.T) {
 		t.Errorf("the trash lists the procedure as %+v", tr)
 	}
 
-	trashRestore(a, s.callee.ID, "")
+	trashRestore(a, s.callee.ID, trashUnique("Fixing"))
 	a.call("PATCH", fmt.Sprintf("/api/processes/%d", s.call.ID), map[string]any{"name": "Call"}, http.StatusOK, nil)
 	if d := a.finish(a.startRun(s.caller.ID).ID); d.Status != runDone {
 		t.Errorf("restored, the procedure's caller ran %s; steps %s", d.Status, describeSteps(d))
@@ -334,6 +339,35 @@ func TestTrashLeavesStructCopiesTheirOwn(t *testing.T) {
 		return runResult{OK: true, Output: `{"id": "T1"}`}
 	})
 	a.refused("POST", fmt.Sprintf("/api/objects/%d/states", cp.ID), map[string]any{"name": "mine"}, http.StatusBadRequest, "comes from the struct")
+
+	// A flow working on its records is one to start on them, until it is in
+	// the trash.
+	work := a.newFlow("Work tickets")
+	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", s.ID), map[string]any{"flow": work.ID, "x": 0, "y": 0}, http.StatusCreated, nil)
+	taken := modNamed(t, modObjects(a, work.ID), name)
+	solve := a.newProcess(work.ID, map[string]any{"name": "Solve", "kind": kindScript, "script": "solve"})
+	a.link(map[string]any{"process": solve.ID, "object": taken.ID, "direction": directionInput, "query": linkQuery{State: "open", Limit: 1}})
+	a.startAt(work.ID, solve.ID)
+	recordFlows := func() []int64 {
+		var res struct {
+			Flows []struct {
+				ID int64 `json:"id"`
+			} `json:"flows"`
+		}
+		a.call("GET", fmt.Sprintf("/api/structs/%d/records/flows", s.ID), nil, http.StatusOK, &res)
+		var ids []int64
+		for _, f := range res.Flows {
+			ids = append(ids, f.ID)
+		}
+		return ids
+	}
+	if !slices.Contains(recordFlows(), work.ID) {
+		t.Fatalf("the flow working on the records isn't offered to run on them: %v", recordFlows())
+	}
+	trashMove(a, work.ID)
+	if slices.Contains(recordFlows(), work.ID) {
+		t.Error("a flow in the trash is offered to run on the records")
+	}
 
 	trashMove(a, s.ID)
 	cp = modNamed(t, modObjects(a, job.ID), name)
@@ -375,12 +409,14 @@ func TestTrashLeavesStructCopiesTheirOwn(t *testing.T) {
 func TestTrashStartsNoRuns(t *testing.T) {
 	a := newApp(t)
 	db := secretsDB(t)
-	f := a.newFlow("Ticking")
+	f := a.newFlow(trashUnique("Ticking"))
 	tick := a.newProcess(f.ID, map[string]any{"name": "Tick", "kind": kindScript, "script": "date"})
 	a.startAt(f.ID, tick.ID)
 	a.worker.onScript("Tick", func(context.Context, scriptRun) runResult {
 		return runResult{OK: true, Output: `{"data": "tick"}`}
 	})
+	// What schedules and the API run is the version published.
+	a.call("POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), map[string]any{"publish": true}, http.StatusCreated, nil)
 	key := apiNewKey(a, "trash")
 	first := apiStart(a, key.Key, f.ID, nil, http.StatusCreated)
 	a.finish(first.ID)
@@ -484,6 +520,15 @@ func TestTrashIsTheirsWhoMayChangeIt(t *testing.T) {
 	if !slices.Contains(teamsFlows(a), f.ID) {
 		t.Fatal("dora doesn't see the flow whose reviews she decides")
 	}
+	// Published, and dropped from the draft, her role is the version's
+	// published only (version_roles).
+	usersSignIn(a, p, bob)
+	a.call("POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), map[string]any{"publish": true}, http.StatusCreated, nil)
+	a.call("PATCH", fmt.Sprintf("/api/objects/%d", approver.ID), map[string]any{"name": "Signer"}, http.StatusOK, nil)
+	usersSignIn(a, p, dora)
+	if !slices.Contains(teamsFlows(a), f.ID) {
+		t.Fatal("dora doesn't see the flow whose published version names her role")
+	}
 
 	usersSignIn(a, p, bob)
 	trashMove(a, f.ID)
@@ -515,7 +560,7 @@ func TestTrashIsTheirsWhoMayChangeIt(t *testing.T) {
 	a.call("DELETE", fmt.Sprintf("/api/trash/%d", teams.ID), nil, http.StatusNoContent, nil)
 	usersSignIn(a, p, dora)
 	if !slices.Contains(teamsFlows(a), f.ID) {
-		t.Error("restored, dora doesn't see the flow whose reviews she decides")
+		t.Error("restored, dora doesn't see the flow whose published version names her role")
 	}
 	usersSignIn(a, p, usersAda)
 	a.call("DELETE", fmt.Sprintf("/api/teams/%d", tm.ID), nil, http.StatusNoContent, nil)
@@ -562,5 +607,94 @@ func TestTrashLeavesSetupFiles(t *testing.T) {
 	}
 	if len(trashList(a)) != 2 {
 		t.Errorf("the trash holds %+v", trashList(a))
+	}
+}
+
+// The board's history says whether a run holds the board, refusing undo,
+// so the board asks before a delete it couldn't undo: a run of the board as
+// it is does, and so does a trial, but not a run of the version published.
+func TestTrashHistorySaysWhetherARunHoldsTheBoard(t *testing.T) {
+	a := newApp(t)
+	f := a.newFlow(trashUnique("Held"))
+	slow := a.agent(f.ID, "Hold", "Hold on.")
+	a.startAt(f.ID, slow.ID)
+	a.worker.onAgent("Hold", func(ctx context.Context, _ agentRun) runResult {
+		<-ctx.Done()
+		return runResult{Error: "cancelled"}
+	})
+	held := func() bool {
+		var h struct {
+			Held bool `json:"held"`
+		}
+		a.call("POST", fmt.Sprintf("/api/history?flow=%d", f.ID), nil, http.StatusOK, &h)
+		return h.Held
+	}
+	stop := func(run int64) {
+		a.call("PATCH", fmt.Sprintf("/api/runs/%d", run), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
+	}
+	if held() {
+		t.Error("the board is held with no run going on")
+	}
+	rn := a.startRun(f.ID)
+	a.waitStep(rn.ID, "Hold", stepActive)
+	if !held() {
+		t.Error("a run of the board doesn't hold it")
+	}
+	stop(rn.ID)
+
+	var trial run
+	a.call("POST", fmt.Sprintf("/api/processes/%d/trial", slow.ID), map[string]any{"inputs": []any{}}, http.StatusCreated, &trial)
+	a.waitStep(trial.ID, "Hold", stepActive)
+	if !held() {
+		t.Error("a trial doesn't hold the board")
+	}
+	stop(trial.ID)
+
+	a.call("POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), map[string]any{"publish": true}, http.StatusCreated, nil)
+	var published run
+	a.call("POST", fmt.Sprintf("/api/runs?flow=%d", f.ID), map[string]any{"published": true}, http.StatusCreated, &published)
+	a.waitStep(published.ID, "Hold", stepActive)
+	if held() {
+		t.Error("a run of the version published holds the board")
+	}
+	stop(published.ID)
+}
+
+// A file written while a procedure and a struct are in the trash leaves
+// them out, and imported back keeps the subflow process running the one and
+// the copy following the other, so restoring them links them again.
+func TestTrashKeepsLinksThroughSetupFiles(t *testing.T) {
+	a := setupApp(t)
+	s := verBuildSubflow(a)
+	var st structFlow
+	a.call("POST", "/api/flows", map[string]any{"name": "Ticket kind", "struct": true}, http.StatusCreated, &st)
+	root := modObjects(a, st.ID)[0]
+	a.newState(root.ID, "open")
+	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", st.ID), map[string]any{"flow": s.caller.ID, "x": 0, "y": 0}, http.StatusCreated, nil)
+	trashMove(a, s.callee.ID)
+	trashMove(a, st.ID)
+
+	var file struct {
+		Text string `json:"text"`
+	}
+	a.call("GET", fmt.Sprintf("/api/flows/%d/setup", s.caller.ID), nil, http.StatusOK, &file)
+	if strings.Contains(file.Text, "Fixing") || strings.Contains(file.Text, "copyOf") {
+		t.Fatalf("the caller's file names what is in the trash:\n%s", file.Text)
+	}
+	setupImportOK(a, file.Text)
+
+	var ps []trashListedProcess
+	a.call("GET", fmt.Sprintf("/api/processes?flow=%d", s.caller.ID), nil, http.StatusOK, &ps)
+	if i := slices.IndexFunc(ps, func(p trashListedProcess) bool { return p.ID == s.call.ID }); i < 0 || ps[i].TrashedFlow != "Fixing" {
+		t.Errorf("imported back, the caller's processes are %+v", ps)
+	}
+	trashRestore(a, s.callee.ID, "")
+	trashRestore(a, st.ID, "")
+	if cp := modNamed(t, modObjects(a, s.caller.ID), "Ticket kind"); cp.Source == nil || *cp.Source != root.ID || modStateNames(cp) != "open" {
+		t.Errorf("restored, the copy is %+v", cp)
+	}
+	a.worker.onAgent("Fix", handsIn(data("the fix")))
+	if d := a.finish(a.startRun(s.caller.ID).ID); d.Status != runDone {
+		t.Errorf("restored, the caller ran %s; steps %s", d.Status, describeSteps(d))
 	}
 }

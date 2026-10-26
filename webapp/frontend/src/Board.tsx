@@ -1603,7 +1603,12 @@ export default function Board({
             ? deleteLink(Number(e.id.slice(LINK_PREFIX.length)))
             : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length))),
     )
-    Promise.all(reqs).then(() => told || deleted(gone.length === 1 ? 'the link' : `${gone.length} links`), report)
+    Promise.all(reqs)
+      .then(() => queueHistory(() => recordHistory(flowId)))
+      .then((h) => {
+        held.current = h.held
+        if (!told) deleted(gone.length === 1 ? 'the link' : `${gone.length} links`)
+      }, report)
   }
 
   const newProcess = (position: XYPosition, kind: ProcessKind = 'agent') =>
@@ -1693,25 +1698,34 @@ export default function Board({
 
   // Deleting from the board can be undone, so it asks nothing: a notice
   // says what went, offering to undo it, until the next change, which undoing
-  // would undo instead. A run of the board as it is holds it, refusing undo
-  // (lockBoard), so while one goes deleting asks first.
+  // would undo instead. A run of the board as it is, a trial's too, holds it,
+  // refusing undo (lockBoard), so while one goes deleting asks first; the
+  // board's history says whether one does, as the run list may not show it.
   const [confirm, confirmDialog] = useConfirm()
   const [showUndo, dismissUndo, undoNotice] = useUndoNotice()
   useEffect(() => onChanged(dismissUndo), [dismissUndo])
-  const boardHeld = runs.some((r) => r.status === 'running' && r.version !== versions.published)
-  const mayDelete = async (what: string, goes: string) =>
-    !boardHeld ||
-    confirm({
-      title: `Delete ${what}?`,
-      message: (
-        <p>
-          {goes && `${goes} `}A run of the board is going on, so this can't be undone until it ends.
-        </p>
-      ),
-      confirm: 'Delete',
-    })
+  const held = useRef(false)
+  const mayDelete = async (what: string, goes: string) => {
+    try {
+      held.current = (await queueHistory(() => recordHistory(flowId))).held
+    } catch {
+      held.current = runs.some((r) => r.status === 'running' && r.version !== versions.published)
+    }
+    return (
+      !held.current ||
+      confirm({
+        title: `Delete ${what}?`,
+        message: (
+          <p>
+            {goes && `${goes} `}A run of the board is going on, so this can't be undone until it ends.
+          </p>
+        ),
+        confirm: 'Delete',
+      })
+    )
+  }
   const deleted = (what: string) => {
-    if (!boardHeld) showUndo({ message: `Deleted ${what}`, undo: () => stepHistory(true) })
+    if (!held.current) showUndo({ message: `Deleted ${what}`, undo: () => stepHistory(true) })
   }
   // While processes and objects are being deleted, the links deleted with
   // them are told of in their notice rather than one of their own.

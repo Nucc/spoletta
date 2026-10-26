@@ -18,12 +18,14 @@ import (
 // How many steps a flow's history keeps.
 const historySteps = 100
 
-// Whether there is a change to undo or to redo, and whether the board
-// changed just now.
+// Whether there is a change to undo or to redo, whether the board changed
+// just now, and whether a run of it holds it, refusing undo and redo until
+// it ends (lockBoard).
 type historyState struct {
 	Undo    bool `json:"undo"`
 	Redo    bool `json:"redo"`
 	Changed bool `json:"changed"`
+	Held    bool `json:"held"`
 }
 
 // The step the board is on, the newest not undone; 0 with none.
@@ -203,7 +205,7 @@ func registerHistoryRoutes(mux *http.ServeMux, db *sql.DB) {
 				serverError(w, err)
 				return
 			}
-			h.Changed = changed && rewrites
+			h.Changed, h.Held = changed && rewrites, running
 			if err := tx.Commit(); err != nil {
 				serverError(w, err)
 				return

@@ -1767,9 +1767,10 @@ export function restoreVersion(id: number): Promise<void> {
   return request(`/api/versions/${id}/restore`, { method: 'POST' })
 }
 
-// Whether a flow's board has a change to undo, and one to redo, and whether
-// the board changed just now.
-export type History = { undo: boolean; redo: boolean; changed: boolean }
+// Whether a flow's board has a change to undo, and one to redo, whether the
+// board changed just now, and whether a run of it holds it, refusing undo
+// and redo until it ends.
+export type History = { undo: boolean; redo: boolean; changed: boolean; held: boolean }
 
 // Keeps the board as it is as a step of its history, unless it is the step
 // the board is on.

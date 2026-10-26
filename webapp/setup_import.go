@@ -51,6 +51,9 @@ type importer struct {
 	mcpConnectors map[int64]string
 	// Skills by name.
 	skills map[string]int64
+	// Credentials by their names as variables', so a file names one
+	// whatever its case or spacing.
+	credentials map[string]int64
 	// The flows in the app before the import, by name.
 	existing map[string][]flowInfo
 	// The flows of the file imported so far, by name.
@@ -67,7 +70,7 @@ type importer struct {
 // nothing. A flow it makes over has its board saved as a version first, as
 // saved says.
 func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (setupResult, error) {
-	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, skills: map[string]int64{}, existing: map[string][]flowInfo{},
+	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, skills: map[string]int64{}, credentials: map[string]int64{}, existing: map[string][]flowInfo{},
 		imported: map[string]flowInfo{}, entries: map[string]*setupEntry{}, objects: map[int64]map[string]int64{},
 		saved: saved, res: setupResult{Flows: []importedFlow{}}}
 	var entries []*setupEntry
@@ -116,6 +119,16 @@ func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (se
 		return im.res, err
 	}
 	if err := im.skillsOf(kindCommand, f.Commands); err != nil {
+		return im.res, err
+	}
+	err = scanAll(ctx, tx, "SELECT id, variable FROM credentials", func(rows *sql.Rows) error {
+		var id int64
+		var variable string
+		err := rows.Scan(&id, &variable)
+		im.credentials[variable] = id
+		return err
+	})
+	if err != nil {
 		return im.res, err
 	}
 	order, err := im.order(entries)
@@ -1221,6 +1234,18 @@ func (b *builder) resolveProcess(bp *bproc) error {
 		}
 		if !slices.Contains(s.Skills, id) {
 			s.Skills = append(s.Skills, id)
+		}
+	}
+	if len(p.Credentials) > 0 && p.Kind != kindAgent && p.Kind != kindScript && p.Kind != "" {
+		return problemf("%s: only an agent or script process uses credentials", at)
+	}
+	for _, name := range p.Credentials {
+		id, ok := b.credentials[credentialVariable(name)]
+		if !ok {
+			return problemf("%s: there is no credential named %s; an admin adds it in the settings' credentials first", at, quote(name))
+		}
+		if !slices.Contains(s.Credentials, id) {
+			s.Credentials = append(s.Credentials, id)
 		}
 	}
 	for m, tools := range p.MCPTools {

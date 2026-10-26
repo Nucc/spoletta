@@ -55,3 +55,38 @@ func envNames(env []string) []string {
 	}
 	return names
 }
+
+// A script picking credentials gets each one's URL at the webapp's proxy,
+// and the token reaching them, beside its own variables; a variable the
+// webapp would name otherwise, such as PATH, fails the step instead.
+func TestScriptsGetTheirCredentials(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	run := scriptRequest{Script: `echo "$CREDENTIALS_TOKEN $CREDENTIAL_JIRA_URL $CREDENTIAL_INTERNAL_API_URL"`,
+		Credentials: []credentialAccess{
+			{Name: "Jira", Env: "CREDENTIAL_JIRA_URL", URL: "http://webapp:8080/credentials/1"},
+			{Name: "Internal API", Env: "CREDENTIAL_INTERNAL_API_URL", URL: "http://webapp:8080/credentials/2"},
+		},
+		CredentialsToken: "step-token"}
+	res := runScript(context.Background(), run, time.Minute, newStepLogger("test", nil), nil)
+	if want := "step-token http://webapp:8080/credentials/1 http://webapp:8080/credentials/2"; !res.OK || res.Output != want {
+		t.Fatalf("the script printed %q (%s), want %q", res.Output, res.Error, want)
+	}
+
+	for _, bad := range []credentialAccess{
+		{Name: "Path", Env: "PATH", URL: "http://webapp:8080/credentials/1"},
+		{Name: "Lower", Env: "CREDENTIAL_jira_URL", URL: "http://webapp:8080/credentials/1"},
+		{Name: "File", Env: "CREDENTIAL_FILE_URL", URL: "file:///etc/passwd"},
+		{Name: "Split", Env: "CREDENTIAL_SPLIT_URL", URL: "http://webapp:8080/x\nPATH=/tmp"},
+	} {
+		run := scriptRequest{Script: "echo ran", Credentials: []credentialAccess{bad}, CredentialsToken: "step-token"}
+		if res := runScript(context.Background(), run, time.Minute, newStepLogger("test", nil), nil); res.OK || res.Output == "ran" {
+			t.Errorf("a script was given %s=%q", bad.Env, bad.URL)
+		}
+	}
+	run = scriptRequest{Script: "echo ran", Credentials: run.Credentials[:1]}
+	if res := runScript(context.Background(), run, time.Minute, newStepLogger("test", nil), nil); res.OK {
+		t.Errorf("a script was given credentials without their token")
+	}
+}

@@ -1,8 +1,8 @@
 package main
 
 // Proxy grants: the tokens steps are handed for the webapp's proxies, to
-// their models (llm.go), their MCP servers (mcp.go) and the internet
-// (egress.go). They are kept in the database, so that whichever replica of
+// their models (llm.go), their MCP servers (mcp.go), the internet
+// (egress.go) and the services of their credentials (credentials.go). They are kept in the database, so that whichever replica of
 // the webapp a step's request reaches knows its token, wherever it was
 // granted. Only a token's SHA-256 is kept, never the token, and never a
 // key: what a grant reaches is worked out again by the replica it reaches,
@@ -28,9 +28,10 @@ import (
 // The proxies a grant is for, as proxy_grants.kind and the audit log name
 // them.
 const (
-	grantModel    = "model"
-	grantMCP      = "mcp"
-	grantInternet = "internet"
+	grantModel      = "model"
+	grantMCP        = "mcp"
+	grantInternet   = "internet"
+	grantCredential = "credential"
 )
 
 // Who and what a grant is for; what of its proxy it reaches is the proxy's
@@ -277,5 +278,7 @@ func auditGrantEnd(kind string, g proxyGrant, why string) {
 		audit("mcp.revoke", g.user, g.run, g.step, "the MCP proxy's token %s", why)
 	case grantInternet:
 		audit("internet.revoke", g.user, g.run, g.step, "the egress proxy's token %s", why)
+	case grantCredential:
+		audit("credential.revoke", g.user, g.run, g.step, "the credential proxy's token %s", why)
 	}
 }

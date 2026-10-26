@@ -1,7 +1,7 @@
 package main
 
-// Secrets the webapp keeps for others, the model keys admins save and the
-// tokens of people's MCP connections, are sealed in the database with
+// Secrets the webapp keeps for others, the model keys admins save, the
+// tokens of people's MCP connections and credentials' secrets, are sealed in the database with
 // SECRET_KEY, so a copy of the database, a backup or a dump doesn't hand
 // them out. Each is sealed with AES-256-GCM under a key derived from
 // SECRET_KEY, and bound to where it is kept, its table, column and row, so
@@ -171,6 +171,9 @@ func mcpTokenPlace(column string, server, user int64) string {
 	return fmt.Sprintf("mcp_tokens/%s/%d/%d", column, server, user)
 }
 
+// Where a credential's secret is kept.
+func credentialPlace(id int64) string { return fmt.Sprintf("credentials/%d", id) }
+
 // Sets up the webapp's sealer from SECRET_KEY and SECRET_KEY_SECONDARY,
 // seals the secrets kept as they came, with reseal those sealed with the
 // key going out too, and checks it opens every one. Runs after the tables'
@@ -192,7 +195,7 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 	}
 	secrets = s
 	if s == nil {
-		log.Printf("WARNING: SECRET_KEY isn't set, so model keys and MCP tokens are kept in the database unsealed")
+		log.Printf("WARNING: SECRET_KEY isn't set, so model keys, MCP tokens and credentials' secrets are kept in the database unsealed")
 	}
 	ctx := context.Background()
 	// A secret, and how to seal it where it is unless it changed meanwhile.
@@ -218,6 +221,18 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 			return err
 		}
 		all = append(all, secret{"UPDATE model_providers SET api_key = ? WHERE id = ? AND api_key = ?", modelProviderPlace(id), key, []any{id, key}})
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	err = scanAll(ctx, db, "SELECT id, secret FROM credentials WHERE secret <> ''", func(rows *sql.Rows) error {
+		var id int64
+		var stored string
+		if err := rows.Scan(&id, &stored); err != nil {
+			return err
+		}
+		all = append(all, secret{"UPDATE credentials SET secret = ? WHERE id = ? AND secret = ?", credentialPlace(id), stored, []any{id, stored}})
 		return nil
 	})
 	if err != nil {

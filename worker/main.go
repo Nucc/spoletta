@@ -97,6 +97,10 @@ type runRequest struct {
 	// The skills pi is given, each written as a SKILL.md of its own; see
 	// writeSkills.
 	Skills []skill `json:"skills"`
+	// The credentials the step calls services with, each at its URL at the
+	// webapp's proxy, which CredentialsToken reaches; see credentialVars.
+	Credentials      []credentialAccess `json:"credentials"`
+	CredentialsToken string             `json:"credentialsToken"`
 }
 
 // A skill as the webapp sends it.
@@ -148,6 +152,9 @@ type scriptRequest struct {
 	Git *gitCredentials `json:"git"`
 	// Where a script in a container reaches the internet hosts it may.
 	Egress *egressAccess `json:"egress"`
+	// The credentials it calls services with; see credentialVars.
+	Credentials      []credentialAccess `json:"credentials"`
+	CredentialsToken string             `json:"credentialsToken"`
 	// How long the script may take, if not the worker's own limit.
 	TimeoutMS int64 `json:"timeoutMs"`
 	// When its schedule's last run that got through started, in seconds
@@ -616,7 +623,14 @@ func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLo
 	if err := writeAgentDir(agentDir, run.Providers, run.LLM); err != nil {
 		return runResult{Error: err.Error()}
 	}
-	env := withCloudCredentials(childEnv(append(gitEnv, "PI_CODING_AGENT_DIR="+agentDir)...))
+	credVars, err := credentialVars(run.Credentials, run.CredentialsToken)
+	if err != nil {
+		return runResult{Error: err.Error()}
+	}
+	if len(credVars) > 0 {
+		l.infof("calling %s through the webapp's credential proxy", credentialNames(run.Credentials))
+	}
+	env := withCloudCredentials(childEnv(append(append(gitEnv, "PI_CODING_AGENT_DIR="+agentDir), credVars...)...))
 	if len(run.MCPServers) > 0 {
 		b, err := json.Marshal(map[string]any{"servers": run.MCPServers, "token": run.MCPToken})
 		if err == nil {
@@ -945,7 +959,14 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	spec := sandboxSpec{Cmd: []string{"bash", script}, Dir: cwd, Mounts: []mount{{Path: cwd}, {Path: private, ReadOnly: true}}, Egress: run.Egress.proxy()}
 	// What it prints goes to a pipe, which Python would otherwise print to
 	// a few KB at a time, so following it as it runs would show nothing.
-	spec.Env = childEnv(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since, "PYTHONUNBUFFERED=1")...)
+	credVars, err := credentialVars(run.Credentials, run.CredentialsToken)
+	if err != nil {
+		return runResult{Error: err.Error()}
+	}
+	if len(credVars) > 0 {
+		l.infof("calling %s through the webapp's credential proxy", credentialNames(run.Credentials))
+	}
+	spec.Env = childEnv(append(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since, "PYTHONUNBUFFERED=1"), credVars...)...)
 	if run.Workspace != nil {
 		spec.Env = append(spec.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
 	}

@@ -117,6 +117,19 @@ type agentRun struct {
 	Guide     bool  `json:"guide,omitempty"`
 	// The skills the process picked, which the worker hands pi.
 	Skills []runSkill `json:"skills,omitempty"`
+	// The credentials it calls services with, at the webapp's proxy, and
+	// the token reaching them.
+	Credentials      []credentialAccess `json:"credentials,omitempty"`
+	CredentialsToken string             `json:"credentialsToken,omitempty"`
+}
+
+// A credential as the worker gets it: where the step reaches it, never its
+// secret.
+type credentialAccess struct {
+	Name    string `json:"name"`
+	BaseURL string `json:"baseUrl"`
+	Env     string `json:"env"`
+	URL     string `json:"url"`
 }
 
 // A skill as the worker gets it.
@@ -625,6 +638,9 @@ type scriptRun struct {
 	Git *gitCredentials `json:"git,omitempty"`
 	// Where its container reaches the internet, the webapp's egress proxy.
 	Egress *egressAccess `json:"egress,omitempty"`
+	// The credentials it calls services with, and the token reaching them.
+	Credentials      []credentialAccess `json:"credentials,omitempty"`
+	CredentialsToken string             `json:"credentialsToken,omitempty"`
 	// How long the script may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`

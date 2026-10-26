@@ -259,8 +259,8 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	if f.ID, err = res.LastInsertId(); err != nil {
 		return f, run, processSettings{}, err
 	}
-	// The process's MCP servers, tools and skills as it has them now; one
-	// since deleted has none.
+	// The process's MCP servers, tools, skills and credentials as it has
+	// them now; one since deleted has none.
 	var uses processSettings
 	if processID != nil {
 		var flow int64
@@ -271,6 +271,12 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 		if err == nil {
 			var msg string
 			if run.Skills, msg, err = stepSkills(ctx, tx, flow, uses.Skills); err != nil {
+				return f, run, uses, err
+			}
+			if msg != "" {
+				return f, run, uses, conflictError(msg)
+			}
+			if run.Credentials, msg, err = stepCredentials(ctx, tx, flow, uses.Credentials); err != nil {
 				return f, run, uses, err
 			}
 			if msg != "" {
@@ -314,6 +320,16 @@ func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBrok
 	auditMCP(who, run.Run, stepID, run.MCPServers)
 	if msg != "" {
 		return runResult{Error: msg}
+	}
+	if len(run.Credentials) > 0 {
+		var flow int64
+		if err := db.QueryRowContext(ctx, "SELECT flow_id FROM processes WHERE id = ?", run.ProcessID).Scan(&flow); err != nil {
+			return runResult{Error: err.Error()}
+		}
+		if run.Credentials, run.CredentialsToken, err = grantCredentials(ctx, who, run.Run, stepID, flow, run.Credentials, time.Duration(run.TimeoutMS)*time.Millisecond); err != nil {
+			return runResult{Error: err.Error()}
+		}
+		defer credentialProxy.revoke(run.CredentialsToken)
 	}
 	return runAgent(ctx, db, workerURL, run, stepID, attempt)
 }

@@ -125,6 +125,7 @@ type setupProcess struct {
 	// The tools it keeps to of its MCP servers, by server name.
 	MCPTools     map[string][]string `yaml:"mcpTools,omitempty"`
 	Skills       []string            `yaml:"skills,omitempty"`
+	Credentials  []string            `yaml:"credentials,omitempty"`
 	Repositories *[]string           `yaml:"repositories,omitempty"`
 	Connector    *setupConnector     `yaml:"connector,omitempty"`
 	Rounds       *int                `yaml:"rounds,omitempty"`

@@ -15,8 +15,10 @@ import (
 // JSON array for a list. Files it generates go in the directory $OUTPUTS
 // points to, with their paths in its output. A non-zero exit fails the step.
 // In a scheduled run, $SINCE and its alias $LAST_RUN say when the schedule
-// last got through, so the script can fetch only what changed since. What
-// it prints is kept as it prints it, for reading; see script_output.go.
+// last got through, so the script can fetch only what changed since. Each
+// credential its process picks is reached at $CREDENTIAL_<NAME>_URL, with
+// $CREDENTIALS_TOKEN as a bearer token; see credentials.go. What it prints
+// is kept as it prints it, for reading; see script_output.go.
 
 // What the worker runs.
 type scriptRun struct {
@@ -40,6 +42,10 @@ type scriptRun struct {
 	// Where the script's container reaches the internet hosts it may; see
 	// egress.go.
 	Egress *egressAccess `json:"egress,omitempty"`
+	// The credentials it calls services with, each at its URL at the
+	// webapp's proxy, which the step's token reaches; see credentials.go.
+	Credentials      []credentialAccess `json:"credentials,omitempty"`
+	CredentialsToken string             `json:"credentialsToken,omitempty"`
 	// How long the script may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
@@ -63,17 +69,24 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 	if err != nil {
 		return res, err
 	}
-	settings := p.Settings
+	flow, settings := b.flow, p.Settings
 	run.ProcessName, run.Script = p.Name, p.Script
 	for _, in := range inputs {
 		run.Inputs = append(run.Inputs, scriptInput{Name: in.Name, Content: in.Content})
 	}
 	contract, msg := b.contractFor(id, true)
+	// The credentials the run's version of the process picked.
+	creds, credsMsg, err := stepCredentials(ctx, db, flow, settings.Credentials)
+	if err != nil {
+		return res, err
+	}
 	switch {
 	case strings.TrimSpace(run.Script) == "":
 		res.Error = "the process has no script"
 	case msg != "":
 		res.Error = msg
+	case credsMsg != "":
+		res.Error = credsMsg
 	default:
 		// One file in $INPUTS would hide the other.
 		res.Error = inputClash(run.ProcessName, inputs)
@@ -112,6 +125,10 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 		}
 		run.Egress = egress.grant(who, runID, stepID, run.Workspace, settings.timeout())
 		defer egress.revoke(run.Egress)
+		if run.Credentials, run.CredentialsToken, err = grantCredentials(ctx, who, runID, stepID, flow, creds, settings.timeout()); err != nil {
+			return res, err
+		}
+		defer credentialProxy.revoke(run.CredentialsToken)
 		res, err = streamScript(ctx, workerURL, run, func(stream, text string) {
 			recordOutput(db, stepID, stream, text)
 		}, func(l workerLogLine) {

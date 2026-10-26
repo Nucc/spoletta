@@ -48,6 +48,9 @@ type processSettings struct {
 	MCPTools map[int64][]string `json:"mcpTools,omitempty"`
 	// The skills an agent process is given, by id; see skills.go.
 	Skills []int64 `json:"skills,omitempty"`
+	// The credentials an agent or script process calls services with, by
+	// id; see credentials.go.
+	Credentials []int64 `json:"credentials,omitempty"`
 	// The operation a connector process carries out; see connectors.go.
 	Connector *connectorSettings `json:"connector,omitempty"`
 	// The flow's repositories an agent or script process works on, by name;
@@ -141,6 +144,9 @@ func (s processSettings) problem() string {
 	}
 	if s.WaitAtMost != nil && (*s.WaitAtMost < 1 || *s.WaitAtMost > maxWait) {
 		return fmt.Sprintf("waitAtMost must be from 1 to %d seconds", maxWait)
+	}
+	if len(s.Credentials) > maxProcessCredentials {
+		return fmt.Sprintf("a process picks at most %d credentials", maxProcessCredentials)
 	}
 	for _, tools := range s.MCPTools {
 		if len(tools) > maxConnectorArgs*10 {

@@ -111,6 +111,11 @@ type agentRun struct {
 	Egress *egressAccess `json:"egress,omitempty"`
 	// The skills the process picked, which the worker hands pi; see skills.go.
 	Skills []runSkill `json:"skills,omitempty"`
+	// The credentials the process calls services with, each at its URL at
+	// the webapp's proxy, which the step's token reaches; never their
+	// secrets. See credentials.go.
+	Credentials      []credentialAccess `json:"credentials,omitempty"`
+	CredentialsToken string             `json:"credentialsToken,omitempty"`
 }
 
 // The pi session of a step that worked in a workspace, which follow-ups carry on.
@@ -195,6 +200,10 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	if run.Skills, skillsMsg, err = stepSkills(ctx, db, flow, settings.Skills); err != nil {
 		return res, err
 	}
+	creds, credsMsg, err := stepCredentials(ctx, db, flow, settings.Credentials)
+	if err != nil {
+		return res, err
+	}
 	switch {
 	case strings.TrimSpace(run.Prompt) == "":
 		res.Error = "the process has no prompt"
@@ -204,11 +213,13 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		res.Error = clash
 	case skillsMsg != "":
 		res.Error = skillsMsg
+	case credsMsg != "":
+		res.Error = credsMsg
 	default:
 		run.Prompt = expanded
 		run.Workspace = ws.forProcess(settings)
 		run.DiskLimit = currentLimits().diskBytes()
-		run.Prompt = withChangeRequest(withInputs(withFlow(withWorkspace(run.Prompt, run.Workspace), run.ProcessName, about), inputs), cr)
+		run.Prompt = withChangeRequest(withInputs(withFlow(withCredentials(withWorkspace(run.Prompt, run.Workspace), creds), run.ProcessName, about), inputs), cr)
 	}
 
 	stepID, err := startStep(ctx, db, b, runID, id, stepActive, run.Prompt, inputs, cr)
@@ -245,8 +256,8 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		}
 	}
 	// The step works for whoever the run is for, with their MCP
-	// connections. Its tokens reach its models and MCP servers until the
-	// step ends, retry included.
+	// connections. Its tokens reach its models, MCP servers and
+	// credentials until the step ends, retry included.
 	if res.Error == "" {
 		who, err := runUser(ctx, db, runID)
 		if err != nil {
@@ -267,6 +278,10 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		defer mcp.revoke(run.MCPToken)
 		auditMCP(who, runID, stepID, run.MCPServers)
 		res.Error = msg
+		if run.Credentials, run.CredentialsToken, err = grantCredentials(ctx, who, runID, stepID, flow, creds, 2*settings.timeout()); err != nil {
+			return res, err
+		}
+		defer credentialProxy.revoke(run.CredentialsToken)
 	}
 	if res.Error == "" && run.Workspace != nil {
 		if run.SessionID, err = newSessionID(); err != nil {

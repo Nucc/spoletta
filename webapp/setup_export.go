@@ -151,13 +151,25 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 	if err != nil {
 		return f, err
 	}
+	// Credentials are named, never written out: they are admins'.
+	credentialNames := map[int64]string{}
+	err = scanAll(ctx, tx, "SELECT id, name FROM credentials", func(rows *sql.Rows) error {
+		var id int64
+		var name string
+		err := rows.Scan(&id, &name)
+		credentialNames[id] = name
+		return err
+	})
+	if err != nil {
+		return f, err
+	}
 	flowNames := map[int64]string{}
 	for _, e := range flows {
 		flowNames[e.id] = e.name
 	}
 
 	for _, e := range flows {
-		x := exporter{e: e, objectFlow: objectFlow, flowNames: flowNames, mcpNames: mcpNames, skillNames: skillNames}
+		x := exporter{e: e, objectFlow: objectFlow, flowNames: flowNames, mcpNames: mcpNames, skillNames: skillNames, credentialNames: credentialNames}
 		if e.isStruct {
 			for _, o := range e.s.Objects {
 				if o.Owner == nil && o.Parent == nil {
@@ -262,11 +274,12 @@ func setupKeyOf(name, id string) string {
 }
 
 type exporter struct {
-	e          *exportedFlow
-	objectFlow map[int64]*exportedFlow
-	flowNames  map[int64]string
-	mcpNames   map[int64]string
-	skillNames map[int64]string
+	e               *exportedFlow
+	objectFlow      map[int64]*exportedFlow
+	flowNames       map[int64]string
+	mcpNames        map[int64]string
+	skillNames      map[int64]string
+	credentialNames map[int64]string
 }
 
 // The board of a flow process, or with none the flow's top board.
@@ -339,6 +352,11 @@ func (x exporter) process(p process) setupProcess {
 	for _, s := range st.Skills {
 		if n, ok := x.skillNames[s]; ok {
 			sp.Skills = append(sp.Skills, n)
+		}
+	}
+	for _, c := range st.Credentials {
+		if n, ok := x.credentialNames[c]; ok {
+			sp.Credentials = append(sp.Credentials, n)
 		}
 	}
 	if c := st.Connector; c != nil {

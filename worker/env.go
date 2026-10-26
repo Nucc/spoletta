@@ -6,9 +6,11 @@ package main
 // git host, and whatever an agent or a script can see it can print. What
 // a step needs beyond the list is added by name where
 // the step starts: the cloud credentials Bedrock signs in with, for pi
-// only (see host_providers.go), and the git token only for the git
-// commands the worker runs itself (see workspace.go). Model keys never
-// reach the worker; agents reach their models through the webapp.
+// only (see host_providers.go), the git token only for the git commands
+// the worker runs itself (see workspace.go), and the URLs and token a step
+// reaches its credentials' services with through the webapp's proxy. Model
+// keys and credentials' secrets never reach the worker; agents reach their
+// models through the webapp.
 //
 // CHILD_ENV names further variables, comma-separated, that every agent and
 // script gets from the worker's environment, for an instance that wants
@@ -16,7 +18,11 @@ package main
 // can read it too.
 
 import (
+	"errors"
+	"fmt"
+	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -56,4 +62,46 @@ func childEnv(extra ...string) []string {
 		}
 	}
 	return append(env, extra...)
+}
+
+// A credential a step calls a service with, as the webapp sends it: the
+// variable holding its URL at the webapp's credential proxy, and the URL.
+type credentialAccess struct {
+	Name string `json:"name"`
+	Env  string `json:"env"`
+	URL  string `json:"url"`
+}
+
+// What the webapp names the variables of credentials.
+var credentialEnvName = regexp.MustCompile(`^CREDENTIAL_[A-Z0-9_]+_URL$`)
+
+// The variables a step reaches its credentials at, CREDENTIAL_<NAME>_URL
+// each, with the token reaching them all as CREDENTIALS_TOKEN; none
+// without any. A variable the webapp names otherwise could stand in for
+// one of the step's own, such as PATH, so it is refused.
+func credentialVars(creds []credentialAccess, token string) ([]string, error) {
+	if len(creds) == 0 {
+		return nil, nil
+	}
+	if token == "" {
+		return nil, errors.New("the webapp sent credentials without the token reaching them")
+	}
+	vars := []string{"CREDENTIALS_TOKEN=" + token}
+	for _, c := range creds {
+		u, err := url.Parse(c.URL)
+		if !credentialEnvName.MatchString(c.Env) || err != nil || (u.Scheme != "http" && u.Scheme != "https") || strings.ContainsAny(c.URL, "\x00\r\n") {
+			return nil, fmt.Errorf("the credential %s came without a variable and URL to reach it at", c.Name)
+		}
+		vars = append(vars, c.Env+"="+c.URL)
+	}
+	return vars, nil
+}
+
+// The credentials' names, as the step's log says them.
+func credentialNames(creds []credentialAccess) string {
+	names := make([]string, len(creds))
+	for i, c := range creds {
+		names[i] = c.Name
+	}
+	return strings.Join(names, ", ")
 }

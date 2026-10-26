@@ -100,6 +100,7 @@ export const ORIGIN_LABELS: Record<RunOrigin, string> = {
   rerun: 'A re-run',
   record: 'Records',
   run: 'Another run',
+  trial: 'A trial',
 }
 
 const STANDINGS = Object.keys(STANDING_LABELS) as RunStanding[]
@@ -191,6 +192,11 @@ export function RunList({
         {r.rerunOf !== null && (
           <span className="run-item-process">
             {nested ? 'Re-run' : `Re-run of #${r.rerunOf}`} from {r.rerunFromName}
+          </span>
+        )}
+        {r.trialOf !== null && (
+          <span className="run-item-process run-item-trial" title="Only this process ran, on inputs given it; what it generated stays in the trial">
+            Trial of {r.trialOfName} alone
           </span>
         )}
         {r.parent !== null && (
@@ -311,6 +317,7 @@ export function RunPanel({
   onStopStep,
   onOpenRun,
   onRerun,
+  onTryAgain,
   onChanged,
   onClose,
 }: {
@@ -331,6 +338,8 @@ export function RunPanel({
   onOpenRun: (id: number) => void
   // Opens the dialog re-running this run from the step's process; see RerunDialog.
   onRerun: (step: number) => void
+  // For a trial: opens the dialog trying its process again; see TrialDialog.
+  onTryAgain?: (process: number) => void
   // A follow-up started or was stopped, so the run is loaded again.
   onChanged: () => void
   onClose: () => void
@@ -383,6 +392,7 @@ export function RunPanel({
           from {run.rerunFromName}.
         </p>
       )}
+      {run.trialOf !== null && <TrialSummary run={run} onTryAgain={onTryAgain} />}
       <p className="panel-note">
         Started {formatTime(run.startedAt)}
         {run.startedBy && ` by ${run.startedBy}`}
@@ -473,8 +483,37 @@ export function RunPanel({
 }
 
 // A run can be re-run from a step's process once it ended, unless the step
-// was copied from an earlier run or its process is gone.
-export const rerunnableFrom = (run: FlowRunDetail, s: RunStep) => run.status !== 'running' && s.process !== null && s.kind !== 'copied'
+// was copied from an earlier run or its process is gone; a trial is tried
+// again instead.
+export const rerunnableFrom = (run: FlowRunDetail, s: RunStep) =>
+  run.status !== 'running' && run.trialOf === null && s.process !== null && s.kind !== 'copied'
+
+// What a trial is, and once it is over, what its process handed back and
+// what that cost.
+function TrialSummary({ run, onTryAgain }: { run: FlowRunDetail; onTryAgain?: (process: number) => void }) {
+  const usage = totalUsage(run.steps)
+  const cost = run.spent > 0 ? run.spent : (usage?.cost ?? 0)
+  const handed = run.objects.map((o) => (o.state ? `${o.name} (${o.state})` : o.name))
+  return (
+    <div className="trial-summary">
+      <p>
+        A trial of {run.trialOfName} alone, on what it was given: nothing before or after it ran, and what it generated
+        stays here. What it did outside the flow, it did.
+      </p>
+      {run.status !== 'running' && (
+        <p>
+          {handed.length > 0 ? `It handed back ${handed.join(', ')}` : 'It handed back nothing'}
+          {cost > 0 ? `, and cost ${formatDollars(cost)} on models` : usage ? '' : ', and used no models'}.
+        </p>
+      )}
+      {onTryAgain && (
+        <button className="panel-button" onClick={() => onTryAgain(run.trialOf!)} title="Try the process again, on the inputs this trial took or a sample">
+          Try again…
+        </button>
+      )}
+    </div>
+  )
+}
 
 // Agent, script and connector steps can be stopped while they go.
 export const stoppable = (s: { kind: ProcessKind | 'copied' | 'input' | 'loop'; status: StepStatus }) =>

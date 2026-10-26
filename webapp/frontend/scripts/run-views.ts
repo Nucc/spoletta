@@ -4,7 +4,7 @@
 // steps and lines of text go beside which. Run with `npm test`, which needs
 // Node 22.6 or later to load TypeScript.
 
-import type { FlowRunDetail, RunObject, RunStep } from '../src/api.ts'
+import { runMatches, runOrigin, type FlowRunDetail, type RunObject, type RunStep } from '../src/api.ts'
 import { diffLines, pairObjects, pairProcesses, pairSteps } from '../src/compare.ts'
 import { formatSpan, lanesOf, scaleOf, shown, stretchesOf, ticksOf, type Bar } from '../src/timeline.ts'
 
@@ -74,6 +74,8 @@ function run(id: number, steps: RunStep[], objects: Partial<RunObject>[] = []): 
     startedBy: '',
     apiKey: '',
     record: null,
+    trialOf: null,
+    trialOfName: '',
     startedAt: at(0),
     finishedAt: at(100),
     steps,
@@ -178,6 +180,30 @@ check('spans read as people say them', [850, 12_000, 200_000, 7_500_000, 270_000
     [false, false, false, true],
   ])
   check('the same text differs nowhere', diffLines('x\ny', 'x\ny').a.some((l) => l.differs), false)
+}
+
+// A trial of one process alone: its one step is the timeline's one lane,
+// and beside a run of the whole flow it pairs with that run's step of the
+// process; the list leaves it out unless asked for.
+{
+  const real = run(20, [step({ process: 1, start: 0, end: 5 }), step({ process: 2, start: 5, end: 9 })])
+  const trial = { ...run(21, [step({ process: 2, start: 0, end: 3 })]), trialOf: 2, trialOfName: 'P2' }
+  const parents = new Map<number, number | null>([
+    [1, null],
+    [2, null],
+  ])
+  check("a trial's timeline", lanesOf([trial], T0, parents).map((l) => [l.name, l.bars.length]), [['P2', 1]])
+  check('a trial beside a run', pairProcesses(trial, real).map((p) => [p.key, p.a.length, p.b.length]), [
+    ['#2', 1, 1],
+    ['#1', 0, 1],
+  ])
+  check('a trial started as one', [runOrigin(trial), runOrigin(real)], ['trial', 'person'])
+  const all = { status: [], started: [] }
+  check('trials are listed only when asked for', [runMatches(trial, all), runMatches(real, all), runMatches(trial, { status: [], started: ['trial'] })], [
+    false,
+    true,
+    true,
+  ])
 }
 
 console.log(`${checked} checks of the run views, ${failed} failed`)

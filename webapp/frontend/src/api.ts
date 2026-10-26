@@ -970,6 +970,10 @@ export type FlowRun = {
   // The shared record a person started it on, if one did; its queries of
   // the record's store read that record alone.
   record: number | null
+  // For a trial: the process a person tried in it, which alone ran; see
+  // TrialDialog.
+  trialOf: number | null
+  trialOfName: string
   startedAt: string
   finishedAt: string | null
 }
@@ -1137,9 +1141,11 @@ export type RunStanding = 'running' | 'waiting' | 'done' | 'failed' | 'interrupt
 // How a run started: by a person with the Run button, a schedule, the API,
 // as a re-run of another, on records a person picked, or in another run (a
 // flow process's board, an item of a list, a subflow).
-export type RunOrigin = 'person' | 'schedule' | 'api' | 'rerun' | 'record' | 'run'
+export type RunOrigin = 'person' | 'schedule' | 'api' | 'rerun' | 'record' | 'run' | 'trial'
 
-// What narrows the run list; each picks any of its values, none for all.
+// What narrows the run list; each picks any of its values, none for all,
+// but for how runs started, where none is every way but a trial of one
+// process alone: trials are listed only when asked for.
 export type RunFilter = { status: RunStanding[]; started: RunOrigin[] }
 
 // The most runs a page of the list holds; a full page means there may be more.
@@ -1147,6 +1153,7 @@ export const RUN_PAGE = 200
 
 // How a run started, the first its markers say, as run_list.go tells.
 export function runOrigin(r: FlowRun): RunOrigin {
+  if (r.trialOf !== null) return 'trial'
   if (r.rerunOf !== null) return 'rerun'
   if (r.record !== null) return 'record'
   if (r.apiKey) return 'api'
@@ -1158,7 +1165,8 @@ export const runStanding = (r: FlowRun): RunStanding => (r.status === 'running' 
 
 // Whether the run is one the filter picks.
 export const runMatches = (r: FlowRun, f: RunFilter) =>
-  (f.status.length === 0 || f.status.includes(runStanding(r))) && (f.started.length === 0 || f.started.includes(runOrigin(r)))
+  (f.status.length === 0 || f.status.includes(runStanding(r))) &&
+  (f.started.length === 0 ? runOrigin(r) !== 'trial' : f.started.includes(runOrigin(r)))
 
 // The flow's runs the filter picks, newest first, a page at a time: those
 // older than the run before, if given.
@@ -1196,6 +1204,51 @@ export function rerun(run: number, step: number, inputs: Record<number, string>)
   return request(`/api/runs/${run}/steps/${step}/rerun`, { method: 'POST', body: JSON.stringify({ inputs }) })
 }
 
+// An object a process tried takes: the states it can be given in, and the
+// one it is given in unless someone says otherwise, the state its link
+// waits for or one its conditions name; empty for none.
+export type TrialObject = { object: number; name: string; states: string[]; state: string }
+
+// What an object is given in a trial, or a sample gives it: its state, empty
+// for none, and what it holds.
+export type TrialValue = { object: number; state: string; content: string }
+
+// Inputs saved with a process to try it on, under a name of their own.
+export type TrialSample = { id: number; name: string; inputs: TrialValue[] }
+
+// What trying a process takes, the samples it may start from, what it took
+// the last time a run reached it, a trial or not, and what it does outside
+// the flow, which it does in a trial too.
+export type TrialPlan = {
+  process: number
+  processName: string
+  kind: ProcessKind
+  takes: TrialObject[]
+  samples: TrialSample[]
+  last: { run: number; trial: boolean; inputs: TrialValue[] } | null
+  effects: string[]
+}
+
+export function getTrial(process: number): Promise<TrialPlan> {
+  return request(`/api/processes/${process}/trial`)
+}
+
+// Tries the process alone, as a trial on the board as it is, giving it the
+// objects listed and none of the others it takes.
+export function tryProcess(process: number, inputs: TrialValue[]): Promise<FlowRun> {
+  return request(`/api/processes/${process}/trial`, { method: 'POST', body: JSON.stringify({ inputs }) })
+}
+
+// Saves inputs as the process's sample of that name, replacing one it has;
+// resolves to its samples.
+export function saveSample(process: number, name: string, inputs: TrialValue[]): Promise<TrialSample[]> {
+  return request(`/api/processes/${process}/samples`, { method: 'PUT', body: JSON.stringify({ name, inputs }) })
+}
+
+export function deleteSample(process: number, sample: number): Promise<void> {
+  return request(`/api/processes/${process}/samples/${sample}`, { method: 'DELETE' })
+}
+
 // What a run held of an object: the latest content and state its steps gave
 // it, or for the run of a recording flow process what it was given, such as
 // the item of a list it ran for.
@@ -1217,8 +1270,9 @@ export type DataRow = FlowRun & { cells: DataCell[] }
 export type DataObject = { id: number; name: string; many: boolean; attributes: string[] }
 
 // The flow's objects and what the latest of its runs the search matches
-// held of them, newest first or as sorted.
-export type FlowData = { objects: DataObject[]; rows: DataRow[] } & SearchResult
+// held of them, newest first or as sorted; and how many of the runs searched
+// were trials it left out, its query not naming the trial facet.
+export type FlowData = { objects: DataObject[]; rows: DataRow[]; trials: number } & SearchResult
 
 export function getFlowData(flow: number, search?: Search): Promise<FlowData> {
   const p = searchParams(search)

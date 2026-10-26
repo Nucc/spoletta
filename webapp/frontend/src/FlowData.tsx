@@ -215,8 +215,9 @@ export default function FlowDataPage({ id }: { id: number }) {
                   {data.rows.length === 0 && <p className="search-none">No runs match the search.</p>}
                 </div>
                 <p className="flows-note">
-                  {searching ? `${data.matched} of ${data.searched} runs match` : `${data.searched} runs`}
+                  {searching ? `${data.matched} of ${data.searched - data.trials} runs match` : `${data.searched - data.trials} runs`}
                   {data.truncated && ', searching the latest of them'}
+                  {data.trials > 0 && `, leaving out ${data.trials === 1 ? 'a trial' : `${data.trials} trials`} of a process alone (trial:* shows them)`}
                   {data.rows.length < data.matched && `; the first ${data.rows.length} show`}
                   {sort ? '' : ', newest first'}. A run of one item of a list is a row of its own. Click a cell to see all of it,
                   a column's name to sort by it.

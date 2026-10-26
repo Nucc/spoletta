@@ -73,6 +73,7 @@ import {
 } from './Palette'
 import { decisionText, ORIGIN_LABELS, rerunnableFrom, RunList, RunPanel, STANDING_LABELS, type RunFocus } from './Runs'
 import RerunDialog from './RerunDialog'
+import TrialDialog from './TrialDialog'
 import OPLPanel from './OPLPanel'
 import CodePanel from './CodePanel'
 import Assistant from './Assistant'
@@ -1024,6 +1025,9 @@ export default function Board({
   // on the board as it is.
   const shownRun = runDetail?.id === runId ? runDetail : null
   const openRun = runs.find((r) => r.id === runId) ?? (openedRun?.id === runId ? openedRun : undefined)
+  // The trial open stays listed, though the filter leaves trials out.
+  const listedRuns =
+    openRun && openRun.trialOf !== null && !runs.some((r) => r.id === openRun.id) ? [...runs, openRun].sort((x, y) => y.id - x.id) : runs
   const runVersion = openRun?.version ?? null
   // Comparing shows the newer board instead: the version compared to, or
   // the board as it is.
@@ -1971,6 +1975,8 @@ export default function Board({
     if (shownRun && step) onStopStep(shownRun.id, step.id)
   }
 
+  // The process being tried on its own; see TrialDialog.
+  const [trying, setTrying] = useState<number | null>(null)
   // The step of the open run it is being re-run from; see RerunDialog.
   const [rerunning, setRerunning] = useState<number | null>(null)
   useEffect(() => setRerunning(null), [runId])
@@ -2052,8 +2058,9 @@ export default function Board({
     }
   }
 
-  // A re-run started from the open run; it opens as a run started with play
-  // does, having saved the board as a new version if it changed.
+  // A re-run started from the open run, or a trial of a process; it opens
+  // as a run started with play does, having saved the board as a new version
+  // if it changed.
   const onRerun = (run: FlowRun) => {
     refreshVersions()
     if (runMatches(run, runFilter)) setRuns((rs) => [run, ...rs])
@@ -2061,15 +2068,17 @@ export default function Board({
   }
 
   // Opens a run on the board it ran on: a recording flow process's run on
-  // the flow process's board, a run of the whole flow, or of a flow a subflow
-  // process ran, on the top board.
+  // the flow process's board, a trial on the board of the process it tried,
+  // a run of the whole flow, or of a flow a subflow process ran, on the top
+  // board.
   const showRun = (run: FlowRun) => {
     setPanelId(null)
     setVersionsOpen(false)
     setOpenedRun(run)
     setRunId(run.id)
     setUnfolded(null)
-    setBoardId(run.process)
+    const tried = run.trialOf == null ? undefined : contents?.processes.find((p) => p.id === run.trialOf)
+    setBoardId(tried ? tried.parent : run.process)
   }
 
   // A run the list may not have, such as a flow process's that just
@@ -2715,7 +2724,7 @@ export default function Board({
             <SidebarGroup id="runs" title="Runs" fill>
               <RunList
                 flow={flowId}
-                runs={runs}
+                runs={listedRuns}
                 filter={runFilter}
                 onFilter={filterRuns}
                 more={moreRuns}
@@ -2729,7 +2738,7 @@ export default function Board({
                     setComparing(null)
                     return
                   }
-                  const run = runs.find((r) => r.id === id)
+                  const run = listedRuns.find((r) => r.id === id)
                   if (run) showRun(run)
                 }}
                 picking={comparing}
@@ -2889,6 +2898,7 @@ export default function Board({
             onOpenMCPSettings={() => openMCPSettings(true)}
             repositories={flow.settings.repositories}
             onOpenFlowSettings={() => openFlowSettings(true)}
+            onTry={viewOnly ? undefined : () => setTrying(Number(panelNode.id))}
             onClose={() => setPanelId(null)}
             onError={report}
           />
@@ -3021,11 +3031,22 @@ export default function Board({
             onCompare={() => setComparing((c) => (c === runDetail.id ? null : runDetail.id))}
             onOpenRun={openRunById}
             onRerun={setRerunning}
+            onTryAgain={viewOnly ? undefined : setTrying}
             onChanged={() => setRunReload((n) => n + 1)}
             onClose={() => setRunId(null)}
           />
         )}
       </div>
+      {trying !== null && (
+        <TrialDialog
+          process={trying}
+          onStarted={(r) => {
+            setTrying(null)
+            onRerun(r)
+          }}
+          onClose={() => setTrying(null)}
+        />
+      )}
       {rerunning !== null && runDetail && (
         <RerunDialog
           run={runDetail.id}

@@ -156,9 +156,11 @@ function Comparison({ a, b }: { a: FlowRunDetail; b: FlowRunDetail }) {
 const startedBy = (r: FlowRunDetail) => {
   const origin = ORIGIN_LABELS[runOrigin(r)]
   return [
-    r.rerunOf !== null
-      ? `${origin} of #${r.rerunOf} from ${r.rerunFromName}`
-      : r.parent !== null
+    r.trialOf !== null
+      ? `${origin} of ${r.trialOfName} alone`
+      : r.rerunOf !== null
+        ? `${origin} of #${r.rerunOf} from ${r.rerunFromName}`
+        : r.parent !== null
         ? `Run #${r.parent}, as ${r.processName}`
         : origin,
     r.apiKey && `key ${r.apiKey}`,

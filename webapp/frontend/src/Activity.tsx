@@ -133,7 +133,8 @@ export default function Activity() {
               what they spend, and when they fail it, its failing. A run failed if it ended failed; one interrupted, by the
               app stopping, or terminated, by a duplicate, didn’t. What a run spent includes its follow-ups, and counts on the
               day it started. Steps count in the flow they ran in, a retry each, so a procedure’s process failing in another
-              flow counts toward the procedure. Only the flows you see count.
+              flow counts toward the procedure. A trial of one process alone isn’t counted as a run, nor its step, but what it
+              spent counts toward its flow’s spending: it cost that money. Only the flows you see count.
             </p>
           </div>
         )}

@@ -111,6 +111,7 @@ export default function ProcessPanel({
   onOpenMCPSettings,
   repositories,
   onOpenFlowSettings,
+  onTry,
   onClose,
   onError,
 }: {
@@ -148,6 +149,9 @@ export default function ProcessPanel({
   // The flow's repositories, which agents and scripts pick from.
   repositories: Repository[]
   onOpenFlowSettings: () => void
+  // Opens the dialog trying an agent, script or connector process on its
+  // own; see TrialDialog.
+  onTry?: () => void
   onClose: () => void
   onError: (err: unknown) => void
 }) {
@@ -457,6 +461,19 @@ export default function ProcessPanel({
             <QueryLinkFields key={q.link} q={q} readOnly={readOnly} onQuery={onQuery} />
           ))}
         </div>
+      )}
+      {onTry && !readOnly && (kind === 'agent' || kind === 'script' || kind === 'connector') && (
+        <button
+          className="panel-button"
+          // What is typed goes first, so the trial runs it.
+          onClick={() => {
+            flush()
+            onTry()
+          }}
+          title="Run only this process, on inputs you give it, without running the flow before or after it"
+        >
+          Try this process…
+        </button>
       )}
       {review && <ReviewForm review={review} />}
       {run?.status === 'active' && <p className="panel-note">Running…</p>}

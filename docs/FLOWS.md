@@ -502,6 +502,26 @@ end what the caller should get back: `GET /v1/runs/<id>` returns what the run
 left of those objects. A flow starting from a human or a fetching process
 takes no inputs.
 
+**A run started by a webhook is given its inputs from the event.** Services
+sending events, GitHub, Slack, a monitoring alert, can't call the API, so a
+flow's settings can add **webhooks**: each a URL of its own that the service
+sends its events to, signed with the webhook's secret. A GitHub webhook takes
+the events it names, alone (`issues`) or with an action (`issues.labeled`);
+a Slack one takes the Events API's events, those it names if any; a generic
+one takes every delivery. Its **mapping** says where each input is taken
+from in the event's payload: a dotted path (`issue.title`,
+`pull_request.number`, `labels.0.name`), the whole payload, or, for an
+object with attributes, a path for each attribute (`number` from
+`issue.number`, `title` from `issue.title`). What it takes is checked as an
+API request's inputs are, and the run starts as one over the API does. Each
+event starts one run however often the service sends it; one the flow can't
+take (a path its payload lacks, an input the mapping doesn't give) is
+refused and listed with why among the webhook's deliveries, beside the last
+payload, to write the mapping from. So a flow meant to run on an issue being
+labeled has its first process take an `Issue` object with the attributes it
+needs, nothing generating it, and its webhook maps them from the payload.
+Webhooks run as whoever added them, and aren't part of the setup file.
+
 ### 4.1a Which version a run runs
 
 A run runs on a **version** of the flow: a snapshot of every board and of
@@ -518,9 +538,10 @@ is then its draft, and:
   can run the version published by hand from the Versions panel.
 - **Trying** one process alone from its panel (a trial, see 10.4) always
   runs the board as it is, the draft, never the version published.
-- A **schedule**'s run, a run **over the API** and a run started **on a
-  record** run the **version published**. What the API says the flow takes,
-  and which records its queries select, are that version's too.
+- A **schedule**'s run, a run **over the API**, one a **webhook** starts
+  and a run started **on a record** run the **version published**. What the
+  API says the flow takes, what a webhook's mapping is checked against, and
+  which records its queries select, are that version's too.
 - A **subflow** process in a run of a version published runs the version
   its procedure published, if it has one, and its board as it is
   otherwise; in a run of the board, it runs the procedure's board as it is.

@@ -11,7 +11,8 @@ the model, MCP and egress proxies. How it works is described at the top of
 
 Everything the webapp keeps is in the database, so every replica sees it:
 runs and their steps, sessions, schedules (each time claimed by one
-replica), the tokens steps are handed for the proxies (only their SHA-256,
+replica), webhooks' deliveries (each taken once by the run its id starts,
+as the API's requests are by their `Idempotency-Key`), the tokens steps are handed for the proxies (only their SHA-256,
 [webapp/grants.go](../webapp/grants.go)), what runs and people spent, the
 steps each person has going, MCP sign-ins under way, and the limits, which
 each replica reads again every five seconds.

@@ -12,8 +12,8 @@ import (
 
 // A flow can publish one of its versions (versions.go): the one the runs
 // nobody starts by hand from the board take, so that a schedule, a request
-// over the API or a run on records never runs a board someone is halfway
-// through editing. The board is then the flow's draft. Publishing saves the
+// over the API, a webhook's delivery or a run on records never runs a board
+// someone is halfway through editing. The board is then the flow's draft. Publishing saves the
 // board as a version if it changed since its last, and marks that version;
 // any older version can be published again instead, which rolls back.
 // Neither changes the board, and bringing the board back to another
@@ -28,10 +28,12 @@ import (
 //   - a trial of one process alone (trials.go): the board as it is, always,
 //     since what is tried is what is being built; never the version
 //     published.
-//   - a schedule's run, one over the API (POST /v1/flows/{id}/runs), and a
-//     run a person starts on records: the version published, or the board
-//     as it is if there is none. What the API says a flow takes, and which
-//     records a flow's queries select, are of that version too.
+//   - a schedule's run, one over the API (POST /v1/flows/{id}/runs), one a
+//     webhook's delivery starts (webhooks.go), and a run a person starts on
+//     records: the version published, or the board as it is if there is
+//     none. What the API says a flow takes, what a webhook's mapping is
+//     checked against, and which records a flow's queries select, are of
+//     that version too.
 //   - the flow a subflow process runs (calls.go): in a run of a version
 //     published, that flow's version published if it has one, else its
 //     board as it is; in a run of a board as it is, the other's board as it

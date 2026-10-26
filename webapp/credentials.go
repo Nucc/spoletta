@@ -764,6 +764,8 @@ type redactor struct {
 	secrets [][]byte
 	longest int
 	pieces  map[[secretPiece]byte]bool
+	// What a piece starts with, shorter than one, which a tail waits on.
+	starts map[string]bool
 
 	held []byte
 	// How many of held's first bytes are blanked out already, by a secret
@@ -791,9 +793,12 @@ func (r *redactor) withPieces(forms ...string) *redactor {
 		b := lowerASCII([]byte(f))
 		for i := 0; i+secretPiece <= len(b); i++ {
 			if r.pieces == nil {
-				r.pieces = map[[secretPiece]byte]bool{}
+				r.pieces, r.starts = map[[secretPiece]byte]bool{}, map[string]bool{}
 			}
 			r.pieces[[secretPiece]byte(b[i:i+secretPiece])] = true
+			for k := 1; k < secretPiece; k++ {
+				r.starts[string(b[i:i+k])] = true
+			}
 		}
 	}
 	return r
@@ -866,11 +871,17 @@ func blankOut(b []byte, m []bool, continuing bool) ([]byte, bool) {
 }
 
 // How many of the last bytes of a text, given in lower case, more could
-// make part of a secret, or of a piece of one, so they wait for it.
+// make part of a secret, or of a piece of one, so they wait for it: the
+// longest tail that starts one. Any other goes on at once, so what streams
+// through, such as the blank line ending an event, isn't kept waiting for
+// the next.
 func (r *redactor) tail(lower []byte) int {
 	keep := 0
-	if len(r.pieces) > 0 {
-		keep = min(secretPiece-1, len(lower))
+	for k := min(secretPiece-1, len(lower)); k > 0 && len(r.starts) > 0; k-- {
+		if r.starts[string(lower[len(lower)-k:])] {
+			keep = k
+			break
+		}
 	}
 	for k := min(r.longest-1, len(lower)); k > keep; k-- {
 		if slices.ContainsFunc(r.secrets, func(s []byte) bool { return bytes.HasPrefix(s, lower[len(lower)-k:]) }) {

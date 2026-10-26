@@ -328,6 +328,14 @@ func TestRedactorBlanksPiecesOfSecrets(t *testing.T) {
 	if got := r.text("Zq8Lw2X and Zq8 and 1Nc"); got != "Zq8Lw2X and Zq8 and 1Nc" {
 		t.Errorf("fewer than a piece came out as %q", got)
 	}
+	// What streams through goes on at once, but for a tail that could start
+	// a piece.
+	if got := string(r.next([]byte("data: {}\n\n"))); got != "data: {}\n\n" {
+		t.Errorf("an event was held back: %q", got)
+	}
+	if got := string(r.next([]byte("data: Zq8"))); got != "data: " {
+		t.Errorf("a piece's start went on: %q", got)
+	}
 }
 
 // A step's tokens are blanked out as they are, in base64 within something

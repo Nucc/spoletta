@@ -8,6 +8,7 @@ import QuantityLabel from './QuantityLabel'
 import type { ObjectNodeType } from './ObjectNode'
 import type { ProcessNodeType } from './ProcessNode'
 import { lanesOf, moveSegment, roundedPath, routePoints, segments, type End, type Lanes } from './route'
+import { CONDITION_WORDS, EVENT_WORDS, ROLE_WORDS } from './words'
 
 export type LinkEdgeData = {
   // The object link the edge draws; the start edge and direct connections have none.
@@ -30,19 +31,19 @@ export type LinkEdgeType = Edge<LinkEdgeData, 'link'>
 // The radius of the filled circle an agent link ends in.
 const AGENT_DOT_RADIUS = 5
 
-// How an input link's process takes the object, as the picker names them.
-const ROLES: { value: LinkRole; label: string; title: string }[] = [
-  { value: '', label: 'takes', title: 'Takes the object and leaves it for other processes' },
-  { value: 'instrument', label: 'instrument', title: 'Uses the object as a reference, without changing it' },
-  { value: 'consumption', label: 'consumes', title: 'Consumes the object: once taken, it is gone' },
-]
+// How an input link's process takes the object, as the picker names them:
+// in plain words, OPM's after; see words.ts.
+const ROLES: { value: LinkRole; label: string; title: string }[] = (['', 'instrument', 'consumption'] as const).map((value) => ({
+  value,
+  ...ROLE_WORDS[value],
+}))
 
 // A link drawn in straight segments with rounded corners, with a button that
 // inserts a step into it. Once selected, each segment has a grip that drags
 // it sideways, so the link can be routed round other nodes; double-click the
 // link to go back to the default route. A person's link into a process is an
 // OPM agent link, which ends in a filled circle instead of an arrow, and an
-// instrument link in a hollow one; a consumed object's link says so. A
+// instrument link in a hollow one; a link using its object up says so. A
 // selected input link picks how its process takes the object.
 export default function LinkEdge({
   id,
@@ -149,11 +150,11 @@ export default function LinkEdge({
                     value={data?.link?.condition ? 'condition' : 'event'}
                     onChange={(e) => actions.setCondition(id, e.target.value === 'condition')}
                   >
-                    <option value="event" title="The process runs when the object enters the state">
-                      when it enters
+                    <option value="event" title={EVENT_WORDS.title}>
+                      {EVENT_WORDS.label}
                     </option>
-                    <option value="condition" title="The process runs only if the object is in the state once it is ready, and is skipped otherwise">
-                      only if in it
+                    <option value="condition" title={CONDITION_WORDS.title}>
+                      {CONDITION_WORDS.label}
                     </option>
                   </select>
                 )}
@@ -161,11 +162,11 @@ export default function LinkEdge({
             ) : (
               <>
                 {data?.link?.condition && (
-                  <span className="condition" title="A condition: the process runs only if the object is in this state, and is skipped otherwise">
+                  <span className="condition" title={`Only if in it: ${CONDITION_WORDS.title.charAt(0).toLowerCase()}${CONDITION_WORDS.title.slice(1)}`}>
                     c
                   </span>
                 )}
-                {role === 'consumption' && <span title="The process consumes the object: once taken, it is gone">consumes</span>}
+                {role === 'consumption' && <span title={ROLE_WORDS.consumption.title}>{ROLE_WORDS.consumption.short}</span>}
                 {data?.link?.query && (
                   <span title="A query: the process takes what earlier runs stored of the object, as its panel says, rather than waiting for it">
                     records

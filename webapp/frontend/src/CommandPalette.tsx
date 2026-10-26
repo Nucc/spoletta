@@ -5,6 +5,7 @@ import { formatTime, ORIGIN_LABELS, RUN_LABELS } from './Runs'
 import { tabsFor } from './Settings'
 import { Keys, MAC } from './Keyboard'
 import { picked, rank, shortcutOf, type ShortcutId } from './shortcuts'
+import { PROCEDURE_WORDS, STRUCT_WORDS } from './words'
 
 // The command palette, Cmd-K or Ctrl-K anywhere: type to go to a flow,
 // procedure or struct, one of the open flow's latest runs, a page or a tab
@@ -79,7 +80,7 @@ function saveRecent(recent: string[]) {
 const RUNS_LISTED = 20
 
 // The groups in the order they are listed in with nothing typed.
-const GROUPS = ['Board', 'Views', 'Run', 'Add to the board', 'Runs', 'Pages', 'Flows', 'Procedures', 'Structs', 'Settings']
+const GROUPS = ['Board', 'Views', 'Run', 'Add to the board', 'Runs', 'Pages', 'Flows', PROCEDURE_WORDS.many, STRUCT_WORDS.many, 'Settings']
 
 // The flow the page in the address is about, if any.
 const flowInHash = () => {
@@ -205,7 +206,7 @@ export default function CommandPalette({
     // Favourites first, as the flow list puts them.
     const ordered = [...(flows ?? [])].sort((a, b) => Number(b.favourite) - Number(a.favourite))
     for (const f of ordered) {
-      const group = f.struct ? 'Structs' : f.module ? 'Procedures' : 'Flows'
+      const group = f.struct ? STRUCT_WORDS.many : f.module ? PROCEDURE_WORDS.many : 'Flows'
       all.push({
         id: `flow:${f.id}`,
         title: f.name,

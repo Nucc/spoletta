@@ -109,6 +109,26 @@ board. An agent process with `describeFlow: true` gets it in its prompt so it
 knows the flow it works in. Section 6 lists every sentence Spoletta writes; use
 it to check that a flow says what you meant.
 
+### 2.5 The app's words and OPM's
+
+The app says what a link or a kind of flow does first and OPM's term after,
+as "uses (instrument)". OPL, the API and the setup file keep OPM's words:
+the setup file's roles are still `instrument` and `consumption`.
+
+| The app says | OPM's term | Meaning | Setup file |
+|---|---|---|---|
+| takes | (a plain input) | the process takes the object and leaves it for others | `takes: [X]` |
+| uses (instrument) | instrument | needs the object and doesn't change it | `role: instrument` |
+| uses up (consumption) | consumption | once taken, the object is gone | `role: consumption` |
+| makes | result | the process generates the object | `yields: [X]` |
+| changes (effect) | effect | the process takes the object and generates it again | `takes: [X]` and `yields: [X]` |
+| handles | agent | a person does a human process | a person object taken by a `kind: human` process |
+| when it enters (event) | event | the object entering the state starts the process | `takes: [{object: X, state: s}]` |
+| only if in it (condition) | condition | the process runs only if the object is in the state, else it is skipped | `condition: true` |
+| procedure (reused flow) | (Spoletta's) | a flow other flows run, through a subflow process | `procedures:` |
+| struct (reused object) | (Spoletta's) | one object flows use copies of | `structs:` |
+| sentences (OPL) | OPL | the board in sentences | (none) |
+
 ---
 
 ## 3. The building blocks

@@ -17,15 +17,18 @@ export function Sidebar({ children }: { children: ReactNode }) {
 }
 
 // A titled part of the sidebar that folds away, and stays as it was left.
-// A filling group takes the height the others leave, and scrolls.
+// A filling group takes the height the others leave, and scrolls. A gloss
+// after the title says in plain words what it holds; see words.ts.
 export function SidebarGroup({
   id,
   title,
+  gloss,
   fill = false,
   children,
 }: {
   id: string
   title: string
+  gloss?: string
   fill?: boolean
   children: ReactNode
 }) {
@@ -40,6 +43,7 @@ export function SidebarGroup({
         <button aria-expanded={open} aria-controls={`sidebar-${id}`} onClick={toggle}>
           <ChevronIcon />
           {title}
+          {gloss && <span className="sidebar-group-gloss">({gloss})</span>}
         </button>
       </h2>
       {open && (

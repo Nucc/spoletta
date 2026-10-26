@@ -147,16 +147,17 @@ const TIPS: Record<BoardTip, ReactNode> = {
   ),
   input: (
     <>
-      Pick how the process takes the object: just takes it, uses it as an instrument it doesn’t change, or consumes it. For a link from a
-      state, pick whether the process runs when the object enters it, or only if the object is in it once the process is ready, being skipped
-      otherwise. Drag the link’s segments to route it, double-click it to reset its route, and use + on it to insert a step.
+      Pick how the process takes the object: it just takes it, uses it without changing it (an instrument, in OPM’s words), or uses it up
+      (a consumption). For a link from a state, pick whether the process runs when the object enters it (an event), or only if the object
+      is in it once the process is ready (a condition), being skipped otherwise. Drag the link’s segments to route it, double-click it to
+      reset its route, and use + on it to insert a step.
     </>
   ),
   output: (
     <>
-      For a human process, pick on the link the states the person decides between; for an agent, the states it decides between, reviewing
-      the object if it takes it too. Drag the link’s segments to route it, double-click it to reset its route, and use + on it to insert a
-      step.
+      The process makes the object (a result, in OPM’s words), or changes it if it takes it too (an effect). For a human process, pick on
+      the link the states the person decides between; for an agent, the states it decides between, reviewing the object if it takes it
+      too. Drag the link’s segments to route it, double-click it to reset its route, and use + on it to insert a step.
     </>
   ),
   connection: (
@@ -175,8 +176,8 @@ const TIPS: Record<BoardTip, ReactNode> = {
   ),
   struct: (
     <>
-      A struct is one object that flows use. Add objects to give it nested fields, and make one a list in its settings. Double-click an object
-      for its attributes; right-click the struct’s to add states.
+      A struct is a reused object: one object that flows use, each copy following it. Add objects to give it nested fields, and make one a
+      list in its settings. Double-click an object for its attributes; right-click the struct’s to add states.
     </>
   ),
 }

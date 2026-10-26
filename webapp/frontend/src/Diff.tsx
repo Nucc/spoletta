@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { BoardDiff, BoardId, DiffField, DiffItem } from './api'
+import type { BoardDiff, BoardId, DiffField, DiffItem, LinkRole } from './api'
+import { ROLE_WORDS } from './words'
 
 // What changed between two boards of the flow, as the server works it out
 // (diff.go): listed in a panel, and highlighted on the board shown, the
@@ -161,11 +162,14 @@ export function DiffPanel({
 // How long a value shows before it folds away behind a toggle.
 const SHORT = 80
 
+// A link's role reads as the link's picker says it, in plain words first.
+const roleWord = (role: string) => ROLE_WORDS[role as LinkRole]?.label ?? role
+
 function DiffFields({ fields }: { fields: DiffField[] }) {
   return (
     <dl className="diff-fields">
       {fields.map((f) => (
-        <DiffValue key={f.field} field={f} />
+        <DiffValue key={f.field} field={f.field === 'role' ? { ...f, before: roleWord(f.before), after: roleWord(f.after) } : f} />
       ))}
     </dl>
   )

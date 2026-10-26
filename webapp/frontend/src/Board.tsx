@@ -83,6 +83,7 @@ import {
 import { decisionText, formatTime, ORIGIN_LABELS, rerunnableFrom, RunList, RunPanel, STANDING_LABELS, type RunFocus } from './Runs'
 import RerunDialog from './RerunDialog'
 import TrialDialog from './TrialDialog'
+import { PROCEDURE_WORDS, STRUCT_WORDS } from './words'
 import StartDialog from './StartDialog'
 import RunLogs from './RunLogs'
 import RunTimeline from './RunTimeline'
@@ -3277,9 +3278,9 @@ export default function Board({
       })
       view({
         id: 'view:opl',
-        title: 'OPL',
-        hint: "The flow in sentences, in OPM's Object-Process Language",
-        words: 'sentences language',
+        title: 'Sentences (OPL)',
+        hint: "The flow said in sentences, in OPM's Object-Process Language",
+        words: 'opl language',
         run: () => openOPL(true),
       })
       view({
@@ -3339,8 +3340,8 @@ export default function Board({
           ? []
           : [
               ...(connectorTiles ?? []).map((b): [Block, string] => [b, 'Connector']),
-              ...flowBlocks.map((b): [Block, string] => [b, 'Procedure']),
-              ...structBlocks.map((b): [Block, string] => [b, 'Struct']),
+              ...flowBlocks.map((b): [Block, string] => [b, PROCEDURE_WORDS.one]),
+              ...structBlocks.map((b): [Block, string] => [b, STRUCT_WORDS.one]),
             ]),
       ]
       for (const [b, kind] of blocks) {
@@ -3757,10 +3758,10 @@ export default function Board({
               <SidebarGroup id="connectors" title="Connectors">
                 <ConnectorPalette blocks={connectorTiles} disabled={readOnly} onAdd={addAtViewportCenter} />
               </SidebarGroup>
-              <SidebarGroup id="flows" title="Procedures">
+              <SidebarGroup id="flows" title="Procedures" gloss={PROCEDURE_WORDS.gloss}>
                 <FlowPalette blocks={flowBlocks} disabled={readOnly} onAdd={addAtViewportCenter} />
               </SidebarGroup>
-              <SidebarGroup id="structs" title="Structs">
+              <SidebarGroup id="structs" title="Structs" gloss={STRUCT_WORDS.gloss}>
                 <StructPalette blocks={structBlocks} disabled={readOnly} onAdd={addAtViewportCenter} />
               </SidebarGroup>
             </>

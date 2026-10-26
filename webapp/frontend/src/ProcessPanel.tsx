@@ -69,7 +69,7 @@ const KIND_HELP: Record<ProcessKind, string> = {
   script: 'A bash script: what the process takes is in $INPUTS, and what it prints is its output.',
   human: 'A person reviews what it takes, deciding the states its links list, or fills in what it generates.',
   flow: 'A board of its own, opened with its magnifier; taking a list, it runs once per item.',
-  subflow: 'Runs a procedure, giving it the objects named as those this process takes.',
+  subflow: 'Runs a procedure, a flow reused in others, giving it the objects named as those this process takes.',
   connector: 'Carries out one operation of an installed connector, such as posting to Slack.',
 }
 

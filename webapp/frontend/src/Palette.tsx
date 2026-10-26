@@ -79,7 +79,7 @@ export function connectorBlocks(servers: MCPServer[]): ConnectorBlock[] {
 export const flowBlock = (f: Flow): Block => ({
   id: `flow-${f.id}`,
   label: f.name,
-  title: `Runs the procedure ${f.name}, with the objects of the same names`,
+  title: `Runs the procedure ${f.name}, a flow reused here, with the objects of the same names`,
   type: 'process',
   kind: 'subflow',
   name: f.name,
@@ -90,7 +90,7 @@ export const flowBlock = (f: Flow): Block => ({
 export const structBlock = (f: Flow): Block => ({
   id: `struct-${f.id}`,
   label: f.name,
-  title: `A copy of the struct ${f.name}, which changes only there`,
+  title: `A copy of the struct ${f.name}, an object reused here, which changes only where it is made`,
   type: 'object',
   struct: f.id,
 })

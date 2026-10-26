@@ -36,6 +36,7 @@ import { OwnerPicker, ownerLabel } from './Owner'
 import { TemplateDialog, TemplateGallery } from './Templates'
 import { useConfirm } from './Confirm'
 import { useUndoNotice } from './UndoNotice'
+import { PROCEDURE_WORDS, STRUCT_WORDS } from './words'
 
 // The main page: the flows that run, each a job of its own, such as fixing
 // exceptions or bumping dependencies, and apart from them the procedures,
@@ -351,6 +352,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         <FlowSection
           kind="module"
           title="Procedures"
+          gloss={PROCEDURE_WORDS.gloss}
           note="Parts reused inside flows, dragged in from a board's sidebar. Changing one changes it everywhere it runs, and the objects it leaves follow it."
           empty="No procedures yet. A procedure is a group of processes other flows run, such as creating a Jira ticket."
           placeholder="Name a new procedure, such as Create a Jira ticket"
@@ -371,6 +373,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         <FlowSection
           kind="struct"
           title="Structs"
+          gloss={STRUCT_WORDS.gloss}
           note="Objects defined once, with their states, attributes and parts, and dragged in from a board's sidebar. Changing one changes every copy of it."
           empty="No structs yet. A struct is a single object flows use, such as a Jira ticket."
           placeholder="Name a new struct, such as Jira ticket"
@@ -600,6 +603,7 @@ function FlowSection({
   teams,
   onOwner,
   title,
+  gloss,
   note,
   empty,
   placeholder,
@@ -617,6 +621,8 @@ function FlowSection({
 }: {
   kind?: FlowKind
   title: string
+  // What the kind is in plain words, after its name; see words.ts.
+  gloss?: string
   note: string
   empty: string
   placeholder: string
@@ -658,6 +664,7 @@ function FlowSection({
         {kind === 'module' && <SubflowIcon />}
         {kind === 'struct' && <ObjectIcon />}
         {title}
+        {gloss && <span className="flow-section-gloss">({gloss})</span>}
       </h2>
       <p className="flows-note">{note}</p>
       <form className="flow-new" onSubmit={submit}>

@@ -1034,6 +1034,13 @@ body {
   cursor: pointer;
 }
 
+.sidebar-group-gloss {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
 .sidebar-group h2 button:hover {
   color: #1f2328;
   background: #f6f8fa;
@@ -3384,7 +3391,36 @@ body {
   border-color: #54aeff;
 }
 
-/* The flow in OPL, a sentence a line. */
+/* The flow in OPL, a sentence a line, with a key to its verbs. */
+.opl-key {
+  font-size: 12px;
+  color: #57606a;
+}
+
+.opl-key summary {
+  cursor: pointer;
+}
+
+.opl-key dl {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 4px 12px;
+  margin: 8px 0 0;
+}
+
+.opl-key dl > div {
+  display: contents;
+}
+
+.opl-key dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #1f2328;
+}
+
+.opl-key dd {
+  margin: 0;
+}
+
 .opl-actions {
   display: flex;
   gap: 8px;
@@ -3628,6 +3664,12 @@ body {
   font: inherit;
   border: 1px solid #54aeff;
   border-radius: 6px;
+}
+
+/* What a kind of flow is, in plain words after its name. */
+.flow-section-gloss {
+  font-weight: 400;
+  color: #656d76;
 }
 
 /* The main page: every flow, each opening its board. */

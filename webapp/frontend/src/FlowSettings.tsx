@@ -133,7 +133,7 @@ export function FlowSettingsPanel({
           disabled={readOnly || saving || (module && usedBy > 0)}
           onChange={(e) => setModule(e.target.checked)}
         />
-        <span>Procedure: a group of processes reused inside other flows</span>
+        <span>Procedure (reused flow): a group of processes other flows run inside them</span>
       </label>
       <p className="panel-note">
         {module

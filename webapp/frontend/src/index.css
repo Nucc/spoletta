@@ -106,6 +106,53 @@ body,
   color: #1f2328;
 }
 
+/* The inbox at the end of the tab bar, with how many steps wait on the
+   person; on a phone, its icon and count alone. */
+.tab-inbox {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin: 0 0 2px auto;
+  padding: 0 8px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: #57606a;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tab-inbox:hover {
+  background: #d8dee4;
+  color: #1f2328;
+}
+
+.tab-inbox.waiting {
+  color: #953800;
+}
+
+.tab-inbox-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #bc4c00;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+@media (max-width: 480px) {
+  .tab-inbox-label {
+    display: none;
+  }
+}
+
+
 body {
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: #1f2328;
@@ -3595,6 +3642,60 @@ button.toolbar-link {
     overflow: visible;
   }
 }
+
+/* On a phone the review takes the whole screen, nothing in it wider than
+   the screen, and its buttons large enough to tap; text fields keep the
+   size a phone doesn't zoom in on. */
+@media (max-width: 600px) {
+  .review-dialog,
+  .review-dialog.reading {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
+    margin: 0;
+    padding: 12px;
+    border-radius: 0;
+  }
+
+  .review-dialog .panel-header h2 {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .review-dialog .panel-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .review-dialog .review {
+    padding: 10px;
+  }
+
+  .review-dialog .entry {
+    min-width: 0;
+  }
+
+  .review-dialog .data-markdown table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .review-dialog :is(input, select, textarea) {
+    max-width: 100%;
+    font-size: 16px;
+  }
+
+  .review-actions button {
+    flex: 1 1 auto;
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
+
 
 /* Re-running a run from a process: what it took, to change, above the buttons. */
 .rerun-body {
@@ -7732,4 +7833,109 @@ select.flow-owner:disabled {
 .activity-footnote {
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* The inbox: a card per step waiting on the person, each opening its review,
+   its left edge saying whether it is a review or a loop question. */
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inbox-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #d8dee4;
+  border-left: 4px solid #fb8f44;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  text-decoration: none;
+}
+
+.inbox-item:hover {
+  border-color: #8c959f;
+  border-left-color: #bc4c00;
+}
+
+.inbox-item.waits-loop {
+  border-left-color: #a475f9;
+}
+
+.inbox-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.inbox-waits {
+  font-size: 12px;
+  font-weight: 600;
+  color: #953800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.waits-loop .inbox-waits {
+  color: #6639ba;
+}
+
+.inbox-process {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.inbox-where,
+.inbox-when {
+  font-size: 13px;
+  color: #57606a;
+  overflow-wrap: anywhere;
+}
+
+.inbox-when strong {
+  color: #953800;
+  font-weight: 600;
+}
+
+.inbox-detail {
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* On a phone each card is easy to tap. */
+@media (max-width: 600px) {
+  .inbox .inbox-item {
+    padding: 14px 12px;
+  }
+
+  .inbox.flows {
+    padding: 20px 12px;
+  }
+}
+
+/* What a person is told of, and how, in their account's settings. */
+.notification-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notification-settings .panel-check {
+  align-items: flex-start;
+  font-size: 14px;
+}
+
+/* A human process's reminder and time limit, side by side. */
+.panel-durations .panel-field {
+  flex: 1;
+  min-width: 0;
 }

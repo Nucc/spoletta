@@ -374,15 +374,18 @@ const endEdge = (object: number): FlowEdge => ({
 })
 
 // A flow's board, its runs and its versions. Opening another flow mounts a
-// new board, showing the run given, if any.
+// new board, showing the run given, if any, with the review of the step
+// given showing, as the inbox opens one.
 export default function Board({
   flow,
   initialRun,
+  initialStep = null,
   onUpdate,
   onReload,
 }: {
   flow: Flow
   initialRun: number | null
+  initialStep?: number | null
   onUpdate: (patch: Partial<Pick<Flow, 'name' | 'module' | 'settings'>>) => Promise<void>
   // Reads the flow again, after the server changed it.
   onReload: () => Promise<void>
@@ -1072,12 +1075,14 @@ export default function Board({
     const steps = new Map(shownRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
     const rerunnable = new Set(shownRun.steps.flatMap((s) => (rerunnableFrom(shownRun, s) ? [String(s.process)] : [])))
     const objects = new Map(shownRun.objects.flatMap((o) => (o.object === null ? [] : [[objectNodeId(o.object), o] as const])))
-    // A review inside a flow process opens once its board shows.
+    // A review inside a flow process opens once its board shows; the one
+    // the address asked for over any other.
     for (const [process, s] of steps) {
       if (s.status !== 'waiting' || shownReviews.current.has(s.id) || !getNode(process)) continue
       shownReviews.current.add(s.id)
-      setReviewId((open) => open ?? process)
-      setPanelId((open) => open ?? process)
+      const asked = s.id === initialStep && shownRun.id === initialRun
+      setReviewId((open) => (asked ? process : (open ?? process)))
+      setPanelId((open) => (asked ? process : (open ?? process)))
     }
     setNodes((ns) =>
       ns.map((n): FlowNode => {
@@ -1434,10 +1439,11 @@ export default function Board({
       return boardId === null && node?.type === 'object' && !node.data.human && stateOfHandle(sourceHandle) === null
     }
     if (source === START_ID || isObject(source)) return isProcess(target)
-    // A process dropped on another handles its failure, if it can fail.
+    // A process dropped on another handles its failure, if it can fail: a
+    // person's past its time limit.
     if (isProcess(source) && isProcess(target)) {
       const node = getNode(source)
-      const fails = node?.type === 'process' && ['agent', 'script', 'connector'].includes(node.data.kind)
+      const fails = node?.type === 'process' && ['agent', 'script', 'connector', 'human'].includes(node.data.kind)
       return fails && source !== target && !edges.some((e) => e.source === source && e.target === target)
     }
     if (!isProcess(source) || !isObject(target)) return false
@@ -2110,6 +2116,18 @@ export default function Board({
     openRunById(initialRun)
   })
 
+  // The review asked for may be on the board of a flow process the run went
+  // into, which shows, once, so its review can.
+  const steppedIn = useRef(false)
+  useEffect(() => {
+    if (initialStep === null || steppedIn.current || shownRun?.id !== initialRun || !contents) return
+    const s = shownRun.steps.find((st) => st.id === initialStep)
+    if (!s) return
+    steppedIn.current = true
+    const p = contents.processes.find((pr) => pr.id === s.process)
+    if (p && p.parent !== boardId) setBoardId(p.parent)
+  })
+
   // The address names the open run, so going back to this flow opens it again.
   useEffect(() => {
     const want = runId === null ? `#/flows/${flowId}` : `#/flows/${flowId}/runs/${runId}`
@@ -2438,8 +2456,9 @@ export default function Board({
   }
 
   // Becoming or ceasing to be human drops the process's outputs, becoming
-  // human its direct connections, and ceasing to be human its people's agent
-  // links; the server deletes the same links when it saves the new kind.
+  // human its direct connections but those handling its failure, and ceasing
+  // to be human its people's agent links; the server deletes the same links
+  // when it saves the new kind.
   const dropMismatchedEdges = (id: string, from: ProcessKind, to: ProcessKind) => {
     // Only an agent decides between states; the others generate the object as it is.
     if (from === 'agent' && to !== 'agent' && to !== 'human') {
@@ -2462,7 +2481,8 @@ export default function Board({
         const l = e.data?.link
         if (l && String(l.process) === id && l.direction === 'input' && to !== 'human' && person(l.object)) return false
         if (l) return !(l.direction === 'output' && String(l.process) === id)
-        return !(to === 'human' && e.id.startsWith(CONNECTION_PREFIX) && e.source === id)
+        // A person can fail past their time limit, so what handles it stays.
+        return !(to === 'human' && e.id.startsWith(CONNECTION_PREFIX) && e.source === id && !e.data?.failure)
       }),
     )
   }

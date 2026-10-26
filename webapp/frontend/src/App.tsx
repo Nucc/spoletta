@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
-import { getFlow, updateFlow, type Flow } from './api'
+import { countInbox, getFlow, onInboxChanged, updateFlow, type Flow } from './api'
 import Board from './Board'
 import FlowData from './FlowData'
 import FlowList from './FlowList'
 import Activity from './Activity'
 import AuditLog from './Audit'
+import Inbox, { INBOX_REFRESH_MS } from './Inbox'
 import Records from './Records'
 import RunCompare from './RunCompare'
 import Schedules from './Schedules'
@@ -14,18 +15,20 @@ import TabBar from './TabBar'
 import { TabContext, useTabs } from './tabs'
 
 // The page the URL's hash names: #/flows/<id> for a flow's board,
-// #/flows/<id>/runs/<run> for it with one of its runs open,
+// #/flows/<id>/runs/<run> for it with one of its runs open, and with
+// /steps/<step> after it that step's review showing,
 // #/flows/<id>/compare/<run>/<run> for two of its runs side by side,
 // #/flows/<id>/data for what its runs held, #/flows/<id>/records for a
 // shared struct's records, both with ?q=<search>&sort=<key> for what they
 // show, #/audit for the audit log, with them too, #/schedules for the
-// schedules, #/settings/<tab> for the settings, #/activity for what goes on
-// across the flows, with ?days=<n> for its period, anything else for the
+// schedules, #/inbox for what waits on the person, #/settings/<tab> for the
+// settings, #/activity for what goes on across the flows, with ?days=<n>
+// for its period, anything else for the
 // list of flows. #/people, where the people were before the settings, is
 // their tab now. The address is the open tab's; each tab keeps its own
 // (tabs.ts).
 type Page =
-  | { flow: number; run: number | null }
+  | { flow: number; run: number | null; step: number | null }
   | { compare: number; a: number; b: number }
   | { data: number }
   | { records: number }
@@ -33,10 +36,14 @@ type Page =
   | 'schedules'
   | 'audit'
   | 'activity'
+  | 'inbox'
   | null
+
+const INBOX = '#/inbox'
 
 const pageInHash = (): Page => {
   if (window.location.hash === '#/schedules') return 'schedules'
+  if (window.location.hash === INBOX) return 'inbox'
   if (/^#\/audit(?:\?.*)?$/.test(window.location.hash)) return 'audit'
   if (/^#\/activity(?:\?.*)?$/.test(window.location.hash)) return 'activity'
   if (window.location.hash === '#/people') return { settings: 'people' }
@@ -48,15 +55,50 @@ const pageInHash = (): Page => {
   if (d) return { data: Number(d[1]) }
   const r = /^#\/flows\/(\d+)\/records(?:\?.*)?$/.exec(window.location.hash)
   if (r) return { records: Number(r[1]) }
-  const m = /^#\/flows\/(\d+)(?:\/runs\/(\d+))?$/.exec(window.location.hash)
-  return m ? { flow: Number(m[1]), run: m[2] ? Number(m[2]) : null } : null
+  const m = /^#\/flows\/(\d+)(?:\/runs\/(\d+)(?:\/steps\/(\d+))?)?$/.exec(window.location.hash)
+  return m ? { flow: Number(m[1]), run: m[2] ? Number(m[2]) : null, step: m[3] ? Number(m[3]) : null } : null
+}
+
+// How many steps wait on the person, asked every so often, again once they
+// decide one, and as they come back to the page; null until known.
+function useInboxCount(): number | null {
+  const [count, setCount] = useState<number | null>(null)
+  useEffect(() => {
+    const ask = () => void countInbox().then((n) => n !== null && setCount(n))
+    ask()
+    const t = window.setInterval(ask, INBOX_REFRESH_MS)
+    const onVisible = () => document.visibilityState === 'visible' && ask()
+    document.addEventListener('visibilitychange', onVisible)
+    const off = onInboxChanged(ask)
+    return () => {
+      window.clearInterval(t)
+      document.removeEventListener('visibilitychange', onVisible)
+      off()
+    }
+  }, [])
+  return count
 }
 
 export default function App() {
   const { tabs, active, select, add, close } = useTabs()
+  const inbox = useInboxCount()
+  // The inbox opens in the tab showing it, if one does, else in a new one.
+  const onInbox = () => {
+    const open = tabs.find((t) => t.hash === INBOX)
+    if (open) select(open.id)
+    else add(INBOX)
+  }
   return (
     <>
-      <TabBar tabs={tabs} active={active} onSelect={select} onAdd={() => add('#/', true)} onClose={close} />
+      <TabBar
+        tabs={tabs}
+        active={active}
+        inbox={inbox}
+        onSelect={select}
+        onAdd={() => add('#/', true)}
+        onClose={close}
+        onInbox={onInbox}
+      />
       <div className="tab-page">
         {/* A new page for each tab, so nothing of one shows on another. */}
         <TabContext.Provider value={active}>
@@ -73,15 +115,16 @@ function Page() {
   if (page === 'schedules') return <Schedules />
   if (page === 'audit') return <AuditLog />
   if (page === 'activity') return <Activity />
+  if (page === 'inbox') return <Inbox />
   if ('settings' in page) return <Settings tab={page.settings} />
   if ('compare' in page) return <RunCompare key={`${page.a}-${page.b}`} flow={page.compare} a={page.a} b={page.b} />
   if ('data' in page) return <FlowData key={page.data} id={page.data} />
   if ('records' in page) return <Records key={page.records} id={page.records} />
   // A new board for each flow, so nothing of one shows on another.
-  return <FlowPage key={page.flow} id={page.flow} run={page.run} />
+  return <FlowPage key={page.flow} id={page.flow} run={page.run} step={page.step} />
 }
 
-function FlowPage({ id, run }: { id: number; run: number | null }) {
+function FlowPage({ id, run, step }: { id: number; run: number | null; step: number | null }) {
   const [flow, setFlow] = useState<Flow | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -118,7 +161,7 @@ function FlowPage({ id, run }: { id: number; run: number | null }) {
   if (!flow) return null
   return (
     <ReactFlowProvider>
-      <Board flow={flow} initialRun={run} onUpdate={onUpdate} onReload={onReload} />
+      <Board flow={flow} initialRun={run} initialStep={step} onUpdate={onUpdate} onReload={onReload} />
     </ReactFlowProvider>
   )
 }

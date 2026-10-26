@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { listMCPServers, type MCPServer, type Me } from './api'
+import {
+  getNotificationSettings,
+  listMCPServers,
+  updateNotificationSettings,
+  type MCPServer,
+  type Me,
+  type NotificationSettings,
+} from './api'
 import { configures, useMe } from './Account'
 import { FlowBuilderIcon } from './icons'
 import { MCPServers } from './MCPSettings'
@@ -81,7 +88,12 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
             {configures(me) && <a href="#/audit">Audit log</a>}
           </nav>
           <main className="settings-main">
-            {shown === 'account' && <AccountSection me={me} />}
+            {shown === 'account' && (
+              <>
+                <AccountSection me={me} />
+                <NotificationsSection onError={report} />
+              </>
+            )}
             {shown === 'keys' && <ModelProvidersSection onError={report} />}
             {shown === 'connectors' && <DirectorySection canConfigure={configures(me)} onError={report} />}
             {shown === 'mcp' && <MCPSection me={me} onError={report} />}
@@ -123,6 +135,56 @@ function AccountSection({ me }: { me: Me }) {
           {u.roles.length > 0 ? `${u.roles.join(', ')}: you decide the reviews of the processes these handle` : 'None'}
         </dd>
       </dl>
+    </section>
+  )
+}
+
+// What the person is told of, and how: that reviews and questions wait on
+// them, by email and on Slack, and whether of their runs failing. A channel
+// the instance isn't set up for says so.
+function NotificationsSection({ onError }: { onError: (err: unknown) => void }) {
+  const [settings, setSettings] = useState<NotificationSettings | null>(null)
+  useEffect(() => {
+    getNotificationSettings().then(setSettings, onError)
+  }, [onError])
+  if (!settings) return null
+  const change = (patch: Parameters<typeof updateNotificationSettings>[0]) =>
+    updateNotificationSettings(patch).then(setSettings, onError)
+  return (
+    <section className="flow-section notification-settings" aria-label="Notifications">
+      <h2>Notifications</h2>
+      <p className="flows-note">
+        You are told when a review, input or loop question starts waiting on you, and reminded when its process says;
+        what waits on you is in your <a href="#/inbox">inbox</a> too. Each message links straight to it.
+      </p>
+      <label className="panel-check">
+        <input
+          type="checkbox"
+          checked={settings.email}
+          disabled={!settings.canEmail}
+          onChange={(e) => change({ email: e.target.checked })}
+        />
+        <span>
+          By email
+          {!settings.canEmail && <small className="panel-note"> (not set up here: an admin sets SMTP_HOST)</small>}
+        </span>
+      </label>
+      <label className="panel-check">
+        <input
+          type="checkbox"
+          checked={settings.slack}
+          disabled={!settings.canSlack}
+          onChange={(e) => change({ slack: e.target.checked })}
+        />
+        <span>
+          On Slack, by a direct message
+          {!settings.canSlack && <small className="panel-note"> (not set up here: an admin installs the Slack connector)</small>}
+        </span>
+      </label>
+      <label className="panel-check">
+        <input type="checkbox" checked={settings.failures} onChange={(e) => change({ failures: e.target.checked })} />
+        <span>Also tell me when a run I started fails</span>
+      </label>
     </section>
   )
 }

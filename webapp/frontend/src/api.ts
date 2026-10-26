@@ -51,6 +51,11 @@ export type ProcessSettings = {
   quorum?: number
   // Whether an agent's prompt describes the flow it works in, in OPL.
   describeFlow?: boolean
+  // How long a human step waits before those who may decide it are
+  // reminded, once, and the longest it waits before it fails, so what
+  // handles its failure takes over; in seconds, neither when absent.
+  remindAfter?: number
+  waitAtMost?: number
 }
 
 export const DEFAULT_ROUNDS = 3
@@ -60,6 +65,9 @@ export const MAX_LOOPS = 100
 // The longest timeout, a day in seconds, and the most retries.
 export const MAX_TIMEOUT = 24 * 60 * 60
 export const MAX_RETRIES = 5
+// The longest a human step may wait before it is reminded or fails, a year
+// in seconds.
+export const MAX_WAIT = 365 * 24 * 60 * 60
 
 export type Process = {
   id: number
@@ -214,7 +222,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/runs', '/api/schedules', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default']
+const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default']
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<(url: string) => void>()
@@ -1450,19 +1458,81 @@ export async function clearAssistant(flow: number): Promise<void> {
 export type EntryValue = string | EntryValue[] | { [name: string]: EntryValue }
 export type Entries = Record<string, EntryValue>
 
-export function decideStep(
+export async function decideStep(
   run: number,
   id: number,
   decision: { state: number | null; instructions: string; entries?: Entries },
 ): Promise<void> {
-  return request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(decision) })
+  await request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(decision) })
+  inboxChanged()
 }
 
 // Answers a loop step: whether its process goes on round the loop, or stops,
 // which fails the run.
-export function answerLoop(run: number, id: number, goOn: boolean): Promise<void> {
-  return request(`/api/runs/${run}/steps/${id}/loop`, { method: 'POST', body: JSON.stringify({ goOn }) })
+export async function answerLoop(run: number, id: number, goOn: boolean): Promise<void> {
+  await request(`/api/runs/${run}/steps/${id}/loop`, { method: 'POST', body: JSON.stringify({ goOn }) })
+  inboxChanged()
 }
+
+// A step waiting on the person signed in: a review or input they may
+// decide, or a loop question of a flow they may edit; without sign-in,
+// every step waiting. See inbox.go.
+export type InboxItem = {
+  step: number
+  run: number
+  // The run's flow, and the run it is within, for a flow process's or a
+  // subflow's run.
+  flow: number
+  flowName: string
+  parent: number | null
+  // Kept once the process is deleted, with its name then.
+  process: number | null
+  processName: string
+  // A decision on a review, what they fill in, or whether a process goes on
+  // round a loop.
+  waits: 'review' | 'input' | 'loop'
+  // A loop step's question, or the human process's instructions.
+  detail: string
+  // The roles that decide it, none when anyone does.
+  handledBy: string[]
+  // Who started its run, when someone did.
+  startedBy: string
+  since: string
+  // When it fails if nobody decides it, if its process says.
+  expires: string | null
+}
+
+// What waits on the person, newest first.
+export function listInbox(): Promise<InboxItem[]> {
+  return request('/api/inbox')
+}
+
+// How many steps wait on the person, asked in the background: null when it
+// can't be told, without sending them to sign in as a page's own request
+// does, so a session ending doesn't pull them away from what they type.
+export async function countInbox(): Promise<number | null> {
+  try {
+    const res = await fetch('/api/inbox')
+    return res.ok ? ((await res.json()) as InboxItem[]).length : null
+  } catch {
+    return null
+  }
+}
+
+// Where the board opens on the step's run with its review showing.
+export const reviewHash = (item: Pick<InboxItem, 'flow' | 'run' | 'step'>) =>
+  `#/flows/${item.flow}/runs/${item.run}/steps/${item.step}`
+
+const INBOX_CHANGED = 'inbox-changed'
+
+// Calls back once the person decided something, which may take it out of
+// their inbox.
+export function onInboxChanged(callback: () => void): () => void {
+  window.addEventListener(INBOX_CHANGED, callback)
+  return () => window.removeEventListener(INBOX_CHANGED, callback)
+}
+
+const inboxChanged = () => window.dispatchEvent(new Event(INBOX_CHANGED))
 
 // A saved snapshot of the whole board and the flow's settings. Saving always
 // adds a version on top; jumping to an older one keeps every other version.
@@ -1695,6 +1765,27 @@ export type Me = { signIn: boolean; user: User | null }
 
 export function getMe(): Promise<Me> {
   return request('/api/me')
+}
+
+// What the person signed in is told of, and how: by email and on Slack,
+// when reviews wait on them, and whether of their runs failing; and whether
+// the instance can email them, and tell them on Slack, at all.
+export type NotificationSettings = {
+  email: boolean
+  slack: boolean
+  failures: boolean
+  canEmail: boolean
+  canSlack: boolean
+}
+
+export function getNotificationSettings(): Promise<NotificationSettings> {
+  return request('/api/me/notifications')
+}
+
+export function updateNotificationSettings(
+  patch: Partial<Pick<NotificationSettings, 'email' | 'slack' | 'failures'>>,
+): Promise<NotificationSettings> {
+  return request('/api/me/notifications', { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
 // Signing in again right away could find the provider still signed in, and

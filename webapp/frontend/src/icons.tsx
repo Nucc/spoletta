@@ -335,3 +335,11 @@ export const TableIcon = () => (
     <path d="M1.5 6.5h13M1.5 10h13M6 6.5v7" />
   </Icon>
 )
+
+// A tray, for the inbox of what waits on the person.
+export const InboxIcon = () => (
+  <Icon>
+    <path d="M2 9.5l1.75-6.25h8.5L14 9.5v3.25H2z" />
+    <path d="M2 9.5h3.5l1 1.75h3l1-1.75H14" />
+  </Icon>
+)

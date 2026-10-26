@@ -6,6 +6,7 @@ import {
   MAX_RETRIES,
   MAX_ROUNDS,
   MAX_TIMEOUT,
+  MAX_WAIT,
   THINKING_LEVELS,
   listObjects,
   updateProcess,
@@ -394,6 +395,28 @@ export default function ProcessPanel({
         </label>
       )}
       {kind === 'script' && repositoryPicker}
+      {kind === 'human' && (
+        <div className="panel-row panel-durations">
+          <DurationSetting
+            label="Remind after"
+            title="How long it waits before whoever may decide it is reminded, once, such as 4h or 1d; never when empty"
+            value={settings.remindAfter}
+            readOnly={readOnly}
+            onChange={(remindAfter) =>
+              setSettings(({ remindAfter: _, ...rest }) => (remindAfter === undefined ? rest : { ...rest, remindAfter }))
+            }
+          />
+          <DurationSetting
+            label="Fail after"
+            title="The longest it waits with nobody deciding before it fails, such as 2d; never when empty. Drag from this process onto another to run that one when it fails."
+            value={settings.waitAtMost}
+            readOnly={readOnly}
+            onChange={(waitAtMost) =>
+              setSettings(({ waitAtMost: _, ...rest }) => (waitAtMost === undefined ? rest : { ...rest, waitAtMost }))
+            }
+          />
+        </div>
+      )}
       {(kind === 'agent' || kind === 'script' || kind === 'connector') && (
         <div className="panel-row">
           {kind === 'agent' && (
@@ -617,6 +640,76 @@ function NumberSetting({
           if (e.target.value === '') return onChange(undefined)
           const n = Number(e.target.value)
           if (Number.isInteger(n) && n >= min && n <= max) onChange(n)
+        }}
+      />
+    </label>
+  )
+}
+
+// A duration as written: days, hours, minutes and seconds, such as 4h or
+// 1d 12h, or seconds alone; null if it isn't one.
+function parseDuration(text: string): number | null {
+  const t = text.trim().toLowerCase()
+  if (/^\d+$/.test(t)) return Number(t)
+  if (!/^(\d+\s*[dhms]\s*)+$/.test(t)) return null
+  const size: Record<string, number> = { d: 86400, h: 3600, m: 60, s: 1 }
+  let total = 0
+  for (const [, n, unit] of t.matchAll(/(\d+)\s*([dhms])/g)) total += Number(n) * size[unit]
+  return total
+}
+
+// A number of seconds as parseDuration takes it, such as 1d 12h.
+function durationText(seconds: number): string {
+  const parts: string[] = []
+  for (const [unit, size] of [['d', 86400], ['h', 3600], ['m', 60], ['s', 1]] as const) {
+    const n = Math.floor(seconds / size)
+    if (n > 0) parts.push(`${n}${unit}`)
+    seconds -= n * size
+  }
+  return parts.join(' ') || '0s'
+}
+
+// A setting holding a duration in seconds, written as parseDuration takes
+// it, none when empty.
+function DurationSetting({
+  label,
+  title,
+  value,
+  readOnly,
+  onChange,
+}: {
+  label: string
+  title: string
+  value: number | undefined
+  readOnly: boolean
+  onChange: (seconds: number | undefined) => void
+}) {
+  const [text, setText] = useState(value === undefined ? '' : durationText(value))
+  useEffect(() => {
+    setText((t) =>
+      parseDuration(t) === (value ?? null) || (t.trim() === '' && value === undefined)
+        ? t
+        : value === undefined
+          ? ''
+          : durationText(value),
+    )
+  }, [value])
+  const seconds = parseDuration(text)
+  const invalid = text.trim() !== '' && (seconds === null || seconds < 1 || seconds > MAX_WAIT)
+  return (
+    <label className="panel-field" title={title}>
+      <span>{label}</span>
+      <input
+        type="text"
+        value={text}
+        placeholder="Never"
+        readOnly={readOnly}
+        aria-invalid={invalid || undefined}
+        onChange={(e) => {
+          setText(e.target.value)
+          if (e.target.value.trim() === '') return onChange(undefined)
+          const n = parseDuration(e.target.value)
+          if (n !== null && n >= 1 && n <= MAX_WAIT) onChange(n)
         }}
       />
     </label>

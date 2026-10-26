@@ -527,3 +527,49 @@ flows:
 		t.Errorf("the reply = %+v", reply)
 	}
 }
+
+// A follow-up of an agent step gets its process's credentials anew, with a
+// token of its own that ends with it.
+func TestFollowUpsGetTheirProcessesCredentials(t *testing.T) {
+	a := newApp(t)
+	svc := newCredentialsService(t)
+	secret := "followup-secret-0123456789"
+	c := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Tracker"), "baseUrl": svc.srv.URL + "/api", "auth": "header", "secret": secret, "everyone": true})
+	f := a.newFlow("Followed up")
+	a.call("PATCH", fmt.Sprintf("/api/flows/%d", f.ID), map[string]any{"settings": map[string]any{
+		"repositories": []map[string]any{{"url": "https://github.com/acme/api"}},
+	}}, http.StatusOK, nil)
+	fix := a.newProcess(f.ID, map[string]any{"name": "Fix", "kind": "agent", "prompt": "Fix it.", "settings": map[string]any{"credentials": []int64{c.ID}}})
+	a.output(fix.ID, a.newObject(f.ID, "Diff").ID)
+	a.startAt(f.ID, fix.ID)
+	var status int
+	a.worker.onAgent("Fix", func(_ context.Context, run agentRun) runResult {
+		if run.Resume {
+			status = credentialsCall(t, "GET", run.Credentials[0].URL+"/issues/7", run.CredentialsToken, false, "").status
+			return runResult{OK: true, Output: "commented"}
+		}
+		return submitted(data("fixed"))
+	})
+	d := a.finish(a.startRun(f.ID).ID)
+	if d.Status != runDone {
+		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
+	}
+	step := onlyStep(t, d, "Fix")
+	a.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/followups", d.ID, step.ID), map[string]any{"message": "Comment on the issue."}, http.StatusCreated, nil)
+	a.waitRun(d.ID, "the follow-up to end", func(d runDetail) bool {
+		s := onlyStep(t, d, "Fix")
+		return len(s.FollowUps) == 1 && s.FollowUps[0].Status == stepDone
+	})
+	runs := a.worker.runsOf("Fix")
+	first, followUp := runs[0], runs[len(runs)-1]
+	if !followUp.Resume || len(followUp.Credentials) != 1 || followUp.Credentials[0].URL != fmt.Sprintf("%s/credentials/%d", a.url, c.ID) ||
+		followUp.CredentialsToken == "" || followUp.CredentialsToken == first.CredentialsToken {
+		t.Fatalf("the follow-up got %+v with the token %q, the step %q", followUp.Credentials, followUp.CredentialsToken, first.CredentialsToken)
+	}
+	if s := svc.requests(); status != http.StatusOK || len(s) != 1 || s[0].path != "/api/issues/7" || s[0].authorization != "Bearer "+secret {
+		t.Errorf("the follow-up's call answered %d, and the service got %+v", status, s)
+	}
+	if got := credentialsCall(t, "GET", followUp.Credentials[0].URL+"/issues/7", followUp.CredentialsToken, false, ""); got.status != http.StatusForbidden {
+		t.Errorf("after the follow-up, its token got %d", got.status)
+	}
+}

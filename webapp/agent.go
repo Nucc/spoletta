@@ -277,11 +277,12 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		}
 		defer mcp.revoke(run.MCPToken)
 		auditMCP(who, runID, stepID, run.MCPServers)
-		res.Error = msg
-		if run.Credentials, run.CredentialsToken, err = grantCredentials(ctx, who, runID, stepID, flow, creds, 2*settings.timeout()); err != nil {
-			return res, err
+		if res.Error = msg; res.Error == "" {
+			if run.Credentials, run.CredentialsToken, err = grantCredentials(ctx, who, runID, stepID, flow, creds, 2*settings.timeout()); err != nil {
+				return res, err
+			}
+			defer credentialProxy.revoke(run.CredentialsToken)
 		}
-		defer credentialProxy.revoke(run.CredentialsToken)
 	}
 	if res.Error == "" && run.Workspace != nil {
 		if run.SessionID, err = newSessionID(); err != nil {

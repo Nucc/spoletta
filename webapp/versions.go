@@ -553,6 +553,9 @@ func saveVersion(ctx context.Context, tx *sql.Tx, flow int64, reuse bool, saved 
 	if err != nil {
 		return 0, err
 	}
+	if err := saveVersionRoles(ctx, tx, id, s); err != nil {
+		return 0, err
+	}
 	_, err = tx.ExecContext(ctx, "UPDATE flows SET version_id = ? WHERE id = ?", id, flow)
 	return id, err
 }

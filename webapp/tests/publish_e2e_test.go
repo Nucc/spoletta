@@ -605,3 +605,71 @@ func TestAssistantChangesShowAgainstTheVersionBefore(t *testing.T) {
 		t.Errorf("what the assistant changed = %v", got)
 	}
 }
+
+// Someone holding the role a human object names keeps deciding the reviews
+// of the runs whose version has it, though the draft dropped the object: of
+// the version published, and of a run of the board waiting on them. The
+// review is decided by the role its run's version names, not the draft's.
+func TestRoleHoldersKeepTheReviewsOfTheirVersions(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	carl, dora := usersNewPerson("Carl"), usersNewPerson("Dora")
+	usersAdd(a, carl.email, "Editor")
+	usersAdd(a, dora.email, "Legal")
+	b := humanNewReviewBoard(a)
+	flowPath := fmt.Sprintf("/api/flows/%d", b.flow.ID)
+	rename := func(name string) {
+		t.Helper()
+		usersSignIn(a, p, usersAda)
+		verPatch(a, fmt.Sprintf("/api/objects/%d", b.person.ID), map[string]any{"name": name})
+	}
+
+	pubPublish(a, b.flow.ID, "The editor reviews")
+	var rn run
+	a.call("POST", fmt.Sprintf("/api/runs?flow=%d", b.flow.ID), map[string]any{"published": true}, http.StatusCreated, &rn)
+	review := a.waitStep(rn.ID, "Review", stepWaiting)
+	// The draft has Legal review instead.
+	rename("Legal")
+
+	// Dora holds the draft's role alone: she sees the flow, but the
+	// published run's review is the editor's.
+	usersSignIn(a, p, dora)
+	a.call("GET", flowPath, nil, http.StatusOK, nil)
+	if s := onlyStep(t, a.getRun(rn.ID), "Review"); s.CanDecide || !slices.Equal(s.HandledBy, []string{"Editor"}) {
+		t.Errorf("dora sees the review handled by %v, can decide %v", s.HandledBy, s.CanDecide)
+	}
+	a.refused("PATCH", fmt.Sprintf("/api/runs/%d/steps/%d", rn.ID, review.ID), map[string]any{"state": b.approved.ID}, http.StatusForbidden, "only Editor decides this review")
+
+	// Carl, the editor, still sees the flow through its version published,
+	// and decides.
+	usersSignIn(a, p, carl)
+	var seen flow
+	a.call("GET", flowPath, nil, http.StatusOK, &seen)
+	if seen.Access != "review" {
+		t.Errorf("carl's access = %q, want review", seen.Access)
+	}
+	humanMustDecide(a, rn.ID, review.ID, map[string]any{"state": b.approved.ID})
+	if r := onlyStep(t, a.finish(rn.ID), "Review"); r.DecidedBy != "Carl" {
+		t.Errorf("decided by %q", r.DecidedBy)
+	}
+
+	// Once nothing published or waiting names his role, he no longer sees it.
+	usersSignIn(a, p, usersAda)
+	a.call("DELETE", fmt.Sprintf("/api/versions/published?flow=%d", b.flow.ID), nil, http.StatusOK, nil)
+	usersSignIn(a, p, carl)
+	a.refused("GET", flowPath, nil, http.StatusNotFound, "flow not found")
+
+	// A run of the board started while the editor reviewed keeps him in,
+	// while it waits on him, after the draft hands the review to Legal.
+	rename("Editor")
+	drafted := a.startRun(b.flow.ID)
+	review = a.waitStep(drafted.ID, "Review", stepWaiting)
+	rename("Legal")
+	usersSignIn(a, p, carl)
+	a.call("GET", flowPath, nil, http.StatusOK, nil)
+	humanMustDecide(a, drafted.ID, review.ID, map[string]any{"state": b.approved.ID})
+	// Decided, the run waits on nobody, so he sees it no longer.
+	a.refused("GET", flowPath, nil, http.StatusNotFound, "flow not found")
+	usersSignIn(a, p, usersAda)
+	a.finish(drafted.ID)
+}

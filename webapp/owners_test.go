@@ -55,6 +55,12 @@ func TestFlowConditions(t *testing.T) {
 	if !strings.Contains(see, edit) || !strings.Contains(see, "user_roles") || !strings.Contains(see, "o.human") {
 		t.Errorf("visibleFlows isn't the editable ones or the ones with reviews the roles decide: %q", see)
 	}
+	// Or a version published, or one a run waiting on a person runs, names them.
+	for _, part := range []string{"version_roles", "f.published_version_id", "s.status = 'waiting'"} {
+		if !strings.Contains(see, part) {
+			t.Errorf("visibleFlows lacks %q: %q", part, see)
+		}
+	}
 }
 
 // Reading needs only review access, and so do deciding a review and

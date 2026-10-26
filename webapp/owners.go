@@ -8,7 +8,10 @@ package main
 // change it and run it. Admins see everything, so nothing can end up out of
 // everyone's reach. Someone holding a role a human object on a flow names,
 // who decides its reviews (see user_roles.go), sees the flow and its runs
-// too, to decide them, but changes nothing in it.
+// too, to decide them, but changes nothing in it. The object may be on the
+// board as it is, on the version the flow published, or on the version of
+// a run waiting for a person, so a draft dropping it doesn't shut its role
+// holders out of the reviews of the runs that still have it.
 //
 // Who owns it changes hands this way: someone gives what is theirs to one
 // of their teams or makes it global; a team's member gives the team's to
@@ -96,14 +99,21 @@ func ownedBy(t string, u *user) (string, []any) {
 }
 
 // The condition on flows f that only the ones the user sees meet: the ones
-// they may change, and the ones with reviews their roles decide.
+// they may change, and the ones with reviews their roles decide: a human
+// object names one of their roles on the board as it is, on the version
+// published, or on the version of a run of it waiting for a person. Versions
+// keep the roles their human objects name in version_roles, so this reads
+// no snapshot.
 func visibleFlows(u *user) (string, []any) {
 	cond, args := editableFlows(u)
 	if u == nil || u.Admin {
 		return cond, args
 	}
-	return "(" + cond + ` OR EXISTS (SELECT 1 FROM objects o JOIN user_roles ur ON LOWER(TRIM(o.name)) = LOWER(ur.name)
-		WHERE o.flow_id = f.id AND o.human AND ur.user_id = ?))`, append(args, u.ID)
+	return "(" + cond + ` OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = ? AND (
+		EXISTS (SELECT 1 FROM objects o WHERE o.flow_id = f.id AND o.human AND LOWER(TRIM(o.name)) = LOWER(ur.name))
+		OR EXISTS (SELECT 1 FROM version_roles vr WHERE vr.role = LOWER(ur.name) AND (vr.version_id = f.published_version_id
+			OR vr.version_id IN (SELECT r.version_id FROM runs r JOIN run_steps s ON s.run_id = r.id
+				WHERE r.flow_id = f.id AND r.status = 'running' AND s.status = 'waiting' AND s.kind IN ('human', 'loop')))))))`, append(args, u.ID)
 }
 
 // How far the user may go with the flow: accessEdit, accessReview, or ""

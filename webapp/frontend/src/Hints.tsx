@@ -110,7 +110,7 @@ export function BlocksHint() {
 
 // What the board shows a tip about: what is selected, or what a link is
 // being drawn from.
-export type BoardTip = 'process' | 'object' | 'input' | 'output' | 'connection' | 'state' | 'several' | 'struct'
+export type BoardTip = 'process' | 'object' | 'note' | 'input' | 'output' | 'connection' | 'state' | 'several' | 'struct'
 
 // The tip for what is selected or being drawn, if any.
 export function BoardTips({ tip }: { tip: BoardTip | null }) {
@@ -139,6 +139,12 @@ const TIPS: Record<BoardTip, ReactNode> = {
       settings, pick an object it specializes, whose fields it has too.
     </>
   ),
+  note: (
+    <>
+      Double-click a note to write in it, in Markdown. Pick its colour above it, size it from its corners, and drag the dot on its edge onto a
+      process or an object to point at it. No run reads notes; press N to add one where the pointer is.
+    </>
+  ),
   input: (
     <>
       Pick how the process takes the object: just takes it, uses it as an instrument it doesn’t change, or consumes it. For a link from a
@@ -162,7 +168,7 @@ const TIPS: Record<BoardTip, ReactNode> = {
   state: <>Drop it on a process that takes the object in this state: the process runs when the object enters it.</>,
   several: (
     <>
-      Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this
+      Cmd/Ctrl+C copies the selected processes, objects and notes, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this
       board or one of another flow; right-click the board to paste too. Group into flow moves the selected processes into a flow process of
       their own.
     </>

@@ -5,6 +5,8 @@ import { Handle, NodeResizer, NodeToolbar, Position, type Node, type NodeProps }
 import { useBoardActions } from './actions'
 import { NOTE_COLOURS, type NoteColour } from './api'
 import { TrashIcon } from './icons'
+import { MAC } from './Keyboard'
+import { shortcutOf, shortcutText } from './shortcuts'
 
 export type NoteNodeData = {
   text: string
@@ -36,9 +38,9 @@ const COLOUR_LABELS: Record<NoteColour, string> = {
 
 // A note: Markdown on a coloured card of the size it is given. Double-clicked,
 // it is written in place, saved as typing stops and once it loses focus;
-// Escape stops writing. Selected, it shows its colours above it and the
-// corners that size it; the dot on its edge is dragged onto a process or an
-// object to point at it.
+// Escape or Cmd-Enter stops writing (noteDone in shortcuts.ts). Selected,
+// it shows its colours above it and the corners that size it; the dot on
+// its edge is dragged onto a process or an object to point at it.
 export default function NoteNode({ id, data, selected }: NodeProps<NoteNodeType>) {
   const actions = useBoardActions()
   const editable = actions.editable && !actions.runShown
@@ -144,7 +146,7 @@ export default function NoteNode({ id, data, selected }: NodeProps<NoteNodeType>
           ref={ref}
           className="note-text nodrag nowheel"
           value={text}
-          placeholder="Write in Markdown"
+          placeholder={`Write in Markdown; ${shortcutText('noteDone', MAC)} when done`}
           aria-label="Note"
           onChange={(e) => {
             const value = e.target.value
@@ -154,10 +156,10 @@ export default function NoteNode({ id, data, selected }: NodeProps<NoteNodeType>
           }}
           onBlur={stop}
           onKeyDown={(e) => {
-            if (e.key === 'Escape' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) {
-              e.preventDefault()
-              ref.current?.blur()
-            }
+            if (e.nativeEvent.isComposing || shortcutOf(e, ['noteDone'], MAC, false) === null) return
+            e.preventDefault()
+            e.stopPropagation()
+            ref.current?.blur()
           }}
         />
       ) : text.trim() === '' ? (

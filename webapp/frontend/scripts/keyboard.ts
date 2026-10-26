@@ -74,6 +74,12 @@ check(
   'findPrevious',
 )
 check('the find box’s Enter', shortcutOf(press('Enter'), ['findPrevious', 'findNext', 'findClose'], true, false), 'findNext')
+check('N adds a note', shortcutOf(press('n'), board, false, false), 'addNote')
+check('N while typing is a letter', shortcutOf(press('n'), board, false, true), null)
+check('Cmd-N is the browser’s', shortcutOf(press('n', { metaKey: true }), board, true, false), null)
+check('a note’s Escape', shortcutOf(press('Escape'), ['noteDone'], true, false), 'noteDone')
+check('a note’s Cmd-Enter', shortcutOf(press('Enter', { metaKey: true }), ['noteDone'], true, false), 'noteDone')
+check('a note’s Enter is a new line', shortcutOf(press('Enter'), ['noteDone'], true, false), null)
 
 // The registry: each shortcut once, and none the window answers sharing a
 // key with another, on a Mac or not.

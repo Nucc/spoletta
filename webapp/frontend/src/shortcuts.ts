@@ -3,8 +3,8 @@
 // command palette shows each action's keys from it, and `?` lists it whole,
 // so what the sheet says is always what the keys do. A shortcut is never
 // taken from someone typing in a field or working in a dialog, but for the
-// palette, which opens from anywhere. The palette's and the find box's own
-// keys are listed too, though their fields handle them.
+// palette, which opens from anywhere. The palette's, the find box's and a
+// note's own keys are listed too, though their fields handle them.
 
 export type ShortcutId =
   | 'palette'
@@ -21,6 +21,8 @@ export type ShortcutId =
   | 'delete'
   | 'fit'
   | 'close'
+  | 'addNote'
+  | 'noteDone'
   | 'findNext'
   | 'findPrevious'
   | 'findClose'
@@ -36,12 +38,13 @@ export type ShortcutId =
 export type Combo = { key?: string; code?: string; mod?: boolean; shift?: boolean; alt?: boolean }
 
 // Where a shortcut works, as the sheet groups them.
-export type Scope = 'anywhere' | 'board' | 'find' | 'palette'
+export type Scope = 'anywhere' | 'board' | 'find' | 'note' | 'palette'
 
 export const SCOPES: { id: Scope; title: string }[] = [
   { id: 'anywhere', title: 'Anywhere' },
   { id: 'board', title: 'On a board' },
   { id: 'find', title: 'Finding on a board' },
+  { id: 'note', title: 'Writing a note' },
   { id: 'palette', title: 'In the command palette' },
 ]
 
@@ -95,9 +98,16 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'delete', scope: 'board', label: 'Delete the selection', combos: [{ key: 'Delete' }, { key: 'Backspace' }] },
   { id: 'fit', scope: 'board', label: 'Zoom to fit the board', combos: [{ code: 'Digit1', shift: true }] },
   { id: 'close', scope: 'board', label: 'Close the open panel, menu or box', combos: [{ key: 'Escape' }] },
+  { id: 'addNote', scope: 'board', label: 'Add a note where the pointer is, to write on the board', combos: [{ key: 'n' }] },
   { id: 'findNext', scope: 'find', label: 'Go to the next match, entering the board it is on', combos: [{ key: 'Enter' }] },
   { id: 'findPrevious', scope: 'find', label: 'Go to the match before', combos: [{ key: 'Enter', shift: true }] },
   { id: 'findClose', scope: 'find', label: 'Stop finding', combos: [{ key: 'Escape' }] },
+  {
+    id: 'noteDone',
+    scope: 'note',
+    label: 'Stop writing, keeping what is written',
+    combos: [{ key: 'Escape' }, { key: 'Enter', mod: true }],
+  },
   { id: 'paletteMove', scope: 'palette', label: 'Move through what it lists', combos: [{ key: 'ArrowDown' }, { key: 'ArrowUp' }] },
   { id: 'palettePick', scope: 'palette', label: 'Open or do what is picked', combos: [{ key: 'Enter' }] },
   {

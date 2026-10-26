@@ -3028,14 +3028,18 @@ export default function Board({
     else void mayDelete(links.length === 1 ? 'the link' : `${links.length} links`, '').then((yes) => yes && deleteLinks())
   }
 
-  // Closes what Escape closes first: a note being written, the find box, a
-  // run being picked to compare with, then the panel showing, as the panels
-  // take the column below; false if nothing is open. A menu closes itself.
+  // Closes what Escape closes first: a version's note being written, the
+  // find box, a run being picked to compare with, the colours and tools of
+  // the notes on the board selected, then the panel showing, as the panels
+  // take the column below; false if nothing is open. A menu closes itself,
+  // and a note being written stops with its own keys (noteDone).
   const closeOpen = () => {
     if (menu || paneMenu) return
     if (noting) setNoting(null)
     else if (finding) closeFind()
     else if (comparing !== null) setComparing(null)
+    else if (nodes.some((n) => n.type === 'note' && n.selected))
+      setNodes((ns) => ns.map((n) => (n.type === 'note' && n.selected ? { ...n, selected: false } : n)))
     else if (panelNode || objectPanelNode) setPanelId(null)
     else if (mcpOpen) setMCPOpen(false)
     else if (settingsOpen) setSettingsOpen(false)
@@ -3045,6 +3049,15 @@ export default function Board({
     else if (compare && diffListed) setCompare(null)
     else if (runDetail) setRunId(null)
     else return false
+  }
+
+  // A note goes where the pointer is over the board, or else in its middle,
+  // as pasting does.
+  const canAddNote = !readOnly && !objectBoard && !structBoard
+  const addNoteHere = () => {
+    const rect = wrapper.current?.getBoundingClientRect()
+    const point = pointer.current ?? (rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+    if (point) return addNote(point.x, point.y)
   }
 
   // What the toolbar's Save and the play button may do, which their
@@ -3076,6 +3089,7 @@ export default function Board({
     delete: deleteSelection,
     fit: () => void fitView(FIT_VIEW),
     close: closeOpen,
+    addNote: () => (canAddNote ? void addNoteHere() : false),
   })
 
   // What the board offers the command palette: its actions, its views, the
@@ -3296,8 +3310,9 @@ export default function Board({
             id: `add:${b.id}`,
             title: `Add ${kind === 'Building block' ? `a ${b.label.toLowerCase()}` : b.label}`,
             hint: kind === 'Building block' ? b.title : kind,
-            words: `new ${kind}`,
-            run: () => addAtViewportCenter(b),
+            words: b.type === 'note' ? `new ${kind} comment markdown text` : `new ${kind}`,
+            shortcut: b.type === 'note' ? 'addNote' : undefined,
+            run: () => (b.type === 'note' ? void addNoteHere() : addAtViewportCenter(b)),
           },
           'Add to the board',
         )
@@ -3331,6 +3346,7 @@ export default function Board({
     if (picked.length === 1 && pickedEdges.length === 0) {
       if (picked[0].type === 'process') return 'process'
       if (picked[0].type === 'object') return structBoard ? 'struct' : 'object'
+      if (picked[0].type === 'note') return 'note'
     }
     if (picked.length === 0 && pickedEdges.length === 1) {
       const e = pickedEdges[0]

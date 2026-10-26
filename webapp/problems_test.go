@@ -77,6 +77,26 @@ func TestSoundBoardHasNoProblems(t *testing.T) {
 	}
 }
 
+// Notes say nothing a run needs: a sound board with notes, even one
+// pointing at a process gone, has no problems, and a board of notes alone
+// has an empty board's.
+func TestNotesAreNoProblems(t *testing.T) {
+	b := soundBoard()
+	b.Notes = []note{
+		{ID: 90, Text: "Why we classify first", Colour: "yellow", Width: 240, Height: 140, Process: versionID(2)},
+		{ID: 91, Text: "Gone", Colour: "pink", Width: 240, Height: 140, Process: versionID(99), Object: versionID(98)},
+		{ID: 92, Text: "Inside nothing", Colour: "grey", Width: 240, Height: 140, Parent: versionID(97)},
+	}
+	if ps := boardProblems(b, soundFacts()); len(ps) != 0 {
+		t.Errorf("a sound board with notes has problems:%s", describeProblems(ps))
+	}
+	empty := snapshot{Settings: &flowSettings{}}
+	only := snapshot{Notes: b.Notes, Settings: &flowSettings{}}
+	if got, want := describeProblems(boardProblems(only, soundFacts())), describeProblems(boardProblems(empty, soundFacts())); got != want {
+		t.Errorf("a board of notes alone has problems:%s\nwant an empty board's:%s", got, want)
+	}
+}
+
 // Each rule, broken on its own, shows as the problem it is, on the process
 // or object it is about, at the level it is.
 func TestBoardProblems(t *testing.T) {

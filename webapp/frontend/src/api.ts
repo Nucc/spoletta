@@ -1819,17 +1819,43 @@ export type History = { undo: boolean; redo: boolean; changed: boolean; held: bo
 
 // Keeps the board as it is as a step of its history, unless it is the step
 // the board is on.
-export function recordHistory(flow: number): Promise<History> {
-  return request(`/api/history?flow=${flow}`, { method: 'POST' })
+// The tab names itself as client, so that it isn't told of its own changes;
+// see presence.go.
+export function recordHistory(flow: number, client: string): Promise<History> {
+  return request(`/api/history?flow=${flow}&client=${encodeURIComponent(client)}`, { method: 'POST' })
 }
 
 // Brings the board back a step, or forward again to the one undone last.
-export function undoHistory(flow: number): Promise<History> {
-  return request(`/api/history/undo?flow=${flow}`, { method: 'POST' })
+export function undoHistory(flow: number, client: string): Promise<History> {
+  return request(`/api/history/undo?flow=${flow}&client=${encodeURIComponent(client)}`, { method: 'POST' })
 }
 
-export function redoHistory(flow: number): Promise<History> {
-  return request(`/api/history/redo?flow=${flow}`, { method: 'POST' })
+export function redoHistory(flow: number, client: string): Promise<History> {
+  return request(`/api/history/redo?flow=${flow}&client=${encodeURIComponent(client)}`, { method: 'POST' })
+}
+
+// Someone else with the board open, editing if they changed it lately.
+export type BoardViewer = { id: number; name: string; editing: boolean }
+
+// What a tab with a board open is told each time it says so: the latest
+// change to the board, whether another tab changed it since the change the
+// tab gave, and who did if it was someone else, and the others there.
+export type Presence = { rev: number; changed: boolean; changedBy: string; people: BoardViewer[] }
+
+// Says the board is open in this tab, which has loaded the change since,
+// if it has heard of one.
+export async function sayPresent(flow: number, client: string, since: number | null): Promise<Presence> {
+  const res = await send(`/api/flows/${flow}/presence`, {
+    method: 'PUT',
+    body: JSON.stringify(since === null ? { client } : { client, since }),
+  })
+  return res.json()
+}
+
+// The tab leaves the board; sent as it closes too, so the others see it go
+// at once rather than once it is no longer heard from.
+export function leaveBoard(flow: number, client: string) {
+  fetch(`/api/flows/${flow}/presence?client=${encodeURIComponent(client)}`, { method: 'DELETE', keepalive: true }).catch(() => {})
 }
 
 // The whole flow, every board of it, as the board's endpoints give it or a

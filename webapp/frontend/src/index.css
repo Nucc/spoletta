@@ -2809,6 +2809,69 @@ body {
   color: #1f2328;
 }
 
+/* The others with the board open, by their initials; a ring round those
+   editing it. */
+.presence {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* On the right of the toolbar, beside Save. */
+.toolbar .presence {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.toolbar .presence + .versioning {
+  margin-left: 0;
+}
+
+.presence-person {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: -6px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  cursor: default;
+  user-select: none;
+}
+
+.presence-person:first-child {
+  margin-left: 0;
+}
+
+.presence-person.editing {
+  box-shadow: 0 0 0 2px #2da44e;
+}
+
+.presence-more {
+  background: #8c959f;
+}
+
+/* Says who else changed the board just now, which it loaded again. */
+.board-toast {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: #1f2328;
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(31, 35, 40, 0.25);
+  cursor: pointer;
+}
+
 /* Says the board shows the version an open run ran on, which can't be edited. */
 .review-banner {
   position: absolute;

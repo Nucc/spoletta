@@ -93,6 +93,7 @@ import { SharedRecords } from './Records'
 import { NoteDialog, VersionPanel } from './Versions'
 import { ProblemCount } from './Problems'
 import { BlocksHint, BoardTips, EmptyBoardGuide, useHints, type BoardTip } from './Hints'
+import Presence from './Presence'
 import { DiffPanel, diffCount, highlightsOf, noHighlights, type Highlights } from './Diff'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
@@ -112,6 +113,10 @@ import {
   deleteNote,
   listNotes,
   updateNote,
+  leaveBoard,
+  sayPresent,
+  type BoardViewer,
+  type Presence as PresenceState,
   copyStruct,
   createObject,
   createProcess,
@@ -272,6 +277,15 @@ const BOARD_FIT_DELAY_MS = 100
 // How long after a change the board waits for more before keeping it as a
 // step of its history, so an action sending several changes is one step.
 const HISTORY_DELAY_MS = 300
+
+// How often the board says it is open, and hears who else has it open and
+// whether someone else changed it; and how long it says who did.
+const PRESENCE_MS = 5000
+const CHANGED_BY_MS = 6000
+
+// The name this tab goes by among those with the board open, telling its
+// changes from others'; see presence.go.
+const newClient = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 
 // Fitting the board into view; a board of a few nodes is not blown up past
 // its natural size.
@@ -542,6 +556,13 @@ export default function Board({
   useEffect(() => onCopiedElsewhere(() => setCopied(readCopied())), [])
   // Where the pointer is over the canvas, on the screen, for pasting there.
   const pointer = useRef<XYPosition | null>(null)
+  // The others with the board open, and who changed it just now, if someone
+  // else did; see presence.go.
+  const [client] = useState(newClient)
+  const [people, setPeople] = useState<BoardViewer[]>([])
+  const [changedBy, setChangedBy] = useState<{ name: string; at: number } | null>(null)
+  // Set while nodes are dragged, which loading the board again would undo.
+  const dragging = useRef(false)
   const { getNode, getNodes, getInternalNode, screenToFlowPosition, fitView, getViewport, setCenter, getZoom, deleteElements } = useReactFlow<FlowNode>()
 
   // Coming back to its tab, the board opens where it was looked at, rather
@@ -1473,8 +1494,10 @@ export default function Board({
     savePositions(positions)
   }
 
-  const onNodeDragStop: OnNodeDrag<FlowNode> = (_, __, dragged) =>
+  const onNodeDragStop: OnNodeDrag<FlowNode> = (_, __, dragged) => {
+    dragging.current = false
     savePositions(new Map(dragged.map((n) => [n.id, n.position])))
+  }
 
   // Saves a node's new width, and its position, which moves when resized from the left.
   const resize = (id: string, x: number, width: number) => {
@@ -1733,7 +1756,7 @@ export default function Board({
             : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length))),
     )
     Promise.all(reqs)
-      .then(() => queueHistory(() => recordHistory(flowId)))
+      .then(() => queueHistory(() => recordHistory(flowId, client)))
       .then((h) => {
         held.current = h.held
         if (!told) deleted(gone.length === 1 ? 'the link' : `${gone.length} links`)
@@ -1836,7 +1859,7 @@ export default function Board({
   const held = useRef(false)
   const mayDelete = async (what: string, goes: string) => {
     try {
-      held.current = (await queueHistory(() => recordHistory(flowId))).held
+      held.current = (await queueHistory(() => recordHistory(flowId, client))).held
     } catch {
       held.current = runs.some((r) => r.status === 'running' && r.version !== versions.published)
     }
@@ -2588,7 +2611,7 @@ export default function Board({
     let pending = false
     const record = () => {
       pending = false
-      queueHistory(() => recordHistory(flowId))
+      queueHistory(() => recordHistory(flowId, client))
         .then(() => boardChanged.current(false))
         .catch(report)
     }
@@ -2603,7 +2626,87 @@ export default function Board({
       window.clearTimeout(recordTimer.current)
       if (pending) record()
     }
-  }, [flowId, queueHistory, report])
+  }, [flowId, client, queueHistory, report])
+
+  // Whether something is under way on the board that loading it again
+  // would lose: a name, a state or a note being typed, a node being named
+  // or dragged.
+  const busy = () => {
+    const typing = document.activeElement
+    return (
+      dragging.current ||
+      getNodes().some((n) => isDraft(n.id)) ||
+      (typing instanceof HTMLElement &&
+        wrapper.current?.contains(typing) === true &&
+        (typing.matches('input, textarea, select') || typing.isContentEditable))
+    )
+  }
+  // Loads what another tab changed on the board, keeping the selection,
+  // once the changes this one sent are done, and says who changed it if it
+  // was someone else. While the board shows a version, such as a run's,
+  // there is nothing to load: the board as it is loads once shown again.
+  // Says whether it is done with the change, or must try again later.
+  const loadChange = useRef(async (_p: PresenceState) => true)
+  loadChange.current = async (p) => {
+    if (shownVersion !== null) return true
+    if (busy()) return false
+    return queueHistory(async () => {
+      await changesSettled()
+      if (busy()) return false
+      const selected = new Set(getNodes().flatMap((n) => (n.selected ? [n.id] : [])))
+      await loadBoard()
+      setNodes((ns) => ns.map((n) => (selected.has(n.id) ? { ...n, selected: true } : n)))
+      boardChanged.current(false)
+      if (p.changedBy) setChangedBy({ name: p.changedBy, at: Date.now() })
+      return true
+    })
+  }
+  // Says every few seconds that the board is open in this tab, and hears
+  // who else has it open and whether another tab changed it, which it
+  // then loads; at once when the tab is shown again. It leaves as it goes,
+  // or as the browser closes it.
+  useEffect(() => {
+    let stopped = false
+    let timer: number | undefined
+    let saying = false
+    // The latest change to the board this tab has loaded, once it heard.
+    let known: number | null = null
+    const say = async () => {
+      window.clearTimeout(timer)
+      if (saying) return
+      saying = true
+      try {
+        const p = await sayPresent(flowId, client, known)
+        if (stopped) return
+        setPeople(p.people)
+        if (!p.changed || (await loadChange.current(p))) known = Math.max(known ?? 0, p.rev)
+      } catch (err) {
+        // Who else is here isn't worth an error on the board.
+        console.error(err)
+      } finally {
+        saying = false
+        if (!stopped) timer = window.setTimeout(say, PRESENCE_MS)
+      }
+    }
+    say()
+    const onShown = () => document.visibilityState === 'visible' && say()
+    const onLeave = () => leaveBoard(flowId, client)
+    document.addEventListener('visibilitychange', onShown)
+    window.addEventListener('pagehide', onLeave)
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onShown)
+      window.removeEventListener('pagehide', onLeave)
+      leaveBoard(flowId, client)
+    }
+  }, [flowId, client])
+  // Who changed the board, said for a while.
+  useEffect(() => {
+    if (!changedBy) return
+    const timer = window.setTimeout(() => setChangedBy(null), CHANGED_BY_MS)
+    return () => window.clearTimeout(timer)
+  }, [changedBy])
 
   // Brings the board back a step of its history, or forward again, once the
   // changes sent are done; the server keeps a change not kept yet as the
@@ -2620,7 +2723,7 @@ export default function Board({
       const h = await queueHistory(async () => {
         await new Promise((resolve) => window.setTimeout(resolve))
         await changesSettled()
-        return undo ? undoHistory(flowId) : redoHistory(flowId)
+        return undo ? undoHistory(flowId, client) : redoHistory(flowId, client)
       })
       if (h.changed) {
         await loadBoard()
@@ -3308,6 +3411,7 @@ export default function Board({
         <button onClick={onTidy} disabled={readOnly} title="Lay the board out from the top">
           <LayoutIcon /> Tidy up
         </button>
+        <Presence people={people} />
         <div className="versioning">
           <span className="note-anchor">
             <button
@@ -3550,6 +3654,7 @@ export default function Board({
                 }}
                 onEdgeDoubleClick={(_, edge) => !readOnly && edge.data?.route && setRoute(edge.id, null, true)}
                 onPaneClick={() => setPanelId(null)}
+                onNodeDragStart={() => (dragging.current = true)}
                 onNodeDragStop={onNodeDragStop}
                 onMoveEnd={() => keepTabView(tab, viewOf.current())}
                 defaultViewport={savedView ?? undefined}
@@ -3565,6 +3670,11 @@ export default function Board({
               </ReactFlow>
             </StructFlowsContext.Provider>
           </BoardActionsContext.Provider>
+          {changedBy && (
+            <div className="board-toast" role="status" onClick={() => setChangedBy(null)}>
+              {changedBy.name} changed the board
+            </div>
+          )}
           {trail.length > 1 && (
             <nav className="breadcrumb" aria-label="Boards">
               {trail.map((b, i) =>

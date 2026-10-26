@@ -623,23 +623,11 @@ func claimRun(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		return false, err
 	}
-	// The runs of its flow processes and subflows going, theirs and so on;
-	// a re-run of one of them is walked on its own.
-	runs := []int64{id}
-	for next := []int64{id}; len(next) > 0; {
-		var found []int64
-		err := scanAll(ctx, tx, "SELECT id FROM runs WHERE parent_run_id IN "+placeholders(len(next))+" AND rerun_of IS NULL AND status = ?",
-			func(rows *sql.Rows) error {
-				var c int64
-				err := rows.Scan(&c)
-				found = append(found, c)
-				return err
-			}, append(int64Args(next), runRunning)...)
-		if err != nil {
-			return false, err
-		}
-		runs, next = append(runs, found...), found
+	inside, err := runsInside(ctx, tx, id)
+	if err != nil {
+		return false, err
 	}
+	runs := append([]int64{id}, inside...)
 	if len(runs) > 1 {
 		if _, err := tx.ExecContext(ctx, "UPDATE runs SET replica_id = ? WHERE id IN "+placeholders(len(runs)-1),
 			append([]any{replicaID}, int64Args(runs[1:])...)...); err != nil {
@@ -666,15 +654,43 @@ func claimRun(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 	return true, nil
 }
 
+// The runs going inside the run: those of its flow processes and subflows,
+// theirs and so on; a re-run of one of them is walked on its own.
+func runsInside(ctx context.Context, db rowsQuerier, id int64) ([]int64, error) {
+	var runs []int64
+	for next := []int64{id}; len(next) > 0; {
+		var found []int64
+		err := scanAll(ctx, db, "SELECT id FROM runs WHERE parent_run_id IN "+placeholders(len(next))+" AND rerun_of IS NULL AND status = ?",
+			func(rows *sql.Rows) error {
+				var c int64
+				err := rows.Scan(&c)
+				found = append(found, c)
+				return err
+			}, append(int64Args(next), runRunning)...)
+		if err != nil {
+			return nil, err
+		}
+		runs, next = append(runs, found...), found
+	}
+	return runs, nil
+}
+
 // Carries on a run of the whole flow, or a re-run, taken over: walks its
 // version's board again, as start or rerun did, taking up what it stored,
 // in the background, and ends it once nothing in it is left to run.
 func (e *engine) carryOn(id int64) {
 	ctx := context.Background()
+	// With the runs going inside it, claimed with it.
 	fail := func(err error) {
 		runLog(e.db, id, 0, logError, "couldn't be taken over, so it is interrupted: %v", err)
-		if _, err := endRun(ctx, e.db, id, runInterrupted); err != nil {
-			log.Printf("interrupt run %d: %v", id, err)
+		runs, err := runsInside(ctx, e.db, id)
+		if err != nil {
+			log.Printf("find the runs inside run %d: %v", id, err)
+		}
+		for _, r := range append(runs, id) {
+			if _, err := endRun(ctx, e.db, r, runInterrupted); err != nil {
+				log.Printf("interrupt run %d: %v", r, err)
+			}
 		}
 	}
 	rn, err := getRun(ctx, e.db, id)

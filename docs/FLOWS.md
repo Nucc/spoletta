@@ -1688,7 +1688,7 @@ Check them before you import.
 **Common mistakes that import fine but don't work**
 1. A first agent taking an object nothing produces gets it **empty** when the
    flow is run with the Run button or a schedule; only a run started over the
-   API is given it (section 4.1).
+   API, or with Start with inputs in Run's menu, is given it (section 4.1).
 2. A process taking the object it revises **plainly** (no state) waits for it
    before it ever writes it. Revisers take it **in the send-back state**.
    And a process with an event link runs only on its events (or from the

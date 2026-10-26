@@ -66,6 +66,11 @@ runs put side by side to see where they went differently.
 A new flow can start from a template, a ready flow such as triaging a
 ticket or a daily digest posted to Slack, and the board says what is wrong
 with a flow before it runs, Run refusing one with errors a run can't get past.
+The board's toolbar keeps Save, Publish and Run in reach, with the board's
+views (its versions, code, sentences, settings and data) in one menu, and
+Run's menu runs the published version, starts with inputs or tries one
+process; a link says what it does first and OPM's term after, such as
+"uses (instrument)".
 Each flow also has an assistant, a chat at the bottom right of its board,
 that changes the flow for you from a description of what you want, and
 explains its runs: ask it why run 412 failed, or from a run's panel, and it

@@ -439,9 +439,10 @@ func TestNotifyWhoMayDecide(t *testing.T) {
 	a.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
 }
 
-// A review reminds those who may decide it, once, and fails past its time
-// limit, which a failure connection handles; with two replicas watching,
-// each happens once.
+// A review reminds those who may decide it every remindAfter while it
+// waits, each round once though two replicas watch, and no more once it is
+// decided; past its time limit it fails, once, never reminding at or after
+// it, and a failure connection handles it.
 func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 	p := newFakeProvider(t)
 	smtp := newInboxSMTP(t)
@@ -452,7 +453,8 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 	// Sessions are kept in the database, so Ada is signed in at both.
 	other.client = a.client
 	bob := usersNewPerson("Bob")
-	usersAdd(a, bob.email, "Approver")
+	row := usersAdd(a, bob.email, "Approver")
+	db := secretsDB(t)
 
 	f := a.newFlow("Timed review")
 	usersShare(a, f.ID)
@@ -468,8 +470,7 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 	a.output(handle.ID, a.newObject(f.ID, "Chased").ID)
 	a.startAt(f.ID, draft.ID)
 	failuresHandles(a, review.ID, handle.ID)
-	// Far enough apart that the reminder goes before the review stops waiting.
-	failuresSettings(a, review.ID, processSettings{RemindAfter: ptr(1), WaitAtMost: ptr(5)})
+	failuresSettings(a, review.ID, processSettings{RemindAfter: ptr(1), WaitAtMost: ptr(6)})
 	a.worker.onAgent("Draft", handsIn(data("a doc")))
 	a.worker.onAgent("Chase", handsIn(data("chased")))
 
@@ -477,46 +478,96 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 		Text string `json:"text"`
 	}
 	a.call("GET", fmt.Sprintf("/api/flows/%d/opl", f.ID), nil, http.StatusOK, &opl)
-	for _, want := range []string{`"Approve" reminds whoever decides it after 1 second.`, `"Approve" fails after waiting 5 seconds.`, `"Chase" handles a failure of "Approve".`} {
+	for _, want := range []string{`"Approve" reminds whoever decides it every 1 second.`, `"Approve" fails after waiting 6 seconds.`, `"Chase" handles a failure of "Approve".`} {
 		if !strings.Contains(opl.Text, want) {
 			t.Errorf("OPL lacks %s:\n%s", want, opl.Text)
 		}
 	}
 
-	rn := other.startRun(f.ID)
-	s := a.waitStep(rn.ID, "Approve", stepWaiting)
-	if got := inboxOf(inboxAs(a, p, bob), f.ID); len(got) != 1 || got[0].Expires == nil || got[0].Expires.Sub(got[0].Since) != 5*time.Second {
+	// What Bob was emailed about a run, by kind.
+	mailed := func(run int64) (waiting, reminders int) {
+		for _, m := range smtp.to(bob.email) {
+			switch {
+			case !strings.Contains(m.subject, fmt.Sprintf("in run %d of", run)):
+			case strings.HasPrefix(m.subject, `Reminder: "Approve" still waits for your review`):
+				reminders++
+			case strings.HasPrefix(m.subject, `"Approve" waits for your review`):
+				waiting++
+			}
+		}
+		return waiting, reminders
+	}
+	// The rounds Bob was reminded of a step in, claimed once each.
+	rounds := func(step int64) []int {
+		rows, err := db.Query("SELECT round FROM notifications WHERE step_id = ? AND user_id = ? AND kind = 'reminder' ORDER BY round", step, row.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var rs []int
+		for rows.Next() {
+			var r int
+			if err := rows.Scan(&r); err != nil {
+				t.Fatal(err)
+			}
+			rs = append(rs, r)
+		}
+		return rs
+	}
+
+	decided, timed := other.startRun(f.ID), other.startRun(f.ID)
+	s := a.waitStep(decided.ID, "Approve", stepWaiting)
+	if got := inboxOf(inboxAs(a, p, bob), f.ID); len(got) != 2 || got[0].Expires == nil || got[0].Expires.Sub(got[0].Since) != 6*time.Second {
 		t.Errorf("Bob's inbox: %+v", got)
 	}
-	d := a.finish(rn.ID)
+
+	// Reminded twice, Bob decides; no more come.
+	inboxEventually(t, "two reminders", func() bool { _, n := mailed(decided.ID); return n >= 2 })
+	humanMustDecide(a, decided.ID, s.ID, map[string]any{"state": ok.ID})
+	if d := a.finish(decided.ID); d.Status != runDone {
+		t.Fatalf("the decided run %s: %s", d.Status, describeSteps(d))
+	}
+	_, before := mailed(decided.ID)
+	time.Sleep(2500 * time.Millisecond)
+	if _, after := mailed(decided.ID); after != before {
+		t.Errorf("reminded %d times once decided, after %d before", after-before, before)
+	}
+
+	// The other waits out its time limit.
+	d := a.finish(timed.ID)
 	if d.Status != runDone {
 		t.Fatalf("the run %s: %s", d.Status, describeSteps(d))
 	}
 	approve := onlyStep(t, d, "Approve")
-	want := "It waited longer than its time limit, 5 seconds, with nobody deciding."
-	if approve.ID != s.ID || approve.Status != stepError || approve.Error != want {
+	want := "It waited longer than its time limit, 6 seconds, with nobody deciding."
+	if approve.Status != stepError || approve.Error != want {
 		t.Errorf("the review: %s %q", approve.Status, approve.Error)
 	}
 	chase := onlyStep(t, d, "Chase")
 	if !slices.ContainsFunc(chase.Inputs, func(in runInput) bool { return in.Name == "Failure of Approve" && in.Content == want }) {
 		t.Errorf("Chase took %+v", chase.Inputs)
 	}
-
 	time.Sleep(1500 * time.Millisecond)
-	var waiting, reminders int
-	for _, m := range smtp.to(bob.email) {
-		switch {
-		case strings.HasPrefix(m.subject, `Reminder: "Approve" still waits for your review`):
-			reminders++
-		case strings.HasPrefix(m.subject, `"Approve" waits for your review`):
-			waiting++
-			if !strings.Contains(m.text, "If nobody decides it by") {
-				t.Errorf("the email doesn't say when it fails:\n%s", m.text)
+	for _, c := range []struct {
+		run  int64
+		step int64
+	}{{decided.ID, s.ID}, {timed.ID, approve.ID}} {
+		waiting, reminders := mailed(c.run)
+		rs := rounds(c.step)
+		if waiting != 1 || reminders < 2 || reminders != len(rs) {
+			t.Errorf("run %d: Bob got %d emails saying it waits and %d reminders, rounds claimed %v", c.run, waiting, reminders, rs)
+		}
+		for i, r := range rs {
+			if r != i+1 {
+				t.Errorf("run %d: rounds claimed %v, want 1, 2, …", c.run, rs)
+				break
 			}
 		}
 	}
-	if waiting != 1 || reminders != 1 {
-		t.Errorf("Bob got %d emails saying it waits and %d reminders, want 1 and 1: %+v", waiting, reminders, smtp.to(bob.email))
+	var late int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM notifications n JOIN run_steps s ON s.id = n.step_id
+		WHERE n.step_id = ? AND n.kind = 'reminder' AND n.claimed_at >= s.expires_at`, approve.ID).Scan(&late); err != nil || late != 0 {
+		t.Errorf("%d reminders claimed at or after the time limit (%v)", late, err)
 	}
 
 	// What can't be set.

@@ -291,8 +291,9 @@ Settings for agent, script and connector processes:
   (section 4.4).
 
 Settings for human processes, both in seconds (1 to 31536000, a year):
-- `remindAfter`: once it has waited this long, those who may decide it are
-  reminded, once.
+- `remindAfter`: those who may decide it are reminded every this long while
+  it waits, until it is decided, stopped, or fails on its `waitAtMost`; never
+  at or after that.
 - `waitAtMost`: once it has waited this long with nobody deciding, it fails
   as a step past its `timeout` does, so its `onFailure` handler takes over
   (section 4.6).
@@ -615,7 +616,7 @@ Whoever may decide it finds it in their inbox, and is told it waits on them,
 by email and on Slack as they choose: the holders of the roles its human
 objects name, or for a review no human object handles, everyone who sees the
 flow; admins only when nobody else may. Name a role to say who is told.
-`remindAfter` reminds them once it has waited that long. `waitAtMost` fails
+`remindAfter` reminds them every that long while it waits. `waitAtMost` fails
 it once it has waited that long, so a review nobody decides doesn't hold the
 run for ever: the failure ends its branch, or goes to its `onFailure`
 handler, which takes what the review took and the failure, as any handler
@@ -815,7 +816,7 @@ check that each one is what you meant.
 | loops (when set) | `"Fix" asks before going round a loop more than 10 times.` |
 | timeout | `"Fix" fails after 900 seconds.` |
 | retries | `"Fix" is tried again up to 2 times when it fails.` |
-| remindAfter (human) | `"Approve" reminds whoever decides it after 4 hours.` |
+| remindAfter (human) | `"Approve" reminds whoever decides it every 4 hours.` |
 | waitAtMost (human) | `"Approve" fails after waiting 2 days.` |
 | failure connection | `"Escalate" handles a failure of "Fix".` |
 | next connection | `"Open PR" follows "Fix".` |

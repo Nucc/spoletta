@@ -398,8 +398,8 @@ export default function ProcessPanel({
       {kind === 'human' && (
         <div className="panel-row panel-durations">
           <DurationSetting
-            label="Remind after"
-            title="How long it waits before whoever may decide it is reminded, once, such as 4h or 1d; never when empty"
+            label="Remind every"
+            title="How often whoever may decide it is reminded while it waits, such as 4h or 1d, but never once it fails; never when empty"
             value={settings.remindAfter}
             readOnly={readOnly}
             onChange={(remindAfter) =>

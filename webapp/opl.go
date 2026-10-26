@@ -346,7 +346,7 @@ func (o *oplWriter) processSentences(p process, indent string) {
 	}
 	// Only a person's review waits to be reminded of, or past its time limit.
 	if p.Kind == kindHuman && st.RemindAfter != nil {
-		o.line(indent, "%s reminds whoever decides it after %s.", name, spokenDuration(*st.RemindAfter))
+		o.line(indent, "%s reminds whoever decides it every %s.", name, spokenDuration(*st.RemindAfter))
 	}
 	if p.Kind == kindHuman && st.WaitAtMost != nil {
 		o.line(indent, "%s fails after waiting %s.", name, spokenDuration(*st.WaitAtMost))

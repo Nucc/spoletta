@@ -51,8 +51,8 @@ export type ProcessSettings = {
   quorum?: number
   // Whether an agent's prompt describes the flow it works in, in OPL.
   describeFlow?: boolean
-  // How long a human step waits before those who may decide it are
-  // reminded, once, and the longest it waits before it fails, so what
+  // How often those who may decide a human step are reminded of it while
+  // it waits, and the longest it waits before it fails, so what
   // handles its failure takes over; in seconds, neither when absent.
   remindAfter?: number
   waitAtMost?: number

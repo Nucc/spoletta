@@ -2,8 +2,10 @@ package main
 
 // People are told when a step starts waiting on them: a review or input
 // they may decide, or a loop question they may answer (see decidesStep);
-// again once a review has waited as long as its process's remindAfter
-// says; and, if they want, when a run they started fails. A review whose
+// again every time a review has waited as long again as its process's
+// remindAfter says, until it is decided, stopped, or fails past its time
+// limit, never at or after that; and, if they want, when a run they
+// started fails. A review whose
 // process has waitAtMost fails once it has waited that long, as a step
 // running past its timeout does, so what handles its failure takes over.
 //
@@ -27,9 +29,9 @@ package main
 // replica gone; so a message goes once, or twice if a replica stopped just
 // as it sent it, but never not at all. Deadlines are kept with their steps
 // by the database's clock, and every replica looks for those due each
-// second, a reminder claimed by clearing its time, a time limit by failing
-// its step, which the replica walking the run is then told, as of a
-// decision. Without sign-in nobody is anyone, so nobody is told anything,
+// second: a round of reminders is claimed by counting it and moving the
+// step's next reminder on, a time limit by failing its step, which the
+// replica walking the run is then told, as of a decision. Without sign-in nobody is anyone, so nobody is told anything,
 // though reviews are still timed out.
 
 import (
@@ -98,15 +100,20 @@ func newNotifier(db *sql.DB, signIn bool, mail *mailer, eng *engine) *notifier {
 	return n
 }
 
-// Records when a review is due to be reminded of and to fail, from when it
-// started waiting by the database's clock, as its process's settings say.
+// Records when a review is due to be reminded of first and to fail, from
+// when it started waiting by the database's clock, as its process's
+// settings say; none reminds at or after it fails.
 func keepDeadlines(ctx context.Context, db *sql.DB, step int64, s processSettings) error {
 	if s.RemindAfter == nil && s.WaitAtMost == nil {
 		return nil
 	}
+	remind := s.RemindAfter
+	if remind != nil && s.WaitAtMost != nil && *remind >= *s.WaitAtMost {
+		remind = nil
+	}
 	_, err := db.ExecContext(ctx,
 		"UPDATE run_steps SET remind_at = started_at + INTERVAL ? SECOND, expires_at = started_at + INTERVAL ? SECOND WHERE id = ?",
-		s.RemindAfter, s.WaitAtMost, step)
+		remind, s.WaitAtMost, step)
 	return err
 }
 
@@ -166,11 +173,11 @@ func deciders(ctx context.Context, db *sql.DB, step int64) ([]int64, error) {
 }
 
 // Claims telling the person of the step of the run, 0 for the run itself,
-// as kind says: the claim's id, or 0 if one was claimed already, here or
-// at another replica.
-func claimNotice(ctx context.Context, db execer, run, step, person int64, kind string) (int64, error) {
-	res, err := db.ExecContext(ctx, "INSERT INTO notifications (run_id, step_id, user_id, kind, replica_id) VALUES (?, ?, ?, ?, ?)",
-		run, step, person, kind, replicaID)
+// as kind says, in the round of reminders given, 0 for anything else: the
+// claim's id, or 0 if one was claimed already, here or at another replica.
+func claimNotice(ctx context.Context, db execer, run, step, person int64, kind string, round int) (int64, error) {
+	res, err := db.ExecContext(ctx, "INSERT INTO notifications (run_id, step_id, user_id, kind, round, replica_id) VALUES (?, ?, ?, ?, ?, ?)",
+		run, step, person, kind, round, replicaID)
 	if mysqlErrorIs(err, mysqlErrDuplicate) {
 		return 0, nil
 	}
@@ -194,7 +201,7 @@ func (n *notifier) waiting(run, step int64) {
 	}
 	var claims []int64
 	for _, p := range people {
-		id, err := claimNotice(ctx, n.db, run, step, p, noticeWaiting)
+		id, err := claimNotice(ctx, n.db, run, step, p, noticeWaiting, 0)
 		if err != nil {
 			runLog(n.db, run, step, logError, "telling user %d that step %d waits on them couldn't be claimed: %v", p, step, err)
 			continue
@@ -225,7 +232,7 @@ func (n *notifier) runFailed(run int64) {
 	if !who.Valid {
 		return
 	}
-	id, err := claimNotice(ctx, n.db, run, 0, who.Int64, noticeFailed)
+	id, err := claimNotice(ctx, n.db, run, 0, who.Int64, noticeFailed, 0)
 	if err != nil {
 		runLog(n.db, run, 0, logError, "telling user %d that it failed couldn't be claimed: %v", who.Int64, err)
 		return
@@ -294,26 +301,48 @@ func (n *notifier) expire(ctx context.Context) error {
 	return nil
 }
 
-// Reminds those who may decide each review due to be reminded of. Clearing
-// its time claims it, along with the claims for each person, so a replica
-// stopping in between leaves both or neither.
+// Reminds those who may decide each review due to be reminded of, every
+// remindAfter of its process as its run's board has it. Counting the round
+// and moving the next on, from now, so a replica that was down doesn't send
+// the rounds it missed all at once, claims it, along with the claims for
+// each person, so a replica stopping in between leaves both or neither. A
+// round falling at or after the review's time limit isn't kept, and none is
+// claimed once the review has passed it.
 func (n *notifier) remind(ctx context.Context) error {
-	type due struct{ step, run int64 }
+	type due struct {
+		step, run, process int64
+		reminded           int
+	}
 	var steps []due
-	err := scanAll(ctx, n.db, `SELECT id, run_id FROM run_steps
+	err := scanAll(ctx, n.db, `SELECT id, run_id, COALESCE(process_ref, 0), reminded FROM run_steps
 		WHERE status = ? AND remind_at <= CURRENT_TIMESTAMP(3) ORDER BY remind_at LIMIT 100`, func(rows *sql.Rows) error {
 		var d due
-		err := rows.Scan(&d.step, &d.run)
+		err := rows.Scan(&d.step, &d.run, &d.process, &d.reminded)
 		steps = append(steps, d)
 		return err
 	}, stepWaiting)
 	if err != nil {
 		return err
 	}
+	boards := map[int64]*runBoard{}
 	for _, d := range steps {
+		b, ok := boards[d.run]
+		if !ok {
+			if b, err = runBoardOf(ctx, n.db, d.run); err != nil {
+				runLog(n.db, d.run, d.step, logError, "how often step %d reminds couldn't be read: %v", d.step, err)
+				continue
+			}
+			boards[d.run] = b
+		}
+		// Without one, as a version from before a setting went, it reminds no more.
+		every := b.processes[d.process].Settings.RemindAfter
+		round := d.reminded + 1
 		var claims []int64
 		err := inTx(ctx, n.db, func(tx *sql.Tx) error {
-			res, err := tx.ExecContext(ctx, "UPDATE run_steps SET remind_at = NULL WHERE id = ? AND status = ? AND remind_at IS NOT NULL", d.step, stepWaiting)
+			res, err := tx.ExecContext(ctx, `UPDATE run_steps SET reminded = reminded + 1,
+				remind_at = IF(? IS NULL OR (expires_at IS NOT NULL AND CURRENT_TIMESTAMP(3) + INTERVAL ? SECOND >= expires_at), NULL, CURRENT_TIMESTAMP(3) + INTERVAL ? SECOND)
+				WHERE id = ? AND status = ? AND reminded = ? AND remind_at IS NOT NULL AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(3))`,
+				every, every, every, d.step, stepWaiting, d.reminded)
 			if err != nil {
 				return err
 			}
@@ -325,7 +354,7 @@ func (n *notifier) remind(ctx context.Context) error {
 				return err
 			}
 			for _, p := range people {
-				id, err := claimNotice(ctx, tx, d.run, d.step, p, noticeReminder)
+				id, err := claimNotice(ctx, tx, d.run, d.step, p, noticeReminder, round)
 				if err != nil {
 					return err
 				}

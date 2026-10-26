@@ -28,10 +28,11 @@ Telling people what waits on them is claimed too
 ([webapp/notify.go](../webapp/notify.go)): each message is a row in
 `notifications` for its step or run, person and kind, which only one
 replica adds, with the time it was sent. A message claimed by a replica
-that stopped before sending it is sent by another. A review's reminder and
+that stopped before sending it is sent by another. A review's reminders and
 time limit are kept with its step, by the database's clock; whichever
-replica finds one due first claims it, a time limit by failing the step as
-a decision would, which the replica walking the run then handles.
+replica finds one due first claims it: a round of reminders by counting it
+and moving the next one on, a time limit by failing the step as a decision
+would, which the replica walking the run then handles.
 
 ## When a replica stops
 

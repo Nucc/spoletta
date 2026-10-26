@@ -321,7 +321,7 @@ var processSettingNames = map[string]string{
 	"mcpServers": "MCP servers", "mcpTools": "MCP tools", "skills": "skills", "connector": "connector",
 	"repositories": "repositories", "flow": "flow it runs", "rounds": "rounds", "loops": "loops",
 	"timeout": "timeout", "retries": "retries", "quorum": "quorum", "describeFlow": "describes the flow",
-	"remindAfter": "reminds after", "waitAtMost": "waits at most",
+	"remindAfter": "reminds every", "waitAtMost": "waits at most",
 }
 
 // The fields of two values marshalled as JSON objects that differ, each

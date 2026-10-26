@@ -75,8 +75,8 @@ import (
 //
 // A human process waits for a person to review its inputs and set an object
 // to one of the states its output links name; the object keeps its content.
-// Those who may decide it are told it waits on them, and reminded once it
-// has waited as long as its remindAfter says; with waitAtMost, it fails once
+// Those who may decide it are told it waits on them, and reminded every
+// remindAfter while it still waits; with waitAtMost, it fails once
 // it has waited that long, as a step running past its timeout does, so a
 // failure connection can handle it. See notify.go.
 // Instructions they leave go as a change request to the processes taking the

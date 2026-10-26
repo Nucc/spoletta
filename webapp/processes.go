@@ -74,8 +74,8 @@ type processSettings struct {
 	Quorum *int `json:"quorum,omitempty"`
 	// Whether an agent's prompt describes the flow it works in, in OPL; see opl.go.
 	DescribeFlow bool `json:"describeFlow,omitempty"`
-	// How long a human step waits before those who may decide it are
-	// reminded of it, once, and the longest it waits before it fails, as a
+	// How often those who may decide a human step are reminded of it while
+	// it waits, and the longest it waits before it fails, as a
 	// step running past its timeout does, so what handles its failure
 	// takes over; in seconds, neither when absent. See notify.go.
 	RemindAfter *int `json:"remindAfter,omitempty"`

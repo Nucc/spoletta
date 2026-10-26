@@ -8780,14 +8780,15 @@ select.flow-owner:disabled {
 /* What was just deleted, with a button undoing it; see UndoNotice.tsx. */
 .undo-notice {
   position: fixed;
-  left: 50%;
+  left: 16px;
+  right: 16px;
   bottom: 24px;
   z-index: 50;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 12px;
-  max-width: calc(100vw - 32px);
+  width: fit-content;
+  margin: 0 auto;
   padding: 10px 12px 10px 16px;
   font-size: 14px;
   color: #fff;
@@ -8798,7 +8799,7 @@ select.flow-owner:disabled {
 
 .undo-notice span {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .undo-notice button {
@@ -8829,15 +8830,21 @@ select.flow-owner:disabled {
   color: #d0d7de;
 }
 
-/* The trash's flows; see Trash.tsx. */
+/* The trash's flows; see Trash.tsx. On a phone the buttons go below. */
 .trash-list li {
   flex-wrap: wrap;
+}
+
+.trash-list .flow-card {
+  flex: 1 1 260px;
 }
 
 .trash-list .flow-card-name {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .trash-used {

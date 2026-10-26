@@ -32,6 +32,14 @@ func TestParseKeep(t *testing.T) {
 	}
 }
 
+func TestKeepLabel(t *testing.T) {
+	for keep, want := range map[time.Duration]string{30 * 24 * time.Hour: "30 days", 24 * time.Hour: "a day", 36 * time.Hour: "36h0m0s", 2 * time.Second: "2s"} {
+		if got := keepLabel(keep); got != want {
+			t.Errorf("keepLabel(%v) = %q, want %q", keep, got, want)
+		}
+	}
+}
+
 // The trash is swept a tenth as often as it keeps what is in it, between a
 // second and a minute.
 func TestTrashSweepEvery(t *testing.T) {

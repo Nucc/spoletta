@@ -43,7 +43,7 @@ export default function Trash() {
         ? null
         : t.struct
           ? `The copies of its object in ${flowsLabel(t.usedBy)} stay theirs for good.`
-          : `${capitalized(flowsLabel(t.usedBy))} running it will fail to for good.`
+          : `${capitalized(flowsLabel(t.usedBy))} running it will fail to run it for good.`
     const yes = await confirm({
       title: `Delete ${t.name} for good?`,
       message: (
@@ -147,8 +147,8 @@ function TrashRow({ item: t, onRestore, onDelete }: { item: TrashedFlow; onResto
         {t.usedBy > 0 && (
           <span className="trash-used">
             {t.struct
-              ? `${capitalized(flowsLabel(t.usedBy))} using it have its copies as their own until it comes back.`
-              : `${capitalized(flowsLabel(t.usedBy))} running it fail to until it comes back.`}
+              ? `${capitalized(flowsLabel(t.usedBy))} using it ${t.usedBy === 1 ? 'has' : 'have'} its copies as ${t.usedBy === 1 ? 'its' : 'their'} own until it comes back.`
+              : `${capitalized(flowsLabel(t.usedBy))} running it ${t.usedBy === 1 ? 'fails' : 'fail'} to run it until it comes back.`}
           </span>
         )}
         {t.nameTaken && !renaming && (

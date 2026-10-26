@@ -178,7 +178,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("the trash keeps what is deleted for %s (TRASH_KEEP)", keep)
+	log.Printf("the trash keeps what is deleted for %s (TRASH_KEEP)", keepLabel(keep))
 	registerTrashRoutes(mux, db, eng, workerURL, keep)
 	go emptyTrash(context.Background(), db, workerURL, keep)
 	registerRecordRunRoutes(mux, db, eng)

@@ -70,6 +70,17 @@ func parseKeep(v string) (time.Duration, error) {
 	return time.ParseDuration(v)
 }
 
+// How long the trash keeps things, as the log says it: in days when whole.
+func keepLabel(keep time.Duration) string {
+	if days := keep / (24 * time.Hour); days > 0 && keep%(24*time.Hour) == 0 {
+		if days == 1 {
+			return "a day"
+		}
+		return fmt.Sprintf("%d days", days)
+	}
+	return keep.String()
+}
+
 // How often each replica looks for what the trash keeps no longer: a tenth
 // of how long it keeps it, between a second and a minute.
 func trashSweepEvery(keep time.Duration) time.Duration {

@@ -459,10 +459,9 @@ function trashedMessage(f: Flow): string {
   const moved = `Moved ${f.name} to the trash`
   const n = f.usedBy
   if (n === 0) return moved
-  const flows = n === 1 ? 'the flow' : `the ${n} flows`
   return f.struct
-    ? `${moved}; ${flows} using it keep their copies as their own until it comes back`
-    : `${moved}; ${flows} running it fail to until it comes back`
+    ? `${moved}; ${n === 1 ? 'the flow using it keeps its copy' : `the ${n} flows using it keep their copies`} as their own until it comes back`
+    : `${moved}; ${n === 1 ? 'the flow running it fails' : `the ${n} flows running it fail`} to run it until it comes back`
 }
 
 // What a card says under its name: how many flows use it, its latest run,

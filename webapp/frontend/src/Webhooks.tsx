@@ -16,6 +16,7 @@ import {
   type WebhookVerify,
 } from './api'
 import { formatTime } from './Runs'
+import { useConfirm } from './Confirm'
 
 const KIND_LABELS: Record<WebhookKind, string> = { github: 'GitHub', slack: 'Slack', generic: 'Generic' }
 
@@ -64,6 +65,7 @@ export function FlowWebhooksSection({ flowId, onError }: { flowId: number; onErr
   const [editing, setEditing] = useState<Webhook | 'new' | null>(null)
   const [showing, setShowing] = useState<Webhook | null>(null)
   const [made, setMade] = useState<Webhook | null>(null)
+  const [confirm, confirmDialog] = useConfirm()
 
   const refresh = useCallback(async () => setList(await listWebhooks(flowId)), [flowId])
 
@@ -87,7 +89,12 @@ export function FlowWebhooksSection({ flowId, onError }: { flowId: number; onErr
   }
 
   const remove = async (h: Webhook) => {
-    if (!window.confirm(`Remove the webhook ${h.name}? Its deliveries are turned away from then on; its runs stay.`)) return
+    const yes = await confirm({
+      title: `Remove the webhook ${h.name}?`,
+      message: <p>Its deliveries are turned away from then on; its runs stay. This can't be undone.</p>,
+      confirm: 'Remove',
+    })
+    if (!yes) return
     try {
       await deleteWebhook(h.id)
       if (made?.id === h.id) setMade(null)
@@ -102,6 +109,7 @@ export function FlowWebhooksSection({ flowId, onError }: { flowId: number; onErr
   if (!list) return null
   return (
     <>
+      {confirmDialog}
       <h3 className="panel-subheading">Webhooks</h3>
       <p className="panel-note">
         GitHub, Slack and other systems start it with their events, each at a URL of its own, signed with its secret.

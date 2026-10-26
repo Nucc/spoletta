@@ -170,6 +170,14 @@ export default function CommandPalette({
         hash: '#/activity',
       },
       { id: 'page:schedules', title: 'Schedules', group: 'Pages', hint: 'When flows run on their own', words: 'cron', hash: '#/schedules' },
+      {
+        id: 'page:trash',
+        title: 'Trash',
+        group: 'Pages',
+        hint: 'Flows, procedures and structs deleted, to restore or delete for good',
+        words: 'deleted restore bin',
+        hash: '#/trash',
+      },
     )
     if (configures(me)) {
       all.push({

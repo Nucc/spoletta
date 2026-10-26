@@ -468,7 +468,8 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 	a.output(handle.ID, a.newObject(f.ID, "Chased").ID)
 	a.startAt(f.ID, draft.ID)
 	failuresHandles(a, review.ID, handle.ID)
-	failuresSettings(a, review.ID, processSettings{RemindAfter: ptr(1), WaitAtMost: ptr(3)})
+	// Far enough apart that the reminder goes before the review stops waiting.
+	failuresSettings(a, review.ID, processSettings{RemindAfter: ptr(1), WaitAtMost: ptr(5)})
 	a.worker.onAgent("Draft", handsIn(data("a doc")))
 	a.worker.onAgent("Chase", handsIn(data("chased")))
 
@@ -476,7 +477,7 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 		Text string `json:"text"`
 	}
 	a.call("GET", fmt.Sprintf("/api/flows/%d/opl", f.ID), nil, http.StatusOK, &opl)
-	for _, want := range []string{`"Approve" reminds whoever decides it after 1 second.`, `"Approve" fails after waiting 3 seconds.`, `"Chase" handles a failure of "Approve".`} {
+	for _, want := range []string{`"Approve" reminds whoever decides it after 1 second.`, `"Approve" fails after waiting 5 seconds.`, `"Chase" handles a failure of "Approve".`} {
 		if !strings.Contains(opl.Text, want) {
 			t.Errorf("OPL lacks %s:\n%s", want, opl.Text)
 		}
@@ -484,7 +485,7 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 
 	rn := other.startRun(f.ID)
 	s := a.waitStep(rn.ID, "Approve", stepWaiting)
-	if got := inboxOf(inboxAs(a, p, bob), f.ID); len(got) != 1 || got[0].Expires == nil || got[0].Expires.Sub(got[0].Since) != 3*time.Second {
+	if got := inboxOf(inboxAs(a, p, bob), f.ID); len(got) != 1 || got[0].Expires == nil || got[0].Expires.Sub(got[0].Since) != 5*time.Second {
 		t.Errorf("Bob's inbox: %+v", got)
 	}
 	d := a.finish(rn.ID)
@@ -492,7 +493,7 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 		t.Fatalf("the run %s: %s", d.Status, describeSteps(d))
 	}
 	approve := onlyStep(t, d, "Approve")
-	want := "It waited longer than its time limit, 3 seconds, with nobody deciding."
+	want := "It waited longer than its time limit, 5 seconds, with nobody deciding."
 	if approve.ID != s.ID || approve.Status != stepError || approve.Error != want {
 		t.Errorf("the review: %s %q", approve.Status, approve.Error)
 	}

@@ -402,6 +402,10 @@ export default function Board({
   const [panelId, setPanelId] = useState<string | null>(null)
   // The process whose waiting review shows in the middle of the screen.
   const [reviewId, setReviewId] = useState<string | null>(null)
+  // The run and the step whose review the address asked for as the board
+  // opened, kept as the board names its open run in the address instead.
+  const [askedRun] = useState(initialRun)
+  const [askedStep] = useState(initialStep)
   const [models, setModels] = useState<Models | null>(null)
   const me = useMe()
   // The teams, to give the flow to one; see Owner.tsx.
@@ -1080,7 +1084,7 @@ export default function Board({
     for (const [process, s] of steps) {
       if (s.status !== 'waiting' || shownReviews.current.has(s.id) || !getNode(process)) continue
       shownReviews.current.add(s.id)
-      const asked = s.id === initialStep && shownRun.id === initialRun
+      const asked = s.id === askedStep && shownRun.id === askedRun
       setReviewId((open) => (asked ? process : (open ?? process)))
       setPanelId((open) => (asked ? process : (open ?? process)))
     }
@@ -2120,8 +2124,8 @@ export default function Board({
   // into, which shows, once, so its review can.
   const steppedIn = useRef(false)
   useEffect(() => {
-    if (initialStep === null || steppedIn.current || shownRun?.id !== initialRun || !contents) return
-    const s = shownRun.steps.find((st) => st.id === initialStep)
+    if (askedStep === null || steppedIn.current || shownRun?.id !== askedRun || !contents) return
+    const s = shownRun.steps.find((st) => st.id === askedStep)
     if (!s) return
     steppedIn.current = true
     const p = contents.processes.find((pr) => pr.id === s.process)

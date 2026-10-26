@@ -21,22 +21,30 @@ import (
 // version published, it runs the version it published instead, if any (see
 // publish.go).
 //
-// A flow can't run itself, however many subflows apart; see checkCall.
+// A flow can't run itself, however many subflows apart; see checkCall. One
+// in the trash runs nowhere until it is restored (trash.go).
+
+// Why a subflow process can't be given a flow in the trash to run.
+const inTrashCall = "that procedure is in the trash; restore it, or pick another"
 
 // What's wrong with a process of kind in flow running the flow its settings
-// name, if anything: that flow must exist, and must not, directly or through
-// its own subflow processes, run flow.
+// name, if anything: that flow must exist, out of the trash, and must not,
+// directly or through its own subflow processes, run flow.
 func checkCall(ctx context.Context, db *sql.DB, flow int64, kind string, s processSettings) (string, error) {
 	if kind != kindSubflow || s.Flow == nil {
 		return "", nil
 	}
 	var n int
-	var st bool
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(MAX(is_struct), FALSE) FROM flows WHERE id = ?", *s.Flow).Scan(&n, &st); err != nil {
+	var st, trashed bool
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(MAX(is_struct), FALSE), COALESCE(MAX(deleted_at IS NOT NULL), FALSE) FROM flows WHERE id = ?", *s.Flow).
+		Scan(&n, &st, &trashed); err != nil {
 		return "", err
 	}
 	if n == 0 {
 		return "flow not found", nil
+	}
+	if trashed {
+		return inTrashCall, nil
 	}
 	if st {
 		return "a struct is an object, not a flow to run; drag it onto the board as an object", nil
@@ -101,12 +109,17 @@ func (fr *flowRun) call(ctx context.Context, db *sql.DB, flow *int64) (*flowRun,
 	defer tx.Rollback()
 	var name string
 	var settings flowSettings
-	err = tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ?", *flow).Scan(&name, &settings)
+	var trashed bool
+	// Taken as moving it to the trash takes it, which then sees its run.
+	err = tx.QueryRowContext(ctx, "SELECT name, settings, deleted_at IS NOT NULL FROM flows WHERE id = ? FOR UPDATE", *flow).Scan(&name, &settings, &trashed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "The flow it runs is gone.", nil
 	}
 	if err != nil {
 		return nil, "", err
+	}
+	if trashed {
+		return nil, "The procedure it runs, " + quote(name) + ", is in the trash; restore it, or pick another.", nil
 	}
 	version, board, _, err := runVersion(ctx, tx, *flow, fr.published, saving{reason: savedForRun})
 	if err != nil {

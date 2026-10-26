@@ -1348,7 +1348,11 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		}
 		if run, err = startChildRun(w.ctx, db, fr.flow, fr.version, w.run, board, w.names[id], key, stepID); err != nil {
 			runLog(db, w.run, stepID, logError, "the run of process %d couldn't start: %v", id, err)
-			w.endStep(stepID, stepError, "Its run couldn't start.")
+			why := "Its run couldn't start."
+			if errors.Is(err, errInTrash) {
+				why = "Its run couldn't start: the flow it runs was moved to the trash."
+			}
+			w.endStep(stepID, stepError, why)
 			w.fail()
 			return nil, runFailed, nil
 		}
@@ -1597,12 +1601,19 @@ func (w *walk) endStep(stepID int64, status, msg string) {
 // process runs, on version of flow, and refers its step in the outer run to
 // it. board is the flow process whose board it runs, nil for the top board.
 func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64, board *int64, name, key string, stepID int64) (int64, error) {
+	// Only of a flow out of the trash, read as moving it there takes it, so
+	// a run started meanwhile is one it sees and stops (trash.go).
 	res, err := db.ExecContext(ctx,
 		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, replica_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		flow, runRunning, version, parent, board, name, key, replicaID)
+		SELECT id, ?, ?, ?, ?, ?, ?, ? FROM flows WHERE id = ? AND deleted_at IS NULL`,
+		runRunning, version, parent, board, name, key, replicaID, flow)
 	if err != nil {
 		return 0, err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return 0, err
+	} else if n == 0 {
+		return 0, errInTrash
 	}
 	id, err := res.LastInsertId()
 	if err != nil {

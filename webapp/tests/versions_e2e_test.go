@@ -500,6 +500,7 @@ func TestDeletingAFlowLeavesOthersAlone(t *testing.T) {
 	before := verDump(a, kept.ID)
 
 	a.call("DELETE", fmt.Sprintf("/api/flows/%d", doomed.ID), nil, http.StatusNoContent, nil)
+	a.call("DELETE", fmt.Sprintf("/api/trash/%d", doomed.ID), nil, http.StatusNoContent, nil)
 	a.refused("GET", fmt.Sprintf("/api/runs/%d", doomedRun), nil, http.StatusNotFound, "run not found")
 	a.refused("GET", fmt.Sprintf("/api/versions/%d", doomedVersion), nil, http.StatusNotFound, "version not found")
 	for _, path := range []string{"processes", "objects", "links", "boards", "runs"} {
@@ -520,8 +521,9 @@ func TestDeletingAFlowLeavesOthersAlone(t *testing.T) {
 		t.Errorf("the kept flow's run is now %s with steps %s", d.Status, describeSteps(d))
 	}
 	a.call("GET", fmt.Sprintf("/api/versions/%d", keptVersion), nil, http.StatusOK, nil)
-	// Deleting it again, or one never there, is no error.
-	a.call("DELETE", fmt.Sprintf("/api/flows/%d", doomed.ID), nil, http.StatusNoContent, nil)
+	// Deleting it again finds nothing.
+	a.refused("DELETE", fmt.Sprintf("/api/flows/%d", doomed.ID), nil, http.StatusNotFound, "flow not found")
+	a.refused("DELETE", fmt.Sprintf("/api/trash/%d", doomed.ID), nil, http.StatusNotFound, "nothing of that id is in the trash")
 }
 
 // A flow's last run is its latest run of the whole flow, not a run of it a
@@ -886,8 +888,14 @@ func TestSubflowFailures(t *testing.T) {
 		a := newApp(t)
 		s := verBuildSubflow(a)
 		a.call("DELETE", fmt.Sprintf("/api/flows/%d", s.callee.ID), nil, http.StatusNoContent, nil)
+		a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", s.caller.ID), nil, http.StatusConflict, `The procedure "Call" runs is in the trash`)
+		rn := a.finish(apiStart(a, apiNewKey(a, "Trashed").Key, s.caller.ID, nil, http.StatusCreated).ID)
+		if cs := onlyStep(t, rn, "Call"); rn.Status != runFailed || cs.Status != stepError || !strings.Contains(cs.Error, "is in the trash") {
+			t.Errorf("callee in the trash: run %s, Call %s %q", rn.Status, cs.Status, cs.Error)
+		}
+		a.call("DELETE", fmt.Sprintf("/api/trash/%d", s.callee.ID), nil, http.StatusNoContent, nil)
 		a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", s.caller.ID), nil, http.StatusConflict, `The flow "Call" runs was deleted`)
-		rn := a.finish(apiStart(a, apiNewKey(a, "Deleted").Key, s.caller.ID, nil, http.StatusCreated).ID)
+		rn = a.finish(apiStart(a, apiNewKey(a, "Deleted").Key, s.caller.ID, nil, http.StatusCreated).ID)
 		if cs := onlyStep(t, rn, "Call"); rn.Status != runFailed || cs.Status != stepError || cs.Error != "The flow it runs is gone." {
 			t.Errorf("run %s, Call %s %q", rn.Status, cs.Status, cs.Error)
 		}

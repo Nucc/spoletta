@@ -115,7 +115,7 @@ func main() {
 	registerOwnerRoutes(mux, db)
 	registerModelKeyRoutes(mux, db)
 	registerModelProviderRoutes(mux, db, workerURL)
-	registerFlowListRoutes(mux, db, workerURL)
+	registerFlowListRoutes(mux, db)
 	registerProblemRoutes(mux, db, workerURL)
 	registerTagRoutes(mux, db)
 	registerFavouriteRoutes(mux, db)
@@ -171,6 +171,13 @@ func main() {
 	registerInboxRoutes(mux, db, eng.notify, auth)
 	llm.overspent = eng.fail
 	registerRunRoutes(mux, db, eng)
+	keep, err := trashKeep()
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("the trash keeps what is deleted for %s (TRASH_KEEP)", keep)
+	registerTrashRoutes(mux, db, eng, workerURL, keep)
+	go emptyTrash(context.Background(), db, workerURL, keep)
 	registerRecordRunRoutes(mux, db, eng)
 	registerLoopRoutes(mux, db, eng)
 	registerLogRoutes(mux, db)

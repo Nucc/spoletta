@@ -27,15 +27,17 @@ func TestScanOwner(t *testing.T) {
 	}
 }
 
-// Nobody signed in and admins see and change every flow; anyone else only
-// the global ones, their own and their teams', and sees the ones their roles
-// decide reviews of besides.
+// Nobody signed in and admins see and change every flow out of the trash;
+// anyone else only the global ones, their own and their teams', and sees the
+// ones their roles decide reviews of besides. Who may change one is the same
+// in the trash, where they restore it.
 func TestFlowConditions(t *testing.T) {
 	for _, u := range []*user{nil, {ID: 1, Admin: true}} {
-		for name, f := range map[string]func(*user) (string, []any){"editableFlows": editableFlows, "visibleFlows": visibleFlows} {
-			if cond, args := f(u); cond != "TRUE" || args != nil {
-				t.Errorf("%s(%+v) = %q, %v, want TRUE without arguments", name, u, cond, args)
-			}
+		if cond, args := editableFlows(u); cond != "TRUE" || args != nil {
+			t.Errorf("editableFlows(%+v) = %q, %v, want TRUE without arguments", u, cond, args)
+		}
+		if cond, args := visibleFlows(u); cond != liveFlows || args != nil {
+			t.Errorf("visibleFlows(%+v) = %q, %v, want %q without arguments", u, cond, args, liveFlows)
 		}
 	}
 	u := &user{ID: 42}
@@ -54,6 +56,12 @@ func TestFlowConditions(t *testing.T) {
 	}
 	if !strings.Contains(see, edit) || !strings.Contains(see, "user_roles") || !strings.Contains(see, "o.human") {
 		t.Errorf("visibleFlows isn't the editable ones or the ones with reviews the roles decide: %q", see)
+	}
+	if !strings.HasPrefix(see, "("+liveFlows+" AND (") {
+		t.Errorf("visibleFlows doesn't leave the trash out of everything: %q", see)
+	}
+	if strings.Contains(edit, "deleted_at") {
+		t.Errorf("editableFlows leaves the trash out, where its flows are restored: %q", edit)
 	}
 	// Or a version published, or one a run waiting on a person runs, names them.
 	for _, part := range []string{"version_roles", "f.published_version_id", "s.status = 'waiting'"} {
@@ -112,8 +120,9 @@ func TestBodyRefs(t *testing.T) {
 		{"/api/end", `{"target": 2}`, map[string][]int64{"processes": {2}}},
 		// Elsewhere a source or target isn't a process.
 		{"/api/links", `{"source": 1, "target": 2}`, map[string][]int64{}},
-		{"/api/processes/4", `{"settings": {"flow": 8}}`, map[string][]int64{"flows": {8}}},
-		{"/api/processes/4", `{"flow": 1, "settings": {"flow": 8}}`, map[string][]int64{"flows": {1, 8}}},
+		// The flow a subflow process runs may be in the trash, and named still.
+		{"/api/processes/4", `{"settings": {"flow": 8}}`, map[string][]int64{"callees": {8}}},
+		{"/api/processes/4", `{"flow": 1, "settings": {"flow": 8}}`, map[string][]int64{"flows": {1}, "callees": {8}}},
 		{"/api/processes/4", `{"settings": {"model": "x"}}`, map[string][]int64{}},
 		{"/api/processes/4", `{"settings": "flow"}`, map[string][]int64{}},
 		// Values that aren't ids name nothing.
@@ -145,6 +154,9 @@ func TestFlowFieldsHaveQueries(t *testing.T) {
 	}
 	if flowOfTable["runs"] == "" {
 		t.Error("runs have no query, which the files route needs")
+	}
+	if !strings.Contains(flowOfTable["callees"], "deleted_at IS NULL") {
+		t.Error("a subflow process's settings naming a flow in the trash would be turned away, and could never be saved again")
 	}
 }
 

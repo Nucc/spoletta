@@ -155,6 +155,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 	}{
 		{"GET", fmt.Sprintf("/api/flows/%d", f.ID), nil},
 		{"PATCH", fmt.Sprintf("/api/flows/%d", f.ID), map[string]any{"name": "Mine"}},
+		{"DELETE", fmt.Sprintf("/api/flows/%d", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/flows/%d/opl", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/flows/%d/setup", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/flows/%d/problems", f.ID), nil},

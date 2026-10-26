@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -251,6 +252,42 @@ func validModel(m string) bool {
 	return !strings.HasPrefix(m, "-") && len(m) <= 255
 }
 
+// A process as its board lists it, with what the board shows of it beyond
+// the process itself: for a subflow process whose procedure is in the
+// trash, that procedure's name, as the call is broken until it comes back
+// (trash.go).
+type listedProcess struct {
+	process
+	TrashedFlow string `json:"trashedFlow,omitempty"`
+}
+
+// Names the procedures in the trash the subflow processes run.
+func markTrashedCalls(ctx context.Context, db *sql.DB, ps []listedProcess) error {
+	var called []int64
+	for _, p := range ps {
+		if p.Kind == kindSubflow && p.Settings.Flow != nil {
+			called = append(called, *p.Settings.Flow)
+		}
+	}
+	if len(called) == 0 {
+		return nil
+	}
+	trashed := map[int64]string{}
+	err := scanAll(ctx, db, "SELECT id, name FROM flows WHERE deleted_at IS NOT NULL AND id IN "+placeholders(len(called)), func(rows *sql.Rows) error {
+		var id int64
+		var name string
+		err := rows.Scan(&id, &name)
+		trashed[id] = name
+		return err
+	}, int64Args(called)...)
+	for i := range ps {
+		if p := &ps[i]; p.Kind == kindSubflow && p.Settings.Flow != nil {
+			p.TrashedFlow = trashed[*p.Settings.Flow]
+		}
+	}
+	return err
+}
+
 func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/processes", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
@@ -264,16 +301,20 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer rows.Close()
 
-		ps := []process{}
+		ps := []listedProcess{}
 		for rows.Next() {
-			var p process
-			if err := scanProcess(rows, &p); err != nil {
+			var p listedProcess
+			if err := scanProcess(rows, &p.process); err != nil {
 				serverError(w, err)
 				return
 			}
 			ps = append(ps, p)
 		}
 		if err := rows.Err(); err != nil {
+			serverError(w, err)
+			return
+		}
+		if err := markTrashedCalls(r.Context(), db, ps); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -437,12 +478,17 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			if patch.Settings != nil {
 				settings = *patch.Settings
 			}
-			if msg, err := checkCall(r.Context(), db, flow, kind, settings); err != nil {
-				serverError(w, err)
-				return
-			} else if msg != "" {
-				http.Error(w, msg, http.StatusBadRequest)
-				return
+			// Only a flow it is to run anew is checked, so a subflow process
+			// whose procedure is in the trash, or gone, can still be changed
+			// otherwise.
+			if kind != oldKind || !reflect.DeepEqual(settings.Flow, oldSettings.Flow) {
+				if msg, err := checkCall(r.Context(), db, flow, kind, settings); err != nil {
+					serverError(w, err)
+					return
+				} else if msg != "" {
+					http.Error(w, msg, http.StatusBadRequest)
+					return
+				}
 			}
 		}
 

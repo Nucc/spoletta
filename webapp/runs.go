@@ -433,11 +433,12 @@ type pendingRun struct {
 // version the flow published if it has one; see runVersion. A board changed
 // since its version is saved as a new one first, so the run's version shows
 // what it ran. The flow's settings, its repositories, are the version's.
-// sql.ErrNoRows without the flow.
+// sql.ErrNoRows without the flow, or with it in the trash, whose moving
+// there waits for the run to be recorded, to stop it (see trash.go).
 func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *int64, published bool) (pendingRun, error) {
 	var name string
 	var settings flowSettings
-	if err := tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ?", flow).Scan(&name, &settings); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ? AND deleted_at IS NULL FOR UPDATE", flow).Scan(&name, &settings); err != nil {
 		return pendingRun{}, err
 	}
 	version, board, onPublished, err := runVersion(ctx, tx, flow, published, saving{by: startedBy, reason: savedForRun})

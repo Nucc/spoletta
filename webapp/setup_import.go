@@ -102,7 +102,9 @@ func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (se
 		}
 	}
 
-	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct FROM flows ORDER BY id FOR UPDATE", func(rows *sql.Rows) error {
+	// A flow in the trash isn't made over; one of its name is made anew
+	// (trash.go).
+	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct FROM flows WHERE deleted_at IS NULL ORDER BY id FOR UPDATE", func(rows *sql.Rows) error {
 		var fi flowInfo
 		var name string
 		err := rows.Scan(&fi.id, &name, &fi.module, &fi.isStruct)

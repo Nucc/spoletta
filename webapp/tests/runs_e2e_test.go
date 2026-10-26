@@ -253,7 +253,7 @@ func TestStoppingARun(t *testing.T) {
 
 	rn := a.startRun(f.ID)
 	a.waitStep(rn.ID, "Slow", stepActive)
-	a.refused("DELETE", fmt.Sprintf("/api/flows/%d", f.ID), nil, http.StatusConflict, "while it is running")
+	a.refused("DELETE", fmt.Sprintf("/api/flows/%d", f.ID), nil, http.StatusConflict, "going on in it")
 	a.refused("POST", fmt.Sprintf("/api/versions/%d/restore", *rn.Version), nil, http.StatusConflict, "while the flow is running")
 
 	var ended run

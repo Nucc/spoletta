@@ -106,6 +106,12 @@ func TestBoardProblems(t *testing.T) {
 			s.Processes = append(s.Processes, process{ID: 6, Name: "Call", Kind: kindSubflow, Settings: processSettings{Flow: versionID(5)}})
 			s.Connections = append(s.Connections, connection{Source: 2, Target: 6})
 		}, level: problemError, rule: "subflow", process: 6, says: "was deleted"},
+		{name: "subflow running a procedure in the trash", change: func(s *snapshot, f *problemFacts) {
+			s.Processes = append(s.Processes, process{ID: 6, Name: "Call", Kind: kindSubflow, Settings: processSettings{Flow: versionID(5)}})
+			s.Connections = append(s.Connections, connection{Source: 2, Target: 6})
+			f.flows = map[int64]bool{5: true}
+			f.trashed = map[int64]bool{5: true}
+		}, level: problemError, rule: "subflow", process: 6, says: "is in the trash"},
 		{name: "connector with none picked", change: func(s *snapshot, f *problemFacts) {
 			s.Processes[3].Settings.Connector.Server = 0
 		}, level: problemError, rule: "connector", process: 4, says: "uses no connector"},

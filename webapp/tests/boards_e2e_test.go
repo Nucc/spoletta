@@ -41,6 +41,7 @@ func TestFlowLifecycle(t *testing.T) {
 	}
 
 	a.call("DELETE", fmt.Sprintf("/api/flows/%d", f.ID), nil, http.StatusNoContent, nil)
+	a.call("DELETE", fmt.Sprintf("/api/trash/%d", f.ID), nil, http.StatusNoContent, nil)
 	a.refused("GET", fmt.Sprintf("/api/flows/%d", f.ID), nil, http.StatusNotFound, "flow not found")
 	a.refused("GET", fmt.Sprintf("/api/runs/%d", rn.ID), nil, http.StatusNotFound, "run not found")
 }

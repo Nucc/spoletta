@@ -255,8 +255,9 @@ func TestScheduleRefusals(t *testing.T) {
 		t.Errorf("rescheduled at noon, it runs next at %v", moved.NextRunAt)
 	}
 
-	// A flow's schedules go with it.
+	// A flow's schedules go with it, deleted for good.
 	a.call("DELETE", fmt.Sprintf("/api/flows/%d", f.ID), nil, http.StatusNoContent, nil)
+	a.call("DELETE", fmt.Sprintf("/api/trash/%d", f.ID), nil, http.StatusNoContent, nil)
 	var all []schedule
 	a.call("GET", "/api/schedules", nil, http.StatusOK, &all)
 	for _, o := range all {

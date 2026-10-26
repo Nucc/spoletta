@@ -23,7 +23,8 @@ import (
 // second for schedules due, and each one due starts a run unless its last
 // run is still going, such as one waiting on a person; that time is skipped.
 // Times missed while the server was down are skipped too: a schedule only
-// carries on from its next time.
+// carries on from its next time, as it does once its flow is restored from
+// the trash, where it doesn't run (see trash.go).
 //
 // Every server checks, so with several of them each time is claimed by
 // moving the schedule's next time on, which only one of them gets to do.
@@ -205,7 +206,10 @@ func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error 
 		next       time.Time
 	}
 	var dues []due
-	rows, err := db.QueryContext(ctx, "SELECT id, flow_id, cron, timezone, next_run_at FROM schedules WHERE enabled AND next_run_at <= ?", now.UTC())
+	// A flow in the trash runs nothing; its schedules come round again once
+	// it is restored (trash.go).
+	rows, err := db.QueryContext(ctx, `SELECT s.id, s.flow_id, s.cron, s.timezone, s.next_run_at FROM schedules s
+		JOIN flows f ON f.id = s.flow_id AND `+liveFlows+` WHERE s.enabled AND s.next_run_at <= ?`, now.UTC())
 	if err != nil {
 		return err
 	}

@@ -275,13 +275,18 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		var owned int
-		if err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM flows WHERE owner_team_id = ?", id).Scan(&owned); err != nil {
+		// Those in the trash too, which are the team's still (trash.go).
+		var owned, trashed int
+		if err := db.QueryRowContext(r.Context(), "SELECT COUNT(*), COALESCE(SUM(deleted_at IS NOT NULL), 0) FROM flows WHERE owner_team_id = ?", id).Scan(&owned, &trashed); err != nil {
 			serverError(w, err)
 			return
 		}
 		if owned > 0 {
-			http.Error(w, fmt.Sprintf("the team owns %d flows, procedures or structs; give them to someone else first", owned), http.StatusConflict)
+			msg := fmt.Sprintf("the team owns %d flows, procedures or structs; give them to someone else first", owned)
+			if trashed > 0 {
+				msg = fmt.Sprintf("the team owns %d flows, procedures or structs, %d of them in the trash; give them to someone else, or delete those for good, first", owned, trashed)
+			}
+			http.Error(w, msg, http.StatusConflict)
 			return
 		}
 		if err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM skills WHERE owner_team_id = ?", id).Scan(&owned); err != nil {

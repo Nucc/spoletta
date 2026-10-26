@@ -62,8 +62,10 @@ type problemFacts struct {
 	signIn bool
 	// The MCP servers, the installed connectors among them, by id.
 	servers map[int64]serverFacts
-	// The flows there are, by id: what subflow processes run.
-	flows map[int64]bool
+	// The flows there are, by id: what subflow processes run; and those of
+	// them in the trash, which a run calling them fails on.
+	flows   map[int64]bool
+	trashed map[int64]bool
 	// Skills and credentials processes picked, by id; those not there are
 	// gone.
 	skills      map[int64]pickFacts
@@ -264,6 +266,8 @@ func (c *problemCheck) subflow(p process) {
 		c.onProcess(problemError, "subflow", p, "%s runs no flow: pick the procedure it runs in its panel.", quote(p.Name))
 	case !c.f.flows[*flow]:
 		c.onProcess(problemError, "subflow", p, "The flow %s runs was deleted: pick another in its panel.", quote(p.Name))
+	case c.f.trashed[*flow]:
+		c.onProcess(problemError, "subflow", p, "The procedure %s runs is in the trash: restore it, or pick another in its panel.", quote(p.Name))
 	}
 }
 
@@ -636,7 +640,7 @@ func problemErrors(ps []problem) []problem {
 // whoever asks sees it: their MCP connections, and with withModel the
 // default model, asking the worker when the settings keep none.
 func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerURL string, flow int64, withModel bool, boards ...snapshot) (problemFacts, error) {
-	f := problemFacts{signIn: requestUser(r) != nil, servers: map[int64]serverFacts{}, flows: map[int64]bool{}, skills: map[int64]pickFacts{},
+	f := problemFacts{signIn: requestUser(r) != nil, servers: map[int64]serverFacts{}, flows: map[int64]bool{}, trashed: map[int64]bool{}, skills: map[int64]pickFacts{},
 		credentials: map[int64]pickFacts{}, roles: map[string]bool{}, sources: map[int64]bool{}}
 	if err := db.QueryRowContext(ctx, "SELECT module FROM flows WHERE id = ?", flow).Scan(&f.module); err != nil {
 		return f, err
@@ -670,10 +674,12 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 		}
 	}
 	if len(flows) > 0 {
-		err := scanAll(ctx, db, "SELECT id FROM flows WHERE id IN "+placeholders(len(flows)), func(rows *sql.Rows) error {
+		err := scanAll(ctx, db, "SELECT id, deleted_at IS NOT NULL FROM flows WHERE id IN "+placeholders(len(flows)), func(rows *sql.Rows) error {
 			var id int64
-			err := rows.Scan(&id)
+			var trashed bool
+			err := rows.Scan(&id, &trashed)
 			f.flows[id] = true
+			f.trashed[id] = trashed
 			return err
 		}, flows...)
 		if err != nil {

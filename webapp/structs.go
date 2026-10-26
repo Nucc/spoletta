@@ -69,10 +69,12 @@ func renameStruct(ctx context.Context, db *sql.DB, flow int64, name string) erro
 	})
 }
 
-// How many other flows hold a copy of a struct's object.
+// How many other flows hold a copy of a struct's object, of those out of
+// the trash.
 func structUsers(ctx context.Context, db querier, flow int64) (int, error) {
 	var n int
 	err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT o.flow_id) FROM objects o JOIN objects src ON src.id = o.source_id
+		JOIN flows f ON f.id = o.flow_id AND `+liveFlows+`
 		WHERE src.flow_id = ? AND o.flow_id <> ?`, flow, flow).Scan(&n)
 	return n, err
 }

@@ -227,8 +227,9 @@ func listFlows(ctx context.Context, db *sql.DB, u *user) ([]flow, error) {
 	// How many other flows run each procedure, as usersOf counts them, and
 	// use each struct's object, as structUsers does.
 	called, used := map[int64]int{}, map[int64]int{}
-	err = scanAll(ctx, db, `SELECT CAST(JSON_EXTRACT(settings, '$.flow') AS SIGNED) AS called, COUNT(DISTINCT flow_id) FROM processes
-		WHERE kind = ? AND flow_id <> CAST(JSON_EXTRACT(settings, '$.flow') AS SIGNED) GROUP BY called`, func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, `SELECT CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) AS called, COUNT(DISTINCT p.flow_id) FROM processes p
+		JOIN flows f ON f.id = p.flow_id AND `+liveFlows+`
+		WHERE p.kind = ? AND p.flow_id <> CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) GROUP BY called`, func(rows *sql.Rows) error {
 		var id int64
 		var n int
 		err := rows.Scan(&id, &n)
@@ -239,6 +240,7 @@ func listFlows(ctx context.Context, db *sql.DB, u *user) ([]flow, error) {
 		return nil, err
 	}
 	err = scanAll(ctx, db, `SELECT src.flow_id, COUNT(DISTINCT o.flow_id) FROM objects o JOIN objects src ON src.id = o.source_id
+		JOIN flows f ON f.id = o.flow_id AND `+liveFlows+`
 		WHERE o.flow_id <> src.flow_id GROUP BY src.flow_id`, func(rows *sql.Rows) error {
 		var id int64
 		var n int
@@ -271,8 +273,9 @@ func listFlows(ctx context.Context, db *sql.DB, u *user) ([]flow, error) {
 	return fs, nil
 }
 
-// Deletes a flow with everything in it and every run of it, and returns
-// the runs, whose workspaces are to go too.
+// Deletes a flow with everything in it and every run of it, for good, and
+// returns the runs, whose workspaces are to go too. Deleting one moves it
+// to the trash first; see trash.go.
 func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
 	var runs []int64
 	rows, err := tx.QueryContext(ctx, "SELECT id FROM runs WHERE flow_id = ?", id)
@@ -310,7 +313,7 @@ func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
 	return runs, nil
 }
 
-func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
+func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 	// The flows the user sees; see owners.go.
 	mux.HandleFunc("GET /api/flows", func(w http.ResponseWriter, r *http.Request) {
 		fs, err := listFlows(r.Context(), db, requestUser(r))
@@ -515,40 +518,5 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		f.Access = accessEdit
 		writeJSON(w, http.StatusOK, f)
-	})
-
-	mux.HandleFunc("DELETE /api/flows/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		ctx := r.Context()
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		defer tx.Rollback()
-		var running int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE flow_id = ? AND status = 'running'", id).Scan(&running); err != nil {
-			serverError(w, err)
-			return
-		}
-		if running > 0 {
-			http.Error(w, "can't delete a flow while it is running", http.StatusConflict)
-			return
-		}
-		runs, err := deleteFlow(ctx, tx, id)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		if err := tx.Commit(); err != nil {
-			serverError(w, err)
-			return
-		}
-		dropWorkspaces(workerURL, runs)
-		w.WriteHeader(http.StatusNoContent)
 	})
 }

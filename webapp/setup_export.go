@@ -32,7 +32,10 @@ type exportedFlow struct {
 func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error) {
 	f := setupFile{Spoletta: setupVersion}
 	var flows []*exportedFlow
-	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, settings FROM flows ORDER BY name, id", func(rows *sql.Rows) error {
+	// What is in the trash is left out, as if deleted (trash.go): copies of
+	// its objects are their flows' own, and the subflow processes running
+	// it run nothing.
+	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, settings FROM flows WHERE deleted_at IS NULL ORDER BY name, id", func(rows *sql.Rows) error {
 		e := &exportedFlow{}
 		err := rows.Scan(&e.id, &e.name, &e.module, &e.isStruct, &e.settings)
 		flows = append(flows, e)

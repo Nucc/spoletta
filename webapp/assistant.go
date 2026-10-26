@@ -621,7 +621,7 @@ func keepToFlow(ctx context.Context, tx *sql.Tx, af assistantFlow, f *setupFile)
 	}
 
 	existing := map[string]bool{}
-	err := scanAll(ctx, tx, "SELECT name FROM flows WHERE id <> ?", func(rows *sql.Rows) error {
+	err := scanAll(ctx, tx, "SELECT name FROM flows WHERE id <> ? AND deleted_at IS NULL", func(rows *sql.Rows) error {
 		var name string
 		err := rows.Scan(&name)
 		existing[name] = true

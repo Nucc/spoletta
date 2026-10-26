@@ -123,8 +123,11 @@ const (
 	roleConsumption = "consumption"
 )
 
-const objectColumns = "id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id, " +
-	"(SELECT src.flow_id FROM objects src WHERE src.id = objects.source_id), store_id IS NOT NULL"
+// A copy whose source is in the trash shows as an object of its own; see
+// copyReason.
+const objectColumns = "id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, " +
+	"IF(EXISTS (SELECT 1 FROM objects src JOIN flows f ON f.id = src.flow_id WHERE src.id = objects.source_id AND f.deleted_at IS NOT NULL), NULL, source_id), " +
+	"(SELECT src.flow_id FROM objects src JOIN flows f ON f.id = src.flow_id AND " + liveFlows + " WHERE src.id = objects.source_id), store_id IS NOT NULL"
 
 // Whether an object is on a board of processes, rather than owned by
 // another object.

@@ -188,30 +188,44 @@ type activity struct {
 	AllReviews reviewTimes `json:"allReviews"`
 }
 
-// The flows the person sees, nil for every one; see visibleFlows. Worked
-// out once, so the queries over runs and steps needn't ask it of each.
-func seenFlows(ctx context.Context, db *sql.DB, u *user) ([]int64, error) {
+// The flows the person sees; see visibleFlows. Worked out once, so the
+// queries over runs and steps needn't ask it of each.
+type flowSet struct {
+	// The flows seen; nil for every one but those in the trash.
+	ids []int64
+	// Those in the trash, for someone seeing every other flow.
+	trashed []int64
+}
+
+func seenFlows(ctx context.Context, db *sql.DB, u *user) (flowSet, error) {
+	var seen flowSet
 	cond, args := visibleFlows(u)
-	if cond == "TRUE" {
-		return nil, nil
+	q := "SELECT f.id FROM flows f WHERE " + cond
+	into := &seen.ids
+	// Someone seeing every flow is told those they don't, which are fewer.
+	if u == nil || u.Admin {
+		q, into = "SELECT f.id FROM flows f WHERE f.deleted_at IS NOT NULL", &seen.trashed
 	}
-	ids := []int64{}
-	err := scanAll(ctx, db, "SELECT f.id FROM flows f WHERE "+cond, func(rows *sql.Rows) error {
+	*into = []int64{}
+	err := scanAll(ctx, db, q, func(rows *sql.Rows) error {
 		var id int64
 		err := rows.Scan(&id)
-		ids = append(ids, id)
+		*into = append(*into, id)
 		return err
 	}, args...)
-	return ids, err
+	return seen, err
 }
 
 // The condition that column col names one of the flows seen, and its
 // arguments.
-func ofFlows(col string, seen []int64) (string, []any) {
-	if seen == nil {
-		return "TRUE", nil
+func ofFlows(col string, seen flowSet) (string, []any) {
+	switch {
+	case seen.ids != nil:
+		return col + " IN " + placeholders(len(seen.ids)), int64Args(seen.ids)
+	case len(seen.trashed) > 0:
+		return col + " NOT IN " + placeholders(len(seen.trashed)), int64Args(seen.trashed)
 	}
-	return col + " IN " + placeholders(len(seen)), int64Args(seen)
+	return "TRUE", nil
 }
 
 // Works out the page for the person over the period.
@@ -389,7 +403,7 @@ var workKinds = []any{kindAgent, kindScript, kindConnector}
 // its latest failed step was. A process is on one flow's boards, so every
 // step of it is in a run of that flow: its steps are counted from the
 // steps alone, and its flow is any one's run's.
-func failingProcesses(ctx context.Context, db *sql.DB, p period, seen []int64) ([]processFailures, error) {
+func failingProcesses(ctx context.Context, db *sql.DB, p period, seen flowSet) ([]processFailures, error) {
 	out := []processFailures{}
 	var lastSteps []int64
 	of, ofArgs := ofFlows("r.flow_id", seen)
@@ -431,7 +445,7 @@ func failingProcesses(ctx context.Context, db *sql.DB, p period, seen []int64) (
 // human process and all together; see reviewTimes. Half and nine in ten
 // within are the least times at least that share of the reviews took no
 // longer than.
-func reviewsDecided(ctx context.Context, db *sql.DB, p period, seen []int64) ([]reviewTimes, reviewTimes, error) {
+func reviewsDecided(ctx context.Context, db *sql.DB, p period, seen flowSet) ([]reviewTimes, reviewTimes, error) {
 	var all reviewTimes
 	byProcess := map[int64]*reviewTimes{}
 	var out []*reviewTimes

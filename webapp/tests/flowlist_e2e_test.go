@@ -124,6 +124,7 @@ func TestFlowListTagsFavouritesAndHealth(t *testing.T) {
 		t.Errorf("the struct is listed as %+v", l)
 	}
 	a.call("DELETE", fmt.Sprintf("/api/flows/%d", s.ID), nil, http.StatusNoContent, nil)
+	a.call("DELETE", fmt.Sprintf("/api/trash/%d", s.ID), nil, http.StatusNoContent, nil)
 	var left int
 	if err := db.QueryRow("SELECT (SELECT COUNT(*) FROM flow_tags WHERE flow_id = ?) + (SELECT COUNT(*) FROM favourite_flows WHERE flow_id = ?)", s.ID, s.ID).Scan(&left); err != nil || left != 0 {
 		t.Errorf("the deleted struct left %d tags and favourites (%v)", left, err)

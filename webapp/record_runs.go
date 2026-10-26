@@ -76,7 +76,7 @@ type recordFlow struct {
 func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*recordFlow, error) {
 	var fs []*recordFlow
 	err := scanAll(ctx, db, `SELECT f.id, f.name, v.snapshot FROM flows f JOIN flow_versions v ON v.id = f.published_version_id
-		WHERE NOT f.is_struct AND NOT f.module AND JSON_CONTAINS(JSON_EXTRACT(v.snapshot, '$.objects[*].store'), CAST(? AS JSON))`,
+		WHERE `+liveFlows+` AND NOT f.is_struct AND NOT f.module AND JSON_CONTAINS(JSON_EXTRACT(v.snapshot, '$.objects[*].store'), CAST(? AS JSON))`,
 		func(rows *sql.Rows) error {
 			f := &recordFlow{Off: map[string]string{}}
 			var body []byte
@@ -104,7 +104,7 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 	err = scanAll(ctx, db, `SELECT f.id, f.name, l.query FROM objects o
 			JOIN object_links l ON l.object_id = o.id AND l.direction = 'input' AND l.query IS NOT NULL
 			JOIN flows f ON f.id = o.flow_id
-		WHERE o.store_id = ? AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL
+		WHERE o.store_id = ? AND `+liveFlows+` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL
 		ORDER BY f.name, f.id, l.id`, func(rows *sql.Rows) error {
 		var id int64
 		var name string

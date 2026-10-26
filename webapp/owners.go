@@ -98,46 +98,49 @@ func ownedBy(t string, u *user) (string, []any) {
 		OR ` + t + ".owner_team_id IN (SELECT team_id FROM team_members WHERE user_id = ?))", []any{u.ID, u.ID}
 }
 
-// The condition on flows f that only the ones the user sees meet: the ones
-// they may change, and the ones with reviews their roles decide: a human
-// object names one of their roles on the board as it is, on the version
-// published, or on the version of a run of it waiting for a person. Versions
-// keep the roles their human objects name in version_roles, so this reads
-// no snapshot.
+// The condition on flows f that only the ones out of the trash meet; see
+// trash.go.
+const liveFlows = "f.deleted_at IS NULL"
+
+// The condition on flows f that only the ones the user sees meet: of those
+// out of the trash, the ones they may change, and the ones with reviews
+// their roles decide: a human object names one of their roles on the board
+// as it is, on the version published, or on the version of a run of it
+// waiting for a person. Versions keep the roles their human objects name in
+// version_roles, so this reads no snapshot.
 func visibleFlows(u *user) (string, []any) {
 	cond, args := editableFlows(u)
 	if u == nil || u.Admin {
-		return cond, args
+		return liveFlows, args
 	}
-	return "(" + cond + ` OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = ? AND (
+	return "(" + liveFlows + " AND (" + cond + ` OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = ? AND (
 		EXISTS (SELECT 1 FROM objects o WHERE o.flow_id = f.id AND o.human AND LOWER(TRIM(o.name)) = LOWER(ur.name))
 		OR EXISTS (SELECT 1 FROM version_roles vr WHERE vr.role = LOWER(ur.name) AND (vr.version_id = f.published_version_id
 			OR vr.version_id IN (SELECT r.version_id FROM runs r JOIN run_steps s ON s.run_id = r.id
-				WHERE r.flow_id = f.id AND r.status = 'running' AND s.status = 'waiting' AND s.kind IN ('human', 'loop')))))))`, append(args, u.ID)
+				WHERE r.flow_id = f.id AND r.status = 'running' AND s.status = 'waiting' AND s.kind IN ('human', 'loop'))))))))`, append(args, u.ID)
 }
 
 // How far the user may go with the flow: accessEdit, accessReview, or ""
-// for not at all. A flow that doesn't exist is everyone's to be told so.
+// for not at all, as for a flow in the trash, whoever asks; only the trash
+// reaches those (trash.go). A flow that doesn't exist is everyone's to be
+// told so.
 func flowAccess(ctx context.Context, db querier, u *user, flow int64) (string, error) {
-	if u == nil || u.Admin {
-		return accessEdit, nil
-	}
 	edit, editArgs := editableFlows(u)
 	see, seeArgs := visibleFlows(u)
-	var exists, editable, visible bool
-	err := db.QueryRowContext(ctx, "SELECT TRUE, "+edit+", "+see+" FROM flows f WHERE f.id = ?",
-		append(append(editArgs, seeArgs...), flow)...).Scan(&exists, &editable, &visible)
+	var editable, visible bool
+	err := db.QueryRowContext(ctx, "SELECT "+edit+", "+see+" FROM flows f WHERE f.id = ?",
+		append(append(editArgs, seeArgs...), flow)...).Scan(&editable, &visible)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return accessEdit, nil
 	case err != nil:
 		return "", err
+	case !visible:
+		return "", nil
 	case editable:
 		return accessEdit, nil
-	case visible:
-		return accessReview, nil
 	}
-	return "", nil
+	return accessReview, nil
 }
 
 // Deciding a review, which its route lets only those holding its role do.
@@ -314,6 +317,10 @@ var flowOfTable = map[string]string{
 	"objects":       "SELECT flow_id FROM objects WHERE id = ?",
 	"runs":          "SELECT flow_id FROM runs WHERE id = ?",
 	"flow_versions": "SELECT flow_id FROM flow_versions WHERE id = ?",
+	// The flow a subflow process runs, which may stay named while it is in
+	// the trash, so the process's settings can still be saved; picking one
+	// anew is refused there (checkCall).
+	"callees": "SELECT id FROM flows WHERE id = ? AND deleted_at IS NULL",
 }
 
 // The tables of the ids a request's query or JSON body names by field.
@@ -339,14 +346,21 @@ const maxGuardedBody = 1 << 20
 // doesn't see, as if it didn't exist; see visibleFlows. It finds the flows
 // a request is about from its path, its query, and the ids its JSON body
 // names, so each route needn't; the routes listing flows, or what is in
-// several, filter them themselves.
+// several, filter them themselves. A flow in the trash is no one's to see,
+// admins' included, with nobody signing in too; only the trash's own routes
+// reach it (trash.go), and they name it by a path of their own.
 func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := requestUser(r)
-		if u == nil || u.Admin || !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/setup" {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/setup" {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Someone who sees every flow may send a body larger than the guard
+		// reads, which goes on unread, as their routes keep to their own
+		// limits; it can only be about flows they see, or one in the trash,
+		// which runs refuse anyway (newRun).
+		everything := u == nil || u.Admin
 		type ref struct {
 			query string
 			id    int64
@@ -384,20 +398,29 @@ func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 		}
 		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			body, err := io.ReadAll(io.LimitReader(r.Body, maxGuardedBody+1))
-			r.Body.Close()
 			if err != nil {
+				r.Body.Close()
 				http.Error(w, "couldn't read the request", http.StatusBadRequest)
 				return
 			}
-			if len(body) > maxGuardedBody {
+			switch {
+			case len(body) <= maxGuardedBody:
+				r.Body.Close()
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				for table, id := range bodyRefs(r.URL.Path, body) {
+					for _, i := range id {
+						refs = append(refs, ref{flowOfTable[table], i})
+					}
+				}
+			case everything:
+				r.Body = struct {
+					io.Reader
+					io.Closer
+				}{io.MultiReader(bytes.NewReader(body), r.Body), r.Body}
+			default:
+				r.Body.Close()
 				http.Error(w, "the request is too large", http.StatusRequestEntityTooLarge)
 				return
-			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			for table, id := range bodyRefs(r.URL.Path, body) {
-				for _, i := range id {
-					refs = append(refs, ref{flowOfTable[table], i})
-				}
 			}
 		}
 		need := neededAccess(r)
@@ -465,7 +488,7 @@ func bodyRefs(path string, body []byte) map[string][]int64 {
 		var settings map[string]json.RawMessage
 		if json.Unmarshal(raw, &settings) == nil {
 			if f, ok := settings["flow"]; ok {
-				add("flows", f)
+				add("callees", f)
 			}
 		}
 	}

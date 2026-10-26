@@ -21,7 +21,7 @@ import (
 // over to match, and a copy's own states, attributes and parts can't be
 // changed but in the module. Only where it goes and what this flow does with
 // it, such as storing it, are the copy's own. A copy whose source is deleted
-// becomes an object of its own.
+// becomes an object of its own, as it is while its source is in the trash.
 
 // Whether an object has the states, attributes and parts of the one it
 // would be a copy of, by name, and so do its parts.
@@ -131,22 +131,23 @@ func markModule(ctx context.Context, tx *sql.Tx, flow int64) error {
 	return err
 }
 
-// How many other flows run a flow through their subflow processes.
+// How many other flows run a flow through their subflow processes, of
+// those out of the trash.
 func usersOf(ctx context.Context, db querier, flow int64) (int, error) {
 	var n int
-	err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT flow_id) FROM processes
-		WHERE kind = ? AND CAST(JSON_EXTRACT(settings, '$.flow') AS SIGNED) = ? AND flow_id <> ?`, kindSubflow, flow, flow).Scan(&n)
+	err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT p.flow_id) FROM processes p JOIN flows f ON f.id = p.flow_id AND `+liveFlows+`
+		WHERE p.kind = ? AND CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) = ? AND p.flow_id <> ?`, kindSubflow, flow, flow).Scan(&n)
 	return n, err
 }
 
 // Why an object can't be changed but where it comes from: it is a copy of a
 // module's or a struct's, whose name the reason gives. Empty for an object of
-// its own.
+// its own, as a copy is while its source is in the trash (see trash.go).
 func copyReason(ctx context.Context, db querier, object int64) (string, error) {
 	var name, module string
 	var isStruct bool
 	err := db.QueryRowContext(ctx, `SELECT src.name, f.name, f.is_struct FROM objects o
-		JOIN objects src ON src.id = o.source_id JOIN flows f ON f.id = src.flow_id WHERE o.id = ?`, object).Scan(&name, &module, &isStruct)
+		JOIN objects src ON src.id = o.source_id JOIN flows f ON f.id = src.flow_id AND `+liveFlows+` WHERE o.id = ?`, object).Scan(&name, &module, &isStruct)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

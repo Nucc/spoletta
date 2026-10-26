@@ -34,6 +34,7 @@ const fieldsOf = (h: Webhook): WebhookFields => ({
   verify: h.verify ?? '',
   header: h.header ?? '',
   idHeader: h.idHeader ?? '',
+  timestampHeader: h.timestampHeader ?? '',
   events: h.events,
   mapping: h.mapping,
   enabled: h.enabled,
@@ -105,7 +106,8 @@ export function FlowWebhooksSection({ flowId, onError }: { flowId: number; onErr
       <p className="panel-note">
         GitHub, Slack and other systems start it with their events, each at a URL of its own, signed with its secret.
         Each event it takes starts a run once, however often it comes, on the version the flow published, or its board as
-        it is while it publishes none, given what the webhook takes from the payload. Its runs are for whoever added it.
+        it is while it publishes none, given what the webhook takes from the payload. Its runs are for whoever added it, or
+        last changed what starts them.
       </p>
       {list.problem && <p className="panel-warning">Deliveries can't start it: {list.problem}.</p>}
       {made?.secret && (
@@ -161,6 +163,12 @@ export function FlowWebhooksSection({ flowId, onError }: { flowId: number; onErr
                   Last delivery {formatTime(h.lastDelivery.receivedAt)}: {deliveryText(h.lastDelivery)}
                 </span>
               )}
+              {h.refused > 0 && (
+                <small className="panel-warning">
+                  {h.refused === 1 ? 'A request was' : `${h.refused} requests were`} refused as not signed with its secret
+                  {h.lastRefusedAt && `, the last ${formatTime(h.lastRefusedAt)}`}.
+                </small>
+              )}
               <div className="mcp-item-actions">
                 <button type="button" onClick={() => setShowing(h)}>
                   Deliveries
@@ -168,7 +176,11 @@ export function FlowWebhooksSection({ flowId, onError }: { flowId: number; onErr
                 <button type="button" onClick={() => setEditing(h)}>
                   Edit
                 </button>
-                <button type="button" onClick={() => toggle(h)}>
+                <button
+                  type="button"
+                  onClick={() => toggle(h)}
+                  title={!h.enabled && !h.yours ? `Its runs become yours rather than ${h.createdBy || 'nobody'}'s` : undefined}
+                >
                   {h.enabled ? 'Turn off' : 'Turn on'}
                 </button>
                 <button type="button" className="danger" onClick={() => remove(h)}>
@@ -233,6 +245,7 @@ function WebhookDialog({
   const [verify, setVerify] = useState<WebhookVerify>(webhook?.verify ?? 'hmac')
   const [header, setHeader] = useState(webhook?.header ?? '')
   const [idHeader, setIDHeader] = useState(webhook ? (webhook.idHeader ?? '') : 'Idempotency-Key')
+  const [timestampHeader, setTimestampHeader] = useState(webhook?.timestampHeader ?? '')
   const [events, setEvents] = useState((webhook?.events ?? []).join(', '))
   // Keep the secret kept, make one, or take the one pasted.
   const [secretMode, setSecretMode] = useState<'keep' | 'make' | 'paste'>(webhook ? 'keep' : 'make')
@@ -303,6 +316,7 @@ function WebhookDialog({
       verify: kind === 'generic' ? verify : '',
       header: kind === 'generic' ? header.trim() : '',
       idHeader: kind === 'generic' ? idHeader.trim() : '',
+      timestampHeader: kind === 'generic' && verify === 'hmac' ? timestampHeader.trim() : '',
       events:
         kind === 'generic'
           ? []
@@ -339,6 +353,12 @@ function WebhookDialog({
         </button>
       </header>
       <div className="rerun-body">
+        {webhook && !webhook.yours && (
+          <p className="panel-note">
+            Its runs are {webhook.createdBy ? `${webhook.createdBy}'s` : "nobody's"}. Changing anything but its name makes
+            them yours.
+          </p>
+        )}
         <label className="panel-field">
           <span>Name</span>
           <input value={name} placeholder="What sends it, such as Issues labeled" onChange={(e) => setName(e.target.value)} />
@@ -397,7 +417,13 @@ function WebhookDialog({
               </div>
               <small className="panel-note">
                 {verify === 'hmac'
-                  ? 'An HMAC-SHA256 of the body keyed with the secret, in hex or base64, with or without sha256= before it.'
+                  ? `An HMAC-SHA256 keyed with the secret, in hex or base64, with or without sha256= before it, of ${[
+                      timestampHeader.trim() && 'the timestamp and a dot',
+                      idHeader.trim() && 'the id and a dot',
+                      'the body',
+                    ]
+                      .filter(Boolean)
+                      .join(', then ')}.`
                   : 'The secret itself, or Bearer and the secret.'}
               </small>
             </div>
@@ -415,8 +441,31 @@ function WebhookDialog({
               <input value={idHeader} spellCheck={false} placeholder="None" onChange={(e) => setIDHeader(e.target.value)} />
               <small className="panel-note">
                 A delivery sent again with the same id gets the run the first started; without one, each starts a run.
+                {verify === 'hmac' && ' Its HMAC covers the id, so nobody can send a delivery again under another.'}
               </small>
             </label>
+            {verify === 'hmac' && (
+              <label className="panel-field">
+                <span>Its timestamp in the header</span>
+                <input
+                  value={timestampHeader}
+                  spellCheck={false}
+                  placeholder="None"
+                  onChange={(e) => setTimestampHeader(e.target.value)}
+                />
+                <small className="panel-note">
+                  Seconds since 1970, which its HMAC covers; one more than five minutes off is refused, so a delivery
+                  can't be sent again later.
+                </small>
+              </label>
+            )}
+            {(verify === 'token' || (!idHeader.trim() && !timestampHeader.trim())) && (
+              <small className="panel-warning">
+                {verify === 'token'
+                  ? 'The secret travels with each delivery, and nothing tells one sent again from a new one.'
+                  : 'With neither an id nor a timestamp signed, whoever sees a delivery could send it again as a new one.'}
+              </small>
+            )}
           </>
         )}
         {kind !== 'generic' && (

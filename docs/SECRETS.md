@@ -4,7 +4,8 @@ The webapp keeps four kinds of secret for others in MySQL: the model API
 keys admins save in the settings, the OAuth tokens of each person's MCP
 connections, the secrets of the credentials admins keep for scripts and
 agents (see [webapp/credentials.go](../webapp/credentials.go)), and the
-secrets other systems sign their deliveries to a flow's webhooks with (see
+secrets other systems sign their deliveries to a flow's webhooks with, with
+the payload each webhook last took (see
 [webapp/webhooks.go](../webapp/webhooks.go)). With `SECRET_KEY` set, each is sealed with AES-256-GCM under a
 key derived from it, bound to the row it is kept in, so a dump or a backup
 of the database doesn't hand them out. How it works is described at the top

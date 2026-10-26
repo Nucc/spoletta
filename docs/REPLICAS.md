@@ -11,8 +11,9 @@ the model, MCP and egress proxies. How it works is described at the top of
 
 Everything the webapp keeps is in the database, so every replica sees it:
 runs and their steps, sessions, schedules (each time claimed by one
-replica), webhooks' deliveries (each taken once by the run its id starts,
-as the API's requests are by their `Idempotency-Key`), the tokens steps are handed for the proxies (only their SHA-256,
+replica), webhooks' deliveries (each taken once by the run its id or
+payload starts, as the API's requests are by their `Idempotency-Key`, and
+the GitHub payloads they ignored), the tokens steps are handed for the proxies (only their SHA-256,
 [webapp/grants.go](../webapp/grants.go)), what runs and people spent, the
 steps each person has going, MCP sign-ins under way, and the limits, which
 each replica reads again every five seconds.
@@ -63,6 +64,10 @@ update leaves runs going, except those of the pods it replaces.
   all. A person's limit on steps going at once counts across replicas.
 - `PROXY_URL` is where the worker reaches the proxies. Point it at the
   Service, not a pod: any replica answers for any step.
+- The rate each address may send to webhooks' URLs (`/hooks/`), and how
+  often requests not signed with a webhook's secret are audited, are held
+  by each replica for itself; with three replicas, an address gets three
+  times as many through. Each webhook's count of them is in the database.
 
 ## Upgrading to a version with replicas
 

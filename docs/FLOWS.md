@@ -520,7 +520,8 @@ refused and listed with why among the webhook's deliveries, beside the last
 payload, to write the mapping from. So a flow meant to run on an issue being
 labeled has its first process take an `Issue` object with the attributes it
 needs, nothing generating it, and its webhook maps them from the payload.
-Webhooks run as whoever added them, and aren't part of the setup file.
+Webhooks run as whoever added them, or last changed what starts them, and
+aren't part of the setup file.
 
 ### 4.1a Which version a run runs
 

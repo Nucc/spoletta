@@ -2078,9 +2078,11 @@ export function getFlowAPI(flow: number): Promise<FlowAPI> {
 // own, each delivery signed with its secret as its kind says, and taken
 // once. GitHub's takes the events it names, alone (issues) or with an
 // action (issues.labeled); Slack's the Events API's, those it names if
-// any; a generic one every delivery, checking an HMAC of the body or the
-// secret itself in the header it names, and telling deliveries apart by
-// the id idHeader holds. Its runs are for whoever added it.
+// any; a generic one every delivery, checking an HMAC or the secret itself
+// in the header it names: the HMAC covers the timestamp timestampHeader
+// holds and the id idHeader holds, when it names them, each followed by a
+// dot, then the body, and deliveries are told apart by that id. Its runs
+// are for whoever added it, or last changed what starts them.
 export type WebhookKind = 'github' | 'slack' | 'generic'
 export type WebhookVerify = 'hmac' | 'token'
 
@@ -2110,14 +2112,20 @@ export type Webhook = {
   verify?: WebhookVerify
   header?: string
   idHeader?: string
+  timestampHeader?: string
   events: string[]
   mapping: Record<string, WebhookInput>
   enabled: boolean
-  // Whom its runs are for.
+  // Whom its runs are for, and whether that is whoever is signed in.
   createdBy: string
+  yours: boolean
   createdAt: string
   // The secret's last four characters, when it is long enough.
   hint?: string
+  // How many requests were refused as not signed with its secret, which
+  // leave no delivery, and when the last was.
+  refused: number
+  lastRefusedAt: string | null
   // What keeps its deliveries from starting a run, as the flow stands.
   problems: string[]
   lastDelivery: WebhookDelivery | null
@@ -2140,6 +2148,8 @@ export type WebhookList = {
 
 // What adding or changing a webhook sends. Without a secret, adding makes
 // one and a change keeps the one kept, unless newSecret asks for another.
+// Changing what starts its runs (all but its name), or turning it on, makes
+// them the runs of whoever changes it.
 export type WebhookFields = {
   flow: number
   name: string
@@ -2147,6 +2157,7 @@ export type WebhookFields = {
   verify: WebhookVerify | ''
   header: string
   idHeader: string
+  timestampHeader: string
   events: string[]
   mapping: Record<string, WebhookInput>
   enabled: boolean

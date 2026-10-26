@@ -501,6 +501,8 @@ is then its draft, and:
 - **Run** on the board, and **re-running** a run from one of its processes,
   run the board as it is (saved as a version first if it changed); a person
   can run the version published by hand from the Versions panel.
+- **Trying** one process alone from its panel (a trial, see 10.4) always
+  runs the board as it is, the draft, never the version published.
 - A **schedule**'s run, a run **over the API** and a run started **on a
   record** run the **version published**. What the API says the flow takes,
   and which records its queries select, are that version's too.
@@ -1618,7 +1620,12 @@ missing sentences.
 3. Tell the user what needs their hands: signing in to any new MCP server in
    the settings, a connector's token, and the first run.
 4. Suggest a first run by hand, even for a scheduled flow, and watching its
-   steps.
+   steps. A process can be tried first on its own, from its panel's *Try this
+   process*: a trial runs only it, on inputs the user gives it, and stores
+   nothing real runs see (persistent objects, shared records and `$SINCE`
+   stay as they were), but what it does outside the flow, a message posted
+   or a branch pushed, it really does. Its inputs can be saved with it as
+   named samples, which a setup file holds as a process's `samples`.
 
 ### 10.5 Changing a flow later
 

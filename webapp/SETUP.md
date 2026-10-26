@@ -128,12 +128,18 @@ Flows and procedures have the same shape:
   yields: [...]         # links to objects it generates
   next: [Review]        # the processes that run after it
   onFailure: [Alert]    # the processes that run instead, once it fails
+  samples:              # agent, script or connector: inputs it is tried on alone, each named
+    - name: Login bug
+      inputs:           # objects it takes, each with what it holds and maybe one of its states
+        - {object: Ticket, state: open, content: '{"data": "The login page loops"}'}
   board: {...}          # flow process: its own board, shaped like a flow's
                         # (start, end, processes, objects)
   x: 40                 # where it is drawn; see Positions
   y: 140
   width: 240
 ```
+
+A process's `samples` are the inputs saved to try it on alone, as its panel's *Try this process* does: a trial runs only it, on the board as it is, and stores nothing the flow's runs see. Each sample has a name of its own and gives objects the process `takes`, by name, with what they hold and, optionally, one of their states. A process the file gives no `samples` keeps those it has; `samples: []` leaves it none. Export writes them for each process that has any.
 
 ### Links: `takes` and `yields`
 

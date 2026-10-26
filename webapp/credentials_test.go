@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -118,6 +120,19 @@ func TestCredentialTargets(t *testing.T) {
 		{"/a\x00b", "/a%00b"},
 		{"/a\nb", "/a%0Ab"},
 		{"evil", "evil"},
+		// What Tomcat, Jetty and Spring read as a step up, dropping what
+		// follows a ;, IIS trimming trailing dots and spaces, and Unicode
+		// normalising full-width dots.
+		{"/..;/admin", "/..;/admin"},
+		{"/..;/admin", "/%2e%2e;/admin"},
+		{"/.;/x", "/.;/x"},
+		{"/..;x=1/admin", "/..;x=1/admin"},
+		{"/.. /admin", "/..%20/admin"},
+		{"/. ./admin", "/.%20./admin"},
+		{"/.../admin", "/.../admin"},
+		{"/a;b", "/a;b"},
+		{"/\uff0e\uff0e/admin", "/%EF%BC%8E%EF%BC%8E/admin"},
+		{"/caf\u00e9", "/caf%C3%A9"},
 	} {
 		if u, ok := credentialTarget("https://gw.example.com/tenant/v1", c.rest, c.escaped, ""); ok {
 			t.Errorf("%q (sent as %q) went to %s", c.rest, c.escaped, u)
@@ -182,5 +197,120 @@ func TestAgentsAreToldTheirCredentials(t *testing.T) {
 	}
 	if strings.Contains(got, "http://webapp/credentials/1") {
 		t.Errorf("the prompt holds the proxy's URL itself:\n%s", got)
+	}
+}
+
+// A secret is blanked out of what streams through, even split across
+// pieces; what can't be the start of one goes on at once.
+func TestRedactor(t *testing.T) {
+	r := newRedactor("abcdefgh", "", "xyz12345", "abcdefgh")
+	var out []string
+	for _, p := range []string{"one abc", "def", "gh two xyz", "1234", "5 three ab"} {
+		out = append(out, string(r.next([]byte(p))))
+	}
+	out = append(out, string(r.flush()))
+	if got := strings.Join(out, ""); got != "one [redacted] two [redacted] three ab" {
+		t.Errorf("came out as %q", got)
+	}
+	if out[0] != "one " || out[1] != "" {
+		t.Errorf("held back %q", out)
+	}
+	if got := string(newRedactor("abcdefgh").next([]byte("plain text"))); got != "plain text" {
+		t.Errorf("held back what can't be a secret: %q", got)
+	}
+	if got := string(newRedactor().next([]byte("abcdefgh"))); got != "abcdefgh" {
+		t.Errorf("with nothing to blank out: %q", got)
+	}
+	if got := newRedactor("tok-123456").text("Bearer tok-123456 and tok-123456"); got != "Bearer [redacted] and [redacted]" {
+		t.Errorf("the text became %q", got)
+	}
+}
+
+// Only the headers a client sends to say what it sends and wants, and
+// those the credential names, go on; never one that could send the call
+// elsewhere, carries the step's token, or the connection names.
+func TestPassedHeaders(t *testing.T) {
+	c := credential{Auth: credentialHeader, Header: "X-Api-Key", Headers: []string{"Notion-Version"}}
+	h := http.Header{}
+	for k, v := range map[string]string{
+		"Accept": "application/json", "Content-Type": "application/json", "If-None-Match": `"x"`, "Notion-Version": "2022-06-28",
+		"Prefer": "return=minimal", "Connection": "Prefer, close", "X-Original-Url": "/admin", "X-Rewrite-Url": "/admin",
+		"X-Forwarded-Prefix": "/admin", "X-Forwarded-Host": "evil.example.com", "X-Http-Method-Override": "DELETE",
+		"Range": "bytes=0-3", "If-Range": `"x"`, "Accept-Encoding": "gzip", "Authorization": "Bearer step-token",
+		"Cookie": "a=1", "X-Api-Key": "the step's own", "X-Custom": "1", "Host": "evil.example.com",
+	} {
+		h.Set(k, v)
+	}
+	got := passedHeaders(c, h)
+	want := []string{"Accept", "Content-Type", "If-None-Match", "Notion-Version"}
+	if len(got) != len(want) {
+		t.Errorf("passed %v, want %v", got, want)
+	}
+	for _, k := range want {
+		if got.Get(k) == "" {
+			t.Errorf("%s didn't go on: %v", k, got)
+		}
+	}
+	for _, bad := range []string{"X-Original-URL", "Authorization", "x-forwarded-prefix", "Range", "Accept-Encoding", "Proxy-Foo", "X-Http-Method-Override"} {
+		f := credentialFields{Name: "Jira", BaseURL: "https://x.example.com", Auth: credentialHeader, Secret: "s", Everyone: true, Headers: []string{bad}}
+		if msg := f.check(true); msg == "" {
+			t.Errorf("a credential lets steps send %s", bad)
+		}
+	}
+	f := credentialFields{Name: "Jira", BaseURL: "https://x.example.com", Auth: credentialHeader, Header: "X-Api-Key", Secret: "s", Everyone: true,
+		Headers: []string{" notion-version ", "Notion-Version", "", "x-api-key"}}
+	if msg := f.check(true); msg == "" {
+		t.Errorf("a credential lets steps send the header its secret goes in")
+	}
+	f.Headers = f.Headers[:3]
+	if msg := f.check(true); msg != "" || len(f.Headers) != 1 || f.Headers[0] != "Notion-Version" {
+		t.Errorf("headers checked into %v: %s", f.Headers, msg)
+	}
+}
+
+// Changing where a kept secret goes needs it again: another origin, or
+// another header, parameter or way; another path at the same origin, or
+// another template, doesn't.
+func TestCredentialChangesSendingTheSecretElsewhere(t *testing.T) {
+	was := credential{BaseURL: "https://jira.example.com/rest", Auth: credentialHeader, Header: "Authorization", Template: "Bearer {secret}"}
+	same := credentialFields{BaseURL: "https://JIRA.example.com:443/other", Auth: credentialHeader, Header: "authorization", Template: "token {secret}"}
+	if sendsElsewhere(was, same) {
+		t.Errorf("another path at the same origin needs the secret again")
+	}
+	for _, f := range []credentialFields{
+		{BaseURL: "https://evil.example.com/rest", Auth: credentialHeader, Header: "Authorization"},
+		{BaseURL: "https://jira.example.com:8443/rest", Auth: credentialHeader, Header: "Authorization"},
+		{BaseURL: "http://localhost/rest", Auth: credentialHeader, Header: "Authorization"},
+		{BaseURL: "https://jira.example.com/rest", Auth: credentialHeader, Header: "X-Echo"},
+		{BaseURL: "https://jira.example.com/rest", Auth: credentialQuery, Param: "key"},
+		{BaseURL: "https://jira.example.com/rest", Auth: credentialBasic},
+	} {
+		if !sendsElsewhere(was, f) {
+			t.Errorf("%+v keeps the secret", f)
+		}
+	}
+}
+
+// The machine's own addresses are dialled only for a base URL naming them.
+func TestCredentialClientsDialLoopbackOnlyWhenAsked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	if _, err := credentialClient(false).Get(srv.URL); err == nil || !strings.Contains(err.Error(), "isn't an address steps may reach") {
+		t.Errorf("the client for other hosts dialled the loopback: %v", err)
+	}
+	resp, err := credentialClient(true).Get(srv.URL)
+	if err != nil {
+		t.Fatalf("the client for the machine's own: %v", err)
+	}
+	resp.Body.Close()
+}
+
+// A secret is found in an answer as JSON would write it, too.
+func TestSecretFormsInJSON(t *testing.T) {
+	forms := secretForms(credential{Auth: credentialQuery, Param: "key"}, `a/b"c`)
+	for _, want := range []string{`a/b\"c`, `a\/b\"c`, "a%2Fb%22c"} {
+		if !holdsSecret(`{"echo": "`+want+`"}`, forms) {
+			t.Errorf("the forms miss %s: %v", want, forms)
+		}
 	}
 }

@@ -1,7 +1,7 @@
 -- Credentials scripts and agents use without seeing them: a service's base
--- URL, how its secret goes on each request, and the secret, sealed with
--- SECRET_KEY; who may use each, everyone or the teams given it. See
--- credentials.go.
+-- URL, how its secret goes on each request, the headers steps may send it
+-- besides the usual ones, and the secret, sealed with SECRET_KEY; who may
+-- use each, everyone or the teams given it. See credentials.go.
 
 -- +goose Up
 CREATE TABLE credentials (
@@ -15,6 +15,7 @@ CREATE TABLE credentials (
   template varchar(255) NOT NULL DEFAULT '',
   username varchar(255) NOT NULL DEFAULT '',
   param varchar(64) NOT NULL DEFAULT '',
+  headers varchar(1024) NOT NULL DEFAULT '',
   secret text NOT NULL,
   everyone boolean NOT NULL DEFAULT TRUE,
   created_at timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),

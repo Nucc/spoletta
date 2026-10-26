@@ -2088,6 +2088,9 @@ export type Credential = {
   template?: string
   username?: string
   param?: string
+  // The headers steps may send the service besides the usual ones, such
+  // as an API's version header.
+  headers: string[]
   everyone: boolean
   teams: { id: number; name: string }[]
   // Whether its secret is kept, with its last four characters when long enough.
@@ -2100,7 +2103,8 @@ export type Credential = {
 export type CredentialChoice = Pick<Credential, 'id' | 'name' | 'variable' | 'description' | 'baseUrl'>
 
 // What adding or changing a credential sends; a change without a secret
-// keeps the one kept.
+// keeps the one kept, unless it would send it elsewhere: to another
+// origin, or in another header, parameter or way.
 export type CredentialFields = {
   name: string
   description: string
@@ -2110,6 +2114,7 @@ export type CredentialFields = {
   template: string
   username: string
   param: string
+  headers: string[]
   secret: string
   everyone: boolean
   teams: number[]

@@ -600,7 +600,8 @@ type fakeWorker struct {
 	// instead of the one every agent sends.
 	messages map[string][]map[string]any
 	// What a script prints as it runs, by process name, sent before it
-	// replies: each a stream and its text.
+	// replies: each a stream and its text. Like the messages, it may print
+	// the step's credentials token, as stepToken says.
 	scriptOutput map[string][][2]string
 	// Every run asked for, in the order asked.
 	agentRuns  []agentRun
@@ -716,7 +717,8 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			messages = []map[string]any{{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "working on " + run.ProcessName}}}}
 		}
 		for _, m := range messages {
-			enc.Encode(map[string]any{"message": m})
+			b, _ := json.Marshal(m)
+			enc.Encode(map[string]any{"message": json.RawMessage(stepToken(string(b), run.CredentialsToken))})
 		}
 		enc.Encode(map[string]any{"result": res})
 	})
@@ -740,7 +742,7 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			enc.Encode(map[string]any{"log": started})
 			for _, o := range output {
-				enc.Encode(map[string]any{"output": map[string]string{"stream": o[0], "text": o[1]}})
+				enc.Encode(map[string]any{"output": map[string]string{"stream": o[0], "text": stepToken(o[1], run.CredentialsToken)}})
 			}
 			w.(http.Flusher).Flush()
 		}
@@ -775,6 +777,17 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 	t.Cleanup(srv.Close)
 	fw.url = srv.URL
 	return fw
+}
+
+// What a step prints or says with the step's credentials token where it
+// says {token}, and its first ten characters and the rest where it says
+// {token-head} and {token-tail}, as a script printing it a piece at a time.
+func stepToken(s, token string) string {
+	head, tail := token, ""
+	if len(token) > 10 {
+		head, tail = token[:10], token[10:]
+	}
+	return strings.NewReplacer("{token}", token, "{token-head}", head, "{token-tail}", tail).Replace(s)
 }
 
 func (fw *fakeWorker) onAgent(process string, reply func(context.Context, agentRun) runResult) {

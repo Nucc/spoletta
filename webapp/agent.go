@@ -360,15 +360,34 @@ func recordDecisions(ctx context.Context, db *sql.DB, b *runBoard, stepID int64,
 // Runs the agent in the worker, recording each message of its conversation
 // as the step's as it comes in, so what the agent does can be followed while
 // it goes, and each line the worker logs of it in its run's log. attempt
-// counts the tries of the step, from 1.
+// counts the tries of the step, from 1. What is kept of it, and its
+// result, never hold the step's tokens, which whoever reads them could
+// reach its models, MCP servers, credentials and repositories with while
+// it goes.
 func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, stepID int64, attempt int) runResult {
-	return streamAgent(ctx, workerURL, run, func(m json.RawMessage) {
-		if err := recordMessage(ctx, db, stepID, attempt, m); err != nil && ctx.Err() == nil {
+	blank := newRedactor(run.tokens()...)
+	res := streamAgent(ctx, workerURL, run, func(m json.RawMessage) {
+		if err := recordMessage(ctx, db, stepID, attempt, json.RawMessage(blank.text(string(m)))); err != nil && ctx.Err() == nil {
 			log.Printf("record message of step %d: %v", stepID, err)
 		}
 	}, func(l workerLogLine) {
+		l.Message = blank.text(l.Message)
 		recordWorkerLog(db, stepID, []workerLogLine{l})
 	})
+	res.Output, res.Error = blank.text(res.Output), blank.text(res.Error)
+	return res
+}
+
+// The tokens the step is handed, which are blanked out of what is kept of it.
+func (run agentRun) tokens() []string {
+	tokens := []string{run.MCPToken, run.CredentialsToken, run.Egress.token()}
+	if run.LLM != nil {
+		tokens = append(tokens, run.LLM.Token)
+	}
+	if run.Git != nil {
+		tokens = append(tokens, run.Git.Token)
+	}
+	return tokens
 }
 
 // Runs the agent in the worker and waits for the result, handing each

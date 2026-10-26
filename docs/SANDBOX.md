@@ -315,14 +315,47 @@ What a step can do with a credential, then, is call its service, as the
 service lets the secret do, at paths under the base URL, while it runs. It
 can't:
 
-- **read the secret.** Neither the worker nor the step ever has it. A
-  token it prints, or leaves in a file, reaches nothing once the step ends.
+- **read the secret.** Neither the worker nor the step ever has it, and it
+  is blanked out of what the service answers, headers and body, in each
+  form it went on the request in: as it is, URL-encoded either way, as the
+  header's whole value, as basic auth's `user:secret` in base64, and as a
+  JSON string would write it. The proxy asks the service for its answer
+  uncompressed, reads a gzipped one uncompressed all the same, refuses one
+  in another encoding, and doesn't pass on the step's `Range`, so a secret
+  can't come back cut in pieces or compressed out of sight. A service
+  handing it back in another form, such as hashed, re-encoded or split
+  across fields, hands it over; give credentials only for services that
+  don't.
+- **hand its token to someone else.** What is kept of the step, what a
+  script prints (stdout and stderr, as shown in its terminal window, a
+  token printed a piece at a time included, as `set -x` does), an agent's
+  conversation, the worker's log lines and the step's result, has the
+  step's tokens blanked out as it is stored, so nobody who sees the flow
+  can call its services with them while it runs. A token it prints, or
+  leaves in a file, reaches nothing once the step ends.
 - **reach other paths or hosts with it.** The path is joined to the base
   URL's; one stepping out of it (`..`, `.`, `//`), carrying an encoded slash
   or backslash (`%2F`, `%5C`), a `%` at all once decoded, which a service
   decoding again would read as one, or a query or fragment of its making in
-  the path, is refused. The step's query goes on as it sent it, but for a
-  query parameter credential's own, which the secret replaces.
+  the path, is refused. So is what some servers read as a step up: a `;`
+  anywhere (Tomcat, Jetty and Spring take `..;` for `..`), a segment of
+  only dots and spaces (IIS trims a segment's trailing ones, so `.. ` is
+  `..`), and any character outside ASCII (normalised, full-width `．．` is
+  `..`); `:` is kept, as APIs such as Google's use it. The step's query
+  goes on as it sent it, but for a query parameter credential's own, which
+  the secret replaces.
+- **send the call elsewhere, or as another method.** Only the headers a
+  client sends to say what it sends and wants go on (`Accept`,
+  `Accept-Charset`, `Accept-Language`, `Cache-Control`,
+  `Content-Disposition`, `Content-Encoding`, `Content-Language`,
+  `Content-Type`, `Idempotency-Key`, `If-Match`, `If-Modified-Since`,
+  `If-None-Match`, `If-Unmodified-Since`, `Pragma`, `Prefer`,
+  `User-Agent`), and those the credential names, such as an API's version
+  header, but for any the request's `Connection` names. A credential can't
+  name its own header, its token's, the connection's, `Range`, or the
+  headers some servers and gateways take as another URL, method or client
+  (`X-Original-URL`, `X-Rewrite-URL`, `X-Forwarded-*`, `Forwarded`,
+  `X-HTTP-Method-Override` and the like).
 - **be redirected with it.** The proxy never follows a redirect. One within
   the base URL comes back as the proxy's URL, so following it goes through
   the proxy again; one elsewhere comes back without the secret's query
@@ -330,25 +363,38 @@ can't:
 - **keep a session got with it.** `Set-Cookie`, `Authorization`-like
   headers, the credential's own header and any header holding the secret,
   as sent or encoded, are dropped from the answer. The step's `Cookie` and
-  forwarding headers stay with the proxy too.
+  forwarding headers stay with the proxy too. What comes back is
+  sandboxed (`Content-Security-Policy: sandbox`, `X-Content-Type-Options:
+  nosniff`), so an answer opened in a browser can't act as the app.
 - **reach the webapp's neighbours through it.** The base URL is an admin's,
   https, or http only at the webapp's own machine (a sidecar), where the
   secret crosses no network. The proxy never dials a link-local or
   multicast address, such as the cloud's metadata service, whatever the
-  service's name resolves to, and the host needn't be allowed for internet
-  access, as the webapp, not the step, makes the call.
+  service's name resolves to, nor the machine's own unless the base URL
+  names it, and the host needn't be allowed for internet access, as the
+  webapp, not the step, makes the call.
 - **use a credential its process didn't pick**, or one its flow's owner may
   no longer use: taking a credential from a team, or removing it, refuses
   the next call of every step using it.
 
-A service that answers with the secret in its body, such as an echo
-endpoint or an error repeating the key, hands it over; the proxy passes
-bodies on as they come. Give credentials only for services that don't.
+Nor can an admin's edit send a kept secret elsewhere: changing a
+credential's base URL to another origin, or where its secret goes (the way,
+the header, the parameter), needs the secret again.
 
 A request may send at most 64 MB; a call may take ten minutes, two of them
 waiting for the service to start answering. Each call goes in the run's log
 and the audit log by its method, credential, path without its query, and
 status, never with the secret or the token.
+
+What this leaves:
+
+- A call already going when its token ends, or its credential is taken
+  away, goes on until it ends, ten minutes at most.
+- When the webapp itself reaches the internet through a proxy of its own
+  (`HTTPS_PROXY`), the address checked before dialling is that proxy's, not
+  the service's.
+- Every call, and every refused one, is a line in the audit log, so a step
+  calling in a loop, or anyone sending tokens at the proxy, makes many.
 
 ## Limits and the audit log
 

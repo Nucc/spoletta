@@ -717,12 +717,17 @@ definitions do that.
   the base URL, and one `$CREDENTIALS_TOKEN` for them all. Call a path under
   it with `Authorization: Bearer $CREDENTIALS_TOKEN` (or the token as basic
   auth's password); the proxy puts the secret where the service wants it, a
-  header, basic auth or a query parameter, and passes the call on. The token
-  ends with the step, so write the variables, never their values. A path
-  leaving the base URL (`..`, an encoded slash) is refused; a redirect within
-  it comes back as the proxy's URL, so `curl -L` follows it through the
-  proxy. Every call goes in the run's log. The service's host needn't be
-  allowed for internet access, as the webapp makes the call.
+  header, basic auth or a query parameter, and passes the call on, blanking
+  the secret out of the answer. The token ends with the step, so write the
+  variables, never their values; it is blanked out of what the script
+  prints, as kept. A path leaving the base URL (`..`, an encoded slash, a
+  `;`, anything not ASCII) is refused; a redirect within it comes back as
+  the proxy's URL, so `curl -L` follows it through the proxy. Only the usual
+  request headers go on (`Accept`, `Content-Type`, `If-Match`,
+  `User-Agent` and the like) and those the credential names, such as an
+  API's version header, which an admin adds to it. Every call goes in the
+  run's log. The service's host needn't be allowed for internet access, as
+  the webapp makes the call.
 - A variable such as `$JIRA_TOKEN` is there only if the instance passes it
   to every script with `CHILD_ENV`, which agents read too; prefer a
   credential. For a service built in, a connector step or an agent with the

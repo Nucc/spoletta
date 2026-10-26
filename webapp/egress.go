@@ -135,10 +135,22 @@ func (b *egressBroker) revoke(a *egressAccess) {
 	if b == nil || a == nil {
 		return
 	}
-	if u, err := url.Parse(a.URL); err == nil && u.User != nil {
-		token, _ := u.User.Password()
+	if token := a.token(); token != "" {
 		b.revokeToken(token, "ended with its step")
 	}
+}
+
+// The step's token, which the proxy's URL carries as its password.
+func (a *egressAccess) token() string {
+	if a == nil {
+		return ""
+	}
+	u, err := url.Parse(a.URL)
+	if err != nil || u.User == nil {
+		return ""
+	}
+	token, _ := u.User.Password()
+	return token
 }
 
 // Ends the token, and every tunnel open with it here.

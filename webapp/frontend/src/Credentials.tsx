@@ -66,8 +66,8 @@ export function CredentialsSection({ onError }: { onError: (err: unknown) => voi
         A service’s secret, such as a Jira token or an internal API’s key, which scripts and agents call it with
         without seeing it. A process picks the credentials it uses; its step reaches each service at{' '}
         <code>$CREDENTIAL_NAME_URL</code>, the webapp’s proxy, sending <code>Authorization: Bearer $CREDENTIALS_TOKEN</code>,
-        a token that ends with the step, and the proxy puts the secret in its place. Every call goes in its run’s log and
-        the audit log. A service that answers with the secret hands it over, so add only services that don’t.
+        a token that ends with the step, and the proxy puts the secret in its place, blanking it out of what comes back.
+        Every call goes in its run’s log and the audit log.
       </p>
       {editing === 'new' && <CredentialEditor teams={teams} signIn={!!me?.user} onSave={save} onCancel={() => setEditing(null)} />}
       {items === null ? (
@@ -89,7 +89,8 @@ export function CredentialsSection({ onError }: { onError: (err: unknown) => voi
                       {c.name} <code className="skill-hint">${credentialEnv(c.variable)}</code>
                     </span>
                     <span className="flows-note">
-                      {c.baseUrl} · {howItGoes(c)} · {c.everyone ? 'everyone' : c.teams.map((t) => t.name).join(', ') || 'no team'} ·{' '}
+                      {c.baseUrl} · {howItGoes(c)}
+                      {c.headers.length > 0 && ` · sends ${c.headers.join(', ')}`} · {c.everyone ? 'everyone' : c.teams.map((t) => t.name).join(', ') || 'no team'} ·{' '}
                       {c.secretSet ? (c.hint ? `secret …${c.hint}` : 'secret set') : 'no secret'}
                     </span>
                   </span>
@@ -118,6 +119,16 @@ function howItGoes(c: Credential): string {
       return `basic auth as ${c.username || 'no username'}`
     case 'query':
       return `?${c.param}={secret}`
+  }
+}
+
+// A URL's scheme, host and port, as the server compares them.
+function originOf(raw: string): string {
+  try {
+    const u = new URL(raw.trim())
+    return `${u.protocol}//${u.hostname}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`
+  } catch {
+    return raw.trim()
   }
 }
 
@@ -150,14 +161,23 @@ function CredentialEditor({
   const [template, setTemplate] = useState(initial?.template || 'Bearer {secret}')
   const [username, setUsername] = useState(initial?.username ?? '')
   const [param, setParam] = useState(initial?.param ?? '')
+  const [headers, setHeaders] = useState((initial?.headers ?? []).join(', '))
   const [secret, setSecret] = useState('')
   const [everyone, setEveryone] = useState(initial?.everyone ?? true)
   const [given, setGiven] = useState<number[]>(initial?.teams.map((t) => t.id) ?? [])
   const [saving, setSaving] = useState(false)
+  // A kept secret never goes elsewhere than it was given for.
+  const elsewhere =
+    !!initial &&
+    (originOf(baseUrl) !== originOf(initial.baseUrl) ||
+      auth !== initial.auth ||
+      (auth === 'header' && header.trim().toLowerCase() !== (initial.header ?? '').toLowerCase()) ||
+      (auth === 'query' && param.trim() !== (initial.param ?? '')))
+  const needsSecret = !initial || elsewhere
   const ready =
     name.trim() !== '' &&
     baseUrl.trim() !== '' &&
-    (initial || secret.trim() !== '') &&
+    (!needsSecret || secret.trim() !== '') &&
     (auth !== 'header' || template.includes('{secret}')) &&
     (auth !== 'query' || param.trim() !== '') &&
     (everyone || given.length > 0)
@@ -166,7 +186,11 @@ function CredentialEditor({
     e.preventDefault()
     if (!ready) return
     setSaving(true)
-    await onSave({ name, description, baseUrl, auth, header, template, username, param, secret, everyone, teams: everyone ? [] : given })
+    const passed = headers
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean)
+    await onSave({ name, description, baseUrl, auth, header, template, username, param, headers: passed, secret, everyone, teams: everyone ? [] : given })
     setSaving(false)
   }
 
@@ -234,15 +258,29 @@ function CredentialEditor({
         )}
       </div>
       <label className="panel-field">
+        <span>Headers steps may send (optional)</span>
+        <input value={headers} placeholder="Notion-Version, X-Atlassian-Token" spellCheck={false} onChange={(e) => setHeaders(e.target.value)} />
+        <small className="panel-note">
+          Besides the usual ones, such as Accept, Content-Type, If-Match and User-Agent; the rest of a step’s headers stay
+          with the proxy.
+        </small>
+      </label>
+      <label className="panel-field">
         <span>Secret</span>
         <input
           type="password"
           autoComplete="off"
           value={secret}
-          placeholder={initial?.secretSet ? `Kept${initial.hint ? ` (…${initial.hint})` : ''}; type to replace it` : 'The token or key'}
+          placeholder={
+            initial?.secretSet && !elsewhere ? `Kept${initial.hint ? ` (…${initial.hint})` : ''}; type to replace it` : 'The token or key'
+          }
           onChange={(e) => setSecret(e.target.value)}
         />
-        <small className="panel-note">Sealed in the database and never shown again.</small>
+        <small className="panel-note">
+          {elsewhere
+            ? 'Give it again: the kept one never goes to another service, or another place on its requests, than it was given for.'
+            : 'Sealed in the database and never shown again.'}
+        </small>
       </label>
       <fieldset className="panel-field mcp-picker">
         <legend>Whose flows may use it</legend>

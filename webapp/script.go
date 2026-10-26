@@ -54,6 +54,15 @@ type scriptRun struct {
 	Since *int64 `json:"since,omitempty"`
 }
 
+// The tokens the step is handed, which are blanked out of what is kept of it.
+func (run scriptRun) tokens() []string {
+	tokens := []string{run.CredentialsToken, run.Egress.token()}
+	if run.Git != nil {
+		tokens = append(tokens, run.Git.Token)
+	}
+	return tokens
+}
+
 type scriptInput struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
@@ -129,11 +138,27 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 			return res, err
 		}
 		defer credentialProxy.revoke(run.CredentialsToken)
+		// What is kept of it never holds its tokens, a piece of one
+		// printed at a time included, as with set -x.
+		blank := newRedactor(run.tokens()...)
+		printed := map[string]*redactor{"stdout": newRedactor(run.tokens()...), "stderr": newRedactor(run.tokens()...)}
 		res, err = streamScript(ctx, workerURL, run, func(stream, text string) {
-			recordOutput(db, stepID, stream, text)
+			if stream != "stderr" {
+				stream = "stdout"
+			}
+			if t := printed[stream].next([]byte(text)); len(t) > 0 {
+				recordOutput(db, stepID, stream, string(t))
+			}
 		}, func(l workerLogLine) {
+			l.Message = blank.text(l.Message)
 			recordWorkerLog(db, stepID, []workerLogLine{l})
 		})
+		for _, stream := range []string{"stdout", "stderr"} {
+			if t := printed[stream].flush(); len(t) > 0 {
+				recordOutput(db, stepID, stream, string(t))
+			}
+		}
+		res.Output, res.Error = blank.text(res.Output), blank.text(res.Error)
 		if err != nil {
 			res = runResult{Error: "worker unavailable: " + err.Error()}
 			if ctx.Err() != nil {

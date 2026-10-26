@@ -24,17 +24,26 @@ package main
 // /credentials/{id}/..., takes the token as a bearer token or as basic
 // auth's password, checks the step's process picked the credential and its
 // flow may still use it, and joins the path to the base URL, refusing one
-// that would leave it. It drops the step's token, puts the secret on the
-// request as the credential says and passes it on, streaming the answer
-// back. Redirects aren't followed: one within the base URL is turned into
-// the proxy's, and the secret is taken out of any other. Headers that
-// would hand the step the secret, or a session got with it, are dropped. A
-// service answering with the secret in its body hands it over, so admins
-// give only services that don't. Every call goes in the run's log and the
-// audit log by its method and path, never its query, the secret or the
-// token.
+// that would leave it or that some servers would read as leaving it. It
+// passes on only the headers a client sends to say what it sends and
+// wants, and those the credential names, never the step's token, puts the
+// secret on the request as the credential says and passes it on,
+// streaming the answer back with the secret blanked out of it, as sent or
+// encoded. Redirects aren't followed: one within the base URL is turned
+// into the proxy's, and the secret is taken out of any other. Headers that
+// would hand the step the secret, or a session got with it, are dropped.
+// What is kept of the step, what it prints and says and logs, has its
+// tokens blanked out too, so nobody reading it can call the services while
+// the step goes. Every call goes in the run's log and the audit log by its
+// method and path, never its query, the secret or the token.
+//
+// A stored secret never goes elsewhere than where it was given for:
+// changing a credential's base URL to another origin, or where its secret
+// goes, needs the secret again.
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -85,6 +94,9 @@ type credential struct {
 	Username string `json:"username,omitempty"`
 	// The query parameter, for credentialQuery.
 	Param string `json:"param,omitempty"`
+	// The headers steps may send the service besides those every service
+	// gets (credentialPassedHeaders), such as an API's version header.
+	Headers []string `json:"headers"`
 	// Whether every flow may use it; else only those of the teams given it.
 	Everyone bool      `json:"everyone"`
 	Teams    []teamRef `json:"teams"`
@@ -170,19 +182,21 @@ func loopbackHost(host string) bool {
 }
 
 // What a request makes or changes a credential to. A change without a
-// secret keeps the one kept.
+// secret keeps the one kept, unless it would send it elsewhere
+// (sendsElsewhere).
 type credentialFields struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	BaseURL     string  `json:"baseUrl"`
-	Auth        string  `json:"auth"`
-	Header      string  `json:"header"`
-	Template    string  `json:"template"`
-	Username    string  `json:"username"`
-	Param       string  `json:"param"`
-	Secret      string  `json:"secret"`
-	Everyone    bool    `json:"everyone"`
-	Teams       []int64 `json:"teams"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	BaseURL     string   `json:"baseUrl"`
+	Auth        string   `json:"auth"`
+	Header      string   `json:"header"`
+	Template    string   `json:"template"`
+	Username    string   `json:"username"`
+	Param       string   `json:"param"`
+	Headers     []string `json:"headers"`
+	Secret      string   `json:"secret"`
+	Everyone    bool     `json:"everyone"`
+	Teams       []int64  `json:"teams"`
 }
 
 // Trims what a request gives, fills in a header credential's defaults, and
@@ -235,6 +249,23 @@ func (f *credentialFields) check(creating bool) string {
 	default:
 		return "a secret goes in a header, as basic auth's password, or as a query parameter: auth is header, basic or query"
 	}
+	var headers []string
+	for _, h := range f.Headers {
+		h = http.CanonicalHeaderKey(strings.TrimSpace(h))
+		switch {
+		case h == "" || slices.Contains(headers, h):
+			continue
+		case !headerName.MatchString(h):
+			return fmt.Sprintf("%q isn't a header's name", h)
+		case !passableHeader(h) || f.Auth == credentialHeader && h == http.CanonicalHeaderKey(f.Header):
+			return "steps can't send " + h + ": it carries their token, is the connection's, or could send the call elsewhere"
+		}
+		headers = append(headers, h)
+	}
+	if len(strings.Join(headers, ",")) > 1024 {
+		return "the headers steps may send are at most 1 KB"
+	}
+	f.Headers = headers
 	switch {
 	case creating && f.Secret == "":
 		return "the secret is required"
@@ -250,13 +281,18 @@ func (f *credentialFields) check(creating bool) string {
 }
 
 // The columns of a credential c, for scanCredential.
-const credentialColumns = "c.id, c.name, c.variable, c.description, c.base_url, c.auth, c.header, c.template, c.username, c.param, c.secret, c.everyone, c.updated_at"
+const credentialColumns = "c.id, c.name, c.variable, c.description, c.base_url, c.auth, c.header, c.template, c.username, c.param, c.headers, c.secret, c.everyone, c.updated_at"
 
-// A credential's row, with its secret as it is kept.
-func scanCredential(rows interface{ Scan(...any) error }) (credential, string, error) {
+// A credential's row, with its secret as it is kept, and after it what
+// more the query asks.
+func scanCredential(rows interface{ Scan(...any) error }, more ...any) (credential, string, error) {
 	var c credential
-	var stored string
-	err := rows.Scan(&c.ID, &c.Name, &c.Variable, &c.Description, &c.BaseURL, &c.Auth, &c.Header, &c.Template, &c.Username, &c.Param, &stored, &c.Everyone, &c.UpdatedAt)
+	var stored, headers string
+	err := rows.Scan(append([]any{&c.ID, &c.Name, &c.Variable, &c.Description, &c.BaseURL, &c.Auth, &c.Header, &c.Template, &c.Username, &c.Param, &headers, &stored, &c.Everyone, &c.UpdatedAt}, more...)...)
+	c.Headers = []string{}
+	if headers != "" {
+		c.Headers = strings.Split(headers, ",")
+	}
 	return c, stored, err
 }
 
@@ -371,7 +407,8 @@ func stepCredentials(ctx context.Context, db querier, flow int64, ids []int64) (
 		case err != nil:
 			return nil, "", err
 		case !usable:
-			return nil, fmt.Sprintf("the credential %s isn't one this flow may use: it is neither everyone's nor given to its owner's team; an admin gives it in Settings, under Credentials", c.Name), nil
+			// Not named: whoever reads the step may not see it.
+			return nil, "a credential the process uses isn't one this flow may use: it is neither everyone's nor given to its owner's team; an admin gives it in Settings, under Credentials, or pick its credentials again", nil
 		case !secretSet:
 			return nil, fmt.Sprintf("the credential %s has no secret; an admin sets it in Settings, under Credentials", c.Name), nil
 		}
@@ -407,7 +444,9 @@ type credentialBroker struct {
 	db       *sql.DB
 	proxyURL string
 	grants   grantStore
-	client   *http.Client
+	// Calls services; the one dialling the machine's own addresses only
+	// for a credential whose base URL names them.
+	client, loopback *http.Client
 
 	mu sync.Mutex
 	// Ends each token this replica granted as it expires.
@@ -419,7 +458,7 @@ var credentialProxy *credentialBroker
 
 func newCredentialBroker(db *sql.DB, proxyURL string) *credentialBroker {
 	return &credentialBroker{db: db, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: grantsIn(db),
-		client: credentialClient(), expiries: map[string]*time.Timer{}}
+		client: credentialClient(false), loopback: credentialClient(true), expiries: map[string]*time.Timer{}}
 }
 
 // How long a call through the proxy may take, and wait for the service's
@@ -432,10 +471,11 @@ const (
 
 // The client the proxy calls services with: it never follows a redirect,
 // never dials a link-local or multicast address, such as the cloud's
-// metadata service, whatever a name resolves to, and never asks for
-// compression of its own, so the step gets what it asked for.
-func credentialClient() *http.Client {
-	dialer := &net.Dialer{Timeout: 15 * time.Second, Control: refusePrivate(true, true)}
+// metadata service, whatever a name resolves to, nor the machine's own
+// unless loopback, for a base URL naming it; and never asks for
+// compression of its own, so what comes back can be read for the secret.
+func credentialClient(loopback bool) *http.Client {
+	dialer := &net.Dialer{Timeout: 15 * time.Second, Control: refusePrivate(true, loopback)}
 	return &http.Client{
 		Transport: &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
@@ -532,21 +572,67 @@ func credentialTokenOf(r *http.Request) string {
 	return ""
 }
 
-// Headers of the step's request that stay here: its token's, its cookies,
-// the connection's, and what says who or where the step is.
-var credentialDroppedHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "Host", "Connection",
-	"Proxy-Connection", "Keep-Alive", "Te", "Trailer", "Transfer-Encoding", "Upgrade",
-	"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Content-Length"}
+// Headers of the step's request that go on to every service: what says
+// what the request sends and what it takes, conditions on what is there,
+// and what many APIs ask a write for. The rest stay here unless the
+// credential names them: the step's token, its cookies, the connection's,
+// what says where the call is meant for or which method it is, and Range,
+// which would cut the secret apart where the answer is read for it.
+var credentialPassedHeaders = []string{"Accept", "Accept-Charset", "Accept-Language", "Cache-Control",
+	"Content-Disposition", "Content-Encoding", "Content-Language", "Content-Type", "Idempotency-Key",
+	"If-Match", "If-Modified-Since", "If-None-Match", "If-Unmodified-Since", "Pragma", "Prefer", "User-Agent"}
+
+// Headers a credential can't let steps send: those that carry the step's
+// token or are HTTP's own, and those some servers and gateways take as
+// another URL, method or client to answer for.
+var unpassableHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "Host", "Connection", "Keep-Alive",
+	"Te", "Trailer", "Transfer-Encoding", "Upgrade", "Content-Length", "Range", "If-Range", "Accept-Encoding",
+	"Forwarded", "X-Real-Ip", "X-Original-Url", "X-Rewrite-Url", "X-Http-Method-Override", "X-Http-Method",
+	"X-Method-Override", "X-Original-Method", "X-Client-Ip", "True-Client-Ip", "X-Envoy-Original-Path"}
+
+// Whether a credential may let steps send a header, by its canonical name.
+func passableHeader(h string) bool {
+	return !slices.Contains(unpassableHeaders, h) && !strings.HasPrefix(h, "Proxy-") && !strings.HasPrefix(h, "X-Forwarded-")
+}
+
+// The headers of the step's request that go on to the credential's service:
+// those every service gets and those the credential names, but for any the
+// request's Connection names, which are its connection's.
+func passedHeaders(c credential, h http.Header) http.Header {
+	hop := map[string]bool{}
+	for _, v := range h.Values("Connection") {
+		for _, name := range strings.Split(v, ",") {
+			hop[http.CanonicalHeaderKey(strings.TrimSpace(name))] = true
+		}
+	}
+	out := http.Header{}
+	for k, v := range h {
+		k = http.CanonicalHeaderKey(k)
+		if hop[k] || !passableHeader(k) || c.Auth == credentialHeader && k == http.CanonicalHeaderKey(c.Header) {
+			continue
+		}
+		if slices.Contains(credentialPassedHeaders, k) || slices.Contains(c.Headers, k) {
+			out[k] = v
+		}
+	}
+	return out
+}
 
 // Headers of the service's answer that stay here: those that could carry
 // a credential, or a session the step could go on with once its token
-// ended, and the connection's.
+// ended, the connection's, and those saying how long the answer is and
+// how it is encoded, which blanking out the secret and reading it
+// uncompressed change.
 var credentialAnswerDropped = []string{"Set-Cookie", "Set-Cookie2", "Authorization", "Proxy-Authorization",
-	"Proxy-Authenticate", "Connection", "Proxy-Connection", "Keep-Alive", "Te", "Trailer", "Transfer-Encoding", "Upgrade"}
+	"Proxy-Authenticate", "Connection", "Proxy-Connection", "Keep-Alive", "Te", "Trailer", "Transfer-Encoding", "Upgrade",
+	"Content-Length", "Content-Encoding", "Content-Range", "Accept-Ranges", "Content-Security-Policy", "X-Content-Type-Options"}
 
-// The forms a secret goes on a request in, which an answer must never hold.
+// The forms a secret goes on a request in, and those it would take in a
+// JSON string echoing it, which an answer must never hold.
 func secretForms(c credential, secret string) []string {
-	forms := []string{secret, url.QueryEscape(secret), url.PathEscape(secret)}
+	quoted, _ := json.Marshal(secret)
+	inJSON := string(quoted[1 : len(quoted)-1])
+	forms := []string{secret, url.QueryEscape(secret), url.PathEscape(secret), inJSON, strings.ReplaceAll(inJSON, "/", `\/`)}
 	switch c.Auth {
 	case credentialHeader:
 		forms = append(forms, strings.ReplaceAll(c.Template, secretPlaceholder, secret))
@@ -561,27 +647,94 @@ func holdsSecret(s string, forms []string) bool {
 	return slices.ContainsFunc(forms, func(f string) bool { return f != "" && strings.Contains(s, f) })
 }
 
+// What stands for a secret or token taken out of what a step gets or
+// what is kept of it.
+const redacted = "[redacted]"
+
+// Takes secrets out of what streams through it, a piece at a time: each
+// piece goes on with every secret in it replaced, but for a tail that
+// could be the start of one, held back until the next piece says, so a
+// secret split across pieces is caught too.
+type redactor struct {
+	// Longest first, so one holding another is replaced whole.
+	secrets [][]byte
+	held    []byte
+}
+
+func newRedactor(secrets ...string) *redactor {
+	r := &redactor{}
+	for _, s := range secrets {
+		if s != "" && !slices.ContainsFunc(r.secrets, func(b []byte) bool { return string(b) == s }) {
+			r.secrets = append(r.secrets, []byte(s))
+		}
+	}
+	slices.SortFunc(r.secrets, func(a, b []byte) int { return len(b) - len(a) })
+	return r
+}
+
+// What of p, after what was held back, may go on.
+func (r *redactor) next(p []byte) []byte {
+	if len(r.secrets) == 0 {
+		return p
+	}
+	buf := r.replace(append(r.held, p...))
+	keep := 0
+	for k := min(len(r.secrets[0])-1, len(buf)); k > 0 && keep == 0; k-- {
+		if slices.ContainsFunc(r.secrets, func(s []byte) bool { return bytes.HasPrefix(s, buf[len(buf)-k:]) }) {
+			keep = k
+		}
+	}
+	r.held = slices.Clone(buf[len(buf)-keep:])
+	return buf[:len(buf)-keep]
+}
+
+// What was held back, once nothing more comes: never a whole secret.
+func (r *redactor) flush() []byte {
+	out := r.held
+	r.held = nil
+	return out
+}
+
+func (r *redactor) replace(b []byte) []byte {
+	for _, s := range r.secrets {
+		b = bytes.ReplaceAll(b, s, []byte(redacted))
+	}
+	return b
+}
+
+// The text with every secret replaced.
+func (r *redactor) text(s string) string {
+	if len(r.secrets) == 0 {
+		return s
+	}
+	return string(r.replace([]byte(s)))
+}
+
 // The URL a call at rest, what follows /credentials/{id} in its path,
 // goes to: rest under the base URL's path, with the query; false when rest
 // would leave it. rest comes decoded, so a step's %2F..%2F would step up
 // out of the base URL, %3F start a query of its making, and %25 hide
 // either from a service that decodes once more; escaped is the path as
-// the step sent it, to find encoded slashes in.
+// the step sent it, to find encoded slashes in. Some servers read more as
+// a step up: Tomcat, Jetty and Spring drop what follows a ; in a segment
+// (..;x=1), IIS trims a segment's trailing dots and spaces (".. "), and
+// normalising Unicode makes full-width dots (．．) plain ones. So no ; or
+// non-ASCII character is taken, nor a segment of only dots and spaces.
 func credentialTarget(base, rest, escaped, query string) (*url.URL, bool) {
 	lower := strings.ToLower(escaped)
 	if strings.Contains(lower, "%2f") || strings.Contains(lower, "%5c") {
 		return nil, false
 	}
-	if (rest != "" && !strings.HasPrefix(rest, "/")) || strings.ContainsAny(rest, `%?#\`) || strings.Contains(rest, "//") {
+	if (rest != "" && !strings.HasPrefix(rest, "/")) || strings.ContainsAny(rest, `%?#\;`) || strings.Contains(rest, "//") {
 		return nil, false
 	}
 	for _, r := range rest {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || r >= 0x7f {
 			return nil, false
 		}
 	}
 	for _, segment := range strings.Split(rest, "/") {
-		if segment == ".." || segment == "." {
+		if segment != "" && strings.Trim(segment, ". ") == "" {
 			return nil, false
 		}
 	}
@@ -689,11 +842,8 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	var c credential
-	var stored string
 	var usable bool
-	row := b.db.QueryRowContext(r.Context(), "SELECT "+credentialColumns+", "+cond+" FROM credentials c WHERE c.id = ?", append(args, id)...)
-	err = row.Scan(&c.ID, &c.Name, &c.Variable, &c.Description, &c.BaseURL, &c.Auth, &c.Header, &c.Template, &c.Username, &c.Param, &stored, &c.Everyone, &c.UpdatedAt, &usable)
+	c, stored, err := scanCredential(b.db.QueryRowContext(r.Context(), "SELECT "+credentialColumns+", "+cond+" FROM credentials c WHERE c.id = ?", append(args, id)...), &usable)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		b.refuse(w, g, http.StatusForbidden, notAvailable, "a call to the credential %d, which was removed", id)
@@ -746,19 +896,20 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.ContentLength = r.ContentLength
-	for k, v := range r.Header {
-		k = http.CanonicalHeaderKey(k)
-		if !slices.Contains(credentialDroppedHeaders, k) && !(c.Auth == credentialHeader && k == http.CanonicalHeaderKey(c.Header)) {
-			req.Header[k] = v
-		}
-	}
+	req.Header = passedHeaders(c, r.Header)
+	// What comes back is read for the secret, so it must come as it is.
+	req.Header.Set("Accept-Encoding", "identity")
 	switch c.Auth {
 	case credentialHeader:
 		req.Header.Set(c.Header, strings.ReplaceAll(c.Template, secretPlaceholder, secret))
 	case credentialBasic:
 		req.SetBasicAuth(c.Username, secret)
 	}
-	resp, err := b.client.Do(req)
+	client := b.client
+	if loopbackHost(target.Hostname()) {
+		client = b.loopback
+	}
+	resp, err := client.Do(req)
 	if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
 		b.logCall(g, c, "%s %s sent more than %d MB, so it went no further", r.Method, logPath, maxCredentialRequest>>20)
 		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
@@ -776,6 +927,29 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	forms := secretForms(c, secret)
+	// A service compressing what it was asked for as it is is read
+	// uncompressed, if gzip; another encoding can't be read for the secret.
+	answer := io.Reader(resp.Body)
+	switch enc := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))); enc {
+	case "", "identity":
+	case "gzip", "x-gzip":
+		gz, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			b.logCall(g, c, "%s %s answered %d, compressed so it couldn't be read", r.Method, logPath, resp.StatusCode)
+			http.Error(w, "the service's answer couldn't be read: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer gz.Close()
+		answer = gz
+	default:
+		// Named only when it is plainly an encoding's name.
+		if len(enc) > 32 || holdsSecret(enc, forms) || strings.ContainsFunc(enc, func(r rune) bool { return r > 0x7e || r < 0x20 }) {
+			enc = "an encoding of its own"
+		}
+		b.logCall(g, c, "%s %s answered %d in %s, which the proxy can't read for the secret, so it went no further", r.Method, logPath, resp.StatusCode, enc)
+		http.Error(w, "the service answered in "+enc+", which the proxy can't read for the credential's secret", http.StatusBadGateway)
+		return
+	}
 	for k, v := range resp.Header {
 		k = http.CanonicalHeaderKey(k)
 		if slices.Contains(credentialAnswerDropped, k) || c.Auth == credentialHeader && k == http.CanonicalHeaderKey(c.Header) || k == "Location" {
@@ -791,14 +965,18 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Location", out)
 		}
 	}
+	// What a service answers may be HTML; sandboxed, it can't act as the app.
+	w.Header().Set("Content-Security-Policy", "sandbox")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(resp.StatusCode)
 	b.logCall(g, c, "%s %s, answered %d", r.Method, logPath, resp.StatusCode)
+	blank := newRedactor(forms...)
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32<<10)
 	for {
-		n, err := resp.Body.Read(buf)
+		n, err := answer.Read(buf)
 		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
+			if _, werr := w.Write(blank.next(buf[:n])); werr != nil {
 				return
 			}
 			if flusher != nil {
@@ -806,6 +984,7 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err != nil {
+			w.Write(blank.flush())
 			return
 		}
 	}
@@ -820,6 +999,28 @@ func (b *credentialBroker) logCall(g *proxyGrant, c credential, format string, a
 		return
 	}
 	runLog(b.db, g.run, g.step, logInfo, "the credential %s: %s", c.Name, detail)
+}
+
+// Whether a change would send the credential's kept secret elsewhere than
+// it was given for: to another origin, or in another header or parameter,
+// or as basic auth where it was a header's.
+func sendsElsewhere(was credential, f credentialFields) bool {
+	return credentialOrigin(was.BaseURL) != credentialOrigin(f.BaseURL) || was.Auth != f.Auth ||
+		!strings.EqualFold(was.Header, f.Header) || was.Param != f.Param
+}
+
+// A URL's scheme, host and port, its port said even when it is the
+// scheme's own.
+func credentialOrigin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"http": "80", "https": "443"}[strings.ToLower(u.Scheme)]
+	}
+	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
 }
 
 // Gives the credential to the teams, in place of those it had.
@@ -864,12 +1065,12 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 			return 0, false
 		}
 		defer tx.Rollback()
-		variable := credentialVariable(f.Name)
+		variable, headers := credentialVariable(f.Name), strings.Join(f.Headers, ",")
 		if id == 0 {
 			res, err := tx.ExecContext(r.Context(),
-				`INSERT INTO credentials (name, variable, description, base_url, auth, header, template, username, param, secret, everyone)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
-				f.Name, variable, f.Description, f.BaseURL, f.Auth, f.Header, f.Template, f.Username, f.Param, f.Everyone)
+				`INSERT INTO credentials (name, variable, description, base_url, auth, header, template, username, param, headers, secret, everyone)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
+				f.Name, variable, f.Description, f.BaseURL, f.Auth, f.Header, f.Template, f.Username, f.Param, headers, f.Everyone)
 			if mysqlErrorIs(err, mysqlErrDuplicate) {
 				taken(w, f.Name)
 				return 0, false
@@ -882,17 +1083,20 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 				return 0, false
 			}
 		} else {
-			var exists bool
-			err := tx.QueryRowContext(r.Context(), "SELECT TRUE FROM credentials WHERE id = ? FOR UPDATE", id).Scan(&exists)
+			was, _, err := scanCredential(tx.QueryRowContext(r.Context(), "SELECT "+credentialColumns+" FROM credentials c WHERE c.id = ? FOR UPDATE", id))
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(w, "credential not found", http.StatusNotFound)
 				return 0, false
 			}
+			if err == nil && f.Secret == "" && sendsElsewhere(was, f) {
+				http.Error(w, "give the secret again: it goes to another service, or another place on its requests, than it was given for", http.StatusBadRequest)
+				return 0, false
+			}
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(),
-					`UPDATE credentials SET name = ?, variable = ?, description = ?, base_url = ?, auth = ?, header = ?, template = ?, username = ?, param = ?, everyone = ?
+					`UPDATE credentials SET name = ?, variable = ?, description = ?, base_url = ?, auth = ?, header = ?, template = ?, username = ?, param = ?, headers = ?, everyone = ?
 					WHERE id = ?`,
-					f.Name, variable, f.Description, f.BaseURL, f.Auth, f.Header, f.Template, f.Username, f.Param, f.Everyone, id)
+					f.Name, variable, f.Description, f.BaseURL, f.Auth, f.Header, f.Template, f.Username, f.Param, headers, f.Everyone, id)
 			}
 			if mysqlErrorIs(err, mysqlErrDuplicate) {
 				taken(w, f.Name)

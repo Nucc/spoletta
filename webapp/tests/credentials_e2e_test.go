@@ -6,10 +6,12 @@ package tests
 // the secret; the step never sees it.
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,16 +23,17 @@ import (
 )
 
 type credentialsItem struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Variable  string `json:"variable"`
-	BaseURL   string `json:"baseUrl"`
-	Auth      string `json:"auth"`
-	Header    string `json:"header"`
-	Template  string `json:"template"`
-	SecretSet bool   `json:"secretSet"`
-	Hint      string `json:"hint"`
-	Everyone  bool   `json:"everyone"`
+	ID        int64    `json:"id"`
+	Name      string   `json:"name"`
+	Variable  string   `json:"variable"`
+	BaseURL   string   `json:"baseUrl"`
+	Auth      string   `json:"auth"`
+	Header    string   `json:"header"`
+	Template  string   `json:"template"`
+	Headers   []string `json:"headers"`
+	SecretSet bool     `json:"secretSet"`
+	Hint      string   `json:"hint"`
+	Everyone  bool     `json:"everyone"`
 	Teams     []struct {
 		ID int64 `json:"id"`
 	} `json:"teams"`
@@ -39,12 +42,15 @@ type credentialsItem struct {
 // A request a service got through the proxy.
 type credentialsSeen struct {
 	method, path, query, authorization, apiKey, cookie, body string
+	header                                                   http.Header
 }
 
 // A service that records what it gets and answers with it; under
-// /redirect it redirects to where its query's to says, and under /echo it
+// /redirect it redirects to where its query's to says, under /echo it
 // answers with the headers it got, a cookie, and what looks like the
-// credential.
+// credential, and under /echo-body with the URL and credential it got,
+// plainly, gzipped under /gzip, and in an encoding the proxy can't read
+// under /br.
 type credentialsService struct {
 	srv  *httptest.Server
 	mu   sync.Mutex
@@ -56,9 +62,20 @@ func newCredentialsService(t *testing.T) *credentialsService {
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		s.mu.Lock()
-		s.seen = append(s.seen, credentialsSeen{r.Method, r.URL.EscapedPath(), r.URL.RawQuery, r.Header.Get("Authorization"), r.Header.Get("X-Api-Key"), r.Header.Get("Cookie"), string(body)})
+		s.seen = append(s.seen, credentialsSeen{r.Method, r.URL.EscapedPath(), r.URL.RawQuery, r.Header.Get("Authorization"), r.Header.Get("X-Api-Key"), r.Header.Get("Cookie"), string(body), r.Header.Clone()})
 		s.mu.Unlock()
+		echo := fmt.Sprintf(`{"self": %q, "auth": %q}`, r.URL.String(), r.Header.Get("Authorization"))
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/echo-body"):
+			fmt.Fprint(w, echo)
+		case strings.HasSuffix(r.URL.Path, "/gzip"):
+			w.Header().Set("Content-Encoding", "gzip")
+			gz := gzip.NewWriter(w)
+			fmt.Fprint(gz, echo)
+			gz.Close()
+		case strings.HasSuffix(r.URL.Path, "/br"):
+			w.Header().Set("Content-Encoding", "br")
+			fmt.Fprint(w, echo)
 		case strings.HasSuffix(r.URL.Path, "/redirect"):
 			w.Header().Set("Location", r.URL.Query().Get("to"))
 			w.WriteHeader(http.StatusFound)
@@ -114,9 +131,9 @@ type credentialsAnswer struct {
 }
 
 // Calls the proxy at target as a step would, with the token as a bearer
-// token, or with basic set as basic auth's password; never following a
-// redirect.
-func credentialsCall(t *testing.T, method, target, token string, basic bool, body string) credentialsAnswer {
+// token, or with basic set as basic auth's password, and the headers in
+// extra, "Name: value" each; never following a redirect.
+func credentialsCall(t *testing.T, method, target, token string, basic bool, body string, extra ...string) credentialsAnswer {
 	t.Helper()
 	req, err := http.NewRequest(method, target, strings.NewReader(body))
 	if err != nil {
@@ -129,6 +146,10 @@ func credentialsCall(t *testing.T, method, target, token string, basic bool, bod
 	}
 	req.Header.Set("X-Api-Key", "the step's own")
 	req.Header.Set("Cookie", "theirs=1")
+	for _, h := range extra {
+		k, v, _ := strings.Cut(h, ": ")
+		req.Header.Set(k, v)
+	}
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -161,14 +182,15 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 	db := secretsDB(t)
 	jiraSecret, basicSecret, querySecret := "jira-secret-0123456789", "basic-secret-0123456789", "query secret+0123456789"
 	jira := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Jira"), "baseUrl": svc.srv.URL + "/jira/", "auth": "header",
-		"template": "token {secret}", "secret": jiraSecret, "everyone": true, "description": "The tracker."})
+		"template": "token {secret}", "secret": jiraSecret, "everyone": true, "description": "The tracker.", "headers": []string{"notion-version"}})
 	basic := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Billing"), "baseUrl": svc.srv.URL + "/billing", "auth": "basic",
 		"username": "me@example.com", "secret": basicSecret, "everyone": true})
 	query := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Maps"), "baseUrl": svc.srv.URL + "/maps/v1", "auth": "query",
 		"param": "key", "secret": querySecret, "everyone": true})
 	unpicked := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Other"), "baseUrl": svc.srv.URL + "/other", "auth": "header",
 		"header": "X-Api-Key", "template": "{secret}", "secret": "other-secret-0123456789", "everyone": true})
-	if jira.Header != "Authorization" || jira.Template != "token {secret}" || !jira.SecretSet || jira.Hint != "6789" || !strings.HasPrefix(jira.Variable, "JIRA_") {
+	if jira.Header != "Authorization" || jira.Template != "token {secret}" || !jira.SecretSet || jira.Hint != "6789" || !strings.HasPrefix(jira.Variable, "JIRA_") ||
+		len(jira.Headers) != 1 || jira.Headers[0] != "Notion-Version" {
 		t.Errorf("the settings show %+v", jira)
 	}
 
@@ -183,9 +205,20 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 		http.StatusConflict, "named "+jira.Name+" already")
 	a.refused("POST", "/api/credentials", map[string]any{"name": credentialsName(t, "Plain"), "baseUrl": "http://jira.example.com", "auth": "header", "secret": "s", "everyone": true},
 		http.StatusBadRequest, "must be https")
-	// A change without a secret keeps it.
+	// A change without a secret keeps it, unless it would send it elsewhere:
+	// to another origin, or in another place on the request.
 	a.call("PUT", fmt.Sprintf("/api/credentials/%d", jira.ID), map[string]any{"name": jira.Name, "baseUrl": svc.srv.URL + "/jira/", "auth": "header",
-		"template": "token {secret}", "everyone": true}, http.StatusOK, nil)
+		"template": "token {secret}", "everyone": true, "headers": []string{"Notion-Version"}}, http.StatusOK, nil)
+	other := map[string]any{"name": unpicked.Name, "baseUrl": svc.srv.URL + "/other/v2", "auth": "header", "header": "X-Api-Key", "template": "{secret}", "everyone": true}
+	a.call("PUT", fmt.Sprintf("/api/credentials/%d", unpicked.ID), other, http.StatusOK, nil)
+	for change, to := range map[string]any{"baseUrl": "http://localhost:1/other", "header": "X-Echo", "auth": "basic"} {
+		moved := maps.Clone(other)
+		moved[change] = to
+		a.refused("PUT", fmt.Sprintf("/api/credentials/%d", unpicked.ID), moved, http.StatusBadRequest, "give the secret again")
+	}
+	moved := maps.Clone(other)
+	moved["baseUrl"], moved["secret"] = "http://localhost:1/other", "another-secret-0123456789"
+	a.call("PUT", fmt.Sprintf("/api/credentials/%d", unpicked.ID), moved, http.StatusOK, nil)
 
 	f := a.newFlow("Credentials")
 	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindScript, "script": "curl \"$CREDENTIAL_JIRA_URL\"",
@@ -194,11 +227,18 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 	before := len(svc.requests())
 	var calls []credentialsAnswer
 	var tricks []credentialsAnswer
+	// What the script prints holds its token, as with set -x, a piece at a time.
+	a.worker.mu.Lock()
+	a.worker.scriptOutput["Fetch"] = [][2]string{{"stderr", "+ curl -H 'Authorization: Bearer {token-head}"}, {"stderr", "{token-tail}' \"$CREDENTIAL_JIRA_URL\"\n"}, {"stdout", "the token is {token}\n"}}
+	a.worker.mu.Unlock()
 	a.worker.onScript("Fetch", func(_ context.Context, run scriptRun) runResult {
 		token := run.CredentialsToken
 		jiraURL := credentialsURL(t, run.Credentials, jira.Name)
+		mapsURL := credentialsURL(t, run.Credentials, query.Name)
 		calls = append(calls,
-			credentialsCall(t, "POST", jiraURL+"/rest/issue?fields=summary", token, false, `{"summary": "x"}`),
+			credentialsCall(t, "POST", jiraURL+"/rest/issue?fields=summary", token, false, `{"summary": "x"}`,
+				"X-Original-URL: /admin", "X-Rewrite-URL: /admin", "X-Forwarded-Prefix: /admin", "X-HTTP-Method-Override: DELETE",
+				"Range: bytes=0-3", "Accept-Encoding: gzip", "Prefer: return=minimal", "Notion-Version: 2022-06-28", "X-Custom: 1"),
 			credentialsCall(t, "GET", credentialsURL(t, run.Credentials, basic.Name)+"/invoices", token, true, ""),
 			credentialsCall(t, "GET", credentialsURL(t, run.Credentials, query.Name)+"/geocode?key=forged&q=Rome", token, false, ""),
 			// What the process didn't pick, and a token that isn't one.
@@ -213,11 +253,16 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 			credentialsCall(t, "GET", credentialsURL(t, run.Credentials, query.Name)+"/redirect?to="+
 				url.QueryEscape("https://login.example.com/"+url.PathEscape(querySecret)), token, false, ""),
 			credentialsCall(t, "GET", jiraURL+"/echo", token, false, ""),
+			// What the service answers is read for the secret, uncompressed.
+			credentialsCall(t, "GET", mapsURL+"/echo-body?page=2", token, false, ""),
+			credentialsCall(t, "GET", jiraURL+"/echo-body", token, false, ""),
+			credentialsCall(t, "GET", mapsURL+"/gzip", token, false, "", "Accept-Encoding: gzip"),
+			credentialsCall(t, "GET", mapsURL+"/br", token, false, ""),
 		)
 		for _, path := range []string{"/a%2F..%2F..%2Fother", "/a%2fb", "/..%2F..%2Fother", "/%2e%2e/%2e%2e/other", "/a%252F..%252Fother", "/a%5Cb", "/../../other"} {
 			tricks = append(tricks, credentialsCall(t, "GET", jiraURL+path, token, false, ""))
 		}
-		return runResult{OK: true, Output: "fetched"}
+		return runResult{OK: true, Output: "fetched with " + token, Log: []logLine{{Time: time.Now(), Level: "info", Message: "bash ran with " + token}}}
 	})
 	d := a.finish(a.startRun(f.ID).ID)
 	if d.Status != runDone {
@@ -248,8 +293,17 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 		return credentialsSeen{}
 	}
 	if s := got("/jira/rest/issue"); s.method != "POST" || s.query != "fields=summary" || s.authorization != "token "+jiraSecret ||
-		s.body != `{"summary": "x"}` || s.apiKey != "the step's own" || s.cookie != "" {
+		s.body != `{"summary": "x"}` || s.apiKey != "" || s.cookie != "" {
 		t.Errorf("Jira got %+v", s)
+	} else {
+		// Only the headers every service gets and those the credential
+		// names go on; what could send the call elsewhere stays here.
+		for k, want := range map[string]string{"Prefer": "return=minimal", "Notion-Version": "2022-06-28", "Accept-Encoding": "identity", "Content-Type": "",
+			"X-Original-Url": "", "X-Rewrite-Url": "", "X-Forwarded-Prefix": "", "X-Http-Method-Override": "", "Range": "", "X-Custom": ""} {
+			if got := s.header.Get(k); got != want {
+				t.Errorf("Jira got %s: %q, want %q", k, got, want)
+			}
+		}
 	}
 	if s := got("/billing/invoices"); s.authorization != "Basic "+base64.StdEncoding.EncodeToString([]byte("me@example.com:"+basicSecret)) {
 		t.Errorf("billing got %+v", s)
@@ -280,6 +334,21 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 	if echo.body != "echoed" || echo.header.Get("X-Kept") != "kept" || echo.header.Get("Set-Cookie") != "" || echo.header.Get("X-Echo") != "" || echo.header.Get("Authorization") != "" {
 		t.Errorf("the echo came back with %v", echo.header)
 	}
+	if echo.header.Get("Content-Security-Policy") != "sandbox" || echo.header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("an answer came back without its sandbox: %v", echo.header)
+	}
+	for i, want := range map[int]string{
+		10: `"self": "/maps/v1/echo-body?key=[redacted]&page=2"`,
+		11: `"auth": "[redacted]"`,
+		12: `"self": "/maps/v1/gzip?key=[redacted]"`,
+	} {
+		if c := calls[i]; c.status != http.StatusOK || !strings.Contains(c.body, want) || c.header.Get("Content-Encoding") != "" {
+			t.Errorf("call %d came back %d %v: %s; want it to hold %s", i, c.status, c.header, c.body, want)
+		}
+	}
+	if c := calls[13]; c.status != http.StatusBadGateway || strings.Contains(c.body, "query") {
+		t.Errorf("an answer the proxy can't read came back %d: %s", c.status, c.body)
+	}
 	for i, c := range tricks {
 		if c.status == http.StatusOK {
 			t.Errorf("trick %d answered %d %s", i, c.status, c.body)
@@ -304,7 +373,20 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 	a.auditEvent("kind:credential.grant", func(_, detail string) bool { return strings.Contains(detail, jira.Name+", "+basic.Name) })
 	a.auditEvent("kind:credential.revoke", func(_, detail string) bool { return detail == "the credential proxy's token ended with its step" })
 	a.auditEvent("kind:credential.refused", func(_, detail string) bool { return strings.Contains(detail, "at a path outside its base URL") })
+	// What the script printed, logged and handed in is kept without its token.
 	var all []string
+	var chunks []outputChunk
+	step := onlyStep(t, d, "Fetch")
+	a.call("GET", fmt.Sprintf("/api/runs/%d/steps/%d/output", d.ID, step.ID), nil, http.StatusOK, &chunks)
+	var printed string
+	for _, c := range chunks {
+		printed += c.Text
+	}
+	if !strings.Contains(printed, "Authorization: Bearer [redacted]' ") || !strings.Contains(printed, "the token is [redacted]\n") {
+		t.Errorf("what the script printed was kept as %q", printed)
+	}
+	logLineWith(t, lines, "bash ran with [redacted]")
+	all = append(all, printed, step.Output, step.Error)
 	for _, l := range lines {
 		all = append(all, l.Message)
 	}
@@ -312,7 +394,7 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 		all = append(all, e.Detail)
 	}
 	all = append(all, a.proc.log.String())
-	for _, secret := range []string{jiraSecret, basicSecret, querySecret, url.QueryEscape(querySecret), run.CredentialsToken} {
+	for _, secret := range []string{jiraSecret, basicSecret, querySecret, url.QueryEscape(querySecret), run.CredentialsToken, run.CredentialsToken[:10], run.CredentialsToken[10:]} {
 		for _, s := range all {
 			if strings.Contains(s, secret) {
 				t.Errorf("%q holds a secret or the token", s)
@@ -339,9 +421,11 @@ func TestAgentsAreToldTheirCredentials(t *testing.T) {
 	use := a.newProcess(f.ID, map[string]any{"name": "Use", "kind": "agent", "prompt": "File the bug.", "settings": map[string]any{"credentials": []int64{jira.ID}}})
 	a.startAt(f.ID, use.ID)
 	var status int
+	// What the agent says holds its token; what is kept of it doesn't.
+	a.worker.onMessages("Use", map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "calling with Bearer {token}"}}})
 	a.worker.onAgent("Use", func(_ context.Context, run agentRun) runResult {
 		status = credentialsCall(t, "GET", run.Credentials[0].URL+"/rest/api/2/myself", run.CredentialsToken, false, "").status
-		return runResult{OK: true, Output: "filed"}
+		return runResult{OK: true, Output: "filed with " + run.CredentialsToken}
 	})
 	d := a.finish(a.startRun(f.ID).ID)
 	if d.Status != runDone || status != http.StatusOK {
@@ -357,6 +441,14 @@ func TestAgentsAreToldTheirCredentials(t *testing.T) {
 	}
 	if s := svc.requests(); len(s) != 1 || s[0].authorization != "Bearer "+secret {
 		t.Errorf("the service got %+v", s)
+	}
+	step := onlyStep(t, d, "Use")
+	_, messages := a.do("GET", fmt.Sprintf("/api/runs/%d/steps/%d/messages", d.ID, step.ID), nil)
+	if !strings.Contains(string(messages), "calling with Bearer [redacted]") || strings.Contains(string(messages), run.CredentialsToken) {
+		t.Errorf("the conversation was kept as %s", messages)
+	}
+	if step.Output != "filed with [redacted]" {
+		t.Errorf("the step's output was kept as %q", step.Output)
 	}
 }
 
@@ -456,7 +548,7 @@ func TestCredentialsAreForTheTeamsGivenThem(t *testing.T) {
 
 	// Now its owner's team may not use it, so the step fails as it starts.
 	d := a.finish(a.startRun(f.ID).ID)
-	if s := onlyStep(t, d, "Fetch"); s.Status != "error" || !strings.Contains(s.Error, "credential "+ledger.Name+" isn't one this flow may use") {
+	if s := onlyStep(t, d, "Fetch"); s.Status != "error" || !strings.Contains(s.Error, "a credential the process uses isn't one this flow may use") || strings.Contains(s.Error, ledger.Name) {
 		t.Errorf("a step picking a credential its flow may not use: %s %s", s.Status, s.Error)
 	}
 	// A global flow uses only everyone's.

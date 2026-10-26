@@ -64,7 +64,9 @@ runs put side by side to see where they went differently.
 ![A finished run on the board: Triage, Fix and Approve risky fix are done, the ticket is a bug and its risk high](docs/images/run.png)
 
 Each flow also has an assistant, a chat at the bottom right of its board,
-that changes the flow for you from a description of what you want. Flows can
+that changes the flow for you from a description of what you want, and
+explains its runs: ask it why run 412 failed, or from a run's panel, and it
+reads that run's steps, decisions and log. Flows can
 be exported and imported as YAML setup files ([webapp/SETUP.md](webapp/SETUP.md)),
 and [docs/FLOWS.md](docs/FLOWS.md) explains how to author them.
 

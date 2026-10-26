@@ -9,7 +9,10 @@ const POLL_MS = 1500
 
 // The flow's assistant, behind a button at the bottom right of the board: an
 // agent the person talks to to have it set the flow up, such as build a flow
-// that processes Jira tickets. A reply that changes the flow has the board
+// that processes Jira tickets, or to ask about its runs: a message naming a
+// run (run 412, #412 or its link) has the assistant told it, and the run's
+// panel asks from a run or a failed step, with a question naming it for the
+// person to edit and send. A reply that changes the flow has the board
 // reloaded, highlighting what it changed, and the board before is saved as
 // a version, so it can be undone.
 // The conversation is kept with the flow; a reply goes on in the server, so
@@ -17,6 +20,8 @@ const POLL_MS = 1500
 export default function Assistant({
   flowId,
   disabled,
+  runOpen,
+  asking,
   beforeSend,
   onApplied,
   onShowChanges,
@@ -25,6 +30,11 @@ export default function Assistant({
   flowId: number
   // While a version is shown: the conversation reads, but nothing is sent.
   disabled: boolean
+  // The run open on the board, if any, which the person may ask about.
+  runOpen: number | null
+  // A question about a run asked from its panel, which opens the assistant
+  // with it to send; seq tells one asked again apart.
+  asking: { question: string; seq: number } | null
   // Settles what the board is sending, so the assistant sees the board as it is.
   beforeSend: () => Promise<void>
   // With the version saved before the reply changed the flow, to show what
@@ -80,6 +90,20 @@ export default function Assistant({
     if (open) input.current?.focus()
   }, [open])
 
+  // Asked from a run: opens with the question after what is written yet, to
+  // edit and send.
+  useEffect(() => {
+    if (!asking) return
+    setOpen(true)
+    setDraft((d) => (d.includes(asking.question) ? d : d.trim() ? `${d.trimEnd()}\n${asking.question}` : asking.question))
+    const timer = window.setTimeout(() => {
+      const el = input.current
+      el?.focus()
+      el?.setSelectionRange(el.value.length, el.value.length)
+    })
+    return () => window.clearTimeout(timer)
+  }, [asking])
+
   const send = async () => {
     const message = draft.trim()
     if (!message || sending || replying || disabled) return
@@ -104,7 +128,7 @@ export default function Assistant({
         className={`assistant-button${replying ? ' replying' : ''}`}
         onClick={() => setOpen(true)}
         aria-label="Open the assistant"
-        title={replying ? 'The assistant is working on your flow' : 'Ask the assistant to set up this flow'}
+        title={replying ? 'The assistant is working on your flow' : 'Ask the assistant to set up this flow, or about its runs'}
       >
         <AssistantIcon size={22} />
       </button>
@@ -133,7 +157,8 @@ export default function Assistant({
           <p className="assistant-hint">
             Describe what this flow should do, and the assistant builds it on the board. For example: “Build a flow that
             takes new Jira tickets, summarizes each one and posts the summary as a comment.” It saves the flow as a version
-            before changing it, so you can always go back.
+            before changing it, so you can always go back. It also explains the flow's runs: ask about one by its number,
+            such as “Why did run 412 fail?”, or from the run's panel.
           </p>
         )}
         {messages?.map((m) => <Message key={m.id} message={m} onShowChanges={onShowChanges} />)}
@@ -148,7 +173,13 @@ export default function Assistant({
         <textarea
           ref={input}
           aria-label="Message to the assistant"
-          placeholder={disabled ? 'Go back to the board as it is to ask' : 'Ask for a flow, or a change to it'}
+          placeholder={
+            disabled
+              ? 'Go back to the board as it is to ask'
+              : runOpen !== null
+                ? `Ask about run #${runOpen}, or for a change to the flow`
+                : 'Ask for a flow, a change to it, or about a run'
+          }
           rows={3}
           value={draft}
           disabled={disabled}

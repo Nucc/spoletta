@@ -318,6 +318,7 @@ export function RunPanel({
   onOpenRun,
   onRerun,
   onTryAgain,
+  onAsk,
   onChanged,
   onClose,
 }: {
@@ -340,6 +341,10 @@ export function RunPanel({
   onRerun: (step: number) => void
   // For a trial: opens the dialog trying its process again; see TrialDialog.
   onTryAgain?: (process: number) => void
+  // Opens the flow's assistant with a question about the run to send,
+  // naming it, which has the assistant told it; absent for those who may
+  // not ask, and for a run of another flow.
+  onAsk?: (question: string) => void
   // A follow-up started or was stopped, so the run is loaded again.
   onChanged: () => void
   onClose: () => void
@@ -425,6 +430,15 @@ export function RunPanel({
         >
           Compare…
         </button>
+        {onAsk && (
+          <button
+            className="run-logs-button"
+            onClick={() => onAsk(run.status === 'failed' ? `Why did run #${run.id} fail?` : `About run #${run.id}: `)}
+            title="Ask the flow's assistant about this run, which it is told: its steps, what they took and handed back, decisions, errors and log"
+          >
+            Ask the assistant
+          </button>
+        )}
         {run.status === 'running' && (
           <button className="run-stop" onClick={onStop} title="End the run where it is; steps still going are cancelled">
             Stop run
@@ -471,6 +485,9 @@ export function RunPanel({
                 onStop={stoppable(s) ? () => onStopStep(s.id) : undefined}
                 onOpenRun={onOpenRun}
                 onRerun={rerunnableFrom(run, s) ? () => onRerun(s.id) : undefined}
+                onAsk={
+                  onAsk && s.status === 'error' ? () => onAsk(`Why did ${s.processName} fail in run #${run.id}?`) : undefined
+                }
                 busy={busy}
                 onChanged={onChanged}
               />
@@ -527,6 +544,7 @@ function Step({
   onStop,
   onOpenRun,
   onRerun,
+  onAsk,
   busy,
   onChanged,
 }: {
@@ -539,6 +557,8 @@ function Step({
   onOpenRun: (id: number) => void
   // Re-runs the run from the step's process; absent when it can't be.
   onRerun?: () => void
+  // For a failed step: asks the flow's assistant why it failed.
+  onAsk?: () => void
   busy: boolean
   onChanged: () => void
 }) {
@@ -658,6 +678,11 @@ function Step({
             text={s.error}
             failed={s.status !== 'duplicate' && s.status !== 'skipped'}
           />
+        )}
+        {onAsk && (
+          <button className="step-rerun" onClick={onAsk} title="Ask the flow's assistant why this step failed, with the run told it">
+            Ask the assistant why
+          </button>
         )}
         {s.kind !== 'human' && s.kind !== 'flow' && s.kind !== 'subflow' && s.kind !== 'loop' && (s.status === 'done' || s.status === 'duplicate') && (
           <Block label="Output" text={s.output || '(empty)'} data />

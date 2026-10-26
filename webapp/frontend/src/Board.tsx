@@ -2275,19 +2275,25 @@ export default function Board({
     await new Promise((resolve) => window.setTimeout(resolve))
     await changesSettled()
   }, [closePanels])
-  // What it changed is highlighted against the version saved before.
+  // What it changed is highlighted against the version saved before, on
+  // the board as it is: a run open, asked about, closes.
   const assistantApplied = useCallback(
     async (version: number | null) => {
       closePanels()
       window.clearTimeout(recordTimer.current)
       await Promise.all([loadBoard(), refreshVersions(), onReload()])
       if (version !== null) {
+        setRunId(null)
         setCompare({ from: version, to: null, assistant: true })
         setDiffListed(false)
       }
     },
     [closePanels, loadBoard, refreshVersions, onReload],
   )
+  // A question about a run, asked from its panel: the assistant opens with
+  // it, to send while the run stays open on its version.
+  const [asking, setAsking] = useState<{ question: string; seq: number } | null>(null)
+  const askAbout = useCallback((question: string) => setAsking((a) => ({ question, seq: (a?.seq ?? 0) + 1 })), [])
   const showAssistantChanges = useCallback((version: number) => {
     setCompare({ from: version, to: null, assistant: true })
     setDiffListed(true)
@@ -2866,7 +2872,9 @@ export default function Board({
           )}
           <Assistant
             flowId={flowId}
-            disabled={readOnly}
+            disabled={viewOnly || (reviewing && runId === null)}
+            runOpen={runId}
+            asking={asking}
             beforeSend={beforeAssistant}
             onApplied={assistantApplied}
             onShowChanges={showAssistantChanges}
@@ -3063,6 +3071,7 @@ export default function Board({
             onOpenRun={openRunById}
             onRerun={setRerunning}
             onTryAgain={viewOnly ? undefined : setTrying}
+            onAsk={viewOnly || runDetail.flow !== flowId ? undefined : askAbout}
             onChanged={() => setRunReload((n) => n + 1)}
             onClose={() => setRunId(null)}
           />

@@ -59,41 +59,38 @@ func releaseRun(ctx context.Context, db interface {
 	return err
 }
 
-// Stores the persistent objects a step generated, replacing what its run
-// stored of them before, so a revision after a review doesn't collide with
-// the run's own earlier value. Returns the first unique value another run
-// already holds; the caller rolls back what was stored then.
-func storeInstances(ctx context.Context, tx *sql.Tx, runID, stepID int64) (*duplicate, error) {
+// Stores the persistent objects a step generated, as the run's board has
+// them, replacing what its run stored of them before, so a revision after a
+// review doesn't collide with the run's own earlier value. Returns the first
+// unique value another run already holds; the caller rolls back what was
+// stored then.
+func storeInstances(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int64) (*duplicate, error) {
 	type generated struct {
 		object        int64
 		name, content string
 		state         string
 	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT ro.object_id, o.name, ro.content, ro.state FROM run_objects ro
-		JOIN objects o ON o.id = ro.object_id
-		WHERE ro.step_id = ? AND o.persistent ORDER BY o.id`, stepID)
-	if err != nil {
-		return nil, err
-	}
 	var objects []generated
-	for rows.Next() {
-		var g generated
-		if err := rows.Scan(&g.object, &g.name, &g.content, &g.state); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		objects = append(objects, g)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	err := scanAll(ctx, tx, "SELECT object_ref, name, content, state FROM run_objects WHERE step_id = ? ORDER BY object_ref, id",
+		func(rows *sql.Rows) error {
+			var g generated
+			if err := rows.Scan(&g.object, &g.name, &g.content, &g.state); err != nil {
+				return err
+			}
+			if o, ok := b.objects[g.object]; ok && o.Persistent {
+				g.name = o.Name
+				objects = append(objects, g)
+			}
+			return nil
+		}, stepID)
+	if err != nil {
 		return nil, err
 	}
 
 	// Objects and attributes go in id order, so concurrent runs take the
 	// keys' locks in the same order.
 	for _, g := range objects {
-		if dup, err := storeInstance(ctx, tx, runID, stepID, g.object, g.name, g.content, g.state); dup != nil || err != nil {
+		if dup, err := storeInstance(ctx, tx, runID, stepID, g.object, g.name, g.content, g.state, b.uniqueAttributes(g.object)); dup != nil || err != nil {
 			return dup, err
 		}
 	}
@@ -101,9 +98,10 @@ func storeInstances(ctx context.Context, tx *sql.Tx, runID, stepID int64) (*dupl
 }
 
 // Stores what a run holds of a persistent object, replacing what it stored
-// of it before, and its unique values. Returns the first unique value
-// another run already holds; the caller rolls back what was stored then.
-func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64, name, content, state string) (*duplicate, error) {
+// of it before, and its unique values, those of attrs. Returns the first
+// unique value another run already holds; the caller rolls back what was
+// stored then.
+func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64, name, content, state string, attrs []attribute) (*duplicate, error) {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM object_instances WHERE object_id = ? AND run_id = ?", object, runID); err != nil {
 		return nil, err
 	}
@@ -123,10 +121,6 @@ func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64,
 	fields, err := jsonObject(content)
 	if err != nil {
 		return nil, nil
-	}
-	attrs, err := uniqueAttributes(ctx, tx, object)
-	if err != nil {
-		return nil, err
 	}
 	for _, a := range attrs {
 		hash, ok := keyOf(fields[a.Name])
@@ -152,7 +146,9 @@ func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64,
 	return nil, nil
 }
 
-// The object's unique attributes, its generals' first, since it has those too.
+// The object's unique attributes as the board has them now, its generals'
+// first, since it has those too; a shared object's store keeps to its
+// struct's as they are.
 func uniqueAttributes(ctx context.Context, tx *sql.Tx, object int64) ([]attribute, error) {
 	var attrs []attribute
 	for seen := map[int64]bool{}; !seen[object]; {
@@ -235,14 +231,14 @@ func compact(raw json.RawMessage) string {
 // in what the step generated, and in what the run stored of it, if it is
 // persistent, so its records are in the state the run left them in, and in
 // the shared records the step moved on; see shared.go.
-func recordState(ctx context.Context, db *sql.DB, step, object int64, state string) error {
-	if _, err := db.ExecContext(ctx, "UPDATE run_objects SET state = ? WHERE step_id = ? AND object_id = ?", state, step, object); err != nil {
+func recordState(ctx context.Context, db *sql.DB, b *runBoard, step, object int64, state string) error {
+	if _, err := db.ExecContext(ctx, "UPDATE run_objects SET state = ? WHERE step_id = ? AND object_ref = ?", state, step, object); err != nil {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, "UPDATE object_instances SET state = ? WHERE step_id = ? AND object_id = ?", state, step, object); err != nil {
 		return err
 	}
-	return recordSharedState(ctx, db, step, object, state)
+	return recordSharedState(ctx, db, step, b.store(object), state)
 }
 
 // Starts the walk of a run's top board with the persistent objects carried

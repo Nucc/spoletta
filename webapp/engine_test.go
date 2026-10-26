@@ -229,8 +229,8 @@ func TestPassVisit(t *testing.T) {
 func TestNotIn(t *testing.T) {
 	for n, want := range map[int]string{
 		0: "",
-		1: " AND object_id NOT IN (?)",
-		3: " AND object_id NOT IN (?, ?, ?)",
+		1: " AND object_ref NOT IN (?)",
+		3: " AND object_ref NOT IN (?, ?, ?)",
 	} {
 		if got := notIn(n); got != want {
 			t.Errorf("notIn(%d) = %q, want %q", n, got, want)

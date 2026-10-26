@@ -47,21 +47,6 @@ func userRoles(ctx context.Context, db *sql.DB, id int64) ([]string, error) {
 	return roles, err
 }
 
-// The names of the human objects handling the process: the roles that may
-// decide its reviews, none when anyone may.
-func handlers(ctx context.Context, db *sql.DB, process int64) ([]string, error) {
-	names := []string{}
-	err := scanAll(ctx, db,
-		`SELECT DISTINCT TRIM(o.name) FROM object_links l JOIN objects o ON o.id = l.object_id
-		WHERE l.process_id = ? AND l.direction = ? AND o.human ORDER BY 1`, func(rows *sql.Rows) error {
-			var n string
-			err := rows.Scan(&n)
-			names = append(names, n)
-			return err
-		}, process, directionInput)
-	return names, err
-}
-
 // Whether the user may decide a review of a process handled by these roles.
 func mayDecide(u *user, roles, handledBy []string) bool {
 	if u == nil || u.Admin || len(handledBy) == 0 {
@@ -75,16 +60,12 @@ func mayDecide(u *user, roles, handledBy []string) bool {
 	return false
 }
 
-// Says why the request's user may not decide a review of the process, if
-// they may not.
-func refuseDecider(ctx context.Context, db *sql.DB, r *http.Request, process int64) (string, error) {
+// Says why the request's user may not decide a review of a process the
+// roles in handledBy decide, if they may not.
+func refuseDecider(ctx context.Context, db *sql.DB, r *http.Request, handledBy []string) (string, error) {
 	u := requestUser(r)
-	if u == nil || u.Admin {
+	if u == nil || u.Admin || len(handledBy) == 0 {
 		return "", nil
-	}
-	handledBy, err := handlers(ctx, db, process)
-	if err != nil || len(handledBy) == 0 {
-		return "", err
 	}
 	roles, err := userRoles(ctx, db, u.ID)
 	if err != nil || mayDecide(u, roles, handledBy) {

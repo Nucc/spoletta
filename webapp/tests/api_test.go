@@ -758,17 +758,23 @@ type stepMessage struct {
 }
 
 // A version is a saved snapshot of a flow's whole board: its processes, objects
-// with their states and attributes, links, connections and start node. Saving
-// always adds a version on top, and jumping to one rewrites the board as it
-// was, so no version is ever lost. The board keeps its rows' ids across
-// jumps: runs refer to processes and objects by id, and persistent objects
-// remember what runs stored by object and attribute id.
+// with their states and attributes, links, connections and start node, and
+// the flow's settings. Saving always adds a version on top, and jumping to
+// one rewrites the board as it was, so no version is ever lost. The board
+// keeps its rows' ids across jumps: runs refer to processes and objects by
+// id, and persistent objects remember what runs stored by object and
+// attribute id.
 type version struct {
 	ID int64 `json:"id"`
 	// The version the board was on when this one was saved, if any; a save
 	// after jumping back is based on an older version.
 	BasedOn   *int64    `json:"basedOn"`
 	CreatedAt time.Time `json:"createdAt"`
+	// Who saved it and why: empty when a person saved it, or what saved it
+	// on its own first; and the person's note.
+	SavedBy string `json:"savedBy"`
+	Reason  string `json:"reason"`
+	Note    string `json:"note"`
 }
 
 // What the worker takes for a step: the workspace with the repositories the

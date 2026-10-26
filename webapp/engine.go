@@ -149,20 +149,22 @@ func newEngine(db *sql.DB, workerURL string, mcp *mcpBroker, parallelSteps int) 
 	return e
 }
 
-// Executes a run of the whole flow, on the top board of version's board,
-// given what came from outside, if anything (see api.go), on the shared
-// record a person started it on, if any (see record_runs.go), in the background,
-// and ends it once nothing in it is left to run.
+// Executes a run of the whole flow, on the top board of its version's
+// board, given what came from outside, if anything (see api.go), on the
+// shared record a person started it on, if any (see record_runs.go), in the
+// background, and ends it once nothing in it is left to run.
 // Its agents and scripts work in a workspace with the repositories, on a
-// branch of the run's own, whose name starts with prefix.
-func (e *engine) start(id, flow, version int64, board snapshot, repos []repository, prefix string, given map[int64]value, record int64) {
+// branch of the run's own, whose name starts with its prefix.
+func (e *engine) start(nr pendingRun, flow int64, given map[int64]value) {
+	id := nr.id
 	ctx, cancel := context.WithCancelCause(context.Background())
 	lr := e.register(id, func() { cancel(nil) })
 	lr.failWith = cancel
 	go func() {
 		logRunStarted(e.db, id)
-		fr := newFlowRun(flow, version, board, repos, prefix)
-		fr.record = record
+		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
+		fr.record = nr.record
+		fr.published = nr.published
 		w := newWalk(ctx, e, id, lr, fr, nil, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
 		if err := w.carry(); err != nil {
 			runLog(e.db, id, 0, logError, "the objects it carries couldn't be carried in: %v", err)
@@ -187,6 +189,7 @@ func (e *engine) rerun(nr pendingRun, flow int64, board *int64, given map[int64]
 		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
 		fr.starts = starts
 		fr.record = nr.record
+		fr.published = nr.published
 		w := newWalk(ctx, e, nr.id, lr, fr, board, given, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10)))
 		w.resume(from, values)
 		e.finish(ctx, nr.id, w)
@@ -386,14 +389,14 @@ func (e *engine) takeCommands() {
 // wait start together, so a decision can't come in between. With a question,
 // the step is a loop step asking it instead; see loops.go. False if the run
 // ended first, or the step couldn't be recorded.
-func (e *engine) await(ctx context.Context, lr *liveRun, runID, processID int64, inputs []runInput, question string) (int64, decision, bool) {
+func (e *engine) await(ctx context.Context, lr *liveRun, b *runBoard, runID, processID int64, inputs []runInput, question string) (int64, decision, bool) {
 	ch := make(chan decision, 1)
 	kind := ""
 	if question != "" {
 		kind = kindLoop
 	}
 	e.mu.Lock()
-	stepID, err := startStepAs(ctx, e.db, runID, processID, kind, stepWaiting, question, inputs, nil)
+	stepID, err := startStepAs(ctx, e.db, b, runID, processID, kind, stepWaiting, question, inputs, nil)
 	if err == nil {
 		lr.reviews[stepID] = ch
 	}
@@ -468,6 +471,8 @@ type flowRun struct {
 	flow    int64
 	version int64
 	board   snapshot
+	// The board looked up by id, which its steps read; see run_board.go.
+	rb      *runBoard
 	objects map[int64]snapshotObject
 	// The flow's repositories as the run started, and its branches' prefix.
 	repos  []repository
@@ -481,6 +486,9 @@ type flowRun struct {
 	// The shared record a person started the run on, 0 for none; see
 	// record_runs.go.
 	record int64
+	// Whether it runs a version published, so the flows its subflow
+	// processes run take theirs; see publish.go.
+	published bool
 	// The board's OPL, made once an agent asks for it.
 	describe sync.Once
 	about    string
@@ -495,11 +503,8 @@ func (fr *flowRun) opl(ctx context.Context, db *sql.DB) string {
 }
 
 func newFlowRun(flow, version int64, board snapshot, repos []repository, prefix string) *flowRun {
-	fr := &flowRun{flow: flow, version: version, board: board, objects: map[int64]snapshotObject{}, repos: repos, prefix: prefix}
-	for _, o := range board.Objects {
-		fr.objects[o.ID] = o
-	}
-	return fr
+	rb := newRunBoard(flow, board)
+	return &flowRun{flow: flow, version: version, board: rb.snapshot, rb: rb, objects: rb.objects, repos: repos, prefix: prefix}
 }
 
 // A workspace of its own for run, named id, on the branch <prefix>/id; nil
@@ -607,7 +612,7 @@ func (w *walk) applyRules(stepID int64, out map[int64]value) {
 			continue
 		}
 		out[o] = v
-		if err := recordState(context.Background(), w.e.db, stepID, o, w.stateNames[v.state]); err != nil {
+		if err := recordState(context.Background(), w.e.db, w.fr.rb, stepID, o, w.stateNames[v.state]); err != nil {
 			log.Printf("record state of object %d in step %d: %v", o, stepID, err)
 		}
 	}
@@ -1286,7 +1291,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		inputs = append(inputs, runInput{Name: w.objects[o], State: w.stateNames[v.state], Content: v.content})
 	}
 	db := w.e.db
-	stepID, err := startStep(w.ctx, db, w.run, id, stepActive, "", inputs, nil)
+	stepID, err := startStep(w.ctx, db, w.fr.rb, w.run, id, stepActive, "", inputs, nil)
 	if err != nil {
 		if w.ctx.Err() == nil {
 			runLog(w.e.db, w.run, 0, logError, "process %d couldn't be recorded: %v", id, err)
@@ -1314,7 +1319,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 			return nil, runFailed, nil
 		}
 		if it != nil && it.claim {
-			dup, err := claimItem(w.ctx, db, run, stepID, it.list, w.objects[it.list], given[it.list].content)
+			dup, err := claimItem(w.ctx, db, w.fr.rb, run, stepID, it.list, w.objects[it.list], given[it.list].content)
 			if err != nil || dup != nil {
 				// Another run handles the item; this one never started.
 				if _, err := db.ExecContext(context.Background(), "DELETE FROM runs WHERE id = ?", run); err != nil {
@@ -1420,7 +1425,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 	}
 	// Only another flow's objects are stored here; a flow process's processes
 	// stored theirs. One another run stored terminates this run.
-	dup, err := finishStep(context.Background(), db, stepID, stepDone, "", "", contents)
+	dup, err := finishStep(context.Background(), db, w.fr.rb, stepID, stepDone, "", "", contents)
 	if err != nil {
 		log.Printf("record step %d: %v", stepID, err)
 		w.fail()
@@ -1435,7 +1440,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 	// The run keeps the state each object came out in, and only the objects
 	// that came out.
 	for o := range contents {
-		if err := recordState(context.Background(), db, stepID, o, w.stateNames[out[o].state]); err != nil {
+		if err := recordState(context.Background(), db, w.fr.rb, stepID, o, w.stateNames[out[o].state]); err != nil {
 			log.Printf("record step %d: %v", stepID, err)
 		}
 	}
@@ -1485,10 +1490,7 @@ func (w *walk) runItems(id int64, given map[int64]value, lists []int64, callee *
 	results := make([]result, len(items))
 	runs := make([]func(), len(items))
 	for i, content := range items {
-		key, err := itemKey(w.ctx, w.e.db, list, content, i)
-		if err != nil {
-			log.Printf("key of item %d of object %d: %v", i+1, list, err)
-		}
+		key := itemKey(w.fr.rb, list, content, i)
 		results[i].key = key
 		g := maps.Clone(given)
 		g[list] = value{content: content}
@@ -1532,17 +1534,17 @@ func (w *walk) runItems(id int64, given map[int64]value, lists []int64, callee *
 	return out, true
 }
 
-// " AND object_id NOT IN (...)" for n ids, nothing for none.
+// " AND object_ref NOT IN (...)" for n ids, nothing for none.
 func notIn(n int) string {
 	if n == 0 {
 		return ""
 	}
-	return " AND object_id NOT IN " + placeholders(n)
+	return " AND object_ref NOT IN " + placeholders(n)
 }
 
 // Records a step of a process that ran nothing, saying why.
 func (w *walk) note(id int64, status, msg string) {
-	stepID, err := startStep(w.ctx, w.e.db, w.run, id, stepActive, "", []runInput{}, nil)
+	stepID, err := startStep(w.ctx, w.e.db, w.fr.rb, w.run, id, stepActive, "", []runInput{}, nil)
 	if err != nil {
 		runLog(w.e.db, w.run, 0, logError, "process %d couldn't be recorded: %v", id, err)
 		return
@@ -1552,7 +1554,7 @@ func (w *walk) note(id int64, status, msg string) {
 
 // Ends a step that generated nothing.
 func (w *walk) endStep(stepID int64, status, msg string) {
-	if _, err := finishStep(context.Background(), w.e.db, stepID, status, "", msg, nil); err != nil {
+	if _, err := finishStep(context.Background(), w.e.db, w.fr.rb, stepID, status, "", msg, nil); err != nil {
 		log.Printf("record step %d: %v", stepID, err)
 	}
 }
@@ -1580,7 +1582,7 @@ func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64,
 // processes taking it; then a fresh pass starts from the object they set, for
 // the processes taking it in that state.
 func (w *walk) runHuman(id int64, p *pass, given []runInput) {
-	stepID, d, ok := w.e.await(w.reviews, w.lr, w.run, id, given, "")
+	stepID, d, ok := w.e.await(w.reviews, w.lr, w.fr.rb, w.run, id, given, "")
 	if !ok {
 		return
 	}
@@ -1598,7 +1600,7 @@ func (w *walk) runHuman(id int64, p *pass, given []runInput) {
 // with it. A unique value another run stored terminates the run, as a step
 // generating it would.
 func (w *walk) enterValues(stepID int64, p *pass, d decision) []func() {
-	dup, err := finishStep(context.Background(), w.e.db, stepID, stepDone, d.output, "", d.entries)
+	dup, err := finishStep(context.Background(), w.e.db, w.fr.rb, stepID, stepDone, d.output, "", d.entries)
 	if err != nil {
 		log.Printf("record entries of step %d: %v", stepID, err)
 		w.mu.Lock()
@@ -1649,7 +1651,7 @@ func (w *walk) setState(id, stepID int64, d decision) []func() {
 	w.mu.Lock()
 	content := w.values[object].content
 	w.mu.Unlock()
-	if err := recordDecision(context.Background(), w.e.db, stepID, *d.state, content); err != nil {
+	if err := recordDecision(context.Background(), w.e.db, w.fr.rb, stepID, *d.state, content); err != nil {
 		log.Printf("record decision of step %d: %v", stepID, err)
 	}
 	if w.stopped() {
@@ -1722,11 +1724,11 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 		if w.settings[id].DescribeFlow {
 			about = w.fr.opl(ctx, w.e.db)
 		}
-		res, err = runAgentStep(ctx, w.e.db, w.e.workerURL, w.e.mcp, w.ws, w.run, id, inputs, cr, about, started)
+		res, err = runAgentStep(ctx, w.e.db, w.e.workerURL, w.e.mcp, w.ws, w.fr.rb, w.run, id, inputs, cr, about, started)
 	case kindConnector:
-		res, err = runConnectorStep(ctx, w.e.db, w.run, id, inputs, started)
+		res, err = runConnectorStep(ctx, w.e.db, w.fr.rb, w.run, id, inputs, started)
 	default:
-		res, err = runScriptStep(ctx, w.e.db, w.e.workerURL, w.ws, w.run, id, inputs, started)
+		res, err = runScriptStep(ctx, w.e.db, w.e.workerURL, w.ws, w.fr.rb, w.run, id, inputs, started)
 	}
 	<-w.e.slots
 	if err != nil {

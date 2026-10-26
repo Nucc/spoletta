@@ -78,14 +78,11 @@ type givenObject struct {
 }
 
 // What a flow takes as it starts, in the order its objects were added; or
-// what keeps it from being started this way. Board is the flow's board, and
-// db holds its objects as the board has them.
-func flowInputs(ctx context.Context, db rowsQuerier, flow int64, board snapshot) ([]givenObject, string, error) {
+// what keeps it from being started this way. Board is the board its runs
+// start on: the version published, if any, or else the board as it is.
+func flowInputs(ctx context.Context, flow int64, board snapshot) ([]givenObject, string) {
 	w := newWalk(ctx, nil, 0, nil, newFlowRun(flow, 0, board, nil, ""), nil, nil, nil)
-	s, err := loadStructure(ctx, db, flow)
-	if err != nil {
-		return nil, "", err
-	}
+	s := w.fr.rb.structure
 	var in []givenObject
 	names := map[string]bool{}
 	for _, o := range board.Objects {
@@ -95,15 +92,15 @@ func flowInputs(ctx context.Context, db rowsQuerier, flow int64, board snapshot)
 			continue
 		}
 		if names[o.Name] {
-			return nil, fmt.Sprintf("two objects it starts from are named %s; rename one so a request can tell them apart", quote(o.Name)), nil
+			return nil, fmt.Sprintf("two objects it starts from are named %s; rename one so a request can tell them apart", quote(o.Name))
 		}
 		names[o.Name] = true
 		fs, err := s.fields(o.ID)
 		if err != nil {
-			return nil, err.Error(), nil
+			return nil, err.Error()
 		}
 		if f := fileField(fs); f != "" {
-			return nil, fmt.Sprintf("%s can't be given in a request: %s holds a file", quote(o.Name), quote(f)), nil
+			return nil, fmt.Sprintf("%s can't be given in a request: %s holds a file", quote(o.Name), quote(f))
 		}
 		g := givenObject{id: o.ID, name: o.Name, many: o.Many, fields: fs}
 		if o.Many && s[o.ID] != nil {
@@ -116,7 +113,7 @@ func flowInputs(ctx context.Context, db rowsQuerier, flow int64, board snapshot)
 		}
 		in = append(in, g)
 	}
-	return in, "", nil
+	return in, ""
 }
 
 // What the object holds, from what a request gives of it, or what is wrong
@@ -266,14 +263,15 @@ func describeFlowAPI(ctx context.Context, db *sql.DB, r *http.Request, flow int6
 	if err := db.QueryRowContext(ctx, "SELECT name, is_struct FROM flows WHERE id = ?", flow).Scan(&d.Name, &structFlow); err != nil {
 		return d, err
 	}
+	// What a run over the API takes is what the version it runs takes.
 	var in []givenObject
 	err := inTx(ctx, db, func(tx *sql.Tx) error {
-		board, err := takeSnapshot(ctx, tx, flow)
+		board, err := boardToRun(ctx, tx, flow)
 		if err != nil {
 			return err
 		}
-		in, d.Problem, err = flowInputs(ctx, tx, flow, board)
-		return err
+		in, d.Problem = flowInputs(ctx, flow, board)
+		return nil
 	})
 	if err != nil {
 		return d, err
@@ -343,20 +341,23 @@ func getAPIRun(ctx context.Context, db *sql.DB, r *http.Request, id int64) (apiR
 	out := apiRun{ID: rn.ID, Flow: rn.Flow, Status: rn.Status, StartedAt: rn.StartedAt, FinishedAt: rn.FinishedAt,
 		URL:      fmt.Sprintf("%s/#/flows/%d/runs/%d", publicOrigin(r), rn.Flow, rn.ID),
 		Outcomes: map[string]apiOutcome{}, Errors: []apiStepError{}}
-	s, err := loadStructure(ctx, db, rn.Flow)
+	// The outcomes are the objects the run's board connects to its end.
+	b, err := runBoardOf(ctx, db, id)
 	if err != nil {
 		return out, err
 	}
 	err = scanAll(ctx, db,
-		`SELECT ro.object_ref, ro.name, ro.state, ro.content FROM run_objects ro JOIN objects o ON o.id = ro.object_ref
-		WHERE ro.run_id = ? AND o.at_end AND o.parent_id IS NULL AND o.`+onProcessBoard+` ORDER BY ro.id`,
+		`SELECT object_ref, name, state, content FROM run_objects WHERE run_id = ? AND object_ref IS NOT NULL ORDER BY id`,
 		func(rows *sql.Rows) error {
 			var object int64
 			var name, state, content string
 			if err := rows.Scan(&object, &name, &state, &content); err != nil {
 				return err
 			}
-			fs, _ := s.fields(object)
+			if o, ok := b.objects[object]; !ok || !o.End || o.Parent != nil || o.Owner != nil {
+				return nil
+			}
+			fs, _ := b.structure.fields(object)
 			// The latest of each wins.
 			out.Outcomes[name] = apiOutcome{State: state, Value: outcomeValue(content, len(fs) == 0)}
 			return nil
@@ -416,17 +417,15 @@ func startAPIRun(ctx context.Context, db *sql.DB, eng *engine, flow, key int64, 
 		}
 		return 0, false, nil, err
 	}
-	nr, err := newRun(ctx, tx, flow, nil, startedBy)
+	nr, err := newRun(ctx, tx, flow, nil, startedBy, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, &apiRefusal{http.StatusNotFound, "flow not found"}, nil
 	}
 	if err != nil {
 		return 0, false, nil, err
 	}
-	in, msg, err := flowInputs(ctx, tx, flow, nr.board)
-	if err != nil {
-		return 0, false, nil, err
-	}
+	b := newRunBoard(flow, nr.board)
+	in, msg := flowInputs(ctx, flow, nr.board)
 	if msg != "" {
 		return 0, false, &apiRefusal{http.StatusUnprocessableEntity, msg}, nil
 	}
@@ -444,7 +443,7 @@ func startAPIRun(ctx context.Context, db *sql.DB, eng *engine, flow, key int64, 
 	if err != nil {
 		return 0, false, nil, err
 	}
-	dup, err := recordGiven(ctx, tx, nr.id, in, given)
+	dup, err := recordGiven(ctx, tx, b, nr.id, in, given)
 	if err != nil {
 		return 0, false, nil, err
 	}
@@ -452,7 +451,7 @@ func startAPIRun(ctx context.Context, db *sql.DB, eng *engine, flow, key int64, 
 		return 0, false, nil, err
 	}
 	if dup == nil {
-		eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix, given, 0)
+		eng.start(nr, flow, given)
 	}
 	return nr.id, true, nil, nil
 }
@@ -476,7 +475,7 @@ func idempotentRun(ctx context.Context, db *sql.DB, flow, key int64, idempotency
 // Records what a run was given as a step before the others, and stores the
 // persistent objects among it. A unique value another run stored ends the
 // run as terminated, and is returned.
-func recordGiven(ctx context.Context, tx *sql.Tx, run int64, in []givenObject, given map[int64]value) (*duplicate, error) {
+func recordGiven(ctx context.Context, tx *sql.Tx, b *runBoard, run int64, in []givenObject, given map[int64]value) (*duplicate, error) {
 	if len(given) == 0 {
 		return nil, nil
 	}
@@ -497,16 +496,14 @@ func recordGiven(ctx context.Context, tx *sql.Tx, run int64, in []givenObject, g
 		if i := slices.IndexFunc(g.states, func(st objectState) bool { return st.ID == v.state }); i >= 0 {
 			state = g.states[i].Name
 		}
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			run, step, g.id, g.id, g.name, state, v.content); err != nil {
+		if err := insertRunObject(ctx, tx, run, step, g.id, g.name, state, v.content); err != nil {
 			return nil, err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, "SAVEPOINT store"); err != nil {
 		return nil, err
 	}
-	dup, err := storeInstances(ctx, tx, run, step)
+	dup, err := storeInstances(ctx, tx, b, run, step)
 	if err != nil || dup == nil {
 		return nil, err
 	}

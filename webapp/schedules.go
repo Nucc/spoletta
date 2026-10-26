@@ -241,7 +241,7 @@ func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error 
 			continue
 		}
 		id := d.id
-		if _, err := startRun(ctx, db, eng, d.flow, &id, nil); err != nil {
+		if _, err := startRun(ctx, db, eng, d.flow, &id, nil, true); err != nil {
 			log.Printf("schedule %d: start a run of flow %d: %v", d.id, d.flow, err)
 		}
 	}

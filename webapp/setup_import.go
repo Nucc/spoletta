@@ -10,11 +10,13 @@ import (
 	"time"
 )
 
-// A flow an import created or made over.
+// A flow an import created or made over, and for one made over, the version
+// its board was saved as first.
 type importedFlow struct {
 	ID      int64  `json:"id"`
 	Name    string `json:"name"`
 	Created bool   `json:"created"`
+	Version int64  `json:"version,omitempty"`
 }
 
 type setupResult struct {
@@ -56,14 +58,18 @@ type importer struct {
 	entries  map[string]*setupEntry
 	// Each flow's objects by identifier, for copies to find their sources.
 	objects map[int64]map[string]int64
-	res     setupResult
+	// How the boards it makes over are saved as versions first.
+	saved saving
+	res   setupResult
 }
 
-// Imports f in tx: what is wrong with it is a setupProblem, and changes nothing.
-func importSetup(ctx context.Context, tx *sql.Tx, f setupFile) (setupResult, error) {
+// Imports f in tx: what is wrong with it is a setupProblem, and changes
+// nothing. A flow it makes over has its board saved as a version first, as
+// saved says.
+func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (setupResult, error) {
 	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, skills: map[string]int64{}, existing: map[string][]flowInfo{},
 		imported: map[string]flowInfo{}, entries: map[string]*setupEntry{}, objects: map[int64]map[string]int64{},
-		res: setupResult{Flows: []importedFlow{}}}
+		saved: saved, res: setupResult{Flows: []importedFlow{}}}
 	var entries []*setupEntry
 	add := func(e *setupEntry) error {
 		e.name = strings.TrimSpace(e.name)
@@ -388,6 +394,7 @@ func (im *importer) importEntry(e *setupEntry) error {
 	if msg != "" {
 		return setupProblem{msg}
 	}
+	var before int64
 	if exists {
 		if fi.isStruct != isStruct {
 			what := map[bool]string{true: "a struct", false: "a flow or procedure"}
@@ -410,7 +417,7 @@ func (im *importer) importEntry(e *setupEntry) error {
 			}
 		}
 		// So that what the import makes over can be gone back to.
-		if _, err := saveVersion(ctx, tx, fi.id, true); err != nil {
+		if before, err = saveVersion(ctx, tx, fi.id, true, im.saved); err != nil {
 			return err
 		}
 		if _, err := recordStep(ctx, tx, fi.id); err != nil {
@@ -457,7 +464,7 @@ func (im *importer) importEntry(e *setupEntry) error {
 	if _, err := recordStep(ctx, tx, fi.id); err != nil {
 		return err
 	}
-	im.res.Flows = append(im.res.Flows, importedFlow{ID: fi.id, Name: e.name, Created: !exists})
+	im.res.Flows = append(im.res.Flows, importedFlow{ID: fi.id, Name: e.name, Created: !exists, Version: before})
 	return nil
 }
 

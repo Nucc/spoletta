@@ -397,13 +397,11 @@ func recordCopied(ctx context.Context, tx *sql.Tx, src, stepID, rerun int64, p r
 	}
 	for _, o := range sortedKeys(p.values) {
 		v := p.values[o]
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			rerun, copied, o, o, p.w.objects[o], p.w.stateNames[v.state], v.content); err != nil {
+		if err := insertRunObject(ctx, tx, rerun, copied, o, p.w.objects[o], p.w.stateNames[v.state], v.content); err != nil {
 			return nil, err
 		}
 	}
-	return storeInstances(ctx, tx, rerun, copied)
+	return storeInstances(ctx, tx, p.w.fr.rb, rerun, copied)
 }
 
 // The run and step a re-run route is about, or false once it answered.
@@ -490,7 +488,7 @@ func registerRerunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		defer tx.Rollback()
-		nr, err := newRun(r.Context(), tx, src.Flow, nil, requestUserID(r))
+		nr, err := newRun(r.Context(), tx, src.Flow, nil, requestUserID(r), false)
 		if err != nil {
 			serverError(w, err)
 			return

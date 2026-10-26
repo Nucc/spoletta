@@ -173,23 +173,16 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 // failures, so they show up on the node like any other; the error is for
 // recording the step. about, if not empty, is the flow's OPL, which goes
 // before the inputs. started gets the step's id once it is recorded.
-func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, ws *runWorkspace, runID, id int64, inputs []runInput, cr *changeRequest, about string, started func(int64)) (runResult, error) {
+func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, ws *runWorkspace, b *runBoard, runID, id int64, inputs []runInput, cr *changeRequest, about string, started func(int64)) (runResult, error) {
 	var res runResult
 	run := agentRun{Run: runID, ProcessID: id}
-	var settings processSettings
-	var flow int64
-	err := db.QueryRowContext(ctx, "SELECT flow_id, name, prompt, model, thinking, settings FROM processes WHERE id = ?", id).
-		Scan(&flow, &run.ProcessName, &run.Prompt, &run.Model, &run.Thinking, &settings)
-	if errors.Is(err, sql.ErrNoRows) {
-		return res, errNotFound
-	}
+	p, err := b.process(id)
 	if err != nil {
 		return res, err
 	}
-	contract, msg, err := contractFor(ctx, db, id, true)
-	if err != nil {
-		return res, err
-	}
+	flow, settings := b.flow, p.Settings
+	run.ProcessName, run.Prompt, run.Model, run.Thinking = p.Name, p.Prompt, p.Model, p.Thinking
+	contract, msg := b.contractFor(id, true)
 	run.TimeoutMS = settings.timeout().Milliseconds()
 	// The prompt couldn't tell apart two inputs of one name.
 	clash := inputClash(run.ProcessName, inputs)
@@ -218,7 +211,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		run.Prompt = withChangeRequest(withInputs(withFlow(withWorkspace(run.Prompt, run.Workspace), run.ProcessName, about), inputs), cr)
 	}
 
-	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Prompt, inputs, cr)
+	stepID, err := startStep(ctx, db, b, runID, id, stepActive, run.Prompt, inputs, cr)
 	if err != nil {
 		return res, err
 	}
@@ -319,23 +312,20 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		}
 	}
 	// The run may have been stopped, but the step still has to end.
-	if res.Duplicate, err = finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects); err != nil {
+	if res.Duplicate, err = finishStep(context.Background(), db, b, stepID, status, res.Output, res.Error, res.Objects); err != nil {
 		return res, err
 	}
-	return res, recordDecisions(context.Background(), db, stepID, res.Decisions)
+	return res, recordDecisions(context.Background(), db, b, stepID, res.Decisions)
 }
 
 // Records the state each object an agent decided on came out in, and as
 // the step's outcome what it decided, as a human step's is.
-func recordDecisions(ctx context.Context, db *sql.DB, stepID int64, decisions map[int64]decided) error {
+func recordDecisions(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, decisions map[int64]decided) error {
 	var outcomes, instructions []string
 	for _, object := range slices.Sorted(maps.Keys(decisions)) {
 		d := decisions[object]
-		var name string
-		if err := db.QueryRowContext(ctx, "SELECT name FROM object_states WHERE id = ?", d.state).Scan(&name); err != nil {
-			return err
-		}
-		if err := recordState(ctx, db, stepID, object, name); err != nil {
+		name := b.stateName(d.state)
+		if err := recordState(ctx, db, b, stepID, object, name); err != nil {
 			return err
 		}
 		outcomes = append(outcomes, name)

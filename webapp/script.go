@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"log"
 	"strings"
 )
@@ -57,24 +56,19 @@ type scriptInput struct {
 // Executes a script process as a step of the run, which records its script
 // as the step's prompt. A change request has nothing to go to. started gets
 // the step's id once it is recorded.
-func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWorkspace, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
+func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWorkspace, b *runBoard, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
 	var res runResult
 	run := scriptRun{Run: runID, ProcessID: id, Inputs: []scriptInput{}}
-	var settings processSettings
-	err := db.QueryRowContext(ctx, "SELECT name, script, settings FROM processes WHERE id = ?", id).Scan(&run.ProcessName, &run.Script, &settings)
-	if errors.Is(err, sql.ErrNoRows) {
-		return res, errNotFound
-	}
+	p, err := b.process(id)
 	if err != nil {
 		return res, err
 	}
+	settings := p.Settings
+	run.ProcessName, run.Script = p.Name, p.Script
 	for _, in := range inputs {
 		run.Inputs = append(run.Inputs, scriptInput{Name: in.Name, Content: in.Content})
 	}
-	contract, msg, err := contractFor(ctx, db, id, true)
-	if err != nil {
-		return res, err
-	}
+	contract, msg := b.contractFor(id, true)
 	switch {
 	case strings.TrimSpace(run.Script) == "":
 		res.Error = "the process has no script"
@@ -91,7 +85,7 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 	if run.Since, err = scheduleSince(ctx, db, runID); err != nil {
 		return res, err
 	}
-	stepID, err := startStep(ctx, db, runID, id, stepActive, run.Script, inputs, nil)
+	stepID, err := startStep(ctx, db, b, runID, id, stepActive, run.Script, inputs, nil)
 	if err != nil {
 		return res, err
 	}
@@ -147,6 +141,6 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 		status = stepDone
 	}
 	// The run may have been stopped, but the step still has to end.
-	res.Duplicate, err = finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects)
+	res.Duplicate, err = finishStep(context.Background(), db, b, stepID, status, res.Output, res.Error, res.Objects)
 	return res, err
 }

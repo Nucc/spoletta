@@ -771,25 +771,19 @@ func connectorOperation(ctx context.Context, db *sql.DB, s *connectorSettings) (
 // Executes a connector process as a step of the run, which records the
 // operation and its arguments as the step's prompt. started gets the
 // step's id once it is recorded.
-func runConnectorStep(ctx context.Context, db *sql.DB, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
+func runConnectorStep(ctx context.Context, db *sql.DB, b *runBoard, runID, id int64, inputs []runInput, started func(int64)) (runResult, error) {
 	var res runResult
-	var settings processSettings
-	err := db.QueryRowContext(ctx, "SELECT settings FROM processes WHERE id = ?", id).Scan(&settings)
-	if errors.Is(err, sql.ErrNoRows) {
-		return res, errNotFound
-	}
+	p, err := b.process(id)
 	if err != nil {
 		return res, err
 	}
+	settings := p.Settings
 	c, op, server, msg, err := connectorOperation(ctx, db, settings.Connector)
 	if err != nil {
 		return res, err
 	}
 	res.Error = msg
-	contract, msg, err := contractFor(ctx, db, id, true)
-	if err != nil {
-		return res, err
-	}
+	contract, msg := b.contractFor(id, true)
 	switch {
 	case res.Error != "":
 	case msg != "":
@@ -819,7 +813,7 @@ func runConnectorStep(ctx context.Context, db *sql.DB, runID, id int64, inputs [
 			return res, err
 		}
 	}
-	stepID, err := startStep(ctx, db, runID, id, stepActive, prompt, inputs, nil)
+	stepID, err := startStep(ctx, db, b, runID, id, stepActive, prompt, inputs, nil)
 	if err != nil {
 		return res, err
 	}
@@ -853,7 +847,7 @@ func runConnectorStep(ctx context.Context, db *sql.DB, runID, id int64, inputs [
 		status = stepDone
 	}
 	// The run may have been stopped, but the step still has to end.
-	res.Duplicate, err = finishStep(context.Background(), db, stepID, status, res.Output, res.Error, res.Objects)
+	res.Duplicate, err = finishStep(context.Background(), db, b, stepID, status, res.Output, res.Error, res.Objects)
 	return res, err
 }
 

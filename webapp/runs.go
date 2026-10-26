@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -173,14 +174,23 @@ func validStepStatus(s string) bool {
 	return s == stepActive || s == stepWaiting || s == stepDone || s == stepError || s == stepSkipped
 }
 
-// Starts a step of a run, copying the process's current settings into it.
-func startStep(ctx context.Context, db *sql.DB, runID, processID int64, status, prompt string, inputs []runInput, cr *changeRequest) (int64, error) {
-	return startStepAs(ctx, db, runID, processID, "", status, prompt, inputs, cr)
+// Starts a step of a run, copying the process's settings on the run's board
+// into it.
+func startStep(ctx context.Context, db *sql.DB, b *runBoard, runID, processID int64, status, prompt string, inputs []runInput, cr *changeRequest) (int64, error) {
+	return startStepAs(ctx, db, b, runID, processID, "", status, prompt, inputs, cr)
 }
 
 // Starts a step as startStep does, of kind rather than its process's, unless
-// empty.
-func startStepAs(ctx context.Context, db *sql.DB, runID, processID int64, kind, status, prompt string, inputs []runInput, cr *changeRequest) (int64, error) {
+// empty. A process the board as it is no longer has, as when the run is on
+// the version published, is referred to by process_ref alone.
+func startStepAs(ctx context.Context, db *sql.DB, b *runBoard, runID, processID int64, kind, status, prompt string, inputs []runInput, cr *changeRequest) (int64, error) {
+	p, err := b.process(processID)
+	if err != nil {
+		return 0, err
+	}
+	if kind == "" {
+		kind = p.Kind
+	}
 	if inputs == nil {
 		inputs = []runInput{}
 	}
@@ -196,15 +206,9 @@ func startStepAs(ctx context.Context, db *sql.DB, runID, processID int64, kind, 
 	}
 	res, err := db.ExecContext(ctx,
 		`INSERT INTO run_steps (run_id, process_id, process_ref, process_name, kind, model, thinking, prompt, inputs, change_request, status, output, error, instructions)
-		SELECT ?, id, id, name, COALESCE(NULLIF(?, ''), kind), model, thinking, ?, ?, ?, ?, '', '', '' FROM processes WHERE id = ?`,
-		runID, kind, prompt, in, crJSON, status, processID)
+		VALUES (?, (SELECT id FROM processes WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')`,
+		runID, p.ID, p.ID, p.Name, kind, p.Model, p.Thinking, prompt, in, crJSON, status)
 	if err != nil {
-		return 0, err
-	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		if err == nil {
-			err = errNotFound
-		}
 		return 0, err
 	}
 	id, err := res.LastInsertId()
@@ -216,18 +220,19 @@ func startStepAs(ctx context.Context, db *sql.DB, runID, processID int64, kind, 
 
 var errNotFound = errors.New("not found")
 
-// Finishes a step. A successful step generates its process's output objects,
-// each in the state its link names; a human step those it fills in. Objects with attributes hold their part
-// of the output, given in contents by object id; the others hold all of it.
+// Finishes a step. A successful step generates its process's output objects
+// on the run's board, each in the state its link names; a human step those
+// it fills in. Objects with attributes hold their part of the output, given
+// in contents by object id; the others hold all of it.
 //
 // While the run goes on, persistent objects are stored too. If one holds a
 // unique value another run stored, nothing is stored, the step ends as a
 // duplicate and its run as terminated; the duplicate is returned.
-func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, errMsg string, contents map[int64]string) (*duplicate, error) {
+func finishStep(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, status, output, errMsg string, contents map[int64]string) (*duplicate, error) {
 	// Parallel steps storing values can still deadlock; the loser rolled
 	// back everything, so it can go again.
 	for attempt := 1; ; attempt++ {
-		dup, err := finishStepOnce(ctx, db, stepID, status, output, errMsg, contents)
+		dup, err := finishStepOnce(ctx, db, b, stepID, status, output, errMsg, contents)
 		if !mysqlErrorIs(err, mysqlErrDeadlock) || attempt == 3 {
 			if err != nil {
 				stepLog(db, stepID, logError, "step %d couldn't be recorded as ended: %v", stepID, err)
@@ -241,7 +246,7 @@ func finishStep(ctx context.Context, db *sql.DB, stepID int64, status, output, e
 
 // Read committed takes no gap locks, which would make parallel runs
 // replacing their own instances deadlock on the same empty range.
-func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, output, errMsg string, contents map[int64]string) (*duplicate, error) {
+func finishStepOnce(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, status, output, errMsg string, contents map[int64]string) (*duplicate, error) {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
@@ -250,9 +255,10 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 	// Locking the run orders this against a parallel step terminating it.
 	var runID int64
 	var runStatus, kind string
+	var process sql.NullInt64
 	err = tx.QueryRowContext(ctx,
-		"SELECT r.id, r.status, s.kind FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
-		Scan(&runID, &runStatus, &kind)
+		"SELECT r.id, r.status, s.kind, s.process_ref FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
+		Scan(&runID, &runStatus, &kind, &process)
 	if err != nil {
 		return nil, err
 	}
@@ -265,22 +271,15 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 	if status != stepDone {
 		return nil, tx.Commit()
 	}
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content)
-		SELECT s.run_id, s.id, o.id, o.id, o.name, COALESCE(st.name, ''), ? FROM run_steps s
-		JOIN object_links l ON l.process_id = s.process_id AND l.direction = 'output'
-		JOIN objects o ON o.id = l.object_id
-		LEFT JOIN object_states st ON st.id = l.state_id
-		WHERE s.id = ? AND (s.kind <> 'human' OR (`+filledIn+`))
-		ORDER BY o.id`,
-		output, stepID)
-	if err != nil {
-		return nil, err
-	}
-	for object, content := range contents {
-		_, err := tx.ExecContext(ctx, "UPDATE run_objects SET content = ? WHERE step_id = ? AND object_id = ?", content, stepID, object)
-		if err != nil {
-			return nil, err
+	if process.Valid {
+		for _, l := range b.outputLinks(process.Int64, kind) {
+			content, ok := contents[l.Object]
+			if !ok {
+				content = output
+			}
+			if err := insertRunObject(ctx, tx, runID, stepID, l.Object, b.objects[l.Object].Name, b.stateName(l.State), content); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// A step finishing after its run ended stores nothing, nor does a flow
@@ -292,12 +291,12 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 	if _, err := tx.ExecContext(ctx, "SAVEPOINT store"); err != nil {
 		return nil, err
 	}
-	dup, err := storeInstances(ctx, tx, runID, stepID)
+	dup, err := storeInstances(ctx, tx, b, runID, stepID)
 	if err != nil {
 		return nil, err
 	}
 	if dup == nil {
-		if err := storeShared(ctx, tx, runID, stepID); err != nil {
+		if err := storeShared(ctx, tx, b, runID, stepID); err != nil {
 			return nil, err
 		}
 	}
@@ -319,34 +318,28 @@ func finishStepOnce(ctx context.Context, db *sql.DB, stepID int64, status, outpu
 	return dup, tx.Commit()
 }
 
-// The name of a state a human step can decide on: one its process's output
-// links list. Empty if the state isn't one of them.
-func decisionState(ctx context.Context, db *sql.DB, stepID, stateID int64) (string, error) {
-	var name string
-	err := db.QueryRowContext(ctx,
-		`SELECT st.name FROM run_steps s
-		JOIN object_links l ON l.process_id = s.process_id AND l.direction = 'output'
-		JOIN link_states ls ON ls.link_id = l.id AND ls.state_id = ?
-		JOIN object_states st ON st.id = ls.state_id
-		WHERE s.id = ? AND s.kind = 'human'`,
-		stateID, stepID).Scan(&name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return name, err
+// Records what a run holds of an object, as a step generated it or a person
+// decided it. One the board as it is no longer has is referred to by
+// object_ref alone.
+func insertRunObject(ctx context.Context, db execer, run, step, object int64, name, state, content string) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content)
+		VALUES (?, ?, (SELECT id FROM objects WHERE id = ?), ?, ?, ?, ?)`,
+		run, step, object, object, name, state, content)
+	return err
 }
 
 // Records the state a human step set its object to; the object keeps its content.
-func recordDecision(ctx context.Context, db *sql.DB, stepID, stateID int64, content string) error {
-	_, err := db.ExecContext(ctx,
-		`INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content)
-		SELECT s.run_id, s.id, o.id, o.id, o.name, st.name, ?
-		FROM run_steps s
-		JOIN object_states st ON st.id = ?
-		JOIN objects o ON o.id = st.object_id
-		WHERE s.id = ?`,
-		content, stateID, stepID)
-	return err
+func recordDecision(ctx context.Context, db *sql.DB, b *runBoard, stepID, stateID int64, content string) error {
+	st, ok := b.states[stateID]
+	if !ok {
+		return nil
+	}
+	var run int64
+	if err := db.QueryRowContext(ctx, "SELECT run_id FROM run_steps WHERE id = ?", stepID).Scan(&run); err != nil {
+		return err
+	}
+	return insertRunObject(ctx, db, run, stepID, st.Object, b.objects[st.Object].Name, st.Name, content)
 }
 
 func getRun(ctx context.Context, db *sql.DB, id int64) (run, error) {
@@ -382,23 +375,24 @@ func endRun(ctx context.Context, db *sql.DB, id int64, status string) (run, erro
 	return rn, err
 }
 
-// Starts a run of the whole flow on its board as it is, for schedule if one
-// started it, or the user who did; see newRun. The run goes on in the server;
-// this returns its id once it started, or sql.ErrNoRows without the flow.
-func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule, startedBy *int64) (int64, error) {
+// Starts a run of the whole flow, for schedule if one started it, or the
+// user who did, on its board as it is, or with published on the version it
+// published if any; see newRun. The run goes on in the server; this returns
+// its id once it started, or sql.ErrNoRows without the flow.
+func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule, startedBy *int64, published bool) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	nr, err := newRun(ctx, tx, flow, schedule, startedBy)
+	nr, err := newRun(ctx, tx, flow, schedule, startedBy, published)
 	if err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix, nil, 0)
+	eng.start(nr, flow, nil)
 	return nr.id, nil
 }
 
@@ -410,24 +404,27 @@ type pendingRun struct {
 	prefix      string
 	// The shared record it is started on, 0 for none; see record_runs.go.
 	record int64
+	// Whether it runs the version the flow published; see publish.go.
+	published bool
 }
 
-// Records a run of the flow on its board as it is: a board changed since its
-// version is saved as a new one first, so the run's version shows what it
-// ran. sql.ErrNoRows without the flow.
-func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *int64) (pendingRun, error) {
+// Records a run of the flow on its board as it is, or with published on the
+// version the flow published if it has one; see runVersion. A board changed
+// since its version is saved as a new one first, so the run's version shows
+// what it ran. The flow's settings, its repositories, are the version's.
+// sql.ErrNoRows without the flow.
+func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *int64, published bool) (pendingRun, error) {
 	var name string
 	var settings flowSettings
 	if err := tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ?", flow).Scan(&name, &settings); err != nil {
 		return pendingRun{}, err
 	}
-	version, err := saveVersion(ctx, tx, flow, true)
+	version, board, onPublished, err := runVersion(ctx, tx, flow, published, saving{by: startedBy, reason: savedForRun})
 	if err != nil {
 		return pendingRun{}, err
 	}
-	board, err := takeSnapshot(ctx, tx, flow)
-	if err != nil {
-		return pendingRun{}, err
+	if board.Settings != nil {
+		settings = *board.Settings
 	}
 	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by, replica_id) VALUES (?, ?, ?, ?, ?, ?)",
 		flow, runRunning, version, schedule, startedBy, replicaID)
@@ -438,7 +435,7 @@ func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *in
 	if err != nil {
 		return pendingRun{}, err
 	}
-	return pendingRun{id: id, version: version, board: board, repos: settings.Repositories, prefix: settings.prefix(name)}, nil
+	return pendingRun{id: id, version: version, board: board, repos: settings.Repositories, prefix: settings.prefix(name), published: onPublished}, nil
 }
 
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
@@ -470,13 +467,21 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		writeJSON(w, http.StatusOK, rs)
 	})
 
-	// Starts a run on the board as it is; see startRun.
+	// Starts a run on the board as it is, or with {"published": true} on the
+	// version the flow published, if any; see startRun.
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
 		if !ok || refuseInStruct(w, r, db, f) {
 			return
 		}
-		id, err := startRun(r.Context(), db, eng, f, nil, requestUserID(r))
+		var body struct {
+			Published bool `json:"published"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		id, err := startRun(r.Context(), db, eng, f, nil, requestUserID(r), body.Published)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return
@@ -589,6 +594,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		rows.Close()
+		// Who decides a review is the run's board's to say.
+		var b *runBoard
 		for i, s := range detail.Steps {
 			if s.Kind == kindLoop {
 				if detail.Steps[i].CanDecide, err = mayAnswerLoops(r.Context(), db, requestUser(r), rn.Flow); err != nil {
@@ -601,10 +608,13 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 				continue
 			}
 			if s.Process != nil {
-				if detail.Steps[i].HandledBy, err = handlers(r.Context(), db, *s.Process); err != nil {
-					serverError(w, err)
-					return
+				if b == nil {
+					if b, err = runBoardOf(r.Context(), db, id); err != nil {
+						serverError(w, err)
+						return
+					}
 				}
+				detail.Steps[i].HandledBy = b.handlers(*s.Process)
 			}
 			detail.Steps[i].CanDecide = mayDecide(requestUser(r), roles, detail.Steps[i].HandledBy)
 		}
@@ -705,17 +715,6 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 
-		var outcome string
-		if patch.State != nil {
-			if outcome, err = decisionState(r.Context(), db, id, *patch.State); err != nil {
-				serverError(w, err)
-				return
-			}
-			if outcome == "" {
-				http.Error(w, "the step's process can't decide on that state", http.StatusBadRequest)
-				return
-			}
-		}
 		// A step whose process was deleted before ids were kept fills in nothing.
 		var process sql.NullInt64
 		err = db.QueryRowContext(r.Context(), "SELECT process_ref FROM run_steps WHERE id = ? AND run_id = ?", id, runID).Scan(&process)
@@ -727,7 +726,20 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
-		if msg, err := refuseDecider(r.Context(), db, r, process.Int64); err != nil || msg != "" {
+		// The review is of the process as the run's board has it.
+		b, err := runBoardOf(r.Context(), db, runID)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		var outcome string
+		if patch.State != nil {
+			if outcome = b.decisionState(process.Int64, *patch.State); outcome == "" {
+				http.Error(w, "the step's process can't decide on that state", http.StatusBadRequest)
+				return
+			}
+		}
+		if msg, err := refuseDecider(r.Context(), db, r, b.handlers(process.Int64)); err != nil || msg != "" {
 			if err != nil {
 				serverError(w, err)
 			} else {
@@ -735,11 +747,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			}
 			return
 		}
-		objects, msg, err := entryObjects(r.Context(), db, process.Int64)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
+		objects, msg := b.entryObjects(process.Int64)
 		if msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return

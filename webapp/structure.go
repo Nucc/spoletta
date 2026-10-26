@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -80,6 +81,24 @@ func loadStructure(ctx context.Context, db rowsQuerier, flow int64) (structure, 
 		}
 	}
 	return s, rows.Err()
+}
+
+// The structure of a version's board, as loadStructure reads the board as it
+// is; see run_board.go.
+func boardStructure(b snapshot) structure {
+	s := structure{}
+	for _, o := range b.Objects {
+		s[o.ID] = &structObject{id: o.ID, name: o.Name, many: o.Many, quantity: quantity{min: o.Min, max: o.Max},
+			owner: o.Owner, general: o.General, relation: o.Relation}
+	}
+	attrs := slices.Clone(b.Attributes)
+	slices.SortFunc(attrs, func(x, y attribute) int { return cmp.Compare(x.ID, y.ID) })
+	for _, a := range attrs {
+		if o := s[a.Object]; o != nil {
+			o.attrs = append(o.attrs, a)
+		}
+	}
+	return s
 }
 
 // The structure of the flow an object is in.

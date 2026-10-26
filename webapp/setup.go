@@ -404,7 +404,7 @@ func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := importSetup(ctx, tx, f)
+		res, err := importSetup(ctx, tx, f, saving{by: requestUserID(r), reason: savedForImport})
 		var p setupProblem
 		if errors.As(err, &p) {
 			http.Error(w, p.msg, http.StatusBadRequest)

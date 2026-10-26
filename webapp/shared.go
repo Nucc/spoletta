@@ -1,11 +1,13 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -67,31 +69,50 @@ func checkShared(ctx context.Context, db *sql.DB, object int64) (string, error) 
 	return "", nil
 }
 
-// Writes the records of shared objects a step generated into their stores.
-// A copy of a struct deleted since writes none, having no unique attribute
-// to tell them apart by; it still reads what was written.
-func storeShared(ctx context.Context, tx *sql.Tx, runID, stepID int64) error {
+// Writes the records of shared objects a step generated, as the run's board
+// has them, into their stores. A copy of a struct deleted since writes none,
+// having no unique attribute to tell them apart by; it still reads what was
+// written.
+func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int64) error {
 	type generated struct {
 		store          int64
 		affects        bool
 		content, state string
 	}
 	var objects []generated
-	err := scanAll(ctx, tx,
-		`SELECT o.store_id, ro.content, ro.state, EXISTS (
-			SELECT 1 FROM object_links l JOIN run_steps s ON s.process_id = l.process_id
-			WHERE s.id = ro.step_id AND l.object_id = ro.object_id AND l.direction = 'input')
-		FROM run_objects ro JOIN objects o ON o.id = ro.object_id JOIN objects st ON st.id = o.store_id
-		WHERE ro.step_id = ? ORDER BY o.store_id, o.id`,
+	var process sql.NullInt64
+	if err := tx.QueryRowContext(ctx, "SELECT process_ref FROM run_steps WHERE id = ?", stepID).Scan(&process); err != nil {
+		return err
+	}
+	err := scanAll(ctx, tx, "SELECT object_ref, content, state FROM run_objects WHERE step_id = ? ORDER BY object_ref, id",
 		func(rows *sql.Rows) error {
+			var object int64
 			var g generated
-			err := rows.Scan(&g.store, &g.content, &g.state, &g.affects)
-			objects = append(objects, g)
-			return err
+			if err := rows.Scan(&object, &g.content, &g.state); err != nil {
+				return err
+			}
+			if g.store = b.store(object); g.store != 0 {
+				g.affects = process.Valid && b.takes(process.Int64, object)
+				objects = append(objects, g)
+			}
+			return nil
 		}, stepID)
 	if err != nil {
 		return err
 	}
+	// A store whose struct is gone keeps no records.
+	kept := objects[:0]
+	for _, g := range objects {
+		var n int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM objects WHERE id = ?", g.store).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			kept = append(kept, g)
+		}
+	}
+	objects = kept
+	slices.SortStableFunc(objects, func(x, y generated) int { return cmp.Compare(x.store, y.store) })
 	for _, g := range objects {
 		attrs, err := uniqueAttributes(ctx, tx, g.store)
 		if err != nil {
@@ -252,14 +273,13 @@ func mergeFields(old, content string) string {
 	return string(b)
 }
 
-// Moves the records the step made its own into the state it came out in.
-func recordSharedState(ctx context.Context, db *sql.DB, step, object int64, state string) error {
-	if state == "" {
+// Moves the records of store the step made its own into the state it came
+// out in.
+func recordSharedState(ctx context.Context, db *sql.DB, step, store int64, state string) error {
+	if state == "" || store == 0 {
 		return nil
 	}
-	_, err := db.ExecContext(ctx,
-		"UPDATE shared_records r JOIN objects o ON o.store_id = r.object_id SET r.state = ? WHERE r.step_id = ? AND o.id = ?",
-		state, step, object)
+	_, err := db.ExecContext(ctx, "UPDATE shared_records SET state = ? WHERE step_id = ? AND object_id = ?", state, step, store)
 	return err
 }
 

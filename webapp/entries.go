@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -15,22 +13,6 @@ import (
 // generates: a JSON object with exactly the object's attributes, or for a
 // list an array of them; an object without attributes holds the text entered.
 // A file can't be entered by hand, since none was written in the step.
-
-// Whether a human process's output link l is to an object it fills in.
-const filledIn = `NOT EXISTS (SELECT 1 FROM link_states ls WHERE ls.link_id = l.id)
-	AND NOT EXISTS (SELECT 1 FROM object_links i
-		WHERE i.process_id = l.process_id AND i.object_id = l.object_id AND i.direction = 'input')`
-
-// The objects a human process fills in, in id order. Says what is wrong if
-// what they hold never ends.
-func entryObjects(ctx context.Context, db *sql.DB, process int64) ([]shapedObject, string, error) {
-	return shapedObjects(ctx, db, process,
-		`SELECT DISTINCT o.id, o.name, o.many AND o.parent_id <=> p.parent_id
-		FROM object_links l JOIN objects o ON o.id = l.object_id JOIN processes p ON p.id = l.process_id
-		WHERE l.process_id = ? AND l.direction = 'output' AND p.kind = ?
-			AND `+filledIn+`
-		ORDER BY o.id`, process, kindHuman)
-}
 
 // The name of the first field holding a file, at any depth; empty if none does.
 func fileField(fs []field) string {

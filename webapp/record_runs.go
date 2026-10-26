@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -37,13 +38,13 @@ func (fr *flowRun) pinnedRecord(ctx context.Context, db *sql.DB, object int64) (
 	if fr.record == 0 {
 		return "", false, nil
 	}
-	store, err := storeOf(ctx, db, object)
-	if err != nil || store == 0 {
-		return "", false, err
+	store := fr.rb.store(object)
+	if store == 0 {
+		return "", false, nil
 	}
 	var of int64
 	var content string
-	err = db.QueryRowContext(ctx, "SELECT object_id, content FROM shared_records WHERE id = ?", fr.record).Scan(&of, &content)
+	err := db.QueryRowContext(ctx, "SELECT object_id, content FROM shared_records WHERE id = ?", fr.record).Scan(&of, &content)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, fmt.Errorf("record %d, which the run was started on, was deleted", fr.record)
 	}
@@ -69,13 +70,40 @@ type recordFlow struct {
 }
 
 // The flows querying the store's records, a job flow's own boards, which
-// the user may start, by name.
+// the user may start, by name. A flow that published a version runs that
+// on records (see publish.go), so its queries are that version's.
 func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*recordFlow, error) {
 	var fs []*recordFlow
-	err := scanAll(ctx, db, `SELECT f.id, f.name, l.query FROM objects o
+	err := scanAll(ctx, db, `SELECT f.id, f.name, v.snapshot FROM flows f JOIN flow_versions v ON v.id = f.published_version_id
+		WHERE NOT f.is_struct AND NOT f.module AND JSON_CONTAINS(JSON_EXTRACT(v.snapshot, '$.objects[*].store'), CAST(? AS JSON))`,
+		func(rows *sql.Rows) error {
+			f := &recordFlow{Off: map[string]string{}}
+			var body []byte
+			if err := rows.Scan(&f.ID, &f.Name, &body); err != nil {
+				return err
+			}
+			var s snapshot
+			if err := json.Unmarshal(body, &s); err != nil {
+				return err
+			}
+			b := newRunBoard(f.ID, s)
+			for _, l := range s.Links {
+				if l.Direction == directionInput && l.Query != nil && b.store(l.Object) == store {
+					f.queries = append(f.queries, *l.Query)
+				}
+			}
+			if len(f.queries) > 0 {
+				fs = append(fs, f)
+			}
+			return nil
+		}, strconv.FormatInt(store, 10))
+	if err != nil {
+		return nil, err
+	}
+	err = scanAll(ctx, db, `SELECT f.id, f.name, l.query FROM objects o
 			JOIN object_links l ON l.object_id = o.id AND l.direction = 'input' AND l.query IS NOT NULL
 			JOIN flows f ON f.id = o.flow_id
-		WHERE o.store_id = ? AND NOT f.is_struct AND NOT f.module
+		WHERE o.store_id = ? AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL
 		ORDER BY f.name, f.id, l.id`, func(rows *sql.Rows) error {
 		var id int64
 		var name string
@@ -97,6 +125,9 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 	if err != nil {
 		return nil, err
 	}
+	slices.SortStableFunc(fs, func(x, y *recordFlow) int {
+		return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.ID, y.ID))
+	})
 	var may []*recordFlow
 	for _, f := range fs {
 		access, err := flowAccess(ctx, db, u, f.ID)
@@ -214,14 +245,15 @@ func recordIDs(s string) ([]int64, error) {
 	return ids, nil
 }
 
-// Starts a run of the flow on the record, for the user who did; see startRun.
+// Starts a run of the flow on the record, for the user who did, on the
+// version the flow published, if any; see startRun.
 func startRecordRun(ctx context.Context, db *sql.DB, eng *engine, flow, record int64, startedBy *int64) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	nr, err := newRun(ctx, tx, flow, nil, startedBy)
+	nr, err := newRun(ctx, tx, flow, nil, startedBy, true)
 	if err != nil {
 		return 0, err
 	}
@@ -231,7 +263,8 @@ func startRecordRun(ctx context.Context, db *sql.DB, eng *engine, flow, record i
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	eng.start(nr.id, flow, nr.version, nr.board, nr.repos, nr.prefix, nil, record)
+	nr.record = record
+	eng.start(nr, flow, nil)
 	return nr.id, nil
 }
 

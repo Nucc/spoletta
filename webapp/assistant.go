@@ -47,8 +47,10 @@ type assistantMessage struct {
 	// A reply is active while the agent works on it, then done or error.
 	Status string `json:"status"`
 	Error  string `json:"error"`
-	// Whether the reply changed the flow.
+	// Whether the reply changed the flow, and the version the flow was
+	// saved as first, which the board shows what it changed against.
 	Applied    bool       `json:"applied"`
+	Version    *int64     `json:"version"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
@@ -72,10 +74,10 @@ var setupFormat string
 
 func assistantMessages(ctx context.Context, q rowsQuerier, flow int64) ([]assistantMessage, error) {
 	msgs := []assistantMessage{}
-	err := scanAll(ctx, q, `SELECT id, role, content, status, error, applied, created_at, finished_at
+	err := scanAll(ctx, q, `SELECT id, role, content, status, error, applied, version_id, created_at, finished_at
 		FROM assistant_messages WHERE flow_id = ? ORDER BY id`, func(rows *sql.Rows) error {
 		var m assistantMessage
-		err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Status, &m.Error, &m.Applied, &m.CreatedAt, &m.FinishedAt)
+		err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Status, &m.Error, &m.Applied, &m.Version, &m.CreatedAt, &m.FinishedAt)
 		msgs = append(msgs, m)
 		return err
 	}, flow)
@@ -298,11 +300,13 @@ func startAssistantReply(ctx context.Context, db *sql.DB, flow int64, message st
 	return id, tx.Commit()
 }
 
-// How a reply ended.
+// How a reply ended, and for one that changed the flow, the version saved
+// before.
 type assistantResult struct {
 	content string
 	err     string
 	applied bool
+	version int64
 }
 
 func finishAssistantReply(db *sql.DB, id int64, res assistantResult) error {
@@ -310,8 +314,12 @@ func finishAssistantReply(db *sql.DB, id int64, res assistantResult) error {
 	if res.err != "" {
 		status = stepError
 	}
-	_, err := db.Exec("UPDATE assistant_messages SET content = ?, status = ?, error = ?, applied = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
-		res.content, status, res.err, res.applied, id)
+	var version *int64
+	if res.applied && res.version != 0 {
+		version = &res.version
+	}
+	_, err := db.Exec("UPDATE assistant_messages SET content = ?, status = ?, error = ?, applied = ?, version_id = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
+		res.content, status, res.err, res.applied, version, id)
 	return err
 }
 
@@ -461,12 +469,12 @@ func runAssistant(ctx context.Context, db *sql.DB, workerURL string, who *int64,
 		if !found {
 			return assistantResult{content: res.Output}
 		}
-		problem, err := applyAssistantSetup(ctx, db, af, file)
+		version, problem, err := applyAssistantSetup(ctx, db, af, file, who)
 		if err != nil {
 			return failed(err)
 		}
 		if problem == "" {
-			return assistantResult{content: text, applied: true}
+			return assistantResult{content: text, applied: true, version: version}
 		}
 		if attempt == assistantRetries {
 			return assistantResult{content: text, err: "The flow wasn't changed, since the app refused the assistant's setup file: " + problem}
@@ -491,38 +499,44 @@ func splitSetup(reply string) (text, file string, found bool) {
 	return text, reply[last[2]:last[3]], true
 }
 
-// Imports the setup file the agent replied with, if it keeps to this flow.
+// Imports the setup file the agent replied with, if it keeps to this flow,
+// for who, saving the flow as a version first, which comes back as version.
 // What is wrong with it, for the agent to fix, comes back as problem; a flow
 // that is running is the error, since there is nothing to fix.
-func applyAssistantSetup(ctx context.Context, db *sql.DB, af assistantFlow, file string) (problem string, err error) {
+func applyAssistantSetup(ctx context.Context, db *sql.DB, af assistantFlow, file string, who *int64) (version int64, problem string, err error) {
 	f, err := parseSetup([]byte(file))
 	if err != nil {
-		return err.Error(), nil
+		return 0, err.Error(), nil
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", err
+		return 0, "", err
 	}
 	defer tx.Rollback()
 	running, err := lockBoard(ctx, tx, af.id)
 	if err != nil {
-		return "", err
+		return 0, "", err
 	}
 	if running {
-		return "", problemf("The flow is running, so the assistant can't change it; ask again once the run is over.")
+		return 0, "", problemf("The flow is running, so the assistant can't change it; ask again once the run is over.")
 	}
 	if msg, err := keepToFlow(ctx, tx, af, &f); err != nil || msg != "" {
-		return msg, err
+		return 0, msg, err
 	}
-	_, err = importSetup(ctx, tx, f)
+	res, err := importSetup(ctx, tx, f, saving{by: who, reason: savedForAssistant})
 	var p setupProblem
 	if errors.As(err, &p) {
-		return p.msg, nil
+		return 0, p.msg, nil
 	}
 	if err != nil {
-		return "", err
+		return 0, "", err
 	}
-	return "", tx.Commit()
+	for _, imported := range res.Flows {
+		if imported.ID == af.id {
+			version = imported.Version
+		}
+	}
+	return version, "", tx.Commit()
 }
 
 // Checks that f changes only the flow the assistant works on, and leaves

@@ -144,6 +144,8 @@ func TestTeamsFlowOwners(t *testing.T) {
 	a.call("POST", "/api/flows", map[string]any{"name": "Carl's", "owner": map[string]any{"kind": "user", "id": carlRow.ID}}, http.StatusCreated, &own)
 	ownProc := a.agent(own.ID, "Mine", "Do mine.")
 	ownObj := a.newObject(own.ID, "Mine")
+	var ownVer row
+	a.call("POST", fmt.Sprintf("/api/versions?flow=%d", own.ID), nil, http.StatusCreated, &ownVer)
 	runPath := func(rest string) string { return fmt.Sprintf("/api/runs/%d%s", rn.ID, rest) }
 	stepPath := func(rest string) string { return runPath(fmt.Sprintf("/steps/%d%s", st.ID, rest)) }
 	cases := []struct {
@@ -178,10 +180,14 @@ func TestTeamsFlowOwners(t *testing.T) {
 		{"DELETE", fmt.Sprintf("/api/schedules/%d", sched.ID), nil},
 		{"GET", fmt.Sprintf("/api/versions/%d", ver.ID), nil},
 		{"POST", fmt.Sprintf("/api/versions/%d/restore", ver.ID), nil},
+		{"POST", fmt.Sprintf("/api/versions/%d/publish", ver.ID), nil},
+		{"GET", fmt.Sprintf("/api/versions/%d/diff", ver.ID), nil},
+		{"GET", fmt.Sprintf("/api/versions/%d/diff?to=%d", ownVer.ID, ver.ID), nil},
 		// Ids in the query or the body; whatever else they name is Carl's.
 		{"GET", fmt.Sprintf("/api/processes?flow=%d", f.ID), nil},
 		{"GET", fmt.Sprintf("/api/schedules?flow=%d", f.ID), nil},
 		{"POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), nil},
+		{"DELETE", fmt.Sprintf("/api/versions/published?flow=%d", f.ID), nil},
 		{"POST", "/api/processes", map[string]any{"flow": f.ID, "name": "Sneak", "kind": "agent"}},
 		{"POST", "/api/runs", map[string]any{"flow": f.ID}},
 		{"POST", "/api/paste", map[string]any{"from": f.ID, "processes": []int64{proc.ID}, "flow": own.ID}},
@@ -207,7 +213,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 	// Every kind of path and every field guardFlows (owners.go) finds a
 	// flow's id from has a row above; keep these lists in step with its
 	// flowPaths and flowFields, and with bodyRefs' source, target and
-	// settings, and the run files of /api/files.
+	// settings, the run files of /api/files and the version a diff is to.
 	for _, kind := range []string{"flows", "structs", "processes", "objects", "links", "connections", "states", "attributes", "runs", "schedules", "versions"} {
 		if !slices.ContainsFunc(cases, func(c struct {
 			method, path string
@@ -218,7 +224,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 			t.Errorf("no request names an id in the path of /api/%s/", kind)
 		}
 	}
-	for _, field := range []string{"flow", "from", "parent", "board", "process", "processes", "object", "objects", "source", "target", "settings", "path"} {
+	for _, field := range []string{"flow", "from", "parent", "board", "process", "processes", "object", "objects", "source", "target", "settings", "path", "to"} {
 		if !slices.ContainsFunc(cases, func(c struct {
 			method, path string
 			body         map[string]any

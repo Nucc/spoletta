@@ -125,44 +125,37 @@ func asItem(content string) string {
 }
 
 // What tells an item apart: the value of the list's first unique attribute
-// it has, or else its place in the list.
-func itemKey(ctx context.Context, db *sql.DB, list int64, content string, index int) (string, error) {
+// on the run's board it has, or else its place in the list.
+func itemKey(b *runBoard, list int64, content string, index int) string {
 	fallback := "item " + strconv.Itoa(index+1)
 	fields, err := jsonObject(content)
 	if err != nil {
-		return fallback, nil
+		return fallback
 	}
-	rows, err := db.QueryContext(ctx, "SELECT name FROM object_attributes WHERE object_id = ? AND is_unique ORDER BY id", list)
-	if err != nil {
-		return fallback, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return fallback, err
-		}
-		if raw, ok := fields[name]; ok {
-			var s string
-			if json.Unmarshal(raw, &s) == nil {
-				return s, nil
+	if o := b.structure[list]; o != nil {
+		for _, a := range o.attrs {
+			if raw, ok := fields[a.Name]; ok && a.Unique {
+				var s string
+				if json.Unmarshal(raw, &s) == nil {
+					return s
+				}
+				return compact(raw)
 			}
-			return compact(raw), nil
 		}
 	}
-	return fallback, rows.Err()
+	return fallback
 }
 
 // Stores an item as the run's instance of the list, so no other run takes
 // it. Returns the claim of the run holding it already, if any; then nothing
 // is stored.
-func claimItem(ctx context.Context, db *sql.DB, run, stepID, list int64, name, content string) (*duplicate, error) {
+func claimItem(ctx context.Context, db *sql.DB, b *runBoard, run, stepID, list int64, name, content string) (*duplicate, error) {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	dup, err := storeInstance(ctx, tx, run, stepID, list, name, content, "")
+	dup, err := storeInstance(ctx, tx, run, stepID, list, name, content, "", b.uniqueAttributes(list))
 	if err != nil || dup != nil {
 		return dup, err
 	}

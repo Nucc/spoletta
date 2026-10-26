@@ -171,6 +171,8 @@ func main() {
 	registerFollowUpRoutes(mux, db, workerURL, mcp)
 	go releaseEnded(db, workerURL)
 	registerVersionRoutes(mux, db)
+	registerPublishRoutes(mux, db)
+	registerDiffRoutes(mux, db)
 	registerHistoryRoutes(mux, db)
 	registerOPLRoutes(mux, db)
 	registerSetupRoutes(mux, db)

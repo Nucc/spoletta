@@ -102,7 +102,7 @@ func (w *walk) goOn(id int64, p *pass, given []runInput, cr *changeRequest) bool
 		return true
 	}
 	runLog(w.e.db, w.run, 0, logInfo, "%s", question)
-	_, d, ok := w.e.await(w.reviews, w.lr, w.run, id, given, question)
+	_, d, ok := w.e.await(w.reviews, w.lr, w.fr.rb, w.run, id, given, question)
 	if !ok {
 		return false
 	}

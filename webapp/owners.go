@@ -293,10 +293,11 @@ var flowPaths = []struct {
 // The query giving the flow of a row an id in a request names, by the
 // table the id is of.
 var flowOfTable = map[string]string{
-	"flows":     "SELECT id FROM flows WHERE id = ?",
-	"processes": "SELECT flow_id FROM processes WHERE id = ?",
-	"objects":   "SELECT flow_id FROM objects WHERE id = ?",
-	"runs":      "SELECT flow_id FROM runs WHERE id = ?",
+	"flows":         "SELECT id FROM flows WHERE id = ?",
+	"processes":     "SELECT flow_id FROM processes WHERE id = ?",
+	"objects":       "SELECT flow_id FROM objects WHERE id = ?",
+	"runs":          "SELECT flow_id FROM runs WHERE id = ?",
+	"flow_versions": "SELECT flow_id FROM flow_versions WHERE id = ?",
 }
 
 // The tables of the ids a request's query or JSON body names by field.
@@ -307,6 +308,9 @@ var flowFields = map[string]string{
 	"parent": "processes", "board": "processes", "process": "processes", "processes": "processes",
 	"object": "objects", "objects": "objects",
 }
+
+// A diff of a version with another; see diff.go.
+var versionDiffPattern = regexp.MustCompile(`^/api/versions/\d+/diff$`)
 
 // The files of a run's steps; see files.go.
 var runFilesPattern = regexp.MustCompile(`^runs/(\d+)(/|$)`)
@@ -343,6 +347,14 @@ func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 			for _, v := range q[field] {
 				if id, err := strconv.ParseInt(v, 10, 64); err == nil {
 					refs = append(refs, ref{flowOfTable[table], id})
+				}
+			}
+		}
+		// A diff of two versions names the second in its query; see diff.go.
+		if versionDiffPattern.MatchString(r.URL.Path) {
+			for _, v := range q["to"] {
+				if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+					refs = append(refs, ref{flowOfTable["flow_versions"], id})
 				}
 			}
 		}

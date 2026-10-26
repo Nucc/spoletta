@@ -142,11 +142,7 @@ func checkQuery(ctx context.Context, db *sql.DB, l link) (string, error) {
 // The records of the object the query selects, as a list of it: what
 // runs other than run that ended done stored of it, or for a shared object
 // its store's records; see shared.go.
-func queryRecords(ctx context.Context, db *sql.DB, run, object int64, q *linkQuery) (string, error) {
-	store, err := storeOf(ctx, db, object)
-	if err != nil {
-		return "", err
-	}
+func queryRecords(ctx context.Context, db *sql.DB, run, object, store int64, q *linkQuery) (string, error) {
 	if store != 0 {
 		return querySharedRecords(ctx, db, store, q)
 	}
@@ -198,7 +194,7 @@ func (w *walk) queried(id int64) ([]runInput, error) {
 	for _, qe := range w.queries[id] {
 		content, pinned, err := w.fr.pinnedRecord(w.ctx, w.e.db, qe.object)
 		if err == nil && !pinned {
-			content, err = queryRecords(w.ctx, w.e.db, w.run, qe.object, qe.query)
+			content, err = queryRecords(w.ctx, w.e.db, w.run, qe.object, w.fr.rb.store(qe.object), qe.query)
 		}
 		if err != nil {
 			return nil, err

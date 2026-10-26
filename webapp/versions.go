@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -13,18 +14,46 @@ import (
 )
 
 // A version is a saved snapshot of a flow's whole board: its processes, objects
-// with their states and attributes, links, connections and start node. Saving
-// always adds a version on top, and jumping to one rewrites the board as it
-// was, so no version is ever lost. The board keeps its rows' ids across
-// jumps: runs refer to processes and objects by id, and persistent objects
-// remember what runs stored by object and attribute id.
+// with their states and attributes, links, connections and start node, and
+// the flow's settings. Saving always adds a version on top, and jumping to
+// one rewrites the board as it was, so no version is ever lost. The board
+// keeps its rows' ids across jumps: runs refer to processes and objects by
+// id, and persistent objects remember what runs stored by object and
+// attribute id. A flow may publish one of its versions for the runs nobody
+// starts by hand to take; see publish.go.
 type version struct {
 	ID int64 `json:"id"`
 	// The version the board was on when this one was saved, if any; a save
 	// after jumping back is based on an older version.
 	BasedOn   *int64    `json:"basedOn"`
 	CreatedAt time.Time `json:"createdAt"`
+	// Who saved it, if someone did with everyone signing in, and why: empty
+	// when a person saved it, or else what saved it on its own first; see
+	// saving. The note says why, as the person saving it put it.
+	SavedBy string `json:"savedBy"`
+	Reason  string `json:"reason"`
+	Note    string `json:"note"`
 }
+
+// How a version comes to be saved: by whom, if anyone signing in, with what
+// note, and why, when not because a person saved it.
+type saving struct {
+	by     *int64
+	note   string
+	reason string
+}
+
+// Why a version was saved on its own: before a run on the board as it was,
+// such as one a subflow process started, and before the assistant or a
+// setup file changed the flow.
+const (
+	savedForRun       = "run"
+	savedForAssistant = "assistant"
+	savedForImport    = "import"
+)
+
+// How long a version's note may be.
+const maxVersionNote = 2000
 
 type snapshotObject struct {
 	ID         int64    `json:"id"`
@@ -92,6 +121,9 @@ type snapshot struct {
 	End *boardEnd `json:"end,omitempty"`
 	// Flow processes' boards; versions from before them have none.
 	Boards []innerBoard `json:"boards"`
+	// The flow's settings, its repositories say; versions from before they
+	// were kept have none, and restoring one leaves them as they are.
+	Settings *flowSettings `json:"settings,omitempty"`
 }
 
 // Scans every row of query with scan, which reads the current row.
@@ -122,8 +154,10 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	}
 	var startRoute []byte
 	var endX, endY *float64
-	err := tx.QueryRowContext(ctx, "SELECT x, y, target_id, route, end_x, end_y FROM flow_starts WHERE flow_id = ?", flow).
-		Scan(&s.Start.X, &s.Start.Y, &s.Start.Target, &startRoute, &endX, &endY)
+	s.Settings = &flowSettings{}
+	err := tx.QueryRowContext(ctx, `SELECT s.x, s.y, s.target_id, s.route, s.end_x, s.end_y, f.settings FROM flow_starts s
+		JOIN flows f ON f.id = s.flow_id WHERE s.flow_id = ?`, flow).
+		Scan(&s.Start.X, &s.Start.Y, &s.Start.Target, &startRoute, &endX, &endY, s.Settings)
 	if err != nil {
 		return s, err
 	}
@@ -431,6 +465,11 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			}
 		}
 	}
+	if s.Settings != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE flows SET settings = ? WHERE id = ?", s.Settings, flow); err != nil {
+			return err
+		}
+	}
 	var endX, endY *float64
 	if s.End != nil {
 		endX, endY = &s.End.X, &s.End.Y
@@ -441,14 +480,18 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 }
 
 // Locks the flow, against a run starting on it or another rewrite of its
-// board meanwhile, and says whether a run is going. A run follows the board
-// as it goes; rewriting it underneath would derail the run.
+// board meanwhile, and says whether a run of the board is going. Rewriting
+// the board while a run that started on it goes is refused, as it was when
+// runs read the board as they went. A run of the version published doesn't
+// hold the board, which is its draft; nor does a run started on the board
+// once it was published unchanged, which runs that version too.
 func lockBoard(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
-	if err := tx.QueryRowContext(ctx, "SELECT id FROM flows WHERE id = ? FOR UPDATE", flow).Scan(&flow); err != nil {
+	var published *int64
+	if err := tx.QueryRowContext(ctx, "SELECT published_version_id FROM flows WHERE id = ? FOR UPDATE", flow).Scan(&published); err != nil {
 		return false, err
 	}
 	var running int
-	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE flow_id = ? AND status = 'running'", flow).Scan(&running)
+	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE flow_id = ? AND status = 'running' AND NOT version_id <=> ?", flow, published).Scan(&running)
 	return running > 0, err
 }
 
@@ -476,9 +519,10 @@ func sameSnapshot(a, b []byte) (bool, error) {
 }
 
 // Saves the flow's board as a new version on top of the one it is on, and
-// makes it current. With reuse, a board unchanged since its current version
-// stays on it instead; the version saved or kept is returned.
-func saveVersion(ctx context.Context, tx *sql.Tx, flow int64, reuse bool) (int64, error) {
+// makes it current, as saved says. With reuse, a board unchanged since its
+// current version stays on it instead; the version saved or kept is
+// returned.
+func saveVersion(ctx context.Context, tx *sql.Tx, flow int64, reuse bool, saved saving) (int64, error) {
 	var current *int64
 	// Locked so that two saves can't both be based on the same version unnoticed.
 	if err := tx.QueryRowContext(ctx, "SELECT version_id FROM flows WHERE id = ? FOR UPDATE", flow).Scan(&current); err != nil {
@@ -502,7 +546,8 @@ func saveVersion(ctx context.Context, tx *sql.Tx, flow int64, reuse bool) (int64
 			return *current, err
 		}
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO flow_versions (flow_id, based_on, snapshot) VALUES (?, ?, ?)", flow, current, body)
+	res, err := tx.ExecContext(ctx, "INSERT INTO flow_versions (flow_id, based_on, snapshot, saved_by, reason, note) VALUES (?, ?, ?, ?, ?, ?)",
+		flow, current, body, saved.by, saved.reason, saved.note)
 	if err != nil {
 		return 0, err
 	}
@@ -522,10 +567,27 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		res := struct {
 			// The version the board was last saved as or jumped to; null before the first save.
-			Current  *int64    `json:"current"`
+			Current *int64 `json:"current"`
+			publishedState
 			Versions []version `json:"versions"`
 		}{Versions: []version{}}
-		err := db.QueryRowContext(r.Context(), "SELECT version_id FROM flows WHERE id = ?", f).Scan(&res.Current)
+		ctx := r.Context()
+		err := inTx(ctx, db, func(tx *sql.Tx) error {
+			if err := tx.QueryRowContext(ctx, "SELECT version_id FROM flows WHERE id = ?", f).Scan(&res.Current); err != nil {
+				return err
+			}
+			var err error
+			if res.publishedState, err = publishedStateOf(ctx, tx, f); err != nil {
+				return err
+			}
+			return scanAll(ctx, tx, "SELECT id, based_on, created_at, "+userLabelColumn("saved_by")+", reason, note FROM flow_versions WHERE flow_id = ? ORDER BY id DESC",
+				func(rows *sql.Rows) error {
+					var v version
+					err := rows.Scan(&v.ID, &v.BasedOn, &v.CreatedAt, &v.SavedBy, &v.Reason, &v.Note)
+					res.Versions = append(res.Versions, v)
+					return err
+				}, f)
+		})
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return
@@ -534,30 +596,29 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), "SELECT id, based_on, created_at FROM flow_versions WHERE flow_id = ? ORDER BY id DESC", f)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var v version
-			if err := rows.Scan(&v.ID, &v.BasedOn, &v.CreatedAt); err != nil {
-				serverError(w, err)
-				return
-			}
-			res.Versions = append(res.Versions, v)
-		}
-		if err := rows.Err(); err != nil {
-			serverError(w, err)
-			return
-		}
 		writeJSON(w, http.StatusOK, res)
 	})
 
+	// Saves the board as a new version, with the note the body gives, if
+	// any: {"note": "..."}. With "publish": true, it publishes the board
+	// instead: saved as a version if it changed since its last, which the
+	// note goes with, and that version published; see publish.go.
 	mux.HandleFunc("POST /api/versions", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
 		if !ok {
+			return
+		}
+		var body struct {
+			Note    string `json:"note"`
+			Publish bool   `json:"publish"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		body.Note = strings.TrimSpace(body.Note)
+		if len(body.Note) > maxVersionNote {
+			http.Error(w, "a note holds at most "+strconv.Itoa(maxVersionNote)+" characters", http.StatusBadRequest)
 			return
 		}
 		ctx := r.Context()
@@ -567,16 +628,40 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
+		if body.Publish {
+			if s, err := isStruct(ctx, tx, f); err != nil || s {
+				if err != nil {
+					serverError(w, err)
+				} else {
+					http.Error(w, notInStruct, http.StatusBadRequest)
+				}
+				return
+			}
+		}
 
 		var v version
-		if v.ID, err = saveVersion(ctx, tx, f, false); errors.Is(err, sql.ErrNoRows) {
+		if v.ID, err = saveVersion(ctx, tx, f, body.Publish, saving{by: requestUserID(r), note: body.Note}); errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return
 		} else if err != nil {
 			serverError(w, err)
 			return
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT based_on, created_at FROM flow_versions WHERE id = ?", v.ID).Scan(&v.BasedOn, &v.CreatedAt); err != nil {
+		if body.Publish {
+			// A version kept as the board hadn't changed takes the note
+			// unless it has one of its own.
+			if _, err := tx.ExecContext(ctx, "UPDATE flow_versions SET note = ? WHERE id = ? AND note = ''", body.Note, v.ID); err != nil {
+				serverError(w, err)
+				return
+			}
+			if err := publishVersion(ctx, tx, f, v.ID, requestUserID(r)); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
+		err = tx.QueryRowContext(ctx, "SELECT based_on, created_at, "+userLabelColumn("saved_by")+", reason, note FROM flow_versions WHERE id = ?", v.ID).
+			Scan(&v.BasedOn, &v.CreatedAt, &v.SavedBy, &v.Reason, &v.Note)
+		if err != nil {
 			serverError(w, err)
 			return
 		}

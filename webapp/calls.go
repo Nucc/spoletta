@@ -17,7 +17,9 @@ import (
 // name on the other flow's top board, in the state of the same name, and an
 // object it generates is what the other flow's run left of the object of the
 // same name. The other flow runs as it is when the step starts, saved as a
-// version first if it changed, with its own repositories.
+// version first if it changed, with its own repositories; in a run of a
+// version published, it runs the version it published instead, if any (see
+// publish.go).
 //
 // A flow can't run itself, however many subflows apart; see checkCall.
 
@@ -80,9 +82,11 @@ func calledFlows(ctx context.Context, db *sql.DB, flow int64) ([]int64, error) {
 	return fs, rows.Err()
 }
 
-// The flow a subflow process runs, as a run of it starts on: its board saved
-// as a version if it changed since its last, and its repositories. The run
-// carries the flows it runs inside, after fr's. Says what is wrong, if anything.
+// The flow a subflow process runs, as a run of it starts on: in a run of a
+// version published, that flow's version published if it has one; else its
+// board, saved as a version if it changed since its last (see publish.go).
+// And the version's repositories. The run carries the flows it runs inside,
+// after fr's. Says what is wrong, if anything.
 func (fr *flowRun) call(ctx context.Context, db *sql.DB, flow *int64) (*flowRun, string, error) {
 	if flow == nil {
 		return nil, "It runs no flow; pick one in its settings.", nil
@@ -104,19 +108,19 @@ func (fr *flowRun) call(ctx context.Context, db *sql.DB, flow *int64) (*flowRun,
 	if err != nil {
 		return nil, "", err
 	}
-	version, err := saveVersion(ctx, tx, *flow, true)
+	version, board, _, err := runVersion(ctx, tx, *flow, fr.published, saving{reason: savedForRun})
 	if err != nil {
 		return nil, "", err
 	}
-	board, err := takeSnapshot(ctx, tx, *flow)
-	if err != nil {
-		return nil, "", err
+	if board.Settings != nil {
+		settings = *board.Settings
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, "", err
 	}
 	callee := newFlowRun(*flow, version, board, settings.Repositories, settings.prefix(name))
 	callee.callers = append(slices.Clone(fr.callers), fr.flow)
+	callee.published = fr.published
 	return callee, "", nil
 }
 

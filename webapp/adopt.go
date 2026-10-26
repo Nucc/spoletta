@@ -74,8 +74,28 @@ func resumingRuns() (bool, error) {
 
 // The engine taking over the runs of replicas that stopped, once this
 // replica listens, as a step going again calls its proxies; until then
-// they wait, as they would for any replica to take them.
-var adopter atomic.Pointer[engine]
+// they wait, as they would for any replica to take them. And whether it
+// is taking them over now.
+var (
+	adopter  atomic.Pointer[engine]
+	adopting atomic.Bool
+)
+
+// Takes over the runs of replicas that stopped as adoptStopped does, in
+// the background and once at a time, so this replica saying it is alive
+// never waits for it, however many runs there are; those it doesn't get
+// to are taken the next time.
+func (e *engine) adoptInBackground() {
+	if !adopting.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer adopting.Store(false)
+		if err := e.adoptStopped(context.Background()); err != nil {
+			log.Printf("WARNING: couldn't take over the runs of replicas that stopped: %v", err)
+		}
+	}()
+}
 
 // What a step goes on with when the replica walking its run stopped while
 // it went.
@@ -679,10 +699,13 @@ func runsInside(ctx context.Context, db rowsQuerier, id int64) ([]int64, error) 
 // version's board again, as start or rerun did, taking up what it stored,
 // in the background, and ends it once nothing in it is left to run.
 func (e *engine) carryOn(id int64) {
+	go e.walkAgain(id)
+}
+
+func (e *engine) walkAgain(id int64) {
 	ctx := context.Background()
 	// With the runs going inside it, claimed with it.
-	fail := func(err error) {
-		runLog(e.db, id, 0, logError, "couldn't be taken over, so it is interrupted: %v", err)
+	end := func() {
 		runs, err := runsInside(ctx, e.db, id)
 		if err != nil {
 			log.Printf("find the runs inside run %d: %v", id, err)
@@ -692,6 +715,10 @@ func (e *engine) carryOn(id int64) {
 				log.Printf("interrupt run %d: %v", r, err)
 			}
 		}
+	}
+	fail := func(err error) {
+		runLog(e.db, id, 0, logError, "couldn't be taken over, so it is interrupted: %v", err)
+		end()
 	}
 	rn, err := getRun(ctx, e.db, id)
 	if err != nil {
@@ -735,27 +762,38 @@ func (e *engine) carryOn(id int64) {
 		fail(err)
 		return
 	}
-	run, cancel := context.WithCancelCause(context.Background())
+	walking, cancel := context.WithCancelCause(context.Background())
 	lr := e.register(id, func() { cancel(nil) })
 	lr.failWith = cancel
 	lr.past = past
-	go func() {
-		w := newWalk(run, e, id, lr, fr, board, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
-		switch {
-		case rn.RerunOf != nil && rn.RerunFrom != nil:
-			w.resume(*rn.RerunFrom, values)
-		case rn.RerunOf != nil:
-			w.fail()
-		default:
-			if err := w.carryAgain(carried); err != nil {
-				runLog(e.db, id, 0, logError, "the objects it carries couldn't be carried in: %v", err)
-				w.fail()
-			} else {
-				w.enter()
-			}
+	// A person may have stopped it since it was claimed, which nothing
+	// walking it heard of; once registered, stopping it reaches the walk.
+	var status string
+	if err := e.db.QueryRowContext(ctx, "SELECT status FROM runs WHERE id = ?", id).Scan(&status); err != nil || status != runRunning {
+		e.forget(id)
+		cancel(nil)
+		if err != nil {
+			fail(err)
+		} else {
+			end()
 		}
-		e.finish(run, id, w)
-	}()
+		return
+	}
+	w := newWalk(walking, e, id, lr, fr, board, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
+	switch {
+	case rn.RerunOf != nil && rn.RerunFrom != nil:
+		w.resume(*rn.RerunFrom, values)
+	case rn.RerunOf != nil:
+		w.fail()
+	default:
+		if err := w.carryAgain(carried); err != nil {
+			runLog(e.db, id, 0, logError, "the objects it carries couldn't be carried in: %v", err)
+			w.fail()
+		} else {
+			w.enter()
+		}
+	}
+	e.finish(walking, id, w)
 }
 
 // What the run's steps of kind recorded of each object, by object on fr's

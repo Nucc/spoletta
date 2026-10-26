@@ -8,11 +8,17 @@
 -- replica walked the run isn't lost; and the instructions an agent left
 -- with each object it decided on. Each time a run moves, it keeps from
 -- which replica to which, and the steps it lost then, tried again or not.
+-- Of the runs going as this runs, those a schedule, an API key or a record
+-- started on the version their flow publishes took it; one started by
+-- hand can't be told from a run of an unchanged board, and is taken as not.
 
 -- +goose Up
 ALTER TABLE runs
   ADD COLUMN published boolean NOT NULL DEFAULT FALSE,
   ADD COLUMN carried json DEFAULT NULL;
+UPDATE runs r JOIN flows f ON f.id = r.flow_id SET r.published = TRUE
+WHERE r.status = 'running' AND r.version_id = f.published_version_id
+  AND (r.schedule_id IS NOT NULL OR r.api_key_id IS NOT NULL OR r.record_id IS NOT NULL);
 ALTER TABLE run_steps ADD COLUMN decision json DEFAULT NULL;
 ALTER TABLE run_objects ADD COLUMN instructions text DEFAULT NULL;
 

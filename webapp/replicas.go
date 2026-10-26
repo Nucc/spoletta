@@ -205,7 +205,7 @@ func endStopped(ctx context.Context, db *sql.DB, timeout time.Duration) error {
 		return err
 	}
 	if e := adopter.Load(); resumeRuns && e != nil {
-		return e.adoptStopped(ctx)
+		e.adoptInBackground()
 	}
 	return nil
 }

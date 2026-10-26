@@ -230,11 +230,7 @@ func main() {
 	if resumeRuns {
 		log.Printf("takes over the runs of replicas that stop (RESUME_RUNS)")
 		adopter.Store(eng)
-		go func() {
-			if err := eng.adoptStopped(context.Background()); err != nil {
-				log.Printf("WARNING: couldn't take over the runs of replicas that stopped: %v", err)
-			}
-		}()
+		eng.adoptInBackground()
 	} else {
 		log.Printf("ends the runs of replicas that stop, as RESUME_RUNS is false")
 	}

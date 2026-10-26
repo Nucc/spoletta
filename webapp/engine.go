@@ -741,16 +741,11 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 			w.successors[c.Source] = append(w.successors[c.Source], c.Target)
 		}
 	}
-	// A human generates only what they fill in, not the objects they decide
-	// on, nor those they review without states to decide between. Nor does
-	// an agent generate what it reviews.
+	// What generates an object, as the board's problems count it too.
 	for p, ends := range w.outputs {
 		for _, end := range ends {
 			takes := slices.ContainsFunc(w.inputs[p], func(i linkEnd) bool { return i.object == end.object })
-			switch {
-			case w.kinds[p] == kindHuman && (end.state != 0 || takes):
-			case w.decides[p][end.object] && takes:
-			default:
+			if generatesOutput(w.kinds[p], end.state != 0, w.decides[p][end.object], takes) {
 				w.generated[end.object] = true
 			}
 		}

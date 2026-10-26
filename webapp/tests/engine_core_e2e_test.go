@@ -155,12 +155,15 @@ func TestEngineProcessesWithoutTriggersDontRun(t *testing.T) {
 	}
 }
 
-// A run of a board whose start points nowhere ends done at once.
+// Run refuses a board whose start points nowhere; a run started on it
+// otherwise, over the API, ends done at once.
 func TestEngineNoStartTarget(t *testing.T) {
 	a := newApp(t)
 	f := a.newFlow("Startless")
 	a.agent(f.ID, "Idle", "Idle.")
-	d := a.finish(a.startRun(f.ID).ID)
+	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", f.ID), nil, http.StatusConflict, "connect the start to the process a run begins with")
+	k := apiNewKey(a, "Startless")
+	d := a.finish(apiStart(a, k.Key, f.ID, nil, http.StatusCreated).ID)
 	coreDone(t, d)
 	if len(d.Steps) != 0 || len(d.Objects) != 0 {
 		t.Errorf("a run without a start ran %s", describeSteps(d))
@@ -817,6 +820,9 @@ func TestEngineRunsAPI(t *testing.T) {
 	second := a.startRun(f.ID)
 	a.finish(second.ID)
 	other := a.newFlow("Other runs")
+	q := a.agent(other.ID, "Q", "Go.")
+	a.startAt(other.ID, q.ID)
+	a.worker.onAgent("Q", corePlain("ok"))
 	a.finish(a.startRun(other.ID).ID)
 
 	var rs []run

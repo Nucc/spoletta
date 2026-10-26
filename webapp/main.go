@@ -116,6 +116,7 @@ func main() {
 	registerModelKeyRoutes(mux, db)
 	registerModelProviderRoutes(mux, db, workerURL)
 	registerFlowListRoutes(mux, db, workerURL)
+	registerProblemRoutes(mux, db, workerURL)
 	registerTagRoutes(mux, db)
 	registerFavouriteRoutes(mux, db)
 	registerProcessRoutes(mux, db)

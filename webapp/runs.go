@@ -494,7 +494,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	})
 
 	// Starts a run on the board as it is, or with {"published": true} on the
-	// version the flow published, if any; see startRun.
+	// version the flow published, if any; see startRun. One with errors is
+	// refused, saying them.
 	mux.HandleFunc("POST /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
 		if !ok || refuseInStruct(w, r, db, f) {
@@ -505,6 +506,16 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// A board whose errors a run can't get past isn't run; see problems.go.
+		msg, err := refuseRun(r.Context(), db, r, f, body.Published)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if msg != "" {
+			http.Error(w, msg, http.StatusConflict)
 			return
 		}
 		id, err := startRun(r.Context(), db, eng, f, nil, requestUserID(r), body.Published)

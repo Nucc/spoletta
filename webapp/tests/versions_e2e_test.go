@@ -187,6 +187,8 @@ func TestRunSavesAVersionOnlyWhenTheBoardChanged(t *testing.T) {
 	a := newApp(t)
 	f := a.newFlow("Run versions")
 	p := a.agent(f.ID, "Draft", "Draft it.")
+	a.startAt(f.ID, p.ID)
+	a.worker.onAgent("Draft", corePlain("drafted"))
 
 	r1 := a.finish(a.startRun(f.ID).ID)
 	if r1.Status != runDone || r1.Version == nil {
@@ -873,7 +875,9 @@ func TestSubflowFailures(t *testing.T) {
 		f := a.newFlow("Unset")
 		call := a.newProcess(f.ID, map[string]any{"name": "Call", "kind": kindSubflow})
 		a.startAt(f.ID, call.ID)
-		rn := a.finish(a.startRun(f.ID).ID)
+		// Run refuses it; a run over the API fails where it calls.
+		a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", f.ID), nil, http.StatusConflict, `"Call" runs no flow`)
+		rn := a.finish(apiStart(a, apiNewKey(a, "Unset").Key, f.ID, nil, http.StatusCreated).ID)
 		if cs := onlyStep(t, rn, "Call"); rn.Status != runFailed || cs.Status != stepError || !strings.Contains(cs.Error, "runs no flow") {
 			t.Errorf("run %s, Call %s %q", rn.Status, cs.Status, cs.Error)
 		}
@@ -882,7 +886,8 @@ func TestSubflowFailures(t *testing.T) {
 		a := newApp(t)
 		s := verBuildSubflow(a)
 		a.call("DELETE", fmt.Sprintf("/api/flows/%d", s.callee.ID), nil, http.StatusNoContent, nil)
-		rn := a.finish(a.startRun(s.caller.ID).ID)
+		a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", s.caller.ID), nil, http.StatusConflict, `The flow "Call" runs was deleted`)
+		rn := a.finish(apiStart(a, apiNewKey(a, "Deleted").Key, s.caller.ID, nil, http.StatusCreated).ID)
 		if cs := onlyStep(t, rn, "Call"); rn.Status != runFailed || cs.Status != stepError || cs.Error != "The flow it runs is gone." {
 			t.Errorf("run %s, Call %s %q", rn.Status, cs.Status, cs.Error)
 		}

@@ -242,13 +242,18 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	err = scanAll(ctx, db, "SELECT id, secret FROM webhooks WHERE secret <> ''", func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, "SELECT id, secret, last_payload FROM webhooks WHERE secret <> ''", func(rows *sql.Rows) error {
 		var id int64
 		var stored string
-		if err := rows.Scan(&id, &stored); err != nil {
+		var payload sql.NullString
+		if err := rows.Scan(&id, &stored, &payload); err != nil {
 			return err
 		}
 		all = append(all, secret{"UPDATE webhooks SET secret = ? WHERE id = ? AND secret = ?", webhookPlace(id), stored, []any{id, stored}})
+		// What a delivery carried is kept sealed too; see webhooks.go.
+		if payload.Valid {
+			all = append(all, secret{"UPDATE webhooks SET last_payload = ? WHERE id = ? AND last_payload = ?", webhookPayloadPlace(id), payload.String, []any{id, payload.String}})
+		}
 		return nil
 	})
 	if err != nil {

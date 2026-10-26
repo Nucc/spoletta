@@ -32,7 +32,9 @@ type webhook struct {
 	Mapping   map[string]any   `json:"mapping"`
 	Enabled   bool             `json:"enabled"`
 	CreatedBy string           `json:"createdBy"`
+	Yours     bool             `json:"yours"`
 	Hint      string           `json:"hint"`
+	Refused   int              `json:"refused"`
 	Problems  []string         `json:"problems"`
 	Secret    string           `json:"secret"`
 	Last      *webhookDelivery `json:"lastDelivery"`
@@ -206,20 +208,52 @@ func TestWebhooksStartRunsFromGitHub(t *testing.T) {
 	if again := hookRun(a, status, reply, http.StatusOK); again != rn {
 		t.Errorf("sending it again started run %d after %d", again, rn)
 	}
-	// Unsigned, or signed with another secret, it starts nothing.
+	// Sent again under another id, the payload GitHub signed gets the same
+	// run: its id isn't signed.
+	status, reply = hookGitHub(a, h, secret, "issues", "replayed", hookIssue(7, "Paper jam", "labeled"))
+	if again := hookRun(a, status, reply, http.StatusOK); again != rn {
+		t.Errorf("sending it again under another id started run %d after %d", again, rn)
+	}
+	// Nor as another event: an issue's payload isn't a comment's.
+	status, reply = hookGitHub(a, h, secret, "issue_comment", "as-a-comment", hookIssue(7, "Paper jam", "labeled"))
+	if status != http.StatusBadRequest || !strings.Contains(string(reply), "isn't that of the") {
+		t.Errorf("sent as another event = %d %s", status, reply)
+	}
+	// Unsigned, or signed with another secret, it starts nothing, and is
+	// told no more than that.
 	body, _ := json.Marshal(hookIssue(8, "Toner", "labeled"))
 	status, reply = hookDeliver(a, h, map[string]string{"X-GitHub-Event": "issues", "X-GitHub-Delivery": "unsigned"}, body)
-	if status != http.StatusUnauthorized || !strings.Contains(string(reply), "no X-Hub-Signature-256") {
+	if status != http.StatusUnauthorized || strings.TrimSpace(string(reply)) != "the delivery isn't signed with the webhook's secret" {
 		t.Errorf("unsigned = %d %s", status, reply)
 	}
 	status, reply = hookGitHub(a, h, "spwh_another-secret-entirely", "issues", "forged", hookIssue(8, "Toner", "labeled"))
-	if status != http.StatusUnauthorized || !strings.Contains(string(reply), "doesn't match") {
+	if status != http.StatusUnauthorized || strings.TrimSpace(string(reply)) != "the delivery isn't signed with the webhook's secret" {
 		t.Errorf("signed with another secret = %d %s", status, reply)
+	}
+	// The URL's token is matched byte for byte.
+	other := h
+	token := h.URL[strings.LastIndex(h.URL, "/")+1:]
+	other.URL = strings.TrimSuffix(h.URL, token) + strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r - 'a' + 'A'
+		case r >= 'A' && r <= 'Z':
+			return r - 'A' + 'a'
+		}
+		return r
+	}, token)
+	if status, _ := hookGitHub(a, other, secret, "issues", "cased", hookIssue(8, "Toner", "labeled")); status != http.StatusNotFound {
+		t.Errorf("the token in another case = %d", status)
 	}
 	// What it doesn't take, and a ping, are answered and start nothing.
 	status, reply = hookGitHub(a, h, secret, "issues", "opened-1", hookIssue(9, "Fuser", "opened"))
 	if status != http.StatusOK || !strings.Contains(string(reply), "not issues.opened") {
 		t.Errorf("an event it doesn't take = %d %s", status, reply)
+	}
+	// Taken and ignored once, it is ignored again, whatever its id.
+	status, reply = hookGitHub(a, h, secret, "issues", "opened-2", hookIssue(9, "Fuser", "opened"))
+	if status != http.StatusOK || !strings.Contains(string(reply), "came before") {
+		t.Errorf("an ignored payload sent again = %d %s", status, reply)
 	}
 	status, reply = hookGitHub(a, h, secret, "ping", "ping-1", map[string]any{"zen": "Keep it logically awesome."})
 	if status != http.StatusOK || !strings.Contains(string(reply), "pong") {
@@ -237,15 +271,25 @@ func TestWebhooksStartRunsFromGitHub(t *testing.T) {
 	for _, d := range ds.Deliveries {
 		outcomes = append(outcomes, d.Outcome)
 	}
-	if strings.Join(outcomes, ",") != "refused,ignored,ignored,refused,refused,repeat,started" {
+	// What wasn't signed left none, only a count.
+	if strings.Join(outcomes, ",") != "ignored,ignored,ignored,refused,repeat,repeat,started" {
 		t.Errorf("the deliveries came to %v: %+v", outcomes, ds.Deliveries)
+	}
+	var list2 webhookList
+	a.call("GET", fmt.Sprintf("/api/webhooks?flow=%d", tf.flow.ID), nil, http.StatusOK, &list2)
+	if len(list2.Webhooks) != 1 || list2.Webhooks[0].Refused != 3 {
+		t.Errorf("the refusals counted are %+v", list2.Webhooks)
 	}
 	if first := ds.Deliveries[len(ds.Deliveries)-1]; first.Run == nil || *first.Run != rn || first.Event != "issues.labeled" || first.Delivery != delivery {
 		t.Errorf("the first delivery is listed as %+v", first)
 	}
-	// The payload shown is the latest signed delivery's, which wasn't a ping.
-	if ds.Payload == nil || ds.Payload.Event != "issues.opened" || !strings.Contains(ds.Payload.Payload, "Fuser") {
+	// The payload shown is the latest it took, not one it ignored; it is
+	// kept sealed.
+	if ds.Payload == nil || ds.Payload.Event != "issues.labeled" || !strings.Contains(ds.Payload.Payload, "Paper jam") {
 		t.Errorf("the payload shown is %+v", ds.Payload)
+	}
+	if v := secretsStored(t, db, "SELECT last_payload FROM webhooks WHERE id = ?", h.ID); !strings.HasPrefix(v, "sealed:v1:") || strings.Contains(v, "Paper jam") {
+		t.Errorf("the payload was kept as %q", v)
 	}
 	if raw, _ := json.Marshal(ds); strings.Contains(string(raw), secret) {
 		t.Errorf("the deliveries hold the secret")
@@ -253,9 +297,17 @@ func TestWebhooksStartRunsFromGitHub(t *testing.T) {
 	a.auditEvent("kind:webhook.delivery run:"+strconv.FormatInt(rn, 10), func(_, detail string) bool {
 		return strings.Contains(detail, `"Issues"`) && strings.Contains(detail, "started")
 	})
-	a.auditEvent("kind:webhook.delivery", func(_, detail string) bool {
-		return strings.Contains(detail, "forged") && strings.Contains(detail, "doesn't match")
-	})
+	// What wasn't signed is audited once a minute at the most.
+	refusals := a.audit("kind:webhook.refused", 1)
+	var ours []string
+	for _, e := range refusals.Events {
+		if strings.Contains(e.Detail, fmt.Sprintf(`"Issues" of flow %d `, tf.flow.ID)) {
+			ours = append(ours, e.Detail)
+		}
+	}
+	if len(ours) != 1 || !strings.Contains(ours[0], "refused 1 requests") {
+		t.Errorf("the refusals audited are %q", ours)
+	}
 	a.auditEvent("kind:webhook.add", func(_, detail string) bool { return strings.Contains(detail, `"Issues"`) })
 	for _, e := range a.audit("webhook", 1).Events {
 		if strings.Contains(e.Detail, secret) || strings.Contains(e.Detail, "Paper jam") {
@@ -331,6 +383,11 @@ func TestWebhooksRefusedDeliveriesTakeNothing(t *testing.T) {
 	if status != http.StatusBadRequest || !strings.Contains(string(reply), `"Ticket"`) || !strings.Contains(string(reply), `"number"`) {
 		t.Errorf("a ticket of other attributes = %d %s", status, reply)
 	}
+	// The audit log says why in words of its own, never what the payload held.
+	a.auditEvent("kind:webhook.delivery", func(_, detail string) bool {
+		return strings.Contains(detail, fmt.Sprintf(`"Issues" of flow %d`, tf.flow.ID)) && strings.Contains(detail, "doesn't fit what the flow starts from") &&
+			!strings.Contains(detail, "number")
+	})
 	// Put right, the same delivery starts its run, keeping the secret.
 	fields["mapping"] = map[string]any{"Ticket": map[string]any{"attributes": map[string]any{"id": "issue.number", "subject": "issue.title"}},
 		"Note": map[string]any{"path": "label.name"}}
@@ -406,7 +463,7 @@ func TestWebhooksTakeSlackEvents(t *testing.T) {
 	if status, reply := hookDeliver(a, h, nil, body); status != http.StatusUnauthorized || strings.Contains(string(reply), "3eZbrw") {
 		t.Errorf("an unsigned URL verification = %d %s", status, reply)
 	}
-	event := map[string]any{"type": "event_callback", "event_id": fmt.Sprint("Ev", h.ID),
+	event := map[string]any{"type": "event_callback", "event_id": fmt.Sprint("Ev", h.ID), "token": "old-verification-token",
 		"event": map[string]any{"type": "app_mention", "text": "<@U1> what's up?"}}
 	status, reply = send(time.Now(), false, event)
 	rn := hookRun(a, status, reply, http.StatusAccepted)
@@ -417,8 +474,12 @@ func TestWebhooksTakeSlackEvents(t *testing.T) {
 	if again := hookRun(a, status, reply, http.StatusOK); again != rn {
 		t.Errorf("Slack's retry started run %d after %d", again, rn)
 	}
+	// Slack's old verification token isn't kept.
+	if ds := hookDeliveriesOf(a, h); ds.Payload == nil || strings.Contains(ds.Payload.Payload, "old-verification-token") || !strings.Contains(ds.Payload.Payload, "what's up") {
+		t.Errorf("the payload shown is %+v", ds.Payload)
+	}
 	event["event_id"] = fmt.Sprint("Ev-old-", h.ID)
-	if status, reply := send(time.Now().Add(-10*time.Minute), false, event); status != http.StatusUnauthorized || !strings.Contains(string(reply), "5 minutes off") {
+	if status, reply := send(time.Now().Add(-10*time.Minute), false, event); status != http.StatusUnauthorized || !strings.Contains(string(reply), "isn't signed") {
 		t.Errorf("one signed long ago = %d %s", status, reply)
 	}
 	message := map[string]any{"type": "event_callback", "event_id": fmt.Sprint("Ev-msg-", h.ID), "event": map[string]any{"type": "message", "text": "hi"}}
@@ -441,7 +502,8 @@ func TestWebhooksGeneric(t *testing.T) {
 	mapping := map[string]any{"Alert": map[string]any{"path": ""}}
 	signed := hooksAdd(a, f.ID, map[string]any{"name": "Monitor", "kind": "generic", "verify": "hmac", "header": "X-Signature", "idHeader": "X-Alert-Id", "mapping": mapping})
 	text := []byte("disk full on db-1")
-	headers := map[string]string{"X-Signature": "sha256=" + hookMAC(signed.Secret, string(text)), "X-Alert-Id": fmt.Sprint("alert-", signed.ID), "Content-Type": "text/plain"}
+	alertID := fmt.Sprint("alert-", signed.ID)
+	headers := map[string]string{"X-Signature": "sha256=" + hookMAC(signed.Secret, alertID+".", string(text)), "X-Alert-Id": alertID, "Content-Type": "text/plain"}
 	status, reply := hookDeliver(a, signed, headers, text)
 	rn := hookRun(a, status, reply, http.StatusAccepted)
 	if d := a.finish(rn); !slices.Equal(contentsOf(d, "Alert"), []string{"disk full on db-1"}) {
@@ -451,9 +513,27 @@ func TestWebhooksGeneric(t *testing.T) {
 	if again := hookRun(a, status, reply, http.StatusOK); again != rn {
 		t.Errorf("sending it again started run %d after %d", again, rn)
 	}
+	// Its id is signed, so it can't be sent again under another.
+	headers["X-Alert-Id"] = alertID + "-again"
+	if status, _ := hookDeliver(a, signed, headers, text); status != http.StatusUnauthorized {
+		t.Errorf("sent again under another id = %d", status)
+	}
+	headers["X-Alert-Id"] = alertID
 	headers["X-Signature"] = hookMAC(signed.Secret, "something else")
 	if status, _ := hookDeliver(a, signed, headers, text); status != http.StatusUnauthorized {
 		t.Errorf("a wrong HMAC = %d", status)
+	}
+	// With a timestamp signed too, one signed long ago is refused.
+	stamped := hooksAdd(a, f.ID, map[string]any{"name": "Stamped", "kind": "generic", "verify": "hmac", "header": "X-Signature", "idHeader": "X-Alert-Id",
+		"timestampHeader": "X-Timestamp", "mapping": mapping})
+	stamp := func(at time.Time, id string) map[string]string {
+		ts := strconv.FormatInt(at.Unix(), 10)
+		return map[string]string{"X-Timestamp": ts, "X-Alert-Id": id, "X-Signature": hookMAC(stamped.Secret, ts+".", id+".", string(text)), "Content-Type": "text/plain"}
+	}
+	status, reply = hookDeliver(a, stamped, stamp(time.Now(), "s-1"), text)
+	a.finish(hookRun(a, status, reply, http.StatusAccepted))
+	if status, _ := hookDeliver(a, stamped, stamp(time.Now().Add(-10*time.Minute), "s-2"), text); status != http.StatusUnauthorized {
+		t.Errorf("one signed long ago = %d", status)
 	}
 
 	token := hooksAdd(a, f.ID, map[string]any{"name": "Pager", "kind": "generic", "verify": "token", "header": "Authorization", "mapping": mapping})
@@ -480,6 +560,17 @@ func TestWebhooksGeneric(t *testing.T) {
 	nowhere.URL = "/hooks/not-a-webhook"
 	if status, _ := hookDeliver(a, nowhere, nil, payload); status != http.StatusNotFound {
 		t.Errorf("a delivery to no webhook = %d", status)
+	}
+	// An address sending too many is held back before anything is looked up.
+	limited := false
+	for range 200 {
+		if status, _ := hookDeliver(a, nowhere, nil, payload); status == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Errorf("200 requests at once went through")
 	}
 }
 
@@ -548,7 +639,7 @@ func TestWebhooksArePeoples(t *testing.T) {
 	// Ada may change the flow, so she sees its webhooks.
 	var list webhookList
 	a.call("GET", fmt.Sprintf("/api/webhooks?flow=%d", tf.flow.ID), nil, http.StatusOK, &list)
-	if len(list.Webhooks) != 1 || list.Webhooks[0].ID != h.ID {
+	if len(list.Webhooks) != 1 || list.Webhooks[0].ID != h.ID || list.Webhooks[0].Yours || list.Webhooks[0].CreatedBy != "Bob" {
 		t.Errorf("ada sees %+v", list.Webhooks)
 	}
 	// Carl only decides its reviews, so he sees none of its webhooks.
@@ -565,5 +656,26 @@ func TestWebhooksArePeoples(t *testing.T) {
 	status, reply = hookGitHub(a, h, h.Secret, "issues", fmt.Sprint("bob-3-", h.ID), hookIssue(3, "Fax", "opened"))
 	if status != http.StatusForbidden || !strings.Contains(string(reply), "was removed") {
 		t.Errorf("after Bob was removed = %d %s", status, reply)
+	}
+
+	// Renaming it leaves its runs Bob's; changing what starts them makes
+	// them Ada's, so nobody edits a webhook into running as someone else.
+	fields["name"] = "Issues, renamed"
+	var changed webhook
+	a.call("PUT", fmt.Sprintf("/api/webhooks/%d", h.ID), fields, http.StatusOK, &changed)
+	if changed.CreatedBy != "Bob" || changed.Yours {
+		t.Errorf("renamed, it is %q's", changed.CreatedBy)
+	}
+	fields["events"] = []string{"issues", "pull_request"}
+	a.call("PUT", fmt.Sprintf("/api/webhooks/%d", h.ID), fields, http.StatusOK, &changed)
+	if changed.CreatedBy == "Bob" || !changed.Yours {
+		t.Errorf("with other events, it is %q's", changed.CreatedBy)
+	}
+	a.auditEvent("kind:webhook.change", func(_, detail string) bool {
+		return strings.Contains(detail, "Issues, renamed") && strings.Contains(detail, "its runs now theirs")
+	})
+	status, reply = hookGitHub(a, h, h.Secret, "issues", fmt.Sprint("bob-3-", h.ID), hookIssue(3, "Fax", "opened"))
+	if d := a.getRun(hookRun(a, status, reply, http.StatusAccepted)); d.StartedBy != changed.CreatedBy {
+		t.Errorf("the run was started by %q, not %q", d.StartedBy, changed.CreatedBy)
 	}
 }

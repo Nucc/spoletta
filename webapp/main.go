@@ -210,7 +210,11 @@ func main() {
 
 	addr := listenAddr(auth != nil)
 	log.Printf("started; listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, egress.wrap(auth.protect(guardFlows(db, mux)))))
+	// A request's headers come within a deadline, so nobody holds a
+	// connection open by trickling them; bodies, streams and tunnels take
+	// as long as their routes allow (a webhook's delivery has its own).
+	srv := &http.Server{Addr: addr, Handler: egress.wrap(auth.protect(guardFlows(db, mux))), ReadHeaderTimeout: 10 * time.Second}
+	log.Fatal(srv.ListenAndServe())
 }
 
 // Logs which database the webapp works on, never with its password.

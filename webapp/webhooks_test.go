@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -129,6 +130,88 @@ func TestWebhookGenericSignatures(t *testing.T) {
 	}
 }
 
+// A generic HMAC covers the timestamp and the id when their headers are
+// named, each followed by a dot, then the body; the timestamp must be
+// within five minutes, and neither can be changed without the secret.
+func TestWebhookGenericSignsTimestampsAndIDs(t *testing.T) {
+	body := `{"alert": "disk full"}`
+	now := time.Now()
+	s := webhookSigner{kind: webhookGeneric, verify: verifyHMAC, header: "X-Signature", idHeader: "X-Alert-Id", timestampHeader: "X-Timestamp", secret: testHookSecret}
+	sign := func(at time.Time, id string) http.Header {
+		ts := strconv.FormatInt(at.Unix(), 10)
+		h := http.Header{}
+		h.Set("X-Timestamp", ts)
+		h.Set("X-Alert-Id", id)
+		h.Set("X-Signature", signedHex(testHookSecret, ts+".", id+".", body))
+		return h
+	}
+	if got := s.refuse(sign(now, "a-1"), []byte(body), now); got != "" {
+		t.Errorf("a signed delivery is refused: %s", got)
+	}
+	h := sign(now, "a-1")
+	h.Set("X-Alert-Id", "a-2")
+	if got := s.refuse(h, []byte(body), now); !strings.Contains(got, "doesn't match") {
+		t.Errorf("another id: %q", got)
+	}
+	h = sign(now, "a-1")
+	h.Set("X-Timestamp", strconv.FormatInt(now.Unix()+5, 10))
+	if got := s.refuse(h, []byte(body), now); !strings.Contains(got, "doesn't match") {
+		t.Errorf("another timestamp: %q", got)
+	}
+	if got := s.refuse(sign(now.Add(-10*time.Minute), "a-1"), []byte(body), now); !strings.Contains(got, "5 minutes off") {
+		t.Errorf("an old one: %q", got)
+	}
+	h = sign(now, "a-1")
+	h.Del("X-Alert-Id")
+	if got := s.refuse(h, []byte(body), now); !strings.Contains(got, "no X-Alert-Id") {
+		t.Errorf("without its id: %q", got)
+	}
+	// With the id alone, the body's HMAC follows it.
+	idOnly := webhookSigner{kind: webhookGeneric, verify: verifyHMAC, header: "X-Signature", idHeader: "X-Alert-Id", secret: testHookSecret}
+	h = http.Header{}
+	h.Set("X-Alert-Id", "a-1")
+	h.Set("X-Signature", signedHex(testHookSecret, "a-1.", body))
+	if got := idOnly.refuse(h, []byte(body), now); got != "" {
+		t.Errorf("an id signed: %s", got)
+	}
+}
+
+// Each address gets a burst of requests, then hookRate a second.
+func TestWebhookRequestLimits(t *testing.T) {
+	l := &hookLimiter{buckets: map[string]*hookBucket{}}
+	now := time.Now()
+	for i := range hookBurst {
+		if !l.allow("10.0.0.1", now) {
+			t.Fatalf("request %d of a burst refused", i+1)
+		}
+	}
+	if l.allow("10.0.0.1", now) {
+		t.Errorf("a request past the burst is let through")
+	}
+	if !l.allow("10.0.0.2", now) {
+		t.Errorf("another address is held back")
+	}
+	if !l.allow("10.0.0.1", now.Add(time.Second/hookRate)) {
+		t.Errorf("a request a while later is refused")
+	}
+
+	a := &refusalAudits{seen: map[int64]*refusals{}}
+	if n := a.note(1, now); n != 1 {
+		t.Errorf("the first refusal audits %d", n)
+	}
+	for range 5 {
+		if n := a.note(1, now.Add(time.Second)); n != 0 {
+			t.Errorf("a refusal within the minute audits %d", n)
+		}
+	}
+	if n := a.note(2, now.Add(time.Second)); n != 1 {
+		t.Errorf("another webhook's first refusal audits %d", n)
+	}
+	if n := a.note(1, now.Add(time.Minute+time.Second)); n != 6 {
+		t.Errorf("a minute on, %d refusals are audited, not 6", n)
+	}
+}
+
 // A path goes into objects by key and into arrays by index; the empty path
 // is the whole payload.
 func TestWebhookPayloadPaths(t *testing.T) {
@@ -241,21 +324,36 @@ func TestWebhookGitHubEvents(t *testing.T) {
 		event, body, name string
 		ignored           bool
 	}{
-		{"issues", `{"action": "labeled"}`, "issues.labeled", false},
-		{"issues", `{"action": "opened"}`, "issues.opened", true},
-		{"pull_request", `{"action": "closed"}`, "pull_request.closed", false},
-		{"push", `{"ref": "main"}`, "push", true},
+		{"issues", `{"action": "labeled", "issue": {}, "label": {}}`, "issues.labeled", false},
+		{"issues", `{"action": "opened", "issue": {}}`, "issues.opened", true},
+		{"pull_request", `{"action": "closed", "pull_request": {}}`, "pull_request.closed", false},
+		{"push", `{"ref": "main", "commits": []}`, "push", true},
+		{"watch", `{"action": "started"}`, "watch.started", true},
 	} {
 		p, msg := read(c.event, "application/json", c.body)
-		if msg != "" || p.eventName() != c.name || (p.ignored != "") != c.ignored || p.delivery != "d-1" {
+		sum := sha256.Sum256([]byte(c.body))
+		if msg != "" || p.eventName() != c.name || (p.ignored != "") != c.ignored || p.delivery != "d-1" || p.key != "sha256:"+hex.EncodeToString(sum[:]) {
 			t.Errorf("%s %s: %+v, %q", c.event, c.body, p, msg)
 		}
 	}
 	if p, _ := read("ping", "", `{"zen": "Keep it simple."}`); p.answer == nil {
 		t.Errorf("a ping isn't answered: %+v", p)
 	}
-	p, msg := read("issues", "application/x-www-form-urlencoded", "payload="+`%7B%22action%22%3A%22labeled%22%7D`)
-	if msg != "" || p.eventName() != "issues.labeled" || p.text != `{"action":"labeled"}` {
+	// A payload GitHub signed for one event, sent as another, is refused.
+	for event, body := range map[string]string{
+		"issues":         `{"action": "created", "issue": {}, "comment": {}}`,
+		"pull_request":   `{"action": "opened", "issue": {}}`,
+		"issue_comment":  `{"action": "opened", "issue": {}}`,
+		"label":          `{"action": "created", "label": {}, "issue": {}}`,
+		"commit_comment": `{"action": "created", "comment": {}, "pull_request": {}}`,
+		"ping":           `{"action": "opened", "issue": {}}`,
+	} {
+		if _, msg := read(event, "", body); !strings.Contains(msg, "isn't that of the") {
+			t.Errorf("%s as %s: %q", body, event, msg)
+		}
+	}
+	p, msg := read("issues", "application/x-www-form-urlencoded", "payload="+`%7B%22action%22%3A%22labeled%22%2C%22issue%22%3A%7B%7D%7D`)
+	if msg != "" || p.eventName() != "issues.labeled" || p.text != `{"action":"labeled","issue":{}}` {
 		t.Errorf("a form's payload: %+v, %q", p, msg)
 	}
 	if _, msg := read("issues", "application/x-www-form-urlencoded", "x=1"); !strings.Contains(msg, "application/json") {
@@ -276,10 +374,18 @@ func TestWebhookSlackEvents(t *testing.T) {
 	if msg != "" || p.answer.(map[string]string)["challenge"] != "abc" {
 		t.Errorf("the URL verification: %+v, %q", p, msg)
 	}
-	callback := []byte(`{"type": "event_callback", "event_id": "Ev1", "event": {"type": "app_mention", "text": "hi"}}`)
+	callback := []byte(`{"token": "old-verification-token", "type": "event_callback", "event_id": "Ev1", "event": {"type": "app_mention", "text": "hi"}}`)
 	p, msg = readPayload(webhookSlack, "", nil, http.Header{}, callback)
-	if msg != "" || p.event != "app_mention" || p.delivery != "Ev1" || p.ignored != "" || p.answer != nil {
+	if msg != "" || p.event != "app_mention" || p.delivery != "Ev1" || p.key != idKey("Ev1") || p.ignored != "" || p.answer != nil {
 		t.Errorf("an event: %+v, %q", p, msg)
+	}
+	// Its old verification token goes nowhere.
+	if _, ok := p.value.(map[string]any)["token"]; ok || strings.Contains(p.text, "old-verification-token") {
+		t.Errorf("the token stayed: %+v", p)
+	}
+	// Event ids telling apart by case stay apart.
+	if idKey("Ev1") == idKey("EV1") || !strings.HasPrefix(idKey("Ev1"), "id:") {
+		t.Errorf("the keys are %s and %s", idKey("Ev1"), idKey("EV1"))
 	}
 	if p, _ := readPayload(webhookSlack, "", []string{"message"}, http.Header{}, callback); p.ignored == "" {
 		t.Errorf("an event not named isn't ignored: %+v", p)
@@ -295,8 +401,12 @@ func TestWebhookGenericPayloads(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Request-Id", "r-7")
 	p, msg := readPayload(webhookGeneric, "X-Request-Id", nil, h, []byte("disk full"))
-	if msg != "" || p.value != "disk full" || p.delivery != "r-7" {
+	if msg != "" || p.value != "disk full" || p.delivery != "r-7" || p.key != idKey("r-7") || p.digest != "" {
 		t.Errorf("text: %+v, %q", p, msg)
+	}
+	h.Set("X-Request-Id", "r-\xff")
+	if _, msg := readPayload(webhookGeneric, "X-Request-Id", nil, h, []byte("{}")); !strings.Contains(msg, "isn't text") {
+		t.Errorf("an id that isn't text: %q", msg)
 	}
 	h.Set("X-Request-Id", strings.Repeat("x", 256))
 	if _, msg := readPayload(webhookGeneric, "X-Request-Id", nil, h, []byte("{}")); !strings.Contains(msg, "255") {
@@ -317,7 +427,7 @@ func TestWebhookFields(t *testing.T) {
 	if f.Name != "Issues" || strings.Join(f.Events, ",") != "issues.labeled,pull_request" || f.Header != "" || f.Mapping == nil {
 		t.Errorf("tidied to %+v", f)
 	}
-	ok(webhookFields{Name: "Alerts", Kind: webhookGeneric, Verify: verifyHMAC, Header: "X-Signature", IDHeader: "X-Request-Id"})
+	ok(webhookFields{Name: "Alerts", Kind: webhookGeneric, Verify: verifyHMAC, Header: "X-Signature", IDHeader: "X-Request-Id", TimestampHeader: "X-Timestamp"})
 	ok(webhookFields{Name: "Slack", Kind: webhookSlack, Secret: "0123456789abcdef0123456789abcdef"})
 	for _, c := range []struct {
 		f    webhookFields
@@ -334,6 +444,8 @@ func TestWebhookFields(t *testing.T) {
 		{webhookFields{Name: "x", Kind: webhookGeneric, Verify: verifyHMAC, Header: "Host"}, "name the header"},
 		{webhookFields{Name: "x", Kind: webhookGeneric, Verify: "basic", Header: "X-Signature"}, "hmac"},
 		{webhookFields{Name: "x", Kind: webhookGeneric, Verify: verifyToken, Header: "X-Token", Events: []string{"a"}}, "names no events"},
+		{webhookFields{Name: "x", Kind: webhookGeneric, Verify: verifyToken, Header: "X-Token", TimestampHeader: "X-Timestamp"}, "only an HMAC signs a timestamp"},
+		{webhookFields{Name: "x", Kind: webhookGeneric, Verify: verifyHMAC, Header: "X-Signature", IDHeader: "x-signature"}, "a header of their own"},
 		{webhookFields{Name: "x", Kind: webhookGitHub, Events: []string{"issues"}, Mapping: webhookMapping{"Ticket": {Path: "a..b"}}}, "isn't a path"},
 		{webhookFields{Name: "x", Kind: webhookGitHub, Events: []string{"issues"}, Mapping: webhookMapping{"Ticket": {Path: "a", Attributes: map[string]string{"id": "b"}}}}, "not both"},
 		{webhookFields{Name: "x", Kind: webhookGitHub, Events: []string{"issues"}, Mapping: webhookMapping{"Ticket": {Attributes: map[string]string{"id": ""}}}}, "each attribute"},

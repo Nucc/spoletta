@@ -4,23 +4,29 @@ package main
 // GitHub, Slack, a monitoring alert, can't call the API (api.go): they send
 // payloads of their own, signed their own way, without an API key. So those
 // who may change a flow add webhooks to it, in its settings: each a URL of
-// its own, /hooks/<token>, outside /api/, with a token nobody can guess, and
-// a secret, generated or pasted (Slack's signing secret), sealed with
-// SECRET_KEY (secrets.go) and never sent back but as it is made. Its kind
-// says how a delivery proves it holds the secret:
+// its own, /hooks/<token>, outside /api/, with a token nobody can guess,
+// compared byte for byte, and a secret, generated or pasted (Slack's signing
+// secret), sealed with SECRET_KEY (secrets.go) and never sent back but as it
+// is made. Its kind says how a delivery proves it holds the secret:
 //   - github: X-Hub-Signature-256, an HMAC-SHA256 of the body;
 //   - slack: X-Slack-Signature, an HMAC-SHA256 of the request's timestamp
 //     and body, refused when the timestamp is more than five minutes off,
 //     so one sent again later isn't taken;
-//   - generic: an HMAC-SHA256 of the body, in hex or base64, in a header it
-//     names, or the secret itself in one, such as Authorization.
+//   - generic: an HMAC-SHA256, in hex or base64, in a header it names, of
+//     the timestamp in the header it names for one, a dot, the delivery's
+//     id in the header it names for that, a dot, and the body, each part
+//     there when its header is named, the timestamp refused when more than
+//     five minutes off; or the secret itself in a header, such as
+//     Authorization.
 //
 // The URL alone starts nothing, since every webhook has a secret, compared
-// in constant time; what goes wrong never says more than that it didn't
-// match. A GitHub webhook takes the events it names, each alone (issues) or
-// with an action (issues.labeled); a Slack one answers Slack's URL
-// verification and takes the Events API's callbacks, those it names by
-// type if it names any.
+// in constant time; a request not signed with it is told only that, leaves
+// no delivery, and is counted on the webhook, audited at most once a minute
+// a webhook, and each address sending to /hooks/ is held to a rate. A
+// GitHub webhook takes the events it names, each alone (issues) or with an
+// action (issues.labeled), refusing an event header its payload belies; a
+// Slack one answers Slack's URL verification and takes the Events API's
+// callbacks, those it names by type if it names any.
 //
 // A delivery starts a run as the API does (startGivenRun), so it runs the
 // version the flow published, if any, and what it gives is checked as a
@@ -28,31 +34,38 @@ package main
 // the payload as the webhook's mapping says, from a dotted path into it
 // (issue.title, pull_request.number, labels.0.name), the whole of it, or
 // for an object with attributes a path for each. It is recorded first as a
-// step of kind input, so re-runs and unique values work as for any run. A
-// delivery is taken once: one sent again with the same id, GitHub's
-// X-GitHub-Delivery, Slack's event id, or the header a generic webhook
-// names, gets the run the first started, through the idempotency key the
-// API's requests use, which the database keeps for every replica. One
-// refused takes nothing, so it can be sent again once what refused it is
-// put right. GitHub's and a generic HMAC sign the body alone, not the id,
-// so whoever captures a signed delivery could send it again under another
-// id; only Slack's timestamp bounds that. A flow that must not handle the
-// same event twice gives what it starts from a unique attribute, which ends
-// a second run as a duplicate (see api.go).
+// step of kind input, so re-runs and unique values work as for any run.
+//
+// A delivery is taken once, by what its signature covers, through the
+// idempotency key the API's requests use, which the database keeps for
+// every replica: a GitHub payload by its digest, as GitHub signs nothing
+// else, so one sent again under another id, or as another event, gets the
+// run the first started, or is ignored as the first was; Slack's by its
+// event id; a generic one by the id its header holds, which its HMAC covers.
+// One refused takes nothing, so it can be sent again once what refused it
+// is put right. Only a generic webhook signing no id, or checking the
+// secret itself, takes a delivery sent again as a new one; a flow that must
+// not handle the same event twice gives what it starts from a unique
+// attribute, which ends a second run as a duplicate (see api.go).
 //
 // A webhook's runs are for whoever added it (runUser), so their limits and
 // access apply: once they are removed, or may no longer run the flow, its
-// deliveries are refused. Without sign-in it is nobody's, and once people
-// sign in it stops working, as API keys do.
+// deliveries are refused. Whoever changes what starts its runs (its kind,
+// secret, headers, events or mapping), or turns it on, makes them theirs,
+// so nobody may edit a webhook into running as someone else. Without
+// sign-in it is nobody's, and once people sign in it stops working, as API
+// keys do.
 //
 // Each webhook keeps its latest deliveries, when, which event, what came of
-// it and why, and the run it started; and the payload of the latest
-// signed one, to write the mapping from. Every delivery goes in the audit
-// log, never what it carried or the secret. The answer comes as soon as the
-// run is recorded, before it goes on.
+// it and why, and the run it started; and the payload of the latest it
+// took, sealed as its secret is, to write the mapping from. Every delivery
+// goes in the audit log, never what it carried or the secret. The body is
+// read under a deadline, and the answer comes as soon as the run is
+// recorded, before it goes on.
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -65,13 +78,16 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // The kinds of webhook, by who sends its deliveries.
@@ -109,9 +125,18 @@ const (
 	minWebhookSecret = 16
 	// How many deliveries each keeps, and the list shows.
 	webhookDeliveriesKept = 100
-	// How far a Slack request's timestamp may be from now.
+	// How far a signed timestamp may be from now.
 	slackTolerance = 5 * time.Minute
+	// How long a delivery's body may take to come.
+	webhookReadTimeout = 15 * time.Second
+	// How long the digests of GitHub's payloads are kept.
+	webhookDigestDays = 90
+	// The shortest secret whose last characters the settings show.
+	minHintedSecret = 32
 )
+
+// What a delivery not signed with the secret is told.
+const unsigned = "the delivery isn't signed with the webhook's secret"
 
 // What a generated secret starts with, so it can be told apart from other
 // secrets, as an API key is by its own.
@@ -153,20 +178,27 @@ type webhook struct {
 	// Where its deliveries go.
 	URL string `json:"url"`
 	// For a generic webhook: how a delivery proves it holds the secret, in
-	// which header, and the header holding its id, if any.
-	Verify   string `json:"verify,omitempty"`
-	Header   string `json:"header,omitempty"`
-	IDHeader string `json:"idHeader,omitempty"`
+	// which header, and the headers holding its id and its timestamp, if
+	// any, which an HMAC covers.
+	Verify          string `json:"verify,omitempty"`
+	Header          string `json:"header,omitempty"`
+	IDHeader        string `json:"idHeader,omitempty"`
+	TimestampHeader string `json:"timestampHeader,omitempty"`
 	// The events it takes; none for every one, but on GitHub.
 	Events  []string       `json:"events"`
 	Mapping webhookMapping `json:"mapping"`
 	Enabled bool           `json:"enabled"`
-	// Whom its runs are for.
+	// Whom its runs are for, and whether that is whoever asks.
 	CreatedBy string    `json:"createdBy"`
+	Yours     bool      `json:"yours"`
 	CreatedAt time.Time `json:"createdAt"`
 	// The secret's last four characters, when it is long enough for them
 	// to say little.
 	Hint string `json:"hint,omitempty"`
+	// How many requests were refused as not signed with its secret, which
+	// leave no delivery, and when the last was.
+	Refused       int64      `json:"refused"`
+	LastRefusedAt *time.Time `json:"lastRefusedAt"`
 	// What keeps its deliveries from starting a run, or leaves part of its
 	// mapping unused, as the flow stands.
 	Problems     []string         `json:"problems"`
@@ -184,6 +216,9 @@ type webhookDelivery struct {
 	Outcome  string `json:"outcome"`
 	Reason   string `json:"reason"`
 	Run      *int64 `json:"run"`
+	// What the audit log says of why, when the reason may hold what the
+	// payload did.
+	audit string
 }
 
 // An object the flow starts from, as the mapping is written for it.
@@ -195,15 +230,16 @@ type webhookFlowInput struct {
 
 // What a request makes or changes a webhook to.
 type webhookFields struct {
-	Flow     int64          `json:"flow"`
-	Name     string         `json:"name"`
-	Kind     string         `json:"kind"`
-	Verify   string         `json:"verify"`
-	Header   string         `json:"header"`
-	IDHeader string         `json:"idHeader"`
-	Events   []string       `json:"events"`
-	Mapping  webhookMapping `json:"mapping"`
-	Enabled  *bool          `json:"enabled"`
+	Flow            int64          `json:"flow"`
+	Name            string         `json:"name"`
+	Kind            string         `json:"kind"`
+	Verify          string         `json:"verify"`
+	Header          string         `json:"header"`
+	IDHeader        string         `json:"idHeader"`
+	TimestampHeader string         `json:"timestampHeader"`
+	Events          []string       `json:"events"`
+	Mapping         webhookMapping `json:"mapping"`
+	Enabled         *bool          `json:"enabled"`
 	// A secret given, such as Slack's signing secret; none keeps the one
 	// kept, or makes one for a new webhook or with NewSecret.
 	Secret    string `json:"secret"`
@@ -214,7 +250,7 @@ type webhookFields struct {
 func (f *webhookFields) check(creating bool) string {
 	f.Name = strings.TrimSpace(f.Name)
 	f.Secret = strings.TrimSpace(f.Secret)
-	f.Header, f.IDHeader = strings.TrimSpace(f.Header), strings.TrimSpace(f.IDHeader)
+	f.Header, f.IDHeader, f.TimestampHeader = strings.TrimSpace(f.Header), strings.TrimSpace(f.IDHeader), strings.TrimSpace(f.TimestampHeader)
 	switch {
 	case f.Name == "" || len(f.Name) > maxWebhookName:
 		return fmt.Sprintf("a webhook needs a name, of at most %d characters, saying what sends it", maxWebhookName)
@@ -235,9 +271,16 @@ func (f *webhookFields) check(creating bool) string {
 			return "name the header the signature or the secret comes in, such as X-Signature"
 		case f.IDHeader != "" && !headerName.MatchString(f.IDHeader):
 			return "the header holding a delivery's id isn't a header's name"
+		case f.TimestampHeader != "" && !headerName.MatchString(f.TimestampHeader):
+			return "the header holding a delivery's timestamp isn't a header's name"
+		case f.TimestampHeader != "" && f.Verify != verifyHMAC:
+			return "only an HMAC signs a timestamp; a delivery carrying the secret itself has none"
+		case strings.EqualFold(f.Header, f.IDHeader) || strings.EqualFold(f.Header, f.TimestampHeader) ||
+			(f.IDHeader != "" && strings.EqualFold(f.IDHeader, f.TimestampHeader)):
+			return "the signature, the id and the timestamp each come in a header of their own"
 		}
 	} else {
-		f.Verify, f.Header, f.IDHeader = "", "", ""
+		f.Verify, f.Header, f.IDHeader, f.TimestampHeader = "", "", "", ""
 	}
 	var events []string
 	for _, e := range f.Events {
@@ -444,6 +487,19 @@ func headerDigest(v string) []byte {
 // What a webhook checks a delivery's signature by.
 type webhookSigner struct {
 	kind, verify, header, secret string
+	// For a generic HMAC, the headers whose values it covers before the body.
+	idHeader, timestampHeader string
+}
+
+// Whether a signed timestamp, in seconds since 1970, is within five
+// minutes of now, either way.
+func fresh(ts string, now time.Time) bool {
+	sent, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return false
+	}
+	d := now.Sub(time.Unix(sent, 0))
+	return d <= slackTolerance && d >= -slackTolerance
 }
 
 // Why the delivery doesn't prove it holds the secret, or "". Comparisons
@@ -471,11 +527,7 @@ func (s webhookSigner) refuse(h http.Header, body []byte, now time.Time) string 
 		if !ok || err != nil || !hmac.Equal(b, hmacSHA256(s.secret, []byte("v0:"+ts+":"), body)) {
 			return mismatch
 		}
-		sent, err := strconv.ParseInt(ts, 10, 64)
-		if err != nil {
-			return "its timestamp isn't one"
-		}
-		if d := now.Sub(time.Unix(sent, 0)); d > slackTolerance || d < -slackTolerance {
+		if !fresh(ts, now) {
 			return "its timestamp is more than 5 minutes off, so it may be an old one sent again"
 		}
 	case webhookGeneric:
@@ -492,9 +544,24 @@ func (s webhookSigner) refuse(h http.Header, body []byte, now time.Time) string 
 			}
 			return ""
 		}
+		// What the HMAC covers: the timestamp and the id when their headers
+		// are named, each followed by a dot, then the body.
+		var signed [][]byte
+		for _, hd := range []string{s.timestampHeader, s.idHeader} {
+			if hd == "" {
+				continue
+			}
+			if h.Get(hd) == "" {
+				return fmt.Sprintf("it has no %s header", hd)
+			}
+			signed = append(signed, []byte(h.Get(hd)+"."))
+		}
 		got := headerDigest(v)
-		if got == nil || !hmac.Equal(got, hmacSHA256(s.secret, body)) {
+		if got == nil || !hmac.Equal(got, hmacSHA256(s.secret, append(signed, body)...)) {
 			return mismatch
+		}
+		if s.timestampHeader != "" && !fresh(h.Get(s.timestampHeader), now) {
+			return "its timestamp is more than 5 minutes off, so it may be an old one sent again"
 		}
 	default:
 		return "the webhook is of no kind known"
@@ -511,6 +578,11 @@ type webhookPayload struct {
 	text string
 	// Which event it is, and its id as its sender gave it.
 	event, delivery string
+	// What tells it apart from every other delivery to the webhook, as its
+	// signature covers it: the run's idempotency key, empty for none; and
+	// for GitHub, the payload's digest, which keeps it from being taken
+	// twice, whatever came of it.
+	key, digest string
 	// For an event GitHub sends with an action, the action.
 	action string
 	// What to answer it with instead of starting a run, for Slack's URL
@@ -565,9 +637,15 @@ func readPayload(kind, idHeader string, events []string, h http.Header, body []b
 	switch kind {
 	case webhookGitHub:
 		p.event, p.delivery, p.action = h.Get("X-GitHub-Event"), h.Get("X-GitHub-Delivery"), str(fields, "action")
+		// GitHub signs the body alone, which tells its events apart.
+		sum := sha256.Sum256(body)
+		p.digest = hex.EncodeToString(sum[:])
+		p.key = "sha256:" + p.digest
 		switch {
 		case p.event == "":
 			return p, "it has no X-GitHub-Event; it doesn't come from GitHub"
+		case !githubEventFits(p.event, fields):
+			return p, fmt.Sprintf("its payload isn't that of the %s event its X-GitHub-Event names", quote(p.event))
 		case p.event == "ping":
 			p.answer, p.ignored = map[string]string{"answer": "pong"}, "GitHub's ping, answered"
 		case !slices.Contains(events, p.event) && !slices.Contains(events, p.event+"."+p.action):
@@ -581,6 +659,9 @@ func readPayload(kind, idHeader string, events []string, h http.Header, body []b
 		case "event_callback":
 			event, _ := fields["event"].(map[string]any)
 			p.event, p.delivery = str(event, "type"), str(fields, "event_id")
+			if p.delivery != "" {
+				p.key = idKey(p.delivery)
+			}
 			if len(events) > 0 && !slices.Contains(events, p.event) {
 				p.ignored = fmt.Sprintf("it takes %s, not %s", strings.Join(events, ", "), p.event)
 			}
@@ -590,12 +671,85 @@ func readPayload(kind, idHeader string, events []string, h http.Header, body []b
 	case webhookGeneric:
 		if idHeader != "" {
 			p.delivery = h.Get(idHeader)
+			if !utf8.ValidString(p.delivery) {
+				return p, "its id isn't text"
+			}
+			if p.delivery != "" {
+				p.key = idKey(p.delivery)
+			}
+		}
+	}
+	if kind == webhookSlack && fields != nil && fields["token"] != nil {
+		// Slack's old verification token goes nowhere: not into runs, not
+		// into what is shown.
+		delete(fields, "token")
+		if b, err := json.Marshal(fields); err == nil {
+			p.text = string(b)
 		}
 	}
 	if len(p.delivery) > 255 {
 		return p, "its id is longer than 255 characters"
 	}
 	return p, ""
+}
+
+// A delivery's id as a run's idempotency key: its digest, so ids telling
+// apart by case or by bytes the column would fold stay apart.
+func idKey(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return "id:" + hex.EncodeToString(sum[:])
+}
+
+// What a GitHub event's payload holds at its top, and doesn't, for the
+// events whose payloads could pass for another's: an issue's comment
+// carries the issue too, a pull request's review the pull request, a
+// labeled issue the label. A payload GitHub signed for one of them, sent
+// again with another event's header, is refused. Events not listed aren't
+// checked; their payloads are taken once, as every GitHub payload is.
+var githubEventKeys = map[string]struct{ has, lacks []string }{
+	"issues":                      {[]string{"issue"}, []string{"comment"}},
+	"issue_comment":               {[]string{"issue", "comment"}, nil},
+	"pull_request":                {[]string{"pull_request"}, []string{"review", "comment", "thread"}},
+	"pull_request_review":         {[]string{"pull_request", "review"}, nil},
+	"pull_request_review_comment": {[]string{"pull_request", "comment"}, nil},
+	"pull_request_review_thread":  {[]string{"pull_request", "thread"}, nil},
+	"commit_comment":              {[]string{"comment"}, []string{"issue", "pull_request", "discussion"}},
+	"discussion":                  {[]string{"discussion"}, []string{"comment"}},
+	"discussion_comment":          {[]string{"discussion", "comment"}, nil},
+	"push":                        {[]string{"ref", "commits"}, nil},
+	"create":                      {[]string{"ref", "ref_type", "master_branch"}, nil},
+	"delete":                      {[]string{"ref", "ref_type"}, []string{"master_branch", "commits"}},
+	"release":                     {[]string{"release"}, nil},
+	"label":                       {[]string{"label"}, []string{"issue", "pull_request"}},
+	"milestone":                   {[]string{"milestone"}, []string{"issue", "pull_request"}},
+	"deployment":                  {[]string{"deployment"}, []string{"deployment_status"}},
+	"deployment_status":           {[]string{"deployment_status"}, nil},
+	"check_run":                   {[]string{"check_run"}, nil},
+	"check_suite":                 {[]string{"check_suite"}, []string{"check_run"}},
+	"workflow_run":                {[]string{"workflow_run"}, nil},
+	"workflow_job":                {[]string{"workflow_job"}, nil},
+	"fork":                        {[]string{"forkee"}, nil},
+	"star":                        {[]string{"starred_at"}, nil},
+	"ping":                        {[]string{"zen"}, nil},
+}
+
+// Whether a payload could be one of the GitHub event its header names.
+func githubEventFits(event string, fields map[string]any) bool {
+	k, ok := githubEventKeys[event]
+	if !ok {
+		return true
+	}
+	for _, key := range k.has {
+		if _, ok := fields[key]; !ok {
+			return false
+		}
+	}
+	for _, key := range k.lacks {
+		if _, ok := fields[key]; ok {
+			return false
+		}
+	}
+	return true
 }
 
 // The event as the deliveries list names it: with its action, if any.
@@ -611,7 +765,6 @@ type webhookRow struct {
 	id, flow   int64
 	name, kind string
 	signer     webhookSigner
-	idHeader   string
 	events     []string
 	mapping    webhookMapping
 	enabled    bool
@@ -681,17 +834,102 @@ func recordDelivery(ctx context.Context, db *sql.DB, h webhookRow, d webhookDeli
 	}
 	detail := fmt.Sprintf("the webhook %s of flow %d", quote(h.name), h.flow)
 	if d.Event != "" {
-		detail += ", " + d.Event
+		detail += ", " + quote(clipText(d.Event, 255))
 	}
 	if d.Delivery != "" {
-		detail += ", delivery " + quote(d.Delivery)
+		detail += ", delivery " + quote(clipText(d.Delivery, 255))
 	}
 	detail += ": " + d.Outcome
-	if d.Reason != "" {
-		detail += ", " + d.Reason
+	if why := cmp.Or(d.audit, d.Reason); why != "" {
+		detail += ", " + why
 	}
 	audit("webhook.delivery", who, run, 0, "%s", detail)
 }
+
+// How many requests to /hooks/ an address may send: a second's worth, and
+// as many at once.
+const (
+	hookRate  = 10
+	hookBurst = 100
+)
+
+// Holds each address sending to /hooks/ to hookRate requests a second,
+// hookBurst at once, before anything is looked up. Each replica holds its
+// own, which only bounds what it does.
+type hookLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*hookBucket
+}
+
+type hookBucket struct {
+	tokens float64
+	at     time.Time
+}
+
+var hookLimits = &hookLimiter{buckets: map[string]*hookBucket{}}
+
+// Whether the address may send another request at now.
+func (l *hookLimiter) allow(addr string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.buckets) > 10000 {
+		// Those idle long enough to have filled up again are as new.
+		for a, b := range l.buckets {
+			if now.Sub(b.at) > time.Minute {
+				delete(l.buckets, a)
+			}
+		}
+	}
+	b := l.buckets[addr]
+	if b == nil {
+		b = &hookBucket{tokens: hookBurst, at: now}
+		l.buckets[addr] = b
+	}
+	b.tokens = min(hookBurst, b.tokens+now.Sub(b.at).Seconds()*hookRate)
+	b.at = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+// Audits the requests a webhook refused as not signed with its secret at
+// most once a minute a webhook at each replica, saying how many came since,
+// so a flood of them can't crowd out the audit log; refusedCount on the
+// webhook counts them all.
+type refusalAudits struct {
+	mu   sync.Mutex
+	seen map[int64]*refusals
+}
+
+type refusals struct {
+	last  time.Time
+	count int
+}
+
+var hookRefusals = &refusalAudits{seen: map[int64]*refusals{}}
+
+// Counts a refusal, and says how many to audit at now, 0 for none yet.
+func (a *refusalAudits) note(webhook int64, now time.Time) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	r := a.seen[webhook]
+	if r == nil {
+		r = &refusals{}
+		a.seen[webhook] = r
+	}
+	r.count++
+	if now.Sub(r.last) < time.Minute {
+		return 0
+	}
+	n := r.count
+	r.last, r.count = now, 0
+	return n
+}
+
+// Where the payload a webhook last took is kept, sealed.
+func webhookPayloadPlace(id int64) string { return fmt.Sprintf("webhooks/%d/payload", id) }
 
 // Takes a delivery to a webhook: checks it holds the secret, answers what
 // asks for an answer, refuses what it can't take, and starts a run for the
@@ -699,14 +937,24 @@ func recordDelivery(ctx context.Context, db *sql.DB, h webhookRow, d webhookDeli
 func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		addr, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			addr = r.RemoteAddr
+		}
+		if !hookLimits.allow(addr, time.Now()) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "too many requests; send them more slowly", http.StatusTooManyRequests)
+			return
+		}
 		token := r.PathValue("token")
 		var h webhookRow
 		var stored, events string
-		err := sql.ErrNoRows
+		err = sql.ErrNoRows
 		if webhookToken.MatchString(token) {
-			err = db.QueryRowContext(ctx, `SELECT id, flow_id, name, kind, secret, verify, header, id_header, events, mapping, enabled, created_by
+			err = db.QueryRowContext(ctx, `SELECT id, flow_id, name, kind, secret, verify, header, id_header, timestamp_header, events, mapping, enabled, created_by
 				FROM webhooks WHERE token = ?`, token).
-				Scan(&h.id, &h.flow, &h.name, &h.kind, &stored, &h.signer.verify, &h.signer.header, &h.idHeader, &events, &h.mapping, &h.enabled, &h.createdBy)
+				Scan(&h.id, &h.flow, &h.name, &h.kind, &stored, &h.signer.verify, &h.signer.header, &h.signer.idHeader, &h.signer.timestampHeader,
+					&events, &h.mapping, &h.enabled, &h.createdBy)
 		}
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "no such webhook", http.StatusNotFound)
@@ -721,39 +969,55 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 			serverError(w, fmt.Errorf("open the secret of webhook %d: %w", h.id, err))
 			return
 		}
+		// What can't be told to hold the secret leaves no delivery: it is
+		// counted, and audited now and then.
+		unsignedRefusal := func(status int, msg string) {
+			if _, err := db.ExecContext(context.WithoutCancel(ctx),
+				"UPDATE webhooks SET refused_count = refused_count + 1, last_refused_at = CURRENT_TIMESTAMP(3) WHERE id = ?", h.id); err != nil {
+				log.Printf("count a refusal of webhook %d: %v", h.id, err)
+			}
+			if n := hookRefusals.note(h.id, time.Now()); n > 0 {
+				var who *int64
+				if h.createdBy.Valid {
+					who = &h.createdBy.Int64
+				}
+				audit("webhook.refused", who, 0, 0, "the webhook %s of flow %d refused %d requests not signed with its secret, since the last such event at this replica",
+					quote(h.name), h.flow, n)
+			}
+			http.Error(w, msg, status)
+		}
+		// Its body comes within a deadline, so a sender can't hold the
+		// connection open by trickling it.
+		if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(webhookReadTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			log.Printf("set a deadline on a delivery to webhook %d: %v", h.id, err)
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				unsignedRefusal(http.StatusRequestEntityTooLarge, fmt.Sprintf("the delivery is larger than %d MB", maxWebhookBody>>20))
+				return
+			}
+			http.Error(w, "couldn't read the delivery", http.StatusBadRequest)
+			return
+		}
+		if h.signer.refuse(r.Header, body, time.Now()) != "" {
+			unsignedRefusal(http.StatusUnauthorized, unsigned)
+			return
+		}
 		d := webhookDelivery{}
 		refuse := func(status int, reason string) {
 			d.Outcome, d.Reason = deliveryRefused, reason
 			recordDelivery(context.WithoutCancel(ctx), db, h, d)
 			http.Error(w, reason, status)
 		}
-		// Which delivery its headers say it is, to list one refused by.
-		switch h.kind {
-		case webhookGitHub:
-			d.Event, d.Delivery = clipText(r.Header.Get("X-GitHub-Event"), 255), clipText(r.Header.Get("X-GitHub-Delivery"), 255)
-		case webhookGeneric:
-			if h.idHeader != "" {
-				d.Delivery = clipText(r.Header.Get(h.idHeader), 255)
-			}
+		ignore := func(reason string) {
+			d.Outcome, d.Reason = deliveryIgnored, reason
+			recordDelivery(context.WithoutCancel(ctx), db, h, d)
+			writeJSON(w, http.StatusOK, map[string]string{"ignored": reason})
 		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
-		if err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				refuse(http.StatusRequestEntityTooLarge, fmt.Sprintf("its payload is larger than %d MB", maxWebhookBody>>20))
-				return
-			}
-			http.Error(w, "couldn't read the delivery", http.StatusBadRequest)
-			return
-		}
-		if reason := h.signer.refuse(r.Header, body, time.Now()); reason != "" {
-			refuse(http.StatusUnauthorized, reason)
-			return
-		}
-		p, reason := readPayload(h.kind, h.idHeader, h.events, r.Header, body)
-		if p.event != "" {
-			d.Event, d.Delivery = p.eventName(), p.delivery
-		}
+		p, reason := readPayload(h.kind, h.signer.idHeader, h.events, r.Header, body)
+		d.Event, d.Delivery = p.eventName(), p.delivery
 		if reason != "" {
 			refuse(http.StatusBadRequest, reason)
 			return
@@ -764,21 +1028,17 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, p.answer)
 			return
 		}
-		// What it carried, to write the mapping from.
-		if _, err := db.ExecContext(ctx, "UPDATE webhooks SET last_payload = ?, last_event = ?, last_payload_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
-			strings.ToValidUTF8(p.text, "\uFFFD"), clipText(d.Event, 255), h.id); err != nil {
-			serverError(w, err)
-			return
-		}
 		src := runSource{column: "webhook_id", id: h.id, given: "Given by the webhook " + h.name}
 		answer := func(status int, run int64) {
 			d.Run = &run
 			recordDelivery(context.WithoutCancel(ctx), db, h, d)
 			writeJSON(w, status, map[string]any{"run": run, "url": fmt.Sprintf("%s/#/flows/%d/runs/%d", publicOrigin(r), h.flow, run)})
 		}
-		// One sent again gets its run, however the webhook changed since.
-		if p.delivery != "" {
-			run, _, err := idempotentRun(ctx, db, h.flow, src, p.delivery)
+		// One taken before gets its run, however the webhook changed since;
+		// a GitHub payload taken before and ignored is ignored again,
+		// whatever headers it came with this time.
+		if p.key != "" {
+			run, _, err := idempotentRun(ctx, db, h.flow, src, p.key)
 			if err != nil {
 				serverError(w, err)
 				return
@@ -789,10 +1049,20 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 				return
 			}
 		}
+		if p.digest != "" {
+			var seen int
+			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM webhook_digests WHERE webhook_id = ? AND digest = ?", h.id, p.digest).Scan(&seen)
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			if seen > 0 {
+				ignore("the same payload came before, and was ignored")
+				return
+			}
+		}
 		if !h.enabled {
-			d.Outcome, d.Reason = deliveryIgnored, "the webhook is turned off"
-			recordDelivery(context.WithoutCancel(ctx), db, h, d)
-			writeJSON(w, http.StatusOK, map[string]string{"ignored": d.Reason})
+			ignore("the webhook is turned off")
 			return
 		}
 		who, reason, err := webhookRunner(ctx, db, signIn, h)
@@ -805,12 +1075,24 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 			return
 		}
 		if p.ignored != "" {
-			d.Outcome, d.Reason = deliveryIgnored, p.ignored
-			recordDelivery(context.WithoutCancel(ctx), db, h, d)
-			writeJSON(w, http.StatusOK, map[string]string{"ignored": d.Reason})
+			if err := takeDigest(ctx, db, h.id, p.digest); err != nil {
+				serverError(w, err)
+				return
+			}
+			ignore(p.ignored)
 			return
 		}
-		run, created, refused, err := startGivenRun(ctx, db, eng, h.flow, src, who, p.delivery, func(in []givenObject) (apiRunRequest, error) {
+		// What it carried, to write the mapping from, sealed as the secret is.
+		shown, err := secrets.seal(webhookPayloadPlace(h.id), strings.ToValidUTF8(p.text, "\uFFFD"))
+		if err == nil {
+			_, err = db.ExecContext(ctx, "UPDATE webhooks SET last_payload = ?, last_event = ?, last_payload_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
+				shown, clipText(d.Event, 255), h.id)
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		run, created, refused, err := startGivenRun(ctx, db, eng, h.flow, src, who, p.key, func(in []givenObject) (apiRunRequest, error) {
 			return h.mapping.request(in, p.value)
 		})
 		if err != nil {
@@ -818,6 +1100,10 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 			return
 		}
 		if refused != nil {
+			if refused.status == http.StatusBadRequest {
+				// What the payload held may be in the reason.
+				d.audit = "what it carried doesn't fit what the flow starts from"
+			}
 			refuse(refused.status, refused.msg)
 			return
 		}
@@ -826,20 +1112,41 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 			answer(http.StatusOK, run)
 			return
 		}
+		if err := takeDigest(ctx, db, h.id, p.digest); err != nil {
+			log.Printf("keep the digest of a delivery to webhook %d: %v", h.id, err)
+		}
 		d.Outcome = deliveryStarted
 		var status, message string
 		if err := db.QueryRowContext(ctx, "SELECT status, COALESCE((SELECT error FROM run_steps WHERE run_id = runs.id AND status = ? LIMIT 1), '') FROM runs WHERE id = ?",
 			stepDuplicate, run).Scan(&status, &message); err == nil && status == runTerminated {
-			// What it gave another run handled already.
-			d.Reason = message
+			// What it gave another run handled already; the message names
+			// the value, which the audit log doesn't.
+			d.Reason, d.audit = message, "what it gave another run handled already"
 		}
 		answer(http.StatusAccepted, run)
 	}
 }
 
+// Keeps the digest of a GitHub payload the webhook took, started or
+// ignored, so it is taken once, and lets go of those older than
+// webhookDigestDays; none for another kind.
+func takeDigest(ctx context.Context, db *sql.DB, webhook int64, digest string) error {
+	if digest == "" {
+		return nil
+	}
+	ctx = context.WithoutCancel(ctx)
+	if _, err := db.ExecContext(ctx, "INSERT IGNORE INTO webhook_digests (webhook_id, digest) VALUES (?, ?)", webhook, digest); err != nil {
+		return err
+	}
+	_, err := db.ExecContext(ctx, "DELETE FROM webhook_digests WHERE webhook_id = ? AND seen_at < CURRENT_TIMESTAMP(3) - INTERVAL ? DAY LIMIT 1000",
+		webhook, webhookDigestDays)
+	return err
+}
+
 // The columns listWebhooks reads, of webhooks h.
-const webhookColumns = `h.id, h.flow_id, h.name, h.kind, h.token, h.verify, h.header, h.id_header, h.events, h.mapping, h.enabled,
-	h.created_by, ` + "COALESCE((SELECT COALESCE(NULLIF(u.name, ''), u.email) FROM users u WHERE u.id = h.created_by), '')" + `, h.created_at, h.secret`
+const webhookColumns = `h.id, h.flow_id, h.name, h.kind, h.token, h.verify, h.header, h.id_header, h.timestamp_header, h.events, h.mapping, h.enabled,
+	h.created_by, ` + "COALESCE((SELECT COALESCE(NULLIF(u.name, ''), u.email) FROM users u WHERE u.id = h.created_by), '')" + `, h.created_at, h.secret,
+	h.refused_count, h.last_refused_at`
 
 // The flow's webhooks, or the one with id, never with their secrets; what
 // the flow starts from, which their mappings are written for; and why it
@@ -857,17 +1164,19 @@ func listWebhooks(ctx context.Context, db *sql.DB, r *http.Request, signIn bool,
 		var h webhook
 		var token, events, stored string
 		var createdBy sql.NullInt64
-		if err := rows.Scan(&h.ID, &h.Flow, &h.Name, &h.Kind, &token, &h.Verify, &h.Header, &h.IDHeader, &events, &h.Mapping, &h.Enabled,
-			&createdBy, &h.CreatedBy, &h.CreatedAt, &stored); err != nil {
+		if err := rows.Scan(&h.ID, &h.Flow, &h.Name, &h.Kind, &token, &h.Verify, &h.Header, &h.IDHeader, &h.TimestampHeader, &events, &h.Mapping, &h.Enabled,
+			&createdBy, &h.CreatedBy, &h.CreatedAt, &stored, &h.Refused, &h.LastRefusedAt); err != nil {
 			return err
 		}
 		secret, err := secrets.open(webhookPlace(h.ID), stored)
 		if err != nil {
 			return err
 		}
-		if len(secret) > 12 {
+		if len(secret) >= minHintedSecret {
 			h.Hint = secret[len(secret)-4:]
 		}
+		me := requestUserID(r)
+		h.Yours = (me == nil && !createdBy.Valid) || (me != nil && createdBy.Valid && *me == createdBy.Int64)
 		h.URL, h.Events, h.Problems = publicOrigin(r)+"/hooks/"+token, splitEvents(events), []string{}
 		if signIn && !createdBy.Valid {
 			h.Problems = append(h.Problems, "it was added before people signed in, so it is nobody's and its deliveries are refused; add it again")
@@ -1052,9 +1361,9 @@ func registerWebhookRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn b
 		var id int64
 		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
 			res, err := tx.ExecContext(r.Context(),
-				`INSERT INTO webhooks (token, flow_id, name, kind, secret, verify, header, id_header, events, mapping, enabled, created_by)
-				VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`,
-				randomToken(), f.Flow, f.Name, f.Kind, f.Verify, f.Header, f.IDHeader, strings.Join(f.Events, ","), mapping,
+				`INSERT INTO webhooks (token, flow_id, name, kind, secret, verify, header, id_header, timestamp_header, events, mapping, enabled, created_by)
+				VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+				randomToken(), f.Flow, f.Name, f.Kind, f.Verify, f.Header, f.IDHeader, f.TimestampHeader, strings.Join(f.Events, ","), mapping,
 				f.Enabled == nil || *f.Enabled, requestUserID(r))
 			if err == nil {
 				id, err = res.LastInsertId()
@@ -1075,7 +1384,9 @@ func registerWebhookRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn b
 
 	// Changes one as a request to add it would make it, keeping its secret
 	// unless given another, or with {"newSecret": true} making one, which
-	// the reply holds. Its runs stay for whoever added it.
+	// the reply holds. Whoever changes what starts its runs, its kind,
+	// secret, headers, events or mapping, or turns it on, makes its runs
+	// theirs; a new name, or turning it off, leaves them whose they were.
 	mux.HandleFunc("PUT /api/webhooks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, flow, ok := named(w, r)
 		if !ok {
@@ -1095,11 +1406,36 @@ func registerWebhookRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn b
 			secret = webhookSecretPrefix + randomToken()
 			made = secret
 		}
+		var taken bool
 		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(),
-				`UPDATE webhooks SET name = ?, kind = ?, verify = ?, header = ?, id_header = ?, events = ?, mapping = ?, enabled = COALESCE(?, enabled)
-				WHERE id = ?`,
-				f.Name, f.Kind, f.Verify, f.Header, f.IDHeader, strings.Join(f.Events, ","), mapping, f.Enabled, id)
+			var was webhookFields
+			var wasEvents string
+			var wasMapping webhookMapping
+			var enabled bool
+			var createdBy sql.NullInt64
+			err := tx.QueryRowContext(r.Context(), "SELECT kind, verify, header, id_header, timestamp_header, events, mapping, enabled, created_by FROM webhooks WHERE id = ? FOR UPDATE", id).
+				Scan(&was.Kind, &was.Verify, &was.Header, &was.IDHeader, &was.TimestampHeader, &wasEvents, &wasMapping, &enabled, &createdBy)
+			if err != nil {
+				return err
+			}
+			before, err := json.Marshal(wasMapping)
+			if err != nil {
+				return err
+			}
+			changes := secret != "" || f.Kind != was.Kind || f.Verify != was.Verify || f.Header != was.Header || f.IDHeader != was.IDHeader ||
+				f.TimestampHeader != was.TimestampHeader || strings.Join(f.Events, ",") != wasEvents || !bytes.Equal(before, mapping) ||
+				(!enabled && f.Enabled != nil && *f.Enabled)
+			me := requestUserID(r)
+			taken = changes && me != nil && (!createdBy.Valid || createdBy.Int64 != *me)
+			if taken {
+				if _, err := tx.ExecContext(r.Context(), "UPDATE webhooks SET created_by = ? WHERE id = ?", *me, id); err != nil {
+					return err
+				}
+			}
+			_, err = tx.ExecContext(r.Context(),
+				`UPDATE webhooks SET name = ?, kind = ?, verify = ?, header = ?, id_header = ?, timestamp_header = ?, events = ?, mapping = ?,
+				enabled = COALESCE(?, enabled) WHERE id = ?`,
+				f.Name, f.Kind, f.Verify, f.Header, f.IDHeader, f.TimestampHeader, strings.Join(f.Events, ","), mapping, f.Enabled, id)
 			if err != nil || secret == "" {
 				return err
 			}
@@ -1111,7 +1447,10 @@ func registerWebhookRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn b
 		}
 		with := ""
 		if secret != "" {
-			with = ", with a new secret"
+			with += ", with a new secret"
+		}
+		if taken {
+			with += ", its runs now theirs"
 		}
 		auditChange(r, "webhook.change", "the %s webhook %s of flow %d%s", f.Kind, quote(f.Name), flow, with)
 		writeOne(w, r, http.StatusOK, flow, id, made)
@@ -1168,7 +1507,11 @@ func registerWebhookRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn b
 			return
 		}
 		if text.Valid && at.Valid {
-			p.ReceivedAt, p.Payload = at.Time, text.String
+			if p.Payload, err = secrets.open(webhookPayloadPlace(id), text.String); err != nil {
+				serverError(w, err)
+				return
+			}
+			p.ReceivedAt = at.Time
 			out.Payload = &p
 		}
 		writeJSON(w, http.StatusOK, out)

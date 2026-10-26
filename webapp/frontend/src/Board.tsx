@@ -118,6 +118,7 @@ import {
   listModels,
   listMCPServers,
   listSkills,
+  listFlowCredentials,
   listBoards,
   listObjects,
   listProcesses,
@@ -166,6 +167,7 @@ import {
   type Versions,
   type MCPServer,
   type Skill,
+  type CredentialChoice,
   type FlowRunDetail,
   type Link,
   type LinkQuery,
@@ -414,6 +416,8 @@ export default function Board({
   // The skills and commands the flow's agents may use; see Skills.tsx.
   const [skills, setSkills] = useState<Skill[] | null>(null)
   const [commands, setCommands] = useState<Skill[] | null>(null)
+  // The credentials the flow's agents and scripts may use; see Credentials.tsx.
+  const [credentials, setCredentials] = useState<CredentialChoice[] | null>(null)
   const [mcpOpen, setMCPOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [oplOpen, setOPLOpen] = useState(false)
@@ -821,9 +825,11 @@ export default function Board({
   reload.current = loadBoard
 
   const refreshMCPServers = useCallback(() => listMCPServers().then(setMCPServers).catch(report), [report])
+  // What the flow may use as its owner may: skills, commands and credentials.
   const refreshSkills = useCallback(() => {
     listSkills('skill', flowId).then(setSkills).catch(report)
     listSkills('command', flowId).then(setCommands).catch(report)
+    listFlowCredentials(flowId).then(setCredentials).catch(report)
   }, [report, flowId])
 
   // A sign-in window says when it is done; coming back to this window after
@@ -832,7 +838,7 @@ export default function Board({
     const onMessage = (e: MessageEvent) => {
       if (e.origin === window.location.origin && e.data?.type === 'mcp-sign-in') refreshMCPServers()
     }
-    // Skills and commands written in another tab show once back.
+    // Skills, commands and credentials written in another tab show once back.
     const onFocus = () => {
       refreshMCPServers()
       refreshSkills()
@@ -2899,6 +2905,7 @@ export default function Board({
             mcpServers={mcpServers}
             skills={skills}
             commands={commands}
+            credentials={credentials}
             readOnly={readOnly}
             run={{ status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
             // The form shows in one place at a time.

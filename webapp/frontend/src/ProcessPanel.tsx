@@ -10,6 +10,7 @@ import {
   THINKING_LEVELS,
   listObjects,
   updateProcess,
+  type CredentialChoice,
   type Entries,
   type EntryValue,
   type Flow,
@@ -28,6 +29,7 @@ import { quantityWords, type Quantity } from './quantity'
 import { fieldsOf, holdsFile, shapeOf, type Field } from './structure'
 import { MCPServerPicker } from './MCPSettings'
 import { PromptEditor, SkillPicker } from './Skills'
+import { CredentialPicker } from './Credentials'
 import { ConnectorFields } from './ConnectorFields'
 import { RepositoryPicker } from './FlowSettings'
 import { ModelOptions } from './ModelProviders'
@@ -46,11 +48,10 @@ type Fields = {
 
 const SAVE_DELAY_MS = 500
 
-const SCRIPT_PLACEHOLDER = `# e.g. the latest unresolved issues in Sentry, with a token
-# the instance passes to scripts with CHILD_ENV:
-curl -sf -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \\
-  "https://sentry.io/api/0/organizations/my-org/issues/?query=is:unresolved&limit=10" |
-  jq '[.[] | {id: .shortId, title, permalink}]'`
+const SCRIPT_PLACEHOLDER = `# e.g. the open bugs in Jira, through a credential the process picks:
+curl -sf -H "Authorization: Bearer $CREDENTIALS_TOKEN" \\
+  "$CREDENTIAL_JIRA_URL/rest/api/2/search?jql=type=Bug+AND+status=Open" |
+  jq '[.issues[] | {key, summary: .fields.summary}]'`
 
 const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'agent', label: 'Agent' },
@@ -97,6 +98,7 @@ export default function ProcessPanel({
   mcpServers,
   skills,
   commands,
+  credentials,
   readOnly = false,
   run,
   review,
@@ -126,6 +128,9 @@ export default function ProcessPanel({
   // those its flow may use, or null while they load.
   skills: Skill[] | null
   commands: Skill[] | null
+  // The credentials its agent or script may call services with, those its
+  // flow may use, or null while they load.
+  credentials: CredentialChoice[] | null
   // Shows the process without letting it change, such as as a past run's version has it.
   readOnly?: boolean
   // How this process did in the latest flow run, if it has run.
@@ -215,6 +220,15 @@ export default function ProcessPanel({
         setSettings(({ repositories: _, ...rest }) => (names === undefined ? rest : { ...rest, repositories: names }))
       }
       onOpenSettings={onOpenFlowSettings}
+    />
+  )
+
+  const credentialPicker = (
+    <CredentialPicker
+      credentials={credentials}
+      selected={settings.credentials ?? []}
+      readOnly={readOnly}
+      onChange={(ids) => setSettings(({ credentials: _, ...rest }) => (ids.length > 0 ? { ...rest, credentials: ids } : rest))}
     />
   )
 
@@ -335,6 +349,7 @@ export default function ProcessPanel({
             readOnly={readOnly}
             onChange={(ids) => setSettings(({ skills: _, ...rest }) => (ids.length > 0 ? { ...rest, skills: ids } : rest))}
           />
+          {credentialPicker}
           <MCPServerPicker
             servers={mcpServers}
             selected={settings.mcpServers ?? []}
@@ -390,10 +405,13 @@ export default function ProcessPanel({
             with spaces as underscores. What it prints is its output; a list of items is a JSON array. A non-zero exit
             fails it. With repositories, it runs in their workspace, <code>$WORKSPACE</code>, on the branch{' '}
             <code>$BRANCH</code>. In a scheduled run, <code>$SINCE</code> (or <code>$LAST_RUN</code>) is when the
-            schedule's last run that got through started, as a Unix timestamp, empty if none did.
+            schedule's last run that got through started, as a Unix timestamp, empty if none did. Each credential it
+            picks is at <code>$CREDENTIAL_NAME_URL</code>, called with{' '}
+            <code>Authorization: Bearer $CREDENTIALS_TOKEN</code>.
           </small>
         </label>
       )}
+      {kind === 'script' && credentialPicker}
       {kind === 'script' && repositoryPicker}
       {kind === 'human' && (
         <div className="panel-row panel-durations">

@@ -27,6 +27,9 @@ export type ProcessSettings = {
   mcpTools?: Record<string, string[]>
   // The skills an agent process is given, by id; none when absent.
   skills?: number[]
+  // The credentials an agent or script process calls services with, by
+  // id; none when absent.
+  credentials?: number[]
   connector?: ConnectorSettings
   // The flow's repositories an agent or script process works on, by name;
   // all of them when absent, none when empty.
@@ -222,7 +225,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default']
+const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials']
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<(url: string) => void>()
@@ -2064,6 +2067,77 @@ export function setSkillOwner(
   owner: { kind: 'global' } | { kind: 'team' | 'user'; id: number },
 ): Promise<Skill> {
   return request(`${skillRoute(kind)}/${id}/owner`, { method: 'PUT', body: JSON.stringify(owner) })
+}
+
+// A credential scripts and agents call a service with without seeing it:
+// admins keep its secret, which is never sent back, and the step reaches
+// the service at $CREDENTIAL_<variable>_URL, the webapp's proxy, which adds
+// the secret as auth says: in a header its template makes, as basic auth's
+// password, or as a query parameter. Everyone's flows may use it, or only
+// those of the teams given it.
+export type CredentialAuth = 'header' | 'basic' | 'query'
+
+export type Credential = {
+  id: number
+  name: string
+  variable: string
+  description: string
+  baseUrl: string
+  auth: CredentialAuth
+  header?: string
+  template?: string
+  username?: string
+  param?: string
+  everyone: boolean
+  teams: { id: number; name: string }[]
+  // Whether its secret is kept, with its last four characters when long enough.
+  secretSet: boolean
+  hint?: string
+  updatedAt: string
+}
+
+// A credential as a board offers it to a process.
+export type CredentialChoice = Pick<Credential, 'id' | 'name' | 'variable' | 'description' | 'baseUrl'>
+
+// What adding or changing a credential sends; a change without a secret
+// keeps the one kept.
+export type CredentialFields = {
+  name: string
+  description: string
+  baseUrl: string
+  auth: CredentialAuth
+  header: string
+  template: string
+  username: string
+  param: string
+  secret: string
+  everyone: boolean
+  teams: number[]
+}
+
+// The variable a step reaches a credential at.
+export const credentialEnv = (variable: string) => `CREDENTIAL_${variable}_URL`
+
+// Every credential, for admins.
+export function listCredentials(): Promise<Credential[]> {
+  return request('/api/credentials')
+}
+
+// The credentials the flow may use, as its owner may.
+export function listFlowCredentials(flow: number): Promise<CredentialChoice[]> {
+  return request(`/api/credentials?flow=${flow}`)
+}
+
+export function createCredential(fields: CredentialFields): Promise<Credential[]> {
+  return request('/api/credentials', { method: 'POST', body: JSON.stringify(fields) })
+}
+
+export function updateCredential(id: number, fields: CredentialFields): Promise<Credential[]> {
+  return request(`/api/credentials/${id}`, { method: 'PUT', body: JSON.stringify(fields) })
+}
+
+export function deleteCredential(id: number): Promise<void> {
+  return request(`/api/credentials/${id}`, { method: 'DELETE' })
 }
 
 // An internet host an admin allows steps in containers of their own to

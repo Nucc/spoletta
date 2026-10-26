@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getRunLogs, type FlowRunDetail, type RunLogLine } from './api'
+import { getRunLogs, webhookLabel, type FlowRunDetail, type RunLogLine } from './api'
 import { formatTime, RUN_LABELS } from './Runs'
 
 // How often the log of a run still going is fetched again.
@@ -94,6 +94,7 @@ export default function RunLogs({ run, onClose }: { run: FlowRunDetail; onClose:
         {RUN_LABELS[run.status]} · started {formatTime(run.startedAt)}
         {run.startedBy && ` by ${run.startedBy}`}
         {run.apiKey && ` through the API key ${run.apiKey}`}
+        {run.webhook !== null && ` for a delivery to ${webhookLabel(run.webhook)}`}
         {run.schedule !== null && ' by a schedule'}
         {run.finishedAt && ` · finished ${formatTime(run.finishedAt)}`}
       </p>

@@ -6,6 +6,7 @@ import {
   getStepMessages,
   sendFollowUp,
   stopFollowUp,
+  webhookLabel,
   type AgentMessage,
   type FollowUp,
   type FlowRun,
@@ -94,6 +95,7 @@ export const ORIGIN_LABELS: Record<RunOrigin, string> = {
   person: 'A person',
   schedule: 'A schedule',
   api: 'The API',
+  webhook: 'A webhook',
   rerun: 'A re-run',
   record: 'Records',
   run: 'Another run',
@@ -396,6 +398,7 @@ export function RunPanel({
         Started {formatTime(run.startedAt)}
         {run.startedBy && ` by ${run.startedBy}`}
         {run.apiKey && ` through the API key ${run.apiKey}`}
+        {run.webhook !== null && ` for a delivery to ${webhookLabel(run.webhook)}`}
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
         {totalUsage(run.steps) && `; its agents used ${formatUsage(totalUsage(run.steps)!)}`}
       </p>

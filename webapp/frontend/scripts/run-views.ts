@@ -73,6 +73,7 @@ function run(id: number, steps: RunStep[], objects: Partial<RunObject>[] = []): 
     schedule: null,
     startedBy: '',
     apiKey: '',
+    webhook: null,
     record: null,
     trialOf: null,
     trialOfName: '',
@@ -198,6 +199,10 @@ check('spans read as people say them', [850, 12_000, 200_000, 7_500_000, 270_000
     ['#1', 0, 1],
   ])
   check('a trial started as one', [runOrigin(trial), runOrigin(real)], ['trial', 'person'])
+  check("a webhook's run, even once it is removed", [runOrigin({ ...real, webhook: 'Issues' }), runOrigin({ ...real, webhook: '' })], [
+    'webhook',
+    'webhook',
+  ])
   const all = { status: [], started: [] }
   check('trials are listed only when asked for', [runMatches(trial, all), runMatches(real, all), runMatches(trial, { status: [], started: ['trial'] })], [
     false,

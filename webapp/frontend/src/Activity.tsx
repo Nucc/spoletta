@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { getActivity, type Activity as ActivityData, type ActivityRun, type FlowActivity, type ReviewTimes } from './api'
+import { getActivity, webhookLabel, type Activity as ActivityData, type ActivityRun, type FlowActivity, type ReviewTimes } from './api'
 import { ActivityIcon, FlowBuilderIcon } from './icons'
 import { formatTime } from './Runs'
 
@@ -206,7 +206,9 @@ const startedBy = (r: ActivityRun) =>
       ? 'by a schedule'
       : r.apiKey
         ? `by API key ${r.apiKey}`
-        : r.startedBy
+        : r.webhook !== null
+          ? `by ${webhookLabel(r.webhook)}`
+          : r.startedBy
           ? `by ${r.startedBy}`
           : ''
 

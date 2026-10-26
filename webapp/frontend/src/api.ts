@@ -225,7 +225,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials']
+const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/webhooks', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials']
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<(url: string) => void>()
@@ -1036,6 +1036,9 @@ export type FlowRun = {
   startedBy: string
   // The name of the API key that started it, if one did.
   apiKey: string
+  // The name of the webhook that started it, empty once it is removed;
+  // null for a run no webhook started.
+  webhook: string | null
   // The shared record a person started it on, if one did; its queries of
   // the record's store read that record alone.
   record: number | null
@@ -1208,9 +1211,9 @@ export async function previewSchedule(cron: string, timezone: string): Promise<{
 export type RunStanding = 'running' | 'waiting' | 'done' | 'failed' | 'interrupted' | 'terminated'
 
 // How a run started: by a person with the Run button, a schedule, the API,
-// as a re-run of another, on records a person picked, or in another run (a
-// flow process's board, an item of a list, a subflow).
-export type RunOrigin = 'person' | 'schedule' | 'api' | 'rerun' | 'record' | 'run' | 'trial'
+// a webhook, as a re-run of another, on records a person picked, or in
+// another run (a flow process's board, an item of a list, a subflow).
+export type RunOrigin = 'person' | 'schedule' | 'api' | 'webhook' | 'rerun' | 'record' | 'run' | 'trial'
 
 // What narrows the run list; each picks any of its values, none for all,
 // but for how runs started, where none is every way but a trial of one
@@ -1226,6 +1229,7 @@ export function runOrigin(r: FlowRun): RunOrigin {
   if (r.rerunOf !== null) return 'rerun'
   if (r.record !== null) return 'record'
   if (r.apiKey) return 'api'
+  if (r.webhook !== null) return 'webhook'
   if (r.schedule !== null) return 'schedule'
   return r.parent !== null ? 'run' : 'person'
 }
@@ -2068,6 +2072,112 @@ export type JSONSchema = {
 
 export function getFlowAPI(flow: number): Promise<FlowAPI> {
   return request(`/api/flows/${flow}/api`)
+}
+
+// A webhook: another system's events starting the flow at a URL of its
+// own, each delivery signed with its secret as its kind says, and taken
+// once. GitHub's takes the events it names, alone (issues) or with an
+// action (issues.labeled); Slack's the Events API's, those it names if
+// any; a generic one every delivery, checking an HMAC of the body or the
+// secret itself in the header it names, and telling deliveries apart by
+// the id idHeader holds. Its runs are for whoever added it.
+export type WebhookKind = 'github' | 'slack' | 'generic'
+export type WebhookVerify = 'hmac' | 'token'
+
+// Where an object the flow starts from is taken from in a delivery's
+// payload: a dotted path into it (issue.title, labels.0.name), the whole
+// of it for an empty path, or for an object with attributes a path for each.
+export type WebhookInput = { path: string; attributes?: Record<string, string> }
+
+export type WebhookDelivery = {
+  id: number
+  receivedAt: string
+  // Its id, as its sender gave it.
+  delivery: string
+  event: string
+  outcome: 'started' | 'repeat' | 'ignored' | 'refused'
+  reason: string
+  run: number | null
+}
+
+export type Webhook = {
+  id: number
+  flow: number
+  name: string
+  kind: WebhookKind
+  // Where its deliveries go.
+  url: string
+  verify?: WebhookVerify
+  header?: string
+  idHeader?: string
+  events: string[]
+  mapping: Record<string, WebhookInput>
+  enabled: boolean
+  // Whom its runs are for.
+  createdBy: string
+  createdAt: string
+  // The secret's last four characters, when it is long enough.
+  hint?: string
+  // What keeps its deliveries from starting a run, as the flow stands.
+  problems: string[]
+  lastDelivery: WebhookDelivery | null
+  // Only as it is made, or given a new one.
+  secret?: string
+}
+
+// The webhook a run names, as its panel says it.
+export const webhookLabel = (name: string) => (name ? `the webhook ${name}` : 'a webhook since removed')
+
+// An object the flow starts from, which a mapping is written for.
+export type WebhookFlowInput = { name: string; many: boolean; attributes: string[] }
+
+export type WebhookList = {
+  webhooks: Webhook[]
+  inputs: WebhookFlowInput[]
+  // Why the flow can't be given what it starts from, if it can't.
+  problem: string
+}
+
+// What adding or changing a webhook sends. Without a secret, adding makes
+// one and a change keeps the one kept, unless newSecret asks for another.
+export type WebhookFields = {
+  flow: number
+  name: string
+  kind: WebhookKind
+  verify: WebhookVerify | ''
+  header: string
+  idHeader: string
+  events: string[]
+  mapping: Record<string, WebhookInput>
+  enabled: boolean
+  secret: string
+  newSecret?: boolean
+}
+
+export type WebhookDeliveries = {
+  deliveries: WebhookDelivery[]
+  // The latest signed delivery's payload, to write the mapping from.
+  payload: { event: string; receivedAt: string; payload: string } | null
+}
+
+export function listWebhooks(flow: number): Promise<WebhookList> {
+  return request(`/api/webhooks?flow=${flow}`)
+}
+
+export function createWebhook(fields: WebhookFields): Promise<Webhook> {
+  return request('/api/webhooks', { method: 'POST', body: JSON.stringify(fields) })
+}
+
+export function updateWebhook(id: number, fields: WebhookFields): Promise<Webhook> {
+  return request(`/api/webhooks/${id}`, { method: 'PUT', body: JSON.stringify(fields) })
+}
+
+export function deleteWebhook(id: number): Promise<void> {
+  return request(`/api/webhooks/${id}`, { method: 'DELETE' })
+}
+
+export function getWebhookDeliveries(id: number): Promise<WebhookDeliveries> {
+  return request(`/api/webhooks/${id}/deliveries`)
 }
 
 // A skill or a command, written in the settings for agents. A skill is a

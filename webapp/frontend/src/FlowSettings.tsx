@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { getGitAccess, type FlowSettings, type GitAccess, type Repository } from './api'
 import { FlowAPISection } from './APIKeys'
+import { FlowWebhooksSection } from './Webhooks'
 
 // What a repository is called in the workspace, from its URL: the last part
 // of its path, without .git.
@@ -24,7 +25,8 @@ export function githubURL(v: string): string {
 const githubPath = (url: string) => /^https:\/\/github\.com\/([^/]+\/[^/]+?)(\.git)?$/.exec(url)?.[1]
 
 // The flow's settings: the repositories its agents and scripts work on, how
-// its runs' branches are named, and how other systems start it. Each run checks the repositories out on
+// its runs' branches are named, and how other systems start it, over the
+// API and with webhooks. Each run checks the repositories out on
 // a branch of its own, which every process of the run works on.
 export function FlowSettingsPanel({
   flowId,
@@ -283,6 +285,7 @@ export function FlowSettingsPanel({
         </small>
       </label>
       <FlowAPISection flowId={flowId} onError={onError} />
+      {!readOnly && <FlowWebhooksSection flowId={flowId} onError={onError} />}
     </aside>
   )
 }

@@ -3203,7 +3203,7 @@ export default function Board({
                 className={`settings-toggle${settingsOpen ? ' open' : ''}`}
                 aria-expanded={settingsOpen}
                 onClick={() => openFlowSettings(!settingsOpen)}
-                title="The repositories the flow works on, and its branches"
+                title="The repositories the flow works on, its branches, and how other systems start it"
               >
                 <GearIcon /> Settings
               </button>

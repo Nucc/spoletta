@@ -6416,6 +6416,132 @@ select.flow-owner:disabled {
   border-radius: 6px;
 }
 
+/* A flow's webhooks, in its settings: where each is reached, with a dialog
+   to add or change one, mapping the payload onto what the flow starts
+   from, and one listing its deliveries. */
+.webhook-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.webhook-url .repo-item-url {
+  flex: 1;
+  min-width: 0;
+}
+
+.webhook-url .link-button {
+  font-size: 12px;
+}
+
+.webhook-dialog {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.webhook-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+}
+
+.webhook-input legend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.webhook-input .segmented {
+  flex-wrap: wrap;
+}
+
+.webhook-input input {
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.webhook-attribute {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) 3fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.webhook-attribute span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.webhook-payload summary {
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.webhook-payload pre {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.webhook-deliveries {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.webhook-deliveries th {
+  text-align: left;
+  font-weight: 600;
+  color: #656d76;
+}
+
+.webhook-deliveries th,
+.webhook-deliveries td {
+  padding: 6px 8px;
+  vertical-align: top;
+  border-bottom: 1px solid #d8dee4;
+}
+
+.webhook-deliveries td:first-child {
+  white-space: nowrap;
+}
+
+.webhook-deliveries tr.webhook-refused td:last-child {
+  color: #82071e;
+}
+
+.webhook-deliveries tr.webhook-ignored td:last-child {
+  color: #656d76;
+}
+
+.webhook-delivery-id {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #656d76;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (max-width: 600px) {
+  .webhook-attribute {
+    grid-template-columns: 1fr;
+  }
+
+  .webhook-deliveries td:first-child {
+    white-space: normal;
+  }
+}
+
 /* Skills and commands in the settings: a list of each, with a form to
    write one or change it in place. */
 .skills + .skills {

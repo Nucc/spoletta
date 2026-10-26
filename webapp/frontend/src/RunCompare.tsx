@@ -164,6 +164,7 @@ const startedBy = (r: FlowRunDetail) => {
         ? `Run #${r.parent}, as ${r.processName}`
         : origin,
     r.apiKey && `key ${r.apiKey}`,
+    r.webhook && `webhook ${r.webhook}`,
     r.startedBy,
   ]
     .filter(Boolean)

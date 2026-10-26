@@ -21,6 +21,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 type credentialsItem struct {
@@ -54,7 +55,9 @@ type credentialsSeen struct {
 // to be encoded twice under /twice and /gzip-twice, and in an encoding the
 // proxy can't read under /br; under /cut it echoes the URL it got cut
 // short, and under /encoded its key parameter in the ways a service could
-// write it.
+// write it; under /utf16 it answers in UTF-16, said in its Content-Type,
+// under /bom and /gzip-bom starting with UTF-16's byte order mark, plainly
+// and gzipped, and under /latin1 its key in ISO-8859-1.
 type credentialsService struct {
 	srv  *httptest.Server
 	mu   sync.Mutex
@@ -94,6 +97,22 @@ func newCredentialsService(t *testing.T) *credentialsService {
 		case strings.Contains(r.URL.Path, "/cut/"):
 			self := r.URL.String()
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such page: " + self[:min(len(self), 80)]})
+		case strings.HasSuffix(r.URL.Path, "/utf16"):
+			w.Header().Set("Content-Type", "application/json; charset=utf-16")
+			w.Write(credentialsUTF16(echo))
+		case strings.HasSuffix(r.URL.Path, "/bom"):
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(append([]byte{0xff, 0xfe}, credentialsUTF16(echo)...))
+		case strings.HasSuffix(r.URL.Path, "/gzip-bom"):
+			w.Header().Set("Content-Encoding", "gzip")
+			gz := gzip.NewWriter(w)
+			gz.Write(append([]byte{0xff, 0xfe}, credentialsUTF16(echo)...))
+			gz.Close()
+		case strings.HasSuffix(r.URL.Path, "/latin1"):
+			w.Header().Set("Content-Type", "text/plain; charset=ISO-8859-1")
+			for _, c := range r.URL.Query().Get("key") {
+				w.Write([]byte{byte(c)})
+			}
 		case strings.HasSuffix(r.URL.Path, "/encoded"):
 			key := r.URL.Query().Get("key")
 			b64 := base64.StdEncoding.EncodeToString([]byte(key))
@@ -121,6 +140,15 @@ func newCredentialsService(t *testing.T) *credentialsService {
 	}))
 	t.Cleanup(s.srv.Close)
 	return s
+}
+
+// s in UTF-16, little-endian.
+func credentialsUTF16(s string) []byte {
+	var b []byte
+	for _, u := range utf16.Encode([]rune(s)) {
+		b = append(b, byte(u), byte(u>>8))
+	}
+	return b
 }
 
 func (s *credentialsService) requests() []credentialsSeen {
@@ -524,6 +552,58 @@ func TestCredentialsBlankOutEchoesCutShort(t *testing.T) {
 	if want := "<p>[redacted]</p> [redacted] [redacted] [redacted] [redacted]"; encoded.status != http.StatusOK || encoded.body != want {
 		t.Errorf("the secret encoded came back %d as %s, want %s", encoded.status, encoded.body, want)
 	}
+}
+
+// A step can't have a service answer in another charset, in which the
+// secret is written in bytes none of its forms are: Accept-Charset and an
+// Accept's charset stay with the proxy. An answer in one all the same,
+// said in its Content-Type or by a byte order mark, gzipped or not, goes
+// no further; one in ISO-8859-1 has the secret blanked out of it as that
+// writes it.
+func TestCredentialsRefuseAnswersInOtherCharsets(t *testing.T) {
+	a := newApp(t)
+	svc := newCredentialsService(t)
+	secret := "pässwörd-Zq8Lw2Xv9Kp4"
+	legacy := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Legacy"), "baseUrl": svc.srv.URL + "/legacy", "auth": "query",
+		"param": "key", "secret": secret, "everyone": true})
+	f := a.newFlow("Charsets")
+	call := a.newProcess(f.ID, map[string]any{"name": "Call", "kind": kindScript, "script": "curl \"$CREDENTIAL_LEGACY_URL\"",
+		"settings": map[string]any{"credentials": []int64{legacy.ID}}})
+	a.startAt(f.ID, call.ID)
+	answers := map[string]credentialsAnswer{}
+	a.worker.onScript("Call", func(_ context.Context, run scriptRun) runResult {
+		at := credentialsURL(t, run.Credentials, legacy.Name)
+		for _, path := range []string{"/asked", "/utf16", "/bom", "/gzip-bom", "/latin1"} {
+			answers[path] = credentialsCall(t, "GET", at+path, run.CredentialsToken, false, "",
+				"Accept-Charset: utf-16", "Accept: application/json;charset=UTF-16;q=0.9, text/plain")
+		}
+		return runResult{OK: true}
+	})
+	d := a.finish(a.startRun(f.ID).ID)
+	if d.Status != runDone {
+		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
+	}
+	asked := false
+	for _, s := range svc.requests() {
+		if s.path == "/legacy/asked" {
+			asked = true
+			if s.header.Get("Accept-Charset") != "" || s.header.Get("Accept") != "application/json;q=0.9, text/plain" {
+				t.Errorf("the service was asked for %q, %q", s.header.Get("Accept-Charset"), s.header.Get("Accept"))
+			}
+		}
+	}
+	if !asked || answers["/asked"].status != http.StatusOK {
+		t.Errorf("the service wasn't asked: %+v", answers["/asked"])
+	}
+	for path, want := range map[string]string{"/utf16": "answered in utf-16,", "/bom": "answered in UTF-16 or UTF-32,", "/gzip-bom": "answered in UTF-16 or UTF-32,"} {
+		if c := answers[path]; c.status != http.StatusBadGateway || !strings.Contains(c.body, want) || strings.Contains(c.body, "Zq8L") {
+			t.Errorf("%s came back %d: %s", path, c.status, c.body)
+		}
+	}
+	if c := answers["/latin1"]; c.status != http.StatusOK || c.body != "[redacted]" {
+		t.Errorf("an answer in ISO-8859-1 came back %d: %q", c.status, c.body)
+	}
+	logLineWith(t, a.runLogs(d.ID, 0), "the credential "+legacy.Name+": GET /utf16 answered 200 in utf-16, which the proxy can't read for the secret")
 }
 
 // An agent is told the services it calls through the proxy, by their

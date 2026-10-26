@@ -29,7 +29,8 @@ package main
 // wants, and those the credential names, never the step's token, puts the
 // secret on the request as the credential says and passes it on,
 // streaming the answer back with the secret blanked out of it, as sent or
-// encoded, and any piece of it, as an echo cut short would hold. Redirects
+// encoded, and any piece of it, as an echo cut short would hold; an answer
+// in a charset the secret's forms aren't found in goes no further. Redirects
 // aren't followed: one within the base URL is turned into the proxy's, and
 // the secret is taken out of any other. Only the answer's headers saying
 // what it is come back, never one handing the step the secret, or a
@@ -44,6 +45,7 @@ package main
 // secret again.
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -55,6 +57,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -64,6 +67,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -580,18 +584,21 @@ func credentialTokenOf(r *http.Request) string {
 // and what many APIs ask a write for. The rest stay here unless the
 // credential names them: the step's token, its cookies, the connection's,
 // what says where the call is meant for or which method it is, and Range,
-// which would cut the secret apart where the answer is read for it.
-var credentialPassedHeaders = []string{"Accept", "Accept-Charset", "Accept-Language", "Cache-Control",
+// which would cut the secret apart where the answer is read for it, and
+// Accept-Charset, which would have it written in bytes its forms aren't
+// (as would an Accept's charset, which passedHeaders takes out).
+var credentialPassedHeaders = []string{"Accept", "Accept-Language", "Cache-Control",
 	"Content-Disposition", "Content-Encoding", "Content-Language", "Content-Type", "Idempotency-Key",
 	"If-Match", "If-Modified-Since", "If-None-Match", "If-Unmodified-Since", "Pragma", "Prefer", "User-Agent"}
 
 // Headers a credential can't let steps send: those that carry the step's
-// token or are HTTP's own, and those some servers and gateways take as
-// another URL, host, method or client to answer for, as do those starting
-// with Proxy-, X-Forwarded-, X-Original- and X-Envoy-.
+// token or are HTTP's own, those having the answer encoded or written in
+// a charset the secret can't be found in, and those some servers and
+// gateways take as another URL, host, method or client to answer for, as
+// do those starting with Proxy-, X-Forwarded-, X-Original- and X-Envoy-.
 var unpassableHeaders = []string{"Authorization", "Cookie", "Host", "Connection", "Keep-Alive", "Te", "Trailer",
-	"Transfer-Encoding", "Upgrade", "Content-Length", "Range", "If-Range", "Accept-Encoding", "Forwarded", "X-Host",
-	"X-Http-Host", "X-Real-Ip", "X-Rewrite-Url", "X-Http-Method-Override", "X-Http-Method", "X-Method-Override",
+	"Transfer-Encoding", "Upgrade", "Content-Length", "Range", "If-Range", "Accept-Encoding", "Accept-Charset", "Forwarded",
+	"X-Host", "X-Http-Host", "X-Real-Ip", "X-Rewrite-Url", "X-Http-Method-Override", "X-Http-Method", "X-Method-Override",
 	"X-Client-Ip", "True-Client-Ip", "Client-Ip", "X-Cluster-Client-Ip", "Cf-Connecting-Ip", "Fastly-Client-Ip"}
 
 // A header's name as it is compared: canonical, with _ read as -, as nginx
@@ -624,6 +631,29 @@ func passedHeaders(c credential, h http.Header) http.Header {
 		if slices.Contains(credentialPassedHeaders, k) || slices.Contains(c.Headers, k) {
 			out[k] = v
 		}
+	}
+	if v, ok := out["Accept"]; ok {
+		out["Accept"] = withoutCharset(v)
+	}
+	return out
+}
+
+// An Accept header's values without the charset any media range asks for,
+// which some services answer in (Spring and Jackson do), keeping the rest
+// of each range's parameters.
+func withoutCharset(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		ranges := strings.Split(v, ",")
+		for j, media := range ranges {
+			params := strings.Split(media, ";")
+			params = append(params[:1], slices.DeleteFunc(params[1:], func(p string) bool {
+				name, _, _ := strings.Cut(p, "=")
+				return strings.EqualFold(strings.TrimSpace(name), "charset")
+			})...)
+			ranges[j] = strings.Join(params, ";")
+		}
+		out[i] = strings.Join(ranges, ",")
 	}
 	return out
 }
@@ -688,6 +718,9 @@ func secretEncodings(secret string) []string {
 		inJSON := strings.TrimSuffix(b.String(), "\n")
 		inJSON = inJSON[1 : len(inJSON)-1]
 		forms = append(forms, inJSON, strings.ReplaceAll(inJSON, "/", `\/`))
+		if !escapeHTML {
+			forms = append(forms, nonASCII(secret, inJSON)...)
+		}
 	}
 	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding} {
 		forms = append(forms, enc.EncodeToString([]byte(secret)))
@@ -695,6 +728,37 @@ func secretEncodings(secret string) []string {
 	forms = append(forms, base64Within(secret)...)
 	slices.Sort(forms)
 	return slices.Compact(forms)
+}
+
+// The ways a secret with characters outside ASCII could be written but as
+// UTF-8: in ISO-8859-1, an answer's charset the proxy takes, if each of
+// them is in it, and in a JSON string (inJSON, as Go writes it) escaping
+// each as \uXXXX, as Python's json does.
+func nonASCII(secret, inJSON string) []string {
+	if !strings.ContainsFunc(secret, func(r rune) bool { return r >= 0x80 }) {
+		return nil
+	}
+	var forms []string
+	if !strings.ContainsFunc(secret, func(r rune) bool { return r > 0xff }) {
+		latin1 := make([]byte, 0, len(secret))
+		for _, r := range secret {
+			latin1 = append(latin1, byte(r))
+		}
+		forms = append(forms, string(latin1))
+	}
+	var escaped strings.Builder
+	for _, r := range inJSON {
+		switch {
+		case r < 0x80:
+			escaped.WriteRune(r)
+		case r > 0xffff:
+			hi, lo := utf16.EncodeRune(r)
+			fmt.Fprintf(&escaped, `\u%04x\u%04x`, hi, lo)
+		default:
+			fmt.Fprintf(&escaped, `\u%04x`, r)
+		}
+	}
+	return append(forms, escaped.String())
 }
 
 // What of s's base64 shows wherever s is encoded, whatever comes before or
@@ -1205,14 +1269,26 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer gz.Close()
-		answer = gz
+		answer = &cappedReader{r: io.LimitReader(gz, maxCredentialAnswer+1), max: maxCredentialAnswer}
 	default:
-		// Named only when it is plainly an encoding's name.
-		if len(enc) > 32 || blank.holds(enc) || strings.ContainsFunc(enc, func(r rune) bool { return r > 0x7e || r < 0x20 }) {
-			enc = "an encoding of its own"
-		}
+		enc = plainName(enc, "an encoding of its own", blank)
 		b.logCall(g, c, "%s %s answered %d in %s, which the proxy can't read for the secret, so it went no further", r.Method, logPath, resp.StatusCode, enc)
 		http.Error(w, "the service answered in "+enc+", which the proxy can't read for the credential's secret", http.StatusBadGateway)
+		return
+	}
+	// In another charset, the secret is written in bytes none of its forms
+	// are; so is an answer starting with UTF-16's or UTF-32's byte order
+	// mark, whatever it says it is.
+	head := bufio.NewReader(answer)
+	answer = head
+	charset, ok := answerCharset(resp.Header.Values("Content-Type"))
+	if ok && startsWithBOM(head) {
+		charset, ok = "UTF-16 or UTF-32", false
+	}
+	if !ok {
+		charset = plainName(charset, "a charset of its own", blank)
+		b.logCall(g, c, "%s %s answered %d in %s, which the proxy can't read for the secret, so it went no further", r.Method, logPath, resp.StatusCode, charset)
+		http.Error(w, "the service answered in "+charset+", which the proxy can't read for the credential's secret; only UTF-8, US-ASCII and ISO-8859-1 are", http.StatusBadGateway)
 		return
 	}
 	for k, v := range resp.Header {
@@ -1235,21 +1311,123 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(resp.StatusCode)
 	b.logCall(g, c, "%s %s, answered %d", r.Method, logPath, resp.StatusCode)
+	if err := streamAnswer(w, answer, blank); err != nil {
+		why := "couldn't be read to its end"
+		if errors.Is(err, errAnswerTooLarge) {
+			why = fmt.Sprintf("came to more than %d MB uncompressed", maxCredentialAnswer>>20)
+		}
+		b.logCall(g, c, "%s %s: its answer %s, so the rest went no further", r.Method, logPath, why)
+		// What went on of it ends broken, so the step can't take it for
+		// the whole answer.
+		panic(http.ErrAbortHandler)
+	}
+}
+
+// The most a gzipped answer comes to uncompressed, past which the call
+// fails: four times what a request may send.
+const maxCredentialAnswer = 4 * maxCredentialRequest
+
+var errAnswerTooLarge = errors.New("the answer is too large")
+
+// Reads r, which a LimitReader keeps to one byte past max, failing past
+// max.
+type cappedReader struct {
+	r         io.Reader
+	read, max int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if c.read += int64(n); c.read > c.max {
+		return 0, errAnswerTooLarge
+	}
+	return n, err
+}
+
+// Streams an answer on to the step with the secret blanked out of it,
+// each piece as it comes; an error if it couldn't be read to its end,
+// once the step has what went on of it, but for what was held back.
+func streamAnswer(w io.Writer, answer io.Reader, blank *redactor) error {
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := answer.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(blank.next(buf[:n])); werr != nil {
-				return
+				// The step went away.
+				return nil
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
-		if err != nil {
+		if errors.Is(err, io.EOF) {
 			w.Write(blank.flush())
-			return
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// A name a service gave, such as an encoding's or a charset's, as the step
+// is told it: as it is when plainly a name, else fallback.
+func plainName(name, fallback string, blank *redactor) string {
+	if name == "" || len(name) > 32 || blank.holds(name) || strings.ContainsFunc(name, func(r rune) bool { return r > 0x7e || r < 0x20 }) {
+		return fallback
+	}
+	return name
+}
+
+// The charsets an answer may be written in, which the secret's forms are
+// found in: UTF-8, and US-ASCII and ISO-8859-1, which write ASCII as it
+// does (a secret outside ASCII has a form in ISO-8859-1 too).
+var answerCharsets = []string{"utf-8", "us-ascii", "iso-8859-1"}
+
+// The charset an answer's Content-Type says that isn't one of
+// answerCharsets, if any, and false; a Content-Type naming a charset that
+// can't be read is taken as one.
+func answerCharset(types []string) (string, bool) {
+	for _, t := range types {
+		_, params, err := mime.ParseMediaType(t)
+		if err != nil {
+			if strings.Contains(strings.ToLower(t), "charset") {
+				return "", false
+			}
+			continue
+		}
+		if cs, ok := params["charset"]; ok && !slices.Contains(answerCharsets, strings.ToLower(strings.TrimSpace(cs))) {
+			return cs, false
+		}
+	}
+	return "", true
+}
+
+// The byte order marks of UTF-16, big- and little-endian, and of UTF-32
+// big-endian; UTF-32 little-endian's starts with UTF-16's.
+var byteOrderMarks = [][]byte{{0xfe, 0xff}, {0xff, 0xfe}, {0x00, 0x00, 0xfe, 0xff}}
+
+// Whether an answer starts with a byte order mark of UTF-16 or UTF-32,
+// reading only as far as it still could, so an answer starting otherwise,
+// such as an event, isn't kept waiting for more.
+func startsWithBOM(r *bufio.Reader) bool {
+	for n := 1; ; n++ {
+		head, _ := r.Peek(n)
+		if len(head) < n {
+			return false
+		}
+		could := false
+		for _, m := range byteOrderMarks {
+			if bytes.HasPrefix(m, head) {
+				if len(m) == n {
+					return true
+				}
+				could = true
+			}
+		}
+		if !could {
+			return false
 		}
 	}
 }

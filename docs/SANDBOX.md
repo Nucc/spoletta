@@ -324,7 +324,9 @@ can't:
   `%2F`), as the header's whole value, as basic auth's `user:secret` in
   base64, in a JSON string with HTML's characters and slashes escaped or
   not (`\u003c`, `\/`), HTML-escaped (`&amp;`, `&quot;`, `&#39;`), and in
-  base64, either alphabet, alone or within something longer. Any eight of
+  base64, either alphabet, alone or within something longer; a secret with
+  characters outside ASCII also as ISO-8859-1 writes it and with them
+  escaped in JSON (`\u00e4`). Any eight of
   its characters in a row, in any of those forms but the header's and
   basic auth's, whose own text could be anybody's, are blanked out too, so
   a service echoing what it got cut short, wherever a step pads the path to
@@ -334,10 +336,15 @@ can't:
   answer uncompressed, reads one gzipped once uncompressed all the same,
   refuses (502) one encoded any other way or more than once, however many
   `Content-Encoding` values say it, and doesn't pass on the step's `Range`,
-  so a secret can't come back cut in pieces or compressed out of sight. A
-  service handing it back in another form, such as hashed, re-encoded or
-  split across fields, hands it over; give credentials only for services
-  that don't.
+  so a secret can't come back cut in pieces or compressed out of sight. Nor
+  can it come back in a charset whose bytes its forms aren't: the step's
+  `Accept-Charset`, and the `charset` an `Accept` asks for, don't go on
+  (ASP.NET answers in UTF-16 when asked, Spring in what `Accept` names),
+  and an answer whose `Content-Type` says a charset but UTF-8, US-ASCII or
+  ISO-8859-1, or that starts with UTF-16's or UTF-32's byte order mark,
+  gzipped or not, is refused (502). A service handing the secret back in
+  another form, such as hashed, re-encoded or split across fields, hands
+  it over; give credentials only for services that don't.
 - **hand its token to someone else.** What is kept of the step, what a
   script prints (stdout and stderr, as shown in its terminal window, a
   token printed a piece at a time included, as `set -x` does), an agent's
@@ -364,17 +371,17 @@ can't:
   such as Google's use it. The step's query goes on as it sent it, but for
   a query parameter credential's own, which the secret replaces, first.
 - **send the call elsewhere, or as another method.** Only the headers a
-  client sends to say what it sends and wants go on (`Accept`,
-  `Accept-Charset`, `Accept-Language`, `Cache-Control`,
+  client sends to say what it sends and wants go on (`Accept`, without a
+  `charset`, `Accept-Language`, `Cache-Control`,
   `Content-Disposition`, `Content-Encoding`, `Content-Language`,
   `Content-Type`, `Idempotency-Key`, `If-Match`, `If-Modified-Since`,
   `If-None-Match`, `If-Unmodified-Since`, `Pragma`, `Prefer`,
   `User-Agent`), and those the credential names, such as an API's version
   header, but for any the request's `Connection` names. A credential can't
-  name its own header, its token's, the connection's, `Range`, or the
-  headers some servers and gateways take as another URL, host, method or
-  client (`X-Original-URL`, `X-Original-URI`, `X-Original-*`,
-  `X-Rewrite-URL`, `X-Host`, `X-Forwarded-*`, `Forwarded`,
+  name its own header, its token's, the connection's, `Range`,
+  `Accept-Charset`, or the headers some servers and gateways take as
+  another URL, host, method or client (`X-Original-URL`, `X-Original-URI`,
+  `X-Original-*`, `X-Rewrite-URL`, `X-Host`, `X-Forwarded-*`, `Forwarded`,
   `X-HTTP-Method-Override` and the like), with `_` read as `-`, as nginx
   and CGI read it (`X_Forwarded_Host`).
 - **be redirected with it.** The proxy never follows a redirect. One within
@@ -415,8 +422,11 @@ share may be another's service (`script.google.com/macros/s/<id>`), or
 where its secret goes (the way, the header, the parameter), needs the
 secret again.
 
-A request may send at most 64 MB; a call may take ten minutes, two of them
-waiting for the service to start answering. Each call goes in the run's log
+A request may send at most 64 MB, and a gzipped answer come to at most
+256 MB uncompressed; a call may take ten minutes, two of them waiting for
+the service to start answering. An answer past its most, or one that
+can't be read to its end, is cut off with the connection broken, so the
+step never takes what came of it for the whole answer. Each call goes in the run's log
 and the audit log by its method, credential, path without its query, and
 status, never with the secret or the token.
 
@@ -444,7 +454,15 @@ What this leaves:
   is called by its numeric ids instead.
 - The step's `Range` doesn't go on, so a download comes whole.
 - A service answering only in brotli or zstd, never uncompressed, gets a
-  502.
+  502; so does one answering in a charset but UTF-8, US-ASCII or
+  ISO-8859-1, even one writing ASCII as UTF-8 does, such as
+  windows-1252, and a download starting with a byte order mark, such as a
+  UTF-16 text file. One answering in UTF-16 without saying so, neither in
+  its `Content-Type` nor with a byte order mark, isn't caught, as telling
+  that from any other bytes would refuse downloads.
+- An answer's headers wait for the first byte of its body, which is read
+  as far as it could still be a byte order mark: for an event stream, its
+  first event.
 
 ## Limits and the audit log
 

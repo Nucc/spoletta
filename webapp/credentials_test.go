@@ -1,12 +1,20 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
+	"time"
 )
 
 func TestCredentialVariables(t *testing.T) {
@@ -368,7 +376,7 @@ func TestPassedHeaders(t *testing.T) {
 		"X-Forwarded-Prefix": "/admin", "X-Forwarded-Host": "evil.example.com", "X-Http-Method-Override": "DELETE",
 		"Range": "bytes=0-3", "If-Range": `"x"`, "Accept-Encoding": "gzip", "Authorization": "Bearer step-token",
 		"Cookie": "a=1", "X-Api-Key": "the step's own", "X-Custom": "1", "Host": "evil.example.com", "X_Api_Key": "theirs",
-		"Notion_Version": "2022-06-28",
+		"Notion_Version": "2022-06-28", "Accept-Charset": "utf-16",
 	} {
 		h.Set(k, v)
 	}
@@ -383,7 +391,8 @@ func TestPassedHeaders(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"X-Original-URL", "Authorization", "x-forwarded-prefix", "Range", "Accept-Encoding", "Proxy-Foo", "X-Http-Method-Override",
-		"X-Original-URI", "X-Host", "X-Original-Host", "X-Forwarded-For", "X_Forwarded_Host", "X_Original_URL", "x_http_method_override", "proxy_authorization"} {
+		"X-Original-URI", "X-Host", "X-Original-Host", "X-Forwarded-For", "X_Forwarded_Host", "X_Original_URL", "x_http_method_override", "proxy_authorization",
+		"Accept-Charset", "accept_charset"} {
 		f := credentialFields{Name: "Jira", BaseURL: "https://x.example.com", Auth: credentialHeader, Secret: "s", Everyone: true, Headers: []string{bad}}
 		if msg := f.check(true); msg == "" {
 			t.Errorf("a credential lets steps send %s", bad)
@@ -476,5 +485,116 @@ func TestAnswerHeaders(t *testing.T) {
 		if answerHeader(c, k) {
 			t.Errorf("%s comes back", k)
 		}
+	}
+}
+
+// An Accept's charsets stay with the proxy; the rest of each media range
+// goes on.
+func TestAcceptWithoutCharset(t *testing.T) {
+	got := withoutCharset([]string{`application/json; charset=utf-16, text/plain;q=0.5;CHARSET="utf-32"`, "text/html"})
+	if want := []string{"application/json, text/plain;q=0.5", "text/html"}; !slices.Equal(got, want) {
+		t.Errorf("came out as %q, want %q", got, want)
+	}
+	h := http.Header{"Accept": {"application/json;charset=utf-16"}}
+	if got := passedHeaders(credential{}, h).Get("Accept"); got != "application/json" {
+		t.Errorf("Accept went on as %q", got)
+	}
+}
+
+// An answer comes in UTF-8, US-ASCII or ISO-8859-1, or says no charset;
+// another, or one that can't be read, is refused.
+func TestAnswerCharsets(t *testing.T) {
+	for _, types := range [][]string{nil, {"application/json"}, {"text/html; charset=UTF-8"}, {`text/plain; charset="us-ascii"`},
+		{"text/plain;charset=ISO-8859-1"}, {"application/json", "text/plain; charset=utf-8"}} {
+		if cs, ok := answerCharset(types); !ok {
+			t.Errorf("%q is refused, as %s", types, cs)
+		}
+	}
+	for types, want := range map[string]string{"application/json; charset=utf-16": "utf-16", "text/plain; charset=UTF-32LE": "UTF-32LE",
+		"text/plain; charset=windows-1252": "windows-1252", "text/plain; charset=utf-8; charset=utf-16": "", `text/plain; charset="utf-16`: ""} {
+		if cs, ok := answerCharset([]string{"application/json", types}); ok || cs != want {
+			t.Errorf("%q is taken (%v), as %q", types, ok, cs)
+		}
+	}
+}
+
+// An answer starting with UTF-16's or UTF-32's byte order mark is found,
+// and one starting otherwise isn't kept waiting for more to tell.
+func TestAnswersStartingWithByteOrderMarks(t *testing.T) {
+	for head, want := range map[string]bool{"\xff\xfe{": true, "\xfe\xff\x00{": true, "\xff\xfe\x00\x00": true, "\x00\x00\xfe\xff": true,
+		"\x00\x00\x01\x00": false, "\xff\xd8\xff": false, "\xef\xbb\xbf{}": false, "{}": false, "": false, "\xff": false} {
+		if got := startsWithBOM(bufio.NewReader(strings.NewReader(head))); got != want {
+			t.Errorf("%q starting an answer: %v", head, got)
+		}
+	}
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	go pw.Write([]byte("data: {}\n\n"))
+	done := make(chan bool)
+	go func() { done <- startsWithBOM(bufio.NewReader(pr)) }()
+	select {
+	case got := <-done:
+		if got {
+			t.Errorf("an event was taken for a byte order mark")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an event waited for more")
+	}
+}
+
+// A gzipped answer coming to more than the most uncompressed fails, and
+// the step's read of it fails too, rather than ending as if it were whole;
+// as does one that can't be read to its end.
+func TestAnswersPastTheirMostFail(t *testing.T) {
+	var zipped bytes.Buffer
+	gz := gzip.NewWriter(&zipped)
+	gz.Write(make([]byte, 1<<20))
+	gz.Close()
+	for max, wantErr := range map[int64]bool{1 << 20: false, 1<<20 - 1: true} {
+		gz, _ := gzip.NewReader(bytes.NewReader(zipped.Bytes()))
+		var out bytes.Buffer
+		err := streamAnswer(&out, &cappedReader{r: io.LimitReader(gz, max+1), max: max}, newRedactor("s3cret"))
+		if wantErr != errors.Is(err, errAnswerTooLarge) || !wantErr && out.Len() != 1<<20 {
+			t.Errorf("with at most %d: %v, %d bytes", max, err, out.Len())
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gz, _ := gzip.NewReader(bytes.NewReader(zipped.Bytes()))
+		// As the proxy does, the answer's headers go first, then what is
+		// read before the most.
+		w.WriteHeader(http.StatusOK)
+		if err := streamAnswer(w, &cappedReader{r: io.LimitReader(gz, 40<<10+1), max: 40 << 10}, newRedactor("s3cret")); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+	}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if b, err := io.ReadAll(resp.Body); err == nil {
+		t.Errorf("the step read %d bytes of an answer past its most, as if whole", len(b))
+	}
+	if err := streamAnswer(io.Discard, io.MultiReader(strings.NewReader("part"), iotest.ErrReader(io.ErrUnexpectedEOF)), newRedactor("s3cret")); err == nil {
+		t.Errorf("an answer cut off ended as if whole")
+	}
+}
+
+// A secret outside ASCII is found as ISO-8859-1 writes it, and as JSON
+// escaping it does.
+func TestSecretFormsOutsideASCII(t *testing.T) {
+	secret := "pässwörd-Zq8Lw2\"x"
+	blank := credentialRedactor(credential{Auth: credentialQuery, Param: "key"}, secret)
+	for _, want := range []string{"p\xe4ssw\xf6rd-Zq8Lw2\"x", `p\u00e4ssw\u00f6rd-Zq8Lw2\"x`, `p\u00E4ssw\u00F6rd-Zq8Lw2\"x`} {
+		if got := blank.text("[" + want + "]"); got != "[[redacted]]" {
+			t.Errorf("%q came out as %q", want, got)
+		}
+	}
+	if forms := nonASCII("emoji-\U0001F600", "emoji-\U0001F600"); len(forms) != 1 || forms[0] != `emoji-\ud83d\ude00` {
+		t.Errorf("outside ISO-8859-1 the forms are %q", forms)
+	}
+	if forms := nonASCII("plain", "plain"); forms != nil {
+		t.Errorf("in ASCII the forms are %q", forms)
 	}
 }

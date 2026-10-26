@@ -6,10 +6,17 @@ setup:
     - name: Expense claim
       start:
         next: Claim an expense
+        x: 60
+        y: 0
+      end: {x: 10, y: 300}
       objects:
         - name: Finance
+          x: 0
+          y: 120
           human: true
         - name: Expense
+          x: 60
+          y: 120
           attributes:
             - name: amount
               definition: What it cost, as a number, in the company's currency.
@@ -27,12 +34,18 @@ setup:
             - approved
             - rejected
         - name: Reply
+          x: 10
+          y: 240
           end: true
       processes:
         - name: Claim an expense
+          x: 60
+          y: 60
           kind: human
           yields: [Expense]
         - name: Approve expense
+          x: 60
+          y: 180
           kind: human
           remindAfter: 86400
           takes:
@@ -43,6 +56,8 @@ setup:
             - object: Expense
               states: [approved, rejected]
         - name: Tell the claimant
+          x: 10
+          y: 180
           prompt: >-
             Write a short, friendly reply to whoever claimed the Expense,
             saying whether it was approved; if it was rejected, give the

@@ -6,29 +6,46 @@ setup:
     - name: Triage a ticket
       start:
         next: Enter ticket
+        x: 55
+        y: 0
+      end: {x: 119.75, y: 1167}
       objects:
         - name: Ticket
+          x: 8
+          y: 228
           attributes:
             - name: summary
               definition: What the ticket is about, in a line.
             - name: description
               definition: Everything its reporter said, with the steps to make it happen if it is a bug.
         - name: Triage
+          x: 452.5
+          y: 492
           states: [bug, feature]
         - name: Fix
+          x: 373.75
+          y: 787
           attributes:
             - name: cause
               definition: Why the bug happened, in two sentences.
             - name: change
               definition: What was changed, and the test that shows it is fixed.
         - name: Spec
+          x: 70.75
+          y: 799
         - name: Summary
+          x: 57.75
+          y: 1051
           end: true
       processes:
         - name: Enter ticket
+          x: 0
+          y: 104
           kind: human
           yields: [Ticket]
         - name: Classify
+          x: 423
+          y: 368
           prompt: >-
             Decide whether the Ticket reports a bug (something that worked, or
             should work, doesn't) or asks for a feature, and say why in a
@@ -39,6 +56,8 @@ setup:
             - object: Triage
               states: [bug, feature]
         - name: Attempt fix
+          x: 342.25
+          y: 663
           prompt: >-
             Find the cause of the bug the Ticket reports and fix it with the
             smallest change that is clearly right, with a test that fails
@@ -51,6 +70,8 @@ setup:
               condition: true
           yields: [Fix]
         - name: Write spec
+          x: 39.25
+          y: 663
           prompt: >-
             Write a one-page spec of the feature the Ticket asks for: the
             problem, who has it, what to build, and what to leave out.
@@ -62,6 +83,8 @@ setup:
               condition: true
           yields: [Spec]
         - name: Summarize
+          x: 39.25
+          y: 927
           prompt: >-
             Say what was done about the Ticket in three lines, for whoever
             reported it: the fix if there is one, or the spec.

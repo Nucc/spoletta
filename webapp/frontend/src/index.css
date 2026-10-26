@@ -769,6 +769,13 @@ body {
   color: #1f2328;
 }
 
+.sidebar-hint {
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .panel .panel-hint {
   flex-shrink: 0;
   padding: 4px 8px;

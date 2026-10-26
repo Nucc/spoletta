@@ -6,16 +6,25 @@ setup:
     - name: Fix with an approval by risk
       start:
         next: Report bug
+        x: 513
+        y: 0
+      end: {x: 688.5, y: 1014}
       objects:
         - name: Tech lead
+          x: 37.5
+          y: 563
           human: true
         - name: Bug
+          x: 468
+          y: 228
           attributes:
             - name: summary
               definition: What goes wrong, in a line.
             - name: steps
               definition: How to make it happen, and what should happen instead.
         - name: Patch
+          x: 286.75
+          y: 492
           attributes:
             - name: cause
               definition: Why the bug happened, in two sentences.
@@ -31,15 +40,21 @@ setup:
             - approved
             - changes requested
         - name: Pull request
+          x: 618
+          y: 874
           end: true
           attributes:
             - name: url
               definition: The pull request's address.
       processes:
         - name: Report bug
+          x: 459.5
+          y: 104
           kind: human
           yields: [Bug]
         - name: Fix
+          x: 255.75
+          y: 368
           prompt: >-
             Find the cause of the Bug and fix it with the smallest change that
             is clearly right, with a test that fails without it, and commit.
@@ -48,6 +63,8 @@ setup:
           takes: [Bug]
           yields: [Patch]
         - name: Approve risky fix
+          x: 0
+          y: 750
           kind: human
           remindAfter: 14400
           takes:
@@ -58,6 +75,8 @@ setup:
             - object: Patch
               states: [approved, changes requested]
         - name: Revise
+          x: 305
+          y: 750
           prompt: Revise the Patch as the tech lead asks, keeping its test, and rate its risk again.
           repositories: [app]
           takes:
@@ -66,6 +85,8 @@ setup:
               state: changes requested
           yields: [Patch]
         - name: Open pull request
+          x: 608
+          y: 750
           prompt: >-
             Push the run's branch and open a pull request fixing the Bug,
             describing the Patch's cause and change, and reply with its address.

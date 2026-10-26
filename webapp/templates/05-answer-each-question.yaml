@@ -6,8 +6,13 @@ setup:
     - name: Answer each question
       start:
         next: List the questions
+        x: 0
+        y: 0
+      end: {x: 0, y: 420}
       objects:
         - name: Questions
+          x: 0
+          y: 120
           many: true
           min: 1
           attributes:
@@ -16,6 +21,8 @@ setup:
             - name: context
               definition: What the answer should take into account; empty if nothing.
         - name: Answers
+          x: 0
+          y: 240
           many: true
           attributes:
             - name: question
@@ -23,12 +30,18 @@ setup:
             - name: answer
               definition: The answer, in a short paragraph.
         - name: Page
+          x: 0
+          y: 360
           end: true
       processes:
         - name: List the questions
+          x: 0
+          y: 60
           kind: human
           yields: [Questions]
         - name: Each question
+          x: 0
+          y: 180
           kind: flow
           recording: true
           takes: [Questions]
@@ -46,6 +59,8 @@ setup:
                 takes: [Questions]
                 yields: [Answers]
         - name: Gather the answers
+          x: 0
+          y: 300
           prompt: >-
             Put the Answers together as one page of questions and answers, in
             an order that reads well, with headings where they help.

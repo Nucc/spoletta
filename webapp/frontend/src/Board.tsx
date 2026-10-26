@@ -88,7 +88,7 @@ import { Sidebar, SidebarGroup } from './Sidebar'
 import { SharedRecords } from './Records'
 import { NoteDialog, VersionPanel } from './Versions'
 import { ProblemCount } from './Problems'
-import { BoardTips, EmptyBoardGuide, useHints, type BoardTip } from './Hints'
+import { BlocksHint, BoardTips, EmptyBoardGuide, useHints, type BoardTip } from './Hints'
 import { DiffPanel, diffCount, highlightsOf, noHighlights, type Highlights } from './Diff'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
@@ -3241,6 +3241,7 @@ export default function Board({
       <div className="workspace" style={{ '--panel-width': `${panelColumn.width}px` } as CSSProperties}>
         <Sidebar>
           <SidebarGroup id="blocks" title="Building blocks">
+            {!readOnly && !(structBoard && !objectBoard) && <BlocksHint />}
             {structBoard && !objectBoard ? null : (
               <BlockPalette
                 blocks={objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS}

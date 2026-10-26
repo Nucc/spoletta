@@ -98,6 +98,16 @@ export function EmptyBoardGuide({ inner }: { inner: boolean }) {
   )
 }
 
+// How blocks go on the board, above them in the sidebar.
+export function BlocksHint() {
+  return (
+    <Hint id="blocks" className="panel-hint sidebar-hint">
+      Drag a block onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, and Shift+double-click
+      to add an object. Processes connect through the objects they generate and take; right-click a node for more.
+    </Hint>
+  )
+}
+
 // What the board shows a tip about: what is selected, or what a link is
 // being drawn from.
 export type BoardTip = 'process' | 'object' | 'input' | 'output' | 'connection' | 'state' | 'several' | 'struct'
@@ -123,7 +133,8 @@ const TIPS: Record<BoardTip, ReactNode> = {
   ),
   object: (
     <>
-      Double-click an object to give it attributes, which agents generating it reply with as JSON, and right-click it to add states. Unfold it
+      Double-click an object to give it attributes, which agents generating it reply with as JSON, and right-click it to rename it, add
+      states and more. Unfold it
       with its magnifier to build what it is made of: attributes and parts that are objects of their own, nested in what it holds. In its
       settings, pick an object it specializes, whose fields it has too.
     </>

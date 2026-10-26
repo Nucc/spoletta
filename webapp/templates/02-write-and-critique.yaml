@@ -6,10 +6,17 @@ setup:
     - name: Write and critique
       start:
         next: Give the brief
+        x: 258.5
+        y: 0
+      end: {x: 373.75, y: 673}
       objects:
         - name: Editor
+          x: 515.75
+          y: 667
           human: true
         - name: Brief
+          x: 213.5
+          y: 228
           attributes:
             - name: topic
               definition: What the piece is about.
@@ -18,13 +25,19 @@ setup:
             - name: length
               definition: About how many words it runs to.
         - name: Draft
+          x: 31.5
+          y: 492
           end: true
           states: [good, weak]
       processes:
         - name: Give the brief
+          x: 197
+          y: 104
           kind: human
           yields: [Brief]
         - name: Write
+          x: 0
+          y: 368
           prompt: >-
             Write the piece the Brief asks for, for its audience and at about
             its length. Be concrete: an example says more than an adjective.
@@ -32,6 +45,8 @@ setup:
           takes: [Brief]
           yields: [Draft]
         - name: Critique
+          x: 731.75
+          y: 663
           prompt: >-
             Critique the Draft as an editor would, against the Brief. It is
             good when it is accurate, concrete, right for its audience and
@@ -45,6 +60,8 @@ setup:
               states: [good, weak]
           onFailure: [Editor decides]
         - name: Rewrite
+          x: 70.75
+          y: 663
           prompt: Rewrite the Draft as the critic asks, keeping to the Brief.
           repositories: []
           takes:
@@ -53,6 +70,8 @@ setup:
               state: weak
           yields: [Draft]
         - name: Editor decides
+          x: 484.25
+          y: 787
           kind: human
           takes: [Editor]
           yields:

@@ -9,8 +9,13 @@ setup:
           timezone: UTC
       start:
         next: Read the channel
+        x: 90.5
+        y: 0
+      end: {x: 94.5, y: 848}
       objects:
         - name: Messages
+          x: 30
+          y: 228
           many: true
           attributes:
             - name: user
@@ -22,10 +27,16 @@ setup:
             - name: replies
               definition: How many replies its thread has.
         - name: Digest
+          x: 42.5
+          y: 492
         - name: Posted
+          x: 41
+          y: 732
           end: true
       processes:
         - name: Read the channel
+          x: 1.5
+          y: 104
           kind: connector
           connector:
             server: slack
@@ -34,6 +45,8 @@ setup:
               limit: "50"
           yields: [Messages]
         - name: Write the digest
+          x: 14
+          y: 368
           prompt: >-
             Sum up the Messages written in the last day, those whose ts is
             within 24 hours of now, for someone who missed them: the
@@ -44,6 +57,8 @@ setup:
           takes: [Messages]
           yields: [Digest]
         - name: Post the digest
+          x: 0
+          y: 608
           kind: connector
           connector:
             server: slack

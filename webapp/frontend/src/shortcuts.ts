@@ -174,9 +174,11 @@ export const shortcutText = (id: ShortcutId, mac: boolean) => comboKeys(shortcut
 
 // How well a query matches a text, as the palette ranks what it lists, and
 // where in the text it matched, to mark it: null if it doesn't. Each word
-// of the query must turn up in the text, its letters in order though not
-// side by side; letters together, at the start of the text or of one of
-// its words, score higher, as does a word found whole.
+// of the query must turn up in the text, whole inside one of its words, or
+// in pieces each starting one of its words, in order: "fix exc" and "fiex"
+// find Fix exceptions, "ept" does, "fxe" doesn't. Letters together, at the
+// start of the text or of one of its words, score higher, as does a word
+// found whole.
 export function fuzzy(query: string, text: string): { score: number; hits: number[] } | null {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   const lower = text.toLowerCase()
@@ -203,7 +205,8 @@ const AT_START = 2
 const GAP = 0.05
 
 // The best placing of a word's letters in the text, by dynamic programming
-// over where each letter lands.
+// over where each letter lands: each starting a word of the text or right
+// after the letter before. Failing that, the word inside one of the text's.
 function matchWord(word: string, lower: string, text: string): { score: number; hits: number[] } | null {
   const n = lower.length
   const m = word.length
@@ -217,13 +220,14 @@ function matchWord(word: string, lower: string, text: string): { score: number; 
     from.push(new Array(n).fill(-1))
     for (let j = i; j < n; j++) {
       if (lower[j] !== word[i]) continue
-      const bonus = MATCH + (wordStart(text, j) ? AT_WORD : 0) + (j === 0 ? AT_START : 0)
+      const starts = wordStart(text, j)
+      const bonus = MATCH + (starts ? AT_WORD : 0) + (j === 0 ? AT_START : 0)
       if (i === 0) {
-        best[i][j] = bonus - GAP * j
+        if (starts) best[i][j] = bonus - GAP * j
         continue
       }
       for (let k = i - 1; k < j; k++) {
-        if (best[i - 1][k] === -Infinity) continue
+        if (best[i - 1][k] === -Infinity || (k !== j - 1 && !starts)) continue
         const s = best[i - 1][k] + bonus + (k === j - 1 ? TOGETHER : -GAP * (j - k - 1))
         if (s > best[i][j]) {
           best[i][j] = s
@@ -234,7 +238,11 @@ function matchWord(word: string, lower: string, text: string): { score: number; 
   }
   let end = -1
   for (let j = 0; j < n; j++) if (best[m - 1][j] > (end < 0 ? -Infinity : best[m - 1][end])) end = j
-  if (end < 0 || best[m - 1][end] === -Infinity) return null
+  if (end < 0 || best[m - 1][end] === -Infinity) {
+    const at = lower.indexOf(word)
+    if (at < 0) return null
+    return { score: MATCH * m + TOGETHER * (m - 1) - GAP * at, hits: Array.from({ length: m }, (_, i) => at + i) }
+  }
   const hits: number[] = []
   for (let i = m - 1, j = end; i >= 0; j = from[i][j], i--) hits.unshift(j)
   // A word found whole, as a word of the text, counts most.

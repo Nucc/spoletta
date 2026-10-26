@@ -4032,8 +4032,14 @@ kbd {
   color: #656d76;
 }
 
-.palette-item:not(:has(.palette-hint)) .palette-title {
-  flex: 1;
+/* The group and the keys keep to the right, after the hint if any. */
+.palette-tag,
+.palette-item > .keys {
+  margin-left: auto;
+}
+
+.palette-tag + .keys {
+  margin-left: 0;
 }
 
 .palette-tag {
@@ -4067,6 +4073,7 @@ kbd {
 .shortcut-sheet {
   width: min(760px, calc(100vw - 32px));
   max-height: calc(100vh - 64px);
+  overflow-y: auto;
   padding: 16px;
   border: none;
   border-radius: 10px;

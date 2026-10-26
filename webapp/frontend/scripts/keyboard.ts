@@ -104,7 +104,11 @@ check('Enter on a Mac', comboKeys({ key: 'Enter', mod: true }, true), ['⌘', '�
 
 // Fuzzy matching.
 check('letters at word starts', fuzzy('fe', 'Fix exceptions')?.hits, [0, 4])
-check('letters in order, apart', fuzzy('fxe', 'Fix exceptions')?.hits, [0, 2, 4])
+check('pieces starting words', fuzzy('fiex', 'Fix exceptions')?.hits, [0, 1, 4, 5])
+check('letters inside words apart', fuzzy('fxe', 'Fix exceptions'), null)
+check('a word inside one', fuzzy('ept', 'Fix exceptions')?.hits, [7, 8, 9])
+check('letters picked across words', fuzzy('cred', 'Select every process and object'), null)
+check('a word starting one beats one inside one', fuzzy('patch', 'Patch')!.score > fuzzy('patch', 'Dispatcher')!.score, true)
 check('letters out of order', fuzzy('xf', 'Fix'), null)
 check('each word of the query', fuzzy('exc fix', 'Fix exceptions')?.hits, [0, 1, 2, 4, 5, 6])
 check('a word missing', fuzzy('fix bug', 'Fix exceptions'), null)
@@ -201,7 +205,7 @@ check('a part is on its object unfolded', [found[2].node, found[2].board, found[
 check('a state goes to its object', found[5].node, `obj-${bug.id}`)
 check('an inner board’s match is on it', [found[3].board, found[3].unfolded], [fix.id, null])
 check('where a part is', placeOf(found[2], c), 'in Bug report')
-check('where an inner board’s match is', placeOf(found[3], c), "on Fix's board")
+check('where an inner board’s match is', placeOf(found[3], c), 'on the board of Fix')
 check('where a top board’s match is', placeOf(found[0], c), 'on the top board')
 const struct = { processes: [], objects: [report, field], boards: [] }
 check(
@@ -211,6 +215,11 @@ check(
     ['Bug report', report.id],
     ['Bug id', report.id],
   ],
+)
+check(
+  'where a struct’s object is',
+  findOnBoards(struct, 'bug', { board: null, unfolded: report.id }, report.id).map((m) => placeOf(m, struct)),
+  ["the struct's own object", 'in Bug report'],
 )
 
 console.log(`${checked} checks of the keyboard's helpers, ${failed} failed`)

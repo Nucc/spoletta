@@ -2847,7 +2847,7 @@ export default function Board({
       if (p && b.process !== boardId)
         view({
           id: `board-of:${b.process}`,
-          title: `${p.name}'s board`,
+          title: `The board of ${p.name}`,
           words: 'flow process inside zoom',
           run: () => showProcessBoard(b.process),
         })

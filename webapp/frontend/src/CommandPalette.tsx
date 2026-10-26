@@ -192,14 +192,7 @@ export default function CommandPalette({
       })
     }
     for (const t of me ? tabsFor(me) : []) {
-      all.push({
-        id: `settings:${t.id}`,
-        title: t.label,
-        group: 'Settings',
-        hint: 'Settings',
-        words: 'settings',
-        hash: `#/settings/${t.id}`,
-      })
+      all.push({ id: `settings:${t.id}`, title: t.label, group: 'Settings', words: 'settings', hash: `#/settings/${t.id}` })
     }
     // Favourites first, as the flow list puts them.
     const ordered = [...(flows ?? [])].sort((a, b) => Number(b.favourite) - Number(a.favourite))
@@ -217,7 +210,9 @@ export default function CommandPalette({
     return GROUPS.flatMap((g) => all.filter((i) => i.group === g)).concat(all.filter((i) => !GROUPS.includes(i.group)))
   }
 
-  const shown = rank(listed(), query, choosing ? [] : recent)
+  // What can't be done now follows what can, still saying why.
+  const ranked = rank(listed(), query, choosing ? [] : recent)
+  const shown = [...ranked.filter((r) => !r.item.disabled), ...ranked.filter((r) => r.item.disabled)]
   // With nothing typed, the groups are headed, what was picked lately first.
   const headed = !query.trim()
   const lately = new Set(recent)
@@ -273,6 +268,7 @@ export default function CommandPalette({
   }
 
   let group = ''
+  const leading = recentCount(shown, lately)
   return (
     <dialog
       ref={ref}
@@ -306,7 +302,7 @@ export default function CommandPalette({
       <ul ref={list} id="palette-list" className="palette-list" role="listbox" aria-label="What it finds">
         {shown.length === 0 && <li className="palette-empty">{flows === null && !choosing ? 'Loading…' : 'Nothing matches.'}</li>}
         {shown.map(({ item, hits }, i) => {
-          const heading = headed && !choosing ? (i < recentCount(shown, lately) ? 'Lately' : item.group) : ''
+          const heading = !headed || choosing ? '' : item.disabled ? 'Not now' : i < leading ? 'Lately' : item.group
           const head = heading !== group ? heading : ''
           group = heading
           return (

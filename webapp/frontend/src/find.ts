@@ -70,11 +70,10 @@ export function findOnBoards(c: Contents, query: string, from: Place, structRoot
 }
 
 // Where a match is, as the find box says it: the board, or the object it
-// makes up, named.
+// makes up, named; on a struct's board, its object is its own.
 export function placeOf(m: FindMatch, c: Contents): string {
-  if (m.unfolded !== null && m.node !== `obj-${m.unfolded}`) {
-    return `in ${c.objects.find((o) => o.id === m.unfolded)?.name ?? 'an object'}`
-  }
+  if (m.unfolded !== null && m.node === `obj-${m.unfolded}`) return "the struct's own object"
+  if (m.unfolded !== null) return `in ${c.objects.find((o) => o.id === m.unfolded)?.name ?? 'an object'}`
   if (m.board === null) return 'on the top board'
-  return `on ${c.processes.find((p) => p.id === m.board)?.name ?? 'a flow process'}'s board`
+  return `on the board of ${c.processes.find((p) => p.id === m.board)?.name ?? 'a flow process'}`
 }

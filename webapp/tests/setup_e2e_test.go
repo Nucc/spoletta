@@ -215,6 +215,8 @@ flows:
         next: [Review]
       - name: Review
         kind: human
+        remindAfter: 3600
+        waitAtMost: 86400
         prompt: Is the summary right?
         takes: [PFX Ticket, Reviewer]
         yields: [{object: PFX Ticket, states: [open, closed]}]
@@ -273,7 +275,7 @@ func TestSetupRoundTrips(t *testing.T) {
 	}
 	for _, want := range []string{"copyOf:", "runs: " + prefix + " Summarize", "enabled: false", "relation: aggregation",
 		"specializes: Base", "rule: When it has been reviewed", "role: instrument", "condition: true", "onFailure:", "mcpServers:", "prompt: |",
-		"tags:\n        - support\n", "tags:\n        - Nightly\n        - triage\n"} {
+		"tags:\n        - support\n", "tags:\n        - Nightly\n        - triage\n", "remindAfter: 3600", "waitAtMost: 86400"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("the export has no %q:\n%s", want, first)
 		}

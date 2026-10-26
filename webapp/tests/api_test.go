@@ -471,6 +471,8 @@ type run struct {
 	// The flow it is a run of.
 	Flow   int64  `json:"flow"`
 	Status string `json:"status"`
+	// Running with a step waiting for a person.
+	Waiting bool `json:"waiting"`
 	// The version of the board the run ran on; null for runs from before
 	// versions were recorded.
 	Version *int64 `json:"version"`
@@ -739,7 +741,11 @@ type step struct {
 	CanFollowUp bool       `json:"canFollowUp"`
 	FollowUps   []followUp `json:"followUps"`
 	// What an agent step's model calls used, as pi reports it.
-	Usage      *stepUsage `json:"usage,omitempty"`
+	Usage *stepUsage `json:"usage,omitempty"`
+	// For an agent, script or connector step: how long it waited for its
+	// slots, in milliseconds, and which try of its process it is, from 1.
+	SlotWaitMS *int64     `json:"slotWaitMs"`
+	Try        *int64     `json:"try"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }

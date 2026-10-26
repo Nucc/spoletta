@@ -920,6 +920,8 @@ export type FlowRun = {
   id: number
   flow: number
   status: FlowRunStatus
+  // Running with a step waiting for a person: a review, or a loop's question.
+  waiting: boolean
   // The version of the board it ran on; starting a run saves a board changed
   // since its version as a new one. Null for runs from before versions were kept.
   version: number | null
@@ -1014,6 +1016,13 @@ export type RunStep = {
   // What an agent step's model calls used, as pi reports it; absent for
   // other steps.
   usage?: StepUsage
+  // For an agent, script or connector step: how long it waited for its
+  // slots before it started, its person's and the engine's, in
+  // milliseconds, and which try of its process it is, from 1, one more for
+  // each retry after a failure. Null for other steps and those from before
+  // they were recorded.
+  slotWaitMs: number | null
+  try: number | null
   startedAt: string
   finishedAt: string | null
 }
@@ -1099,8 +1108,44 @@ export async function previewSchedule(cron: string, timezone: string): Promise<{
   return res.json()
 }
 
-export function listRuns(flow: number): Promise<FlowRun[]> {
-  return request(`/api/runs?flow=${flow}`)
+// How a run stands, as the run list picks runs by: waiting is running with
+// a step waiting for a person, and running the others going.
+export type RunStanding = 'running' | 'waiting' | 'done' | 'failed' | 'interrupted' | 'terminated'
+
+// How a run started: by a person with the Run button, a schedule, the API,
+// as a re-run of another, on records a person picked, or in another run (a
+// flow process's board, an item of a list, a subflow).
+export type RunOrigin = 'person' | 'schedule' | 'api' | 'rerun' | 'record' | 'run'
+
+// What narrows the run list; each picks any of its values, none for all.
+export type RunFilter = { status: RunStanding[]; started: RunOrigin[] }
+
+// The most runs a page of the list holds; a full page means there may be more.
+export const RUN_PAGE = 200
+
+// How a run started, the first its markers say, as run_list.go tells.
+export function runOrigin(r: FlowRun): RunOrigin {
+  if (r.rerunOf !== null) return 'rerun'
+  if (r.record !== null) return 'record'
+  if (r.apiKey) return 'api'
+  if (r.schedule !== null) return 'schedule'
+  return r.parent !== null ? 'run' : 'person'
+}
+
+export const runStanding = (r: FlowRun): RunStanding => (r.status === 'running' ? (r.waiting ? 'waiting' : 'running') : r.status)
+
+// Whether the run is one the filter picks.
+export const runMatches = (r: FlowRun, f: RunFilter) =>
+  (f.status.length === 0 || f.status.includes(runStanding(r))) && (f.started.length === 0 || f.started.includes(runOrigin(r)))
+
+// The flow's runs the filter picks, newest first, a page at a time: those
+// older than the run before, if given.
+export function listRuns(flow: number, filter?: RunFilter, before?: number): Promise<FlowRun[]> {
+  const p = new URLSearchParams({ flow: String(flow) })
+  if (filter?.status.length) p.set('status', filter.status.join(','))
+  if (filter?.started.length) p.set('started', filter.started.join(','))
+  if (before !== undefined) p.set('before', String(before))
+  return request(`/api/runs?${p}`)
 }
 
 // Starts a run on the board as it is, or with published on the version the

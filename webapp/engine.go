@@ -1161,7 +1161,7 @@ func (w *walk) runStep(id int64, p *pass, given []runInput, cr *changeRequest) (
 	var ok, stopped bool
 	var stepID int64
 	for try := 0; ; try++ {
-		res, ok, stopped, stepID = w.execute(id, given, cr)
+		res, ok, stopped, stepID = w.execute(id, given, cr, try+1)
 		if ok || stopped || w.stopped() || try >= w.settings[id].retries() {
 			break
 		}
@@ -1680,12 +1680,15 @@ func (w *walk) setState(id, stepID int64, d decision) []func() {
 // its run, rather than failed; a duplicate is a result, and terminates the
 // run. A step with a timeout fails once it runs out: the worker ends agents
 // and scripts then, and the engine a little later if the worker doesn't.
-func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResult, bool, bool, int64) {
+// try is which try of the process it is, from 1, which the step records with
+// how long it waited for its slots, for its run's timeline.
+func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest, try int) (runResult, bool, bool, int64) {
 	who, err := runUser(w.ctx, w.e.db, w.run)
 	if err != nil {
 		runLog(w.e.db, w.run, 0, logError, "process %d couldn't run: whose run it is: %v", id, err)
 		return runResult{}, false, false, 0
 	}
+	ready := time.Now()
 	slot, ok := w.e.personSlot(w.ctx, who, w.run, w.names[id])
 	if !ok {
 		return runResult{}, false, true, 0
@@ -1696,6 +1699,7 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 	case <-w.ctx.Done():
 		return runResult{}, false, true, 0
 	}
+	waited := time.Since(ready)
 	stop, cancel := context.WithCancel(w.ctx)
 	defer cancel()
 	ctx := stop
@@ -1713,6 +1717,9 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest) (runResul
 		stepID = id
 		w.lr.steps[id] = cancel
 		w.e.mu.Unlock()
+		if _, err := w.e.db.ExecContext(w.ctx, "UPDATE run_steps SET slot_wait_ms = ?, try = ? WHERE id = ?", waited.Milliseconds(), try, id); err != nil && w.ctx.Err() == nil {
+			log.Printf("record how long step %d waited: %v", id, err)
+		}
 	}
 	defer func() {
 		w.e.mu.Lock()

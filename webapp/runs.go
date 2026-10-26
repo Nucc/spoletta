@@ -18,6 +18,9 @@ type run struct {
 	// The flow it is a run of.
 	Flow   int64  `json:"flow"`
 	Status string `json:"status"`
+	// Running with a step waiting for a person: a review, or a loop's
+	// question; see run_list.go.
+	Waiting bool `json:"waiting"`
 	// The version of the board the run ran on; null for runs from before
 	// versions were recorded.
 	Version *int64 `json:"version"`
@@ -49,7 +52,9 @@ type run struct {
 	FinishedAt *time.Time `json:"finishedAt"`
 }
 
-var runColumns = "id, flow_id, status, version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), record_id, started_at, finished_at"
+// What scanRun reads of a run, selected from runs unaliased, which runWaiting
+// refers to.
+var runColumns = "id, flow_id, status, status = '" + runRunning + "' AND " + runWaiting + ", version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), record_id, started_at, finished_at"
 
 // The tokens a step's model calls took in and gave out, and what they cost
 // at the models' catalog prices, in dollars.
@@ -84,7 +89,7 @@ func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage,
 }
 
 func scanRun(row interface{ Scan(...any) error }, rn *run) error {
-	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.Record, &rn.StartedAt, &rn.FinishedAt)
+	return row.Scan(&rn.ID, &rn.Flow, &rn.Status, &rn.Waiting, &rn.Version, &rn.Parent, &rn.Process, &rn.ProcessName, &rn.RerunOf, &rn.RerunFrom, &rn.RerunFromName, &rn.ItemKey, &rn.Schedule, &rn.StartedBy, &rn.APIKey, &rn.Record, &rn.StartedAt, &rn.FinishedAt)
 }
 
 // A step is one execution of a process in a run. A process can run several
@@ -133,7 +138,13 @@ type step struct {
 	FollowUps   []followUp `json:"followUps"`
 	// What an agent step's model calls used, follow-ups included, as pi
 	// reports it; absent for other steps.
-	Usage      *stepUsage `json:"usage,omitempty"`
+	Usage *stepUsage `json:"usage,omitempty"`
+	// For an agent, script or connector step: how long it waited for its
+	// slots before it started, in milliseconds, and which try of its process
+	// it is, from 1; null for other steps and those from before they were
+	// recorded. A step waiting for its slots isn't recorded until it has them.
+	SlotWaitMS *int64     `json:"slotWaitMs"`
+	Try        *int64     `json:"try"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
 }
@@ -439,12 +450,20 @@ func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *in
 }
 
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
+	// The flow's runs, newest first, a page at a time, narrowed by status and
+	// how they started; see run_list.go.
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := flowParam(w, r)
 		if !ok {
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), "SELECT "+runColumns+" FROM runs WHERE flow_id = ? ORDER BY id DESC LIMIT 200", f)
+		filter, msg := parseRunFilter(r.URL.Query())
+		if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		where, args := filter.query(f)
+		rows, err := db.QueryContext(r.Context(), "SELECT "+runColumns+" FROM runs"+where, args...)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -532,7 +551,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
-				status, output, error, outcome, instructions, `+userLabelColumn("decided_by")+`, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''), started_at, finished_at
+				status, output, error, outcome, instructions, `+userLabelColumn("decided_by")+`, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''), slot_wait_ms, try, started_at, finished_at
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
 			serverError(w, err)
@@ -561,7 +580,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			var inputs []byte
 			var cr, commits []byte
 			if err := rows.Scan(&s.ID, &s.Process, &s.ProcessName, &s.Kind, &s.Model, &s.Thinking, &s.Prompt, &inputs, &cr,
-				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.DecidedBy, &s.ChildRun, &s.Branch, &commits, &s.Session, &s.StartedAt, &s.FinishedAt); err != nil {
+				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.DecidedBy, &s.ChildRun, &s.Branch, &commits, &s.Session, &s.SlotWaitMS, &s.Try, &s.StartedAt, &s.FinishedAt); err != nil {
 				serverError(w, err)
 				return
 			}

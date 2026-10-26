@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Data } from './Data'
 import {
@@ -11,8 +11,12 @@ import {
   type FlowRun,
   type FlowRunDetail,
   type FlowRunStatus,
+  type Process,
   type ProcessKind,
   type RepoCommits,
+  type RunFilter,
+  type RunOrigin,
+  type RunStanding,
   type RunStep,
   type StepMessage,
   type StepStatus,
@@ -20,10 +24,15 @@ import {
 } from './api'
 import { ClockIcon, TerminalIcon } from './icons'
 import RunLogs from './RunLogs'
+import RunTimeline from './RunTimeline'
 import StepTerminal, { formatLogTime, useStepLogs } from './StepTerminal'
+import { formatSpan } from './timeline'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
+
+// The shortest wait for a slot a step's panel tells of.
+const SLOT_WAIT_SHOWN_MS = 1000
 
 export const RUN_LABELS: Record<FlowRunStatus, string> = {
   running: 'Running',
@@ -59,7 +68,7 @@ const totalUsage = (steps: RunStep[]): StepUsage | undefined =>
 export const formatTime = (s: string) =>
   new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
 
-function formatDuration(start: string, end: string | null): string {
+export function formatDuration(start: string, end: string | null): string {
   if (!end) return ''
   const s = Math.max(0, Math.round((Date.parse(end) - Date.parse(start)) / 1000))
   if (s < 60) return `${s}s`
@@ -75,18 +84,63 @@ export function decisionText(outcome: string, object: string | undefined, instru
   return instructions ? `${head}:\n${instructions}` : head
 }
 
-// Every run of the flow, newest first, each with the runs of its recording
-// flow processes under it, such as one per item of a list, and its re-runs,
-// in the order they started.
+export const STANDING_LABELS: Record<RunStanding, string> = {
+  running: 'Running',
+  waiting: 'Waiting',
+  done: 'Done',
+  failed: 'Failed',
+  interrupted: 'Interrupted',
+  terminated: 'Terminated',
+}
+
+export const ORIGIN_LABELS: Record<RunOrigin, string> = {
+  person: 'A person',
+  schedule: 'A schedule',
+  api: 'The API',
+  rerun: 'A re-run',
+  record: 'Records',
+  run: 'Another run',
+}
+
+const STANDINGS = Object.keys(STANDING_LABELS) as RunStanding[]
+const ORIGINS = Object.keys(ORIGIN_LABELS) as RunOrigin[]
+
+// The flow's runs the filter picks, newest first, each with the runs of its
+// recording flow processes under it, such as one per item of a list, and
+// its re-runs, in the order they started, as far as they are loaded; older
+// ones load a page at a time. Above them, a search of what the runs held,
+// on the flow's Data page, and the filter. While a run to compare is
+// picked, the next run clicked is compared with it.
 export function RunList({
+  flow,
   runs,
+  filter,
+  onFilter,
+  more,
+  loading,
+  onMore,
   selected,
   onSelect,
+  picking,
+  onCancelPick,
 }: {
+  flow: number
   runs: FlowRun[]
+  filter: RunFilter
+  onFilter: (f: RunFilter) => void
+  // Whether older runs the filter picks may not be loaded yet, and what loads them.
+  more: boolean
+  loading: boolean
+  onMore: () => void
   selected: number | null
   onSelect: (id: number) => void
+  // The run the next one clicked is compared with, if one is.
+  picking: number | null
+  onCancelPick: () => void
 }) {
+  const [filtering, setFiltering] = useState(false)
+  const [query, setQuery] = useState('')
+  const filtered = filter.status.length > 0 || filter.started.length > 0
   const ids = new Set(runs.map((r) => r.id))
   const children = new Map<number, FlowRun[]>()
   // A re-run goes under the run it re-runs.
@@ -95,25 +149,39 @@ export function RunList({
     const p = parentOf(r)
     if (p !== null && ids.has(p)) children.set(p, [...(children.get(p) ?? []), r])
   }
-  // A run whose parent fell off the list shows on its own.
+  // A run whose parent fell off the list, or the filter left out, shows on its own.
   const top = runs.filter((r) => parentOf(r) === null || !ids.has(parentOf(r)!))
+
+  // The Data page opens on the query, written as its address keeps one.
+  const search = (e: FormEvent) => {
+    e.preventDefault()
+    const q = query.trim()
+    window.location.hash = `#/flows/${flow}/data${q ? '?' + new URLSearchParams({ q }).toString().replace(/\+/g, '%20') : ''}`
+  }
+  const toggle = <K extends keyof RunFilter>(key: K, value: RunFilter[K][number]) => {
+    const values = filter[key] as RunFilter[K][number][]
+    onFilter({ ...filter, [key]: values.includes(value) ? values.filter((v) => v !== value) : [...values, value] })
+  }
 
   const item = (r: FlowRun, nested: boolean) => (
     <li key={r.id}>
       <button
-        className={`run-item${selected === r.id ? ' selected' : ''}`}
+        className={`run-item${selected === r.id ? ' selected' : ''}${picking === r.id ? ' picking' : ''}`}
         aria-current={selected === r.id}
+        disabled={picking === r.id}
         onClick={() => onSelect(r.id)}
       >
         <span className="run-item-title">
-          <span className={`status-dot ${r.status}`} aria-hidden="true" />
+          <span className={`status-dot ${r.waiting ? 'waiting' : r.status}`} aria-hidden="true" />
           Run #{r.id}
           {r.schedule !== null && (
             <span className="run-item-scheduled" title="Started by a schedule">
               <ClockIcon />
             </span>
           )}
-          <span className="run-item-status">{RUN_LABELS[r.status]}</span>
+          <span className="run-item-status" title={r.waiting ? 'A step waits for a person' : undefined}>
+            {r.waiting ? STANDING_LABELS.waiting : RUN_LABELS[r.status]}
+          </span>
         </span>
         {r.itemKey && (
           <span className="run-item-key" title={r.itemKey}>
@@ -141,25 +209,104 @@ export function RunList({
     </li>
   )
 
-  return runs.length === 0 ? (
-    <p className="panel-note">No runs yet. Press play to run the flow.</p>
-  ) : (
-    <ol className="run-list">{top.map((r) => item(r, false))}</ol>
+  return (
+    <div className="run-finder" onKeyDown={(e) => e.key === 'Escape' && picking !== null && onCancelPick()}>
+      <form className="run-search" role="search" onSubmit={search}>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search what runs held…"
+          aria-label="Search the flow's runs on its Data page"
+          title="Opens the flow's Data page with this search, e.g. status:failed -@Bug.state:fixed timeout"
+        />
+        <button
+          type="button"
+          className={`run-filter-button${filtering ? ' open' : ''}${filtered ? ' active' : ''}`}
+          aria-expanded={filtering}
+          onClick={() => setFiltering(!filtering)}
+          title="Show only runs in some states, or started some ways"
+        >
+          Filter{filtered && ` · ${filter.status.length + filter.started.length}`}
+        </button>
+      </form>
+      {filtering && (
+        <div className="run-filters">
+          <fieldset>
+            <legend>Status</legend>
+            {STANDINGS.map((s) => (
+              <label key={s} className={`run-chip${filter.status.includes(s) ? ' on' : ''}`}>
+                <input type="checkbox" checked={filter.status.includes(s)} onChange={() => toggle('status', s)} />
+                <span className={`status-dot ${s}`} aria-hidden="true" />
+                {STANDING_LABELS[s]}
+              </label>
+            ))}
+          </fieldset>
+          <fieldset>
+            <legend>Started by</legend>
+            {ORIGINS.map((o) => (
+              <label key={o} className={`run-chip${filter.started.includes(o) ? ' on' : ''}`}>
+                <input type="checkbox" checked={filter.started.includes(o)} onChange={() => toggle('started', o)} />
+                {ORIGIN_LABELS[o]}
+              </label>
+            ))}
+          </fieldset>
+        </div>
+      )}
+      {filtered && !filtering && (
+        <p className="panel-note run-filtered">
+          {[
+            filter.status.map((s) => STANDING_LABELS[s]).join(' or '),
+            filter.started.length > 0 && `started by ${filter.started.map((o) => ORIGIN_LABELS[o].toLowerCase()).join(' or ')}`,
+          ]
+            .filter(Boolean)
+            .join(', ')}{' '}
+          <button className="link-button" onClick={() => onFilter({ status: [], started: [] })}>
+            Show all
+          </button>
+        </p>
+      )}
+      {picking !== null && (
+        <p className="run-picking" role="status">
+          Pick the run to compare run #{picking} with.{' '}
+          <button className="link-button" onClick={onCancelPick}>
+            Cancel
+          </button>
+        </p>
+      )}
+      {runs.length === 0 ? (
+        <p className="panel-note">
+          {loading ? 'Loading…' : filtered ? 'No runs match the filter.' : 'No runs yet. Press play to run the flow.'}
+        </p>
+      ) : (
+        <ol className="run-list">{top.map((r) => item(r, false))}</ol>
+      )}
+      {more && (
+        <button className="run-more" onClick={onMore} disabled={loading}>
+          {loading ? 'Loading…' : 'Load older runs'}
+        </button>
+      )}
+    </div>
   )
 }
 
 // A process or object of the board the run panel is on, double-clicked
-// while the run shows, with its name on the board; seq tells a second
-// double-click on it from the first.
-export type RunFocus = { kind: 'process' | 'object'; id: number; name: string; seq: number }
+// while the run shows, with its name on the board, or a step clicked on the
+// run's timeline; seq tells a second double-click on it from the first.
+export type RunFocus = { kind: 'process' | 'object' | 'step'; id: number; name: string; seq: number }
 
 // What happened in a run: each process execution in the order it started.
 // On a process, its steps open and the panel scrolls to them; on an object,
-// what it held in the run comes first, and the steps that made it open.
+// what it held in the run comes first, and the steps that made it open; on
+// a step, it opens. Its timeline and its log open in windows of their own.
 export function RunPanel({
   run,
+  processes,
   focus,
   onClearFocus,
+  onOpenStep,
+  comparing,
+  onCompare,
   onStop,
   onStopStep,
   onOpenRun,
@@ -168,8 +315,16 @@ export function RunPanel({
   onClose,
 }: {
   run: FlowRunDetail
+  // The processes of the version the board shows, for the timeline's lanes.
+  processes: Process[] | undefined
   focus: RunFocus | null
   onClearFocus: () => void
+  // Opens a step of this run, or of one it ran as, from its timeline.
+  onOpenStep: (run: number, step: number) => void
+  // Whether the run waits for the run to compare it with to be picked in the
+  // list, and what starts or ends that.
+  comparing: boolean
+  onCompare: () => void
   onStop: () => void
   onStopStep: (id: number) => void
   // Opens another run: the one a recording flow process ran as, or the one it ran in.
@@ -184,9 +339,14 @@ export function RunPanel({
   const busy = run.steps.some((s) => s.status === 'active' || s.followUps.some((f) => f.status === 'active'))
   const focusedObjects = focus?.kind === 'object' ? run.objects.filter((o) => o.object === focus.id) : []
   const focused = (s: RunStep) =>
-    focus?.kind === 'process' ? s.process === focus.id : focus?.kind === 'object' && focusedObjects.some((o) => o.step === s.id)
+    focus?.kind === 'process'
+      ? s.process === focus.id
+      : focus?.kind === 'step'
+        ? s.id === focus.id
+        : focus?.kind === 'object' && focusedObjects.some((o) => o.step === s.id)
   const panel = useRef<HTMLElement>(null)
   const [showLogs, setShowLogs] = useState(false)
+  const [showTimeline, setShowTimeline] = useState(false)
   useEffect(() => {
     if (!focus || !panel.current) return
     const steps = [...panel.current.querySelectorAll<HTMLDetailsElement>('.step.focused')]
@@ -240,13 +400,37 @@ export function RunPanel({
         <button className="run-logs-button" onClick={() => setShowLogs(true)} title="Read what happened in the run, step by step">
           Logs
         </button>
+        <button
+          className="run-logs-button"
+          onClick={() => setShowTimeline(true)}
+          title="See the run's steps on a time axis: what ran at once, and how long each took and waited"
+        >
+          Timeline
+        </button>
+        <button
+          className={`run-logs-button${comparing ? ' on' : ''}`}
+          onClick={onCompare}
+          aria-pressed={comparing}
+          title="Put this run beside another of the flow's, to see where they differ"
+        >
+          Compare…
+        </button>
         {run.status === 'running' && (
           <button className="run-stop" onClick={onStop} title="End the run where it is; steps still going are cancelled">
             Stop run
           </button>
         )}
       </div>
+      {comparing && (
+        <p className="run-picking" role="status">
+          Pick the run to compare it with in the list of runs.{' '}
+          <button className="link-button" onClick={onCompare}>
+            Cancel
+          </button>
+        </p>
+      )}
       {showLogs && <RunLogs run={run} onClose={() => setShowLogs(false)} />}
+      {showTimeline && <RunTimeline run={run} processes={processes} onOpenStep={onOpenStep} onClose={() => setShowTimeline(false)} />}
       <p className="panel-note">
         {run.version === null
           ? 'Ran before versions were kept, so the board shows it as the board is now.'
@@ -332,6 +516,8 @@ function Step({
       <div className="step-body">
         <p className="panel-note">
           {STEP_LABELS[s.status]} · started {formatTime(s.startedAt)}
+          {s.slotWaitMs !== null && s.slotWaitMs >= SLOT_WAIT_SHOWN_MS && ` after waiting ${formatSpan(s.slotWaitMs)} for a slot`}
+          {s.try !== null && s.try > 1 && ` · try ${s.try}`}
           {s.process === null && ' · process since deleted'}
           {s.usage && ` · ${formatUsage(s.usage)}`}
         </p>

@@ -57,6 +57,9 @@ took, what it handed back, and for agents the whole session and its cost.
 People get the decisions that are theirs to make, by the roles they hold.
 Code an agent changes is committed to a branch of the run, and an ended run
 can be re-run from any of its processes with what that process took edited.
+The board's runs can be filtered by how they stand and how they started, a
+run's steps seen on a timeline of what ran at once and what waited, and two
+runs put side by side to see where they went differently.
 
 ![A finished run on the board: Triage, Fix and Approve risky fix are done, the ticket is a bug and its risk high](docs/images/run.png)
 

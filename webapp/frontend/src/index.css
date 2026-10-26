@@ -921,6 +921,11 @@ body {
   background: #fbefff;
 }
 
+.run-badge.waiting {
+  color: #953800;
+  background: #fff1e5;
+}
+
 .run-panel {
   overflow-y: auto;
 }
@@ -2534,6 +2539,163 @@ body {
   padding-left: 14px;
   font-size: 12px;
   color: #1b7c83;
+}
+
+/* Above the run list: a search opening the flow's Data page, and the
+   filter, which folds out in place since the list scrolls. */
+.run-finder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.run-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+  padding: 2px 0 4px;
+  background: #fff;
+}
+
+.run-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.run-search input:focus {
+  outline: 2px solid #1f6feb;
+  outline-offset: -1px;
+}
+
+.run-filter-button {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.run-filter-button:hover,
+.run-filter-button.open {
+  background: #f6f8fa;
+}
+
+.run-filter-button.active {
+  color: #0969da;
+  border-color: #54aeff;
+  background: #ddf4ff;
+}
+
+.run-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: #f6f8fa;
+  border-radius: 6px;
+}
+
+.run-filters fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.run-filters legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #656d76;
+}
+
+.run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  font-size: 12px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.run-chip:hover {
+  border-color: #8c959f;
+}
+
+.run-chip.on {
+  color: #0969da;
+  border-color: #54aeff;
+  background: #ddf4ff;
+}
+
+.run-chip .status-dot {
+  animation: none;
+}
+
+.run-chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.run-chip:has(input:focus-visible) {
+  outline: 2px solid #1f6feb;
+  outline-offset: 1px;
+}
+
+.run-filtered {
+  font-size: 12px;
+}
+
+/* While the run to compare with another is picked; see RunCompare. */
+.run-picking {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #0a3069;
+  background: #ddf4ff;
+  border-radius: 6px;
+}
+
+.run-item.picking,
+.run-item:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.run-more {
+  align-self: center;
+  margin-top: 4px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: #0969da;
+  background: none;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.run-more:hover:not(:disabled) {
+  background: #f6f8fa;
 }
 
 /* The runs of a run's recording flow processes, such as one per item. */
@@ -5697,6 +5859,458 @@ select.flow-owner:disabled {
 
 .run-logs-button:hover {
   background: #f6f8fa;
+}
+
+.run-logs-button.on {
+  color: #0969da;
+  border-color: #54aeff;
+  background: #ddf4ff;
+}
+
+/* A run's timeline; see RunTimeline. Lanes are rows, the names to the left
+   staying in view as the axis scrolls sideways. */
+.review-dialog.run-timeline {
+  width: min(1400px, calc(100vw - 32px));
+  height: calc(100vh - 64px);
+}
+
+.timeline-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.timeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #57606a;
+}
+
+.timeline-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.timeline-swatch {
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.timeline-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timeline-zoom button {
+  width: 24px;
+  height: 24px;
+  font: inherit;
+  font-size: 14px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.timeline-zoom button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.timeline-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.timeline {
+  position: relative;
+  min-height: 100%;
+}
+
+.timeline-axis {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 24px;
+  background: #f6f8fa;
+  border-bottom: 1px solid #d8dee4;
+  font-size: 11px;
+  color: #57606a;
+}
+
+.timeline-axis span {
+  position: absolute;
+  top: 5px;
+  padding-left: 3px;
+  white-space: nowrap;
+}
+
+.timeline-lines {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.timeline-lines span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid #eaeef2;
+}
+
+/* A long while with only people to wait for, shortened. */
+.timeline-lines .timeline-cut {
+  border-left: 1px dashed #8c959f;
+  border-right: 1px dashed #8c959f;
+  background: repeating-linear-gradient(90deg, rgba(246, 248, 250, 0.9) 0 4px, rgba(234, 238, 242, 0.9) 4px 8px);
+}
+
+.timeline-axis .timeline-cut-label {
+  padding-left: 0;
+  text-align: center;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeline-cut-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: #57606a;
+  cursor: pointer;
+}
+
+.timeline-lane {
+  position: relative;
+  border-bottom: 1px solid #f0f2f4;
+}
+
+.timeline-lane:hover {
+  background: rgba(234, 238, 242, 0.5);
+}
+
+.timeline-label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding-right: 8px;
+  font-size: 13px;
+  background: #fff;
+  border-right: 1px solid #d8dee4;
+}
+
+.timeline-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-more {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #656d76;
+}
+
+.timeline-fold,
+.timeline-fold-space {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+}
+
+.timeline-fold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #57606a;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.timeline-fold:hover {
+  background: #eaeef2;
+}
+
+.timeline-fold svg {
+  transition: transform 0.15s;
+}
+
+.timeline-fold.open svg {
+  transform: rotate(90deg);
+}
+
+.timeline-bar {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  height: 18px;
+  min-width: 3px;
+  padding: 0;
+  overflow: hidden;
+  font: inherit;
+  font-size: 11px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.timeline-bar:hover,
+.timeline-bar:focus-visible {
+  outline: 2px solid #1f6feb;
+  outline-offset: 1px;
+}
+
+.timeline-bar-label {
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.timeline-bar-aside {
+  position: absolute;
+  z-index: 1;
+  height: 18px;
+  line-height: 18px;
+  font-size: 11px;
+  color: #57606a;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* The time a step waited for its slots comes first, lighter and hatched. */
+.timeline-slot,
+.timeline-swatch.slot {
+  align-self: stretch;
+  flex-shrink: 0;
+  background: repeating-linear-gradient(135deg, #d0d7de 0 3px, #eaeef2 3px 6px);
+}
+
+.timeline-bar.done,
+.timeline-swatch.done {
+  color: #fff;
+  background-color: #2da44e;
+}
+
+.timeline-bar.active,
+.timeline-swatch.active {
+  color: #3b2300;
+  background-color: #d4a72c;
+}
+
+.timeline-bar.error,
+.timeline-swatch.error {
+  color: #fff;
+  background-color: #cf222e;
+}
+
+.timeline-bar.duplicate {
+  color: #fff;
+  background-color: #8250df;
+}
+
+.timeline-bar.skipped {
+  color: #57606a;
+  background-color: #d0d7de;
+}
+
+.timeline-bar.person,
+.timeline-swatch.person {
+  color: #762c00;
+  background: repeating-linear-gradient(135deg, #ffd8b5 0 4px, #fff1e5 4px 8px);
+  box-shadow: inset 0 0 0 1px #fb8f44;
+}
+
+.timeline-bar.going {
+  animation: timeline-going 1.5s ease-in-out infinite;
+}
+
+@keyframes timeline-going {
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Two runs side by side; see RunCompare. Every row is a label and what
+   each run has of it, marked where they differ. */
+.compare-main {
+  width: 100%;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 16px 24px 48px;
+}
+
+.compare-swap {
+  margin-left: auto;
+  font-size: 14px;
+  color: #0969da;
+}
+
+.compare-section {
+  margin-bottom: 24px;
+  padding: 12px 16px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+}
+
+.compare-section > h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 240px) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.compare-heads h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.compare-row {
+  padding: 5px 6px;
+  font-size: 13px;
+  border-top: 1px solid #f0f2f4;
+}
+
+.compare-row.differs,
+.compare-process.differs > summary {
+  background: #fff8c5;
+  box-shadow: inset 3px 0 #d4a72c;
+}
+
+.compare-label {
+  min-width: 0;
+  font-weight: 600;
+  color: #424a53;
+  overflow-wrap: anywhere;
+}
+
+.compare-note {
+  margin: 8px 0 0;
+}
+
+.compare-process {
+  border-top: 1px solid #d8dee4;
+}
+
+.compare-process > summary {
+  padding: 8px 6px;
+  font-size: 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.compare-process > summary::-webkit-details-marker {
+  display: none;
+}
+
+.compare-process > summary .compare-label::before {
+  content: '▸';
+  display: inline-block;
+  width: 14px;
+  color: #8c959f;
+  transition: transform 0.15s;
+}
+
+.compare-process[open] > summary .compare-label::before {
+  transform: rotate(90deg);
+}
+
+.compare-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 13px;
+}
+
+.compare-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.compare-steps .panel-note {
+  margin: 0;
+}
+
+.compare-turn {
+  margin: 0 0 8px 20px;
+  padding-left: 8px;
+  border-left: 2px solid #eaeef2;
+}
+
+.compare-turn h3 {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #656d76;
+}
+
+.compare-text {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 4px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f6f8fa;
+  border-radius: 4px;
+}
+
+.compare-text .differs {
+  background: #ffe2a8;
+}
+
+.compare-object + .compare-object {
+  border-top: 1px solid #d8dee4;
+}
+
+@media (max-width: 720px) {
+  .compare-main {
+    padding: 12px 16px 32px;
+  }
+  .compare-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .compare-grid > :first-child {
+    grid-column: 1 / -1;
+  }
 }
 
 /* A step's terminal: its conversation as a terminal shows it, everything in

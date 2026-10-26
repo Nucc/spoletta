@@ -71,7 +71,7 @@ import {
   StructPalette,
   type Block,
 } from './Palette'
-import { decisionText, rerunnableFrom, RunList, RunPanel, type RunFocus } from './Runs'
+import { decisionText, ORIGIN_LABELS, rerunnableFrom, RunList, RunPanel, STANDING_LABELS, type RunFocus } from './Runs'
 import RerunDialog from './RerunDialog'
 import OPLPanel from './OPLPanel'
 import CodePanel from './CodePanel'
@@ -121,6 +121,8 @@ import {
   listObjects,
   listProcesses,
   listRuns,
+  RUN_PAGE,
+  runMatches,
   listVersions,
   changesSettled,
   onChanged,
@@ -159,6 +161,7 @@ import {
   defaultBranchPrefix,
   type Flow,
   type FlowRun,
+  type RunFilter,
   type Versions,
   type MCPServer,
   type Skill,
@@ -409,9 +412,19 @@ export default function Board({
   const [codeOpen, setCodeOpen] = useState(false)
   // Every other flow, which this one can run; null while they load.
   const [otherFlows, setOtherFlows] = useState<Flow[] | null>(null)
+  // The runs the list shows: those its filter picks, newest first, as many
+  // pages as are loaded, and whether older ones may be left to load.
   const [runs, setRuns] = useState<FlowRun[]>([])
-  // The run open in the side panel, and its steps once loaded.
+  const [runFilter, setRunFilter] = useState<RunFilter>(() => loadRunFilter(flowId))
+  const [moreRuns, setMoreRuns] = useState(false)
+  const [loadingRuns, setLoadingRuns] = useState(true)
+  // The run open in the side panel, and its steps once loaded. The list
+  // may not have it, filtered out or older than it loaded, so it is kept
+  // as it opened too, for the version it ran on.
   const [runId, setRunId] = useState<number | null>(null)
+  const [openedRun, setOpenedRun] = useState<FlowRun | null>(null)
+  // The run whose comparison waits for the other run to be picked in the list.
+  const [comparing, setComparing] = useState<number | null>(null)
   const [runDetail, setRunDetail] = useState<FlowRunDetail | null>(null)
   // Bumped to load the open run again straight away, such as after a decision.
   const [runReload, setRunReload] = useState(0)
@@ -628,7 +641,56 @@ export default function Board({
     [],
   )
 
-  const refreshRuns = useCallback(() => listRuns(flowId).then(setRuns).catch(report), [report, flowId])
+  // The newest page of runs the filter picks, in place of the runs the list
+  // had from then on; older pages loaded stay, with whether more are left,
+  // unless the page holds them all. An answer for another filter is dropped.
+  const runPages = useRef({ filter: runFilter, loaded: 1 })
+  const refreshRuns = useCallback(() => {
+    const asked = runPages.current
+    return listRuns(flowId, runFilter)
+      .then((page) => {
+        if (runPages.current !== asked) return
+        const full = page.length >= RUN_PAGE
+        const oldest = page.at(-1)?.id ?? Infinity
+        setRuns((rs) => (full ? [...page, ...rs.filter((r) => r.id < oldest)] : page))
+        if (!full || asked.loaded === 1) {
+          asked.loaded = 1
+          setMoreRuns(full)
+        }
+      })
+      .catch(report)
+      .finally(() => setLoadingRuns(false))
+  }, [report, flowId, runFilter])
+
+  // Another filter shows its own runs, from the newest.
+  const filterRuns = (f: RunFilter) => {
+    runPages.current = { filter: f, loaded: 1 }
+    setRuns([])
+    setMoreRuns(false)
+    setLoadingRuns(true)
+    setRunFilter(f)
+    saveRunFilter(flowId, f)
+  }
+
+  const loadOlderRuns = () => {
+    const asked = runPages.current
+    const oldest = runs.at(-1)?.id
+    if (oldest === undefined) return
+    setLoadingRuns(true)
+    listRuns(flowId, runFilter, oldest)
+      .then((page) => {
+        if (runPages.current !== asked) return
+        asked.loaded++
+        setRuns((rs) => [...rs, ...page.filter((r) => r.id < (rs.at(-1)?.id ?? Infinity))])
+        setMoreRuns(page.length >= RUN_PAGE)
+      })
+      .catch(report)
+      .finally(() => setLoadingRuns(false))
+  }
+
+  useEffect(() => {
+    refreshRuns()
+  }, [refreshRuns])
 
   const refreshVersions = useCallback(() => listVersions(flowId).then(setVersions).catch(report), [report, flowId])
 
@@ -782,7 +844,6 @@ export default function Board({
       .catch(report)
     refreshMCPServers()
     refreshSkills()
-    refreshRuns()
     refreshVersions()
     // The flow just loaded; show all of it once its nodes are measured.
     loadBoard()
@@ -791,7 +852,7 @@ export default function Board({
         if (!savedView) window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
       })
       .catch(report)
-  }, [loadBoard, report, refreshRuns, refreshVersions, refreshMCPServers, refreshSkills, fitView, flowId, savedView])
+  }, [loadBoard, report, refreshVersions, refreshMCPServers, refreshSkills, fitView, flowId, savedView])
 
   // The settings take the side panel; a node opened afterwards takes it back.
   const openMCPSettings = (open: boolean) => {
@@ -935,7 +996,9 @@ export default function Board({
         // Follow-ups go on once the run is over.
         const following = detail.steps.some((s) => s.followUps.some((f) => f.status === 'active'))
         if (detail.status === 'running' || following) timer = window.setTimeout(load, RUN_REFRESH_MS)
-        if (detail.status !== 'running') setRuns((rs) => rs.map((r) => (r.id === detail.id ? { ...r, status: detail.status, finishedAt: detail.finishedAt } : r)))
+        const current = (r: FlowRun) => (r.id === detail.id ? { ...r, status: detail.status, waiting: detail.waiting, finishedAt: detail.finishedAt } : r)
+        setRuns((rs) => rs.map(current))
+        setOpenedRun((r) => r && current(r))
       } catch (err) {
         report(err)
       }
@@ -947,8 +1010,9 @@ export default function Board({
     }
   }, [runId, runReload, report])
 
-  // Runs go on in the server whether open or not, so the list keeps up with them.
-  const anyRunning = runs.some((r) => r.status === 'running')
+  // Runs go on in the server whether open or not, so the list keeps up with
+  // them; a filtered list, which may leave out those going, keeps asking.
+  const anyRunning = runs.some((r) => r.status === 'running') || runFilter.status.length > 0 || runFilter.started.length > 0
   useEffect(() => {
     if (!anyRunning) return
     const timer = window.setInterval(refreshRuns, RUN_LIST_REFRESH_MS)
@@ -959,7 +1023,7 @@ export default function Board({
   // edited while the run is open. Runs from before versions were kept show
   // on the board as it is.
   const shownRun = runDetail?.id === runId ? runDetail : null
-  const openRun = runs.find((r) => r.id === runId)
+  const openRun = runs.find((r) => r.id === runId) ?? (openedRun?.id === runId ? openedRun : undefined)
   const runVersion = openRun?.version ?? null
   // Comparing shows the newer board instead: the version compared to, or
   // the board as it is.
@@ -1915,6 +1979,20 @@ export default function Board({
   const [runFocus, setRunFocus] = useState<RunFocus | null>(null)
   useEffect(() => setRunFocus(null), [runId])
 
+  // Opens a step from the run's timeline in the run's panel: of the open
+  // run, or of a run it ran as, which opens first.
+  const [pendingStep, setPendingStep] = useState<{ run: number; step: number } | null>(null)
+  const openStep = (run: number, step: number) => {
+    setPendingStep({ run, step })
+    if (run !== runId) openRunById(run)
+  }
+  useEffect(() => {
+    if (!shownRun || pendingStep?.run !== shownRun.id) return
+    setPendingStep(null)
+    const s = shownRun.steps.find((s) => s.id === pendingStep.step)
+    if (s) setRunFocus((f) => ({ kind: 'step', id: s.id, name: s.processName, seq: (f?.seq ?? 0) + 1 }))
+  }, [shownRun, pendingStep])
+
   // Re-runs the open run from the last step the process had in it.
   const rerunProcess = (id: string) => {
     const step = shownRun?.steps.filter((s) => String(s.process) === id && rerunnableFrom(shownRun, s)).at(-1)
@@ -1965,7 +2043,7 @@ export default function Board({
       const run = await startRun(flowId, published)
       // Starting the run may have saved the board as a new version.
       refreshVersions()
-      setRuns((rs) => [run, ...rs])
+      if (runMatches(run, runFilter)) setRuns((rs) => [run, ...rs])
       showRun(run)
     } catch (err) {
       report(err)
@@ -1978,36 +2056,35 @@ export default function Board({
   // does, having saved the board as a new version if it changed.
   const onRerun = (run: FlowRun) => {
     refreshVersions()
-    setRuns((rs) => [run, ...rs])
+    if (runMatches(run, runFilter)) setRuns((rs) => [run, ...rs])
     showRun(run)
   }
 
   // Opens a run on the board it ran on: a recording flow process's run on
   // the flow process's board, a run of the whole flow, or of a flow a subflow
   // process ran, on the top board.
-  const showRun = (run: { id: number; process: number | null }) => {
+  const showRun = (run: FlowRun) => {
     setPanelId(null)
     setVersionsOpen(false)
+    setOpenedRun(run)
     setRunId(run.id)
     setUnfolded(null)
     setBoardId(run.process)
   }
 
-  // A run the list may not have yet, such as a flow process's that just
-  // started. A run of another flow, such as one a subflow process ran, or
-  // the run that ran this one, opens on that flow's page.
+  // A run the list may not have, such as a flow process's that just
+  // started, one the filter leaves out or one older than the list loaded. A
+  // run of another flow, such as one a subflow process ran, or the run that
+  // ran this one, opens on that flow's page.
   const openRunById = async (id: number) => {
     let run = runs.find((r) => r.id === id)
     try {
       if (!run) {
-        const rs = await listRuns(flowId)
-        setRuns(rs)
-        run = rs.find((r) => r.id === id)
-      }
-      if (!run) {
-        const other = await getRun(id)
-        if (other.flow !== flowId) window.location.hash = `#/flows/${other.flow}/runs/${id}`
-        return
+        run = await getRun(id)
+        if (run.flow !== flowId) {
+          window.location.hash = `#/flows/${run.flow}/runs/${id}`
+          return
+        }
       }
     } catch (err) {
       report(err)
@@ -2637,12 +2714,26 @@ export default function Board({
           {!structBoard && (
             <SidebarGroup id="runs" title="Runs" fill>
               <RunList
+                flow={flowId}
                 runs={runs}
+                filter={runFilter}
+                onFilter={filterRuns}
+                more={moreRuns}
+                loading={loadingRuns}
+                onMore={loadOlderRuns}
                 selected={runId}
                 onSelect={(id) => {
+                  // The run picked to compare with opens beside the other, in a tab of its own.
+                  if (comparing !== null) {
+                    if (id !== comparing) openTab(`#/flows/${flowId}/compare/${comparing}/${id}`)
+                    setComparing(null)
+                    return
+                  }
                   const run = runs.find((r) => r.id === id)
                   if (run) showRun(run)
                 }}
+                picking={comparing}
+                onCancelPick={() => setComparing(null)}
               />
             </SidebarGroup>
           )}
@@ -2920,10 +3011,14 @@ export default function Board({
         {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && !versionsOpen && !(compare && diffListed) && runDetail && (
           <RunPanel
             run={runDetail}
+            processes={contents?.processes}
             onStop={() => onStop(runDetail.id)}
             onStopStep={(step) => onStopStep(runDetail.id, step)}
             focus={runFocus}
             onClearFocus={() => setRunFocus(null)}
+            onOpenStep={openStep}
+            comparing={comparing === runDetail.id}
+            onCompare={() => setComparing((c) => (c === runDetail.id ? null : runDetail.id))}
             onOpenRun={openRunById}
             onRerun={setRerunning}
             onChanged={() => setRunReload((n) => n + 1)}
@@ -2996,4 +3091,29 @@ function FlowName({
       }}
     />
   )
+}
+
+const RUN_FILTER_KEY_PREFIX = 'run-filter-'
+
+// The run list's filter last picked for the flow, so it filters the same
+// way next time; only values it still knows.
+function loadRunFilter(flow: number): RunFilter {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RUN_FILTER_KEY_PREFIX + flow) ?? 'null') as Partial<RunFilter> | null
+    return {
+      status: (saved?.status ?? []).filter((s) => s in STANDING_LABELS),
+      started: (saved?.started ?? []).filter((o) => o in ORIGIN_LABELS),
+    }
+  } catch {
+    return { status: [], started: [] }
+  }
+}
+
+function saveRunFilter(flow: number, f: RunFilter) {
+  try {
+    if (f.status.length === 0 && f.started.length === 0) localStorage.removeItem(RUN_FILTER_KEY_PREFIX + flow)
+    else localStorage.setItem(RUN_FILTER_KEY_PREFIX + flow, JSON.stringify(f))
+  } catch {
+    // The list shows every run next time.
+  }
 }

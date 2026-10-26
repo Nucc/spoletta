@@ -341,27 +341,27 @@ func (c *problemCheck) installed(connector string) bool {
 	return false
 }
 
-// The names of what a step of the process takes: what it links to, what
-// a failure it handles says, and for the process a board's start leads
-// to, what is given the board from outside.
+// The names of what a step of the process takes: what it links to, a
+// failure it handles and what the process that failed took, and for the
+// process a board's start leads to, what is given the board from outside.
 func (c *problemCheck) inputNames(p process) []string {
 	var names []string
-	for _, l := range c.links[p.ID] {
-		if l.Direction == directionInput {
-			names = append(names, c.objs[l.Object].Name)
-		}
-	}
-	for _, cn := range c.in[p.ID] {
-		if cn.Kind == connectionFailure {
-			names = append(names, "Failure of "+c.procs[cn.Source].Name)
-		}
-	}
-	if p.Parent != nil && c.innerStart(*p.Parent) == p.ID {
-		for _, l := range c.links[*p.Parent] {
+	takes := func(id int64) {
+		for _, l := range c.links[id] {
 			if l.Direction == directionInput {
 				names = append(names, c.objs[l.Object].Name)
 			}
 		}
+	}
+	takes(p.ID)
+	for _, cn := range c.in[p.ID] {
+		if cn.Kind == connectionFailure {
+			names = append(names, "Failure of "+c.procs[cn.Source].Name)
+			takes(cn.Source)
+		}
+	}
+	if p.Parent != nil && c.innerStart(*p.Parent) == p.ID {
+		takes(*p.Parent)
 	}
 	if p.Parent == nil && c.f.module && c.started() && *c.s.Start.Target == p.ID {
 		for _, o := range c.s.Objects {

@@ -262,7 +262,7 @@ func TestBoardProblemsLeaveAlone(t *testing.T) {
 	})
 	t.Run("a failure handler's arguments", func(t *testing.T) {
 		s, f := soundBoard(), soundFacts()
-		s.Processes[3].Settings.Connector.Args["text"] = "{{Failure of Fix}}"
+		s.Processes[3].Settings.Connector.Args["text"] = "{{Failure of Fix}}: {{Ticket.summary}}"
 		s.Connections = append(s.Connections, connection{Source: 3, Target: 4, Kind: connectionFailure})
 		if ps := boardProblems(s, f); len(ps) != 0 {
 			t.Errorf("problems:%s", describeProblems(ps))

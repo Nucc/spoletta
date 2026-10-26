@@ -11,7 +11,6 @@ import {
   type FlowRun,
   type FlowRunDetail,
   type FlowRunStatus,
-  type Process,
   type ProcessKind,
   type RepoCommits,
   type RunFilter,
@@ -23,8 +22,6 @@ import {
   type StepUsage,
 } from './api'
 import { ClockIcon, TerminalIcon } from './icons'
-import RunLogs from './RunLogs'
-import RunTimeline from './RunTimeline'
 import StepTerminal, { formatLogTime, useStepLogs } from './StepTerminal'
 import { formatSpan } from './timeline'
 
@@ -304,13 +301,13 @@ export type RunFocus = { kind: 'process' | 'object' | 'step'; id: number; name: 
 // What happened in a run: each process execution in the order it started.
 // On a process, its steps open and the panel scrolls to them; on an object,
 // what it held in the run comes first, and the steps that made it open; on
-// a step, it opens. Its timeline and its log open in windows of their own.
+// a step, it opens. Its timeline and its log open in windows the board shows.
 export function RunPanel({
   run,
-  processes,
   focus,
   onClearFocus,
-  onOpenStep,
+  onLogs,
+  onTimeline,
   comparing,
   onCompare,
   onStop,
@@ -323,12 +320,11 @@ export function RunPanel({
   onClose,
 }: {
   run: FlowRunDetail
-  // The processes of the version the board shows, for the timeline's lanes.
-  processes: Process[] | undefined
   focus: RunFocus | null
   onClearFocus: () => void
-  // Opens a step of this run, or of one it ran as, from its timeline.
-  onOpenStep: (run: number, step: number) => void
+  // Open the run's log and its timeline, which the board shows.
+  onLogs: () => void
+  onTimeline: () => void
   // Whether the run waits for the run to compare it with to be picked in the
   // list, and what starts or ends that.
   comparing: boolean
@@ -359,8 +355,6 @@ export function RunPanel({
         ? s.id === focus.id
         : focus?.kind === 'object' && focusedObjects.some((o) => o.step === s.id)
   const panel = useRef<HTMLElement>(null)
-  const [showLogs, setShowLogs] = useState(false)
-  const [showTimeline, setShowTimeline] = useState(false)
   useEffect(() => {
     if (!focus || !panel.current) return
     const steps = [...panel.current.querySelectorAll<HTMLDetailsElement>('.step.focused')]
@@ -412,12 +406,12 @@ export function RunPanel({
         </p>
       )}
       <div className="run-actions">
-        <button className="run-logs-button" onClick={() => setShowLogs(true)} title="Read what happened in the run, step by step">
+        <button className="run-logs-button" onClick={onLogs} title="Read what happened in the run, step by step">
           Logs
         </button>
         <button
           className="run-logs-button"
-          onClick={() => setShowTimeline(true)}
+          onClick={onTimeline}
           title="See the run's steps on a time axis: what ran at once, and how long each took and waited"
         >
           Timeline
@@ -453,8 +447,6 @@ export function RunPanel({
           </button>
         </p>
       )}
-      {showLogs && <RunLogs run={run} onClose={() => setShowLogs(false)} />}
-      {showTimeline && <RunTimeline run={run} processes={processes} onOpenStep={onOpenStep} onClose={() => setShowTimeline(false)} />}
       <p className="panel-note">
         {run.version === null
           ? 'Ran before versions were kept, so the board shows it as the board is now.'

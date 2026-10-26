@@ -1180,12 +1180,13 @@ export const runMatches = (r: FlowRun, f: RunFilter) =>
   (f.started.length === 0 ? runOrigin(r) !== 'trial' : f.started.includes(runOrigin(r)))
 
 // The flow's runs the filter picks, newest first, a page at a time: those
-// older than the run before, if given.
-export function listRuns(flow: number, filter?: RunFilter, before?: number): Promise<FlowRun[]> {
+// older than the run before, if given, and as many as the limit, if given.
+export function listRuns(flow: number, filter?: RunFilter, before?: number, limit?: number): Promise<FlowRun[]> {
   const p = new URLSearchParams({ flow: String(flow) })
   if (filter?.status.length) p.set('status', filter.status.join(','))
   if (filter?.started.length) p.set('started', filter.started.join(','))
   if (before !== undefined) p.set('before', String(before))
+  if (limit !== undefined) p.set('limit', String(limit))
   return request(`/api/runs?${p}`)
 }
 

@@ -71,9 +71,16 @@ import {
   StructPalette,
   type Block,
 } from './Palette'
-import { decisionText, ORIGIN_LABELS, rerunnableFrom, RunList, RunPanel, STANDING_LABELS, type RunFocus } from './Runs'
+import { decisionText, formatTime, ORIGIN_LABELS, rerunnableFrom, RunList, RunPanel, STANDING_LABELS, type RunFocus } from './Runs'
 import RerunDialog from './RerunDialog'
 import TrialDialog from './TrialDialog'
+import RunLogs from './RunLogs'
+import RunTimeline from './RunTimeline'
+import BoardFind from './BoardFind'
+import { findOnBoards, placeOf, type FindMatch, type Place } from './find'
+import { runItem, usePaletteSource, type PaletteItem } from './CommandPalette'
+import { MAC, useShortcuts } from './Keyboard'
+import { shortcutText } from './shortcuts'
 import OPLPanel from './OPLPanel'
 import CodePanel from './CodePanel'
 import Assistant from './Assistant'
@@ -248,6 +255,12 @@ const HISTORY_DELAY_MS = 300
 // Fitting the board into view; a board of a few nodes is not blown up past
 // its natural size.
 const FIT_VIEW = { duration: 300, maxZoom: 1 }
+
+// Going to what was found zooms in to at least this, to read it.
+const FIND_ZOOM = 0.75
+
+// How many of the flow's latest runs the palette offers to compare a run with.
+const COMPARE_RUNS = 50
 
 // The state a handle of an object node belongs to, if any.
 const stateOfHandle = (handle: string | null | undefined): number | null => {
@@ -478,7 +491,7 @@ export default function Board({
   useEffect(() => onCopiedElsewhere(() => setCopied(readCopied())), [])
   // Where the pointer is over the canvas, on the screen, for pasting there.
   const pointer = useRef<XYPosition | null>(null)
-  const { getNode, getNodes, screenToFlowPosition, fitView, getViewport } = useReactFlow<FlowNode>()
+  const { getNode, getNodes, screenToFlowPosition, fitView, getViewport, setCenter, getZoom, deleteElements } = useReactFlow<FlowNode>()
 
   // Coming back to its tab, the board opens where it was looked at, rather
   // than moving to show all of it.
@@ -486,6 +499,9 @@ export default function Board({
   const [savedView] = useState(() => tabView(tab, flowId))
   // Until the board is shown, there is nothing of it to keep.
   const viewShown = useRef(false)
+  // Set while finding goes to a match on another board, which is centred
+  // once it shows, so the board isn't fitted into view over it.
+  const centring = useRef(false)
   const wrapper = useRef<HTMLDivElement>(null)
   const draftSeq = useRef(0)
   // Loads the board again, for callbacks made before loadBoard is.
@@ -1068,7 +1084,9 @@ export default function Board({
         setShownBoard(boardId)
         setShownUnfolded(unfolded)
         // Another board is a different place; show all of it once its nodes are measured.
-        if (boardId !== shownBoard || unfolded !== shownUnfolded) window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
+        if ((boardId !== shownBoard || unfolded !== shownUnfolded) && !centring.current) {
+          window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
+        }
       })
       .catch(report)
     return () => {
@@ -1325,7 +1343,7 @@ export default function Board({
     panelWasOpen.current = panelOpen
     const comingBack = panelComingBack.current && panelOpen
     panelComingBack.current = false
-    if (!comingBack) window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
+    if (!comingBack && !centring.current) window.setTimeout(() => fitView(FIT_VIEW), BOARD_FIT_DELAY_MS)
   }, [panelOpen, fitView])
 
   // Where the top board is looked at is kept for its tab as it moves and as
@@ -1634,33 +1652,70 @@ export default function Board({
     }
   }
 
-  // Its links go with it on the server, and a flow process's board with all
-  // on it; runs keep their record of it. The objects outside a flow process
-  // belong to the board outside.
-  const remove = async (id: string) => {
+  // Whether a node can be deleted: not the start or end, an object outside a
+  // flow process, which belongs to the board outside, one shown beside an
+  // unfolded object, or a struct's own object, which goes only with it.
+  const removable = (id: string) => {
     const node = getNode(id)
-    if (!node || node.type === 'start' || node.type === 'end' || readOnly || isBoundary(id) || isFixed(id) || isStructRoot(id))
-      return
-    const inside =
-      node.type === 'process' && node.data.kind === 'flow'
-        ? ', its links and everything on its board'
-        : node.type === 'object' && objectBoard
-          ? ' and everything it is made of'
-          : ' and its links'
-    if (!window.confirm(`Delete “${node.data.name}”${inside}?`)) return
-    try {
-      if (node.type === 'object') await deleteObject(objectIdOf(id))
-      else await deleteProcess(Number(id))
-    } catch (err) {
-      report(err)
-      return
+    return (
+      node !== undefined &&
+      node.type !== 'start' &&
+      node.type !== 'end' &&
+      !isDraft(id) &&
+      !readOnly &&
+      !isBoundary(id) &&
+      !isFixed(id) &&
+      !isStructRoot(id)
+    )
+  }
+
+  // Their links go with them on the server, and a flow process's board with
+  // all on it; runs keep their record of them. One question asks for all,
+  // and once it is answered yes, whatever else was to go with them goes.
+  const removeNodes = async (ids: string[], confirmed?: () => void) => {
+    let chosen = ids.filter(removable).map((id) => getNode(id)!)
+    // What an object deleted is made of goes with it.
+    if (objectBoard) {
+      const all = new Set(chosen.map((n) => n.id))
+      chosen = chosen.filter((n) => !ownersOf(contents?.objects ?? [], objectIdOf(n.id)).some((o) => all.has(objectNodeId(o.id))))
     }
-    setNodes((ns) => ns.filter((n) => n.id !== id))
-    setEdges((es) => es.filter((e) => e.source !== id && e.target !== id))
-    setPanelId((open) => (open === id ? null : open))
-    // The object it made up has one field less.
+    if (chosen.length === 0) return
+    const node = chosen[0]
+    const flowsInside = chosen.some((n) => n.type === 'process' && n.data.kind === 'flow')
+    const inside =
+      chosen.length === 1 && flowsInside
+        ? ', its links and everything on its board'
+        : chosen.length === 1 && node.type === 'object' && objectBoard
+          ? ' and everything it is made of'
+          : chosen.length === 1
+            ? ' and its links'
+            : flowsInside
+              ? ', their links and everything on their boards'
+              : objectBoard
+                ? ' and everything they are made of'
+                : ' and their links'
+    const what =
+      chosen.length === 1 && node.type !== 'start' && node.type !== 'end' ? `“${node.data.name}”` : `${chosen.length} processes and objects`
+    if (!window.confirm(`Delete ${what}${inside}?`)) return
+    confirmed?.()
+    const gone = new Set<string>()
+    for (const n of chosen) {
+      try {
+        if (n.type === 'object') await deleteObject(objectIdOf(n.id))
+        else await deleteProcess(Number(n.id))
+        gone.add(n.id)
+      } catch (err) {
+        report(err)
+        break
+      }
+    }
+    setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
+    setEdges((es) => es.filter((e) => !gone.has(e.source) && !gone.has(e.target)))
+    setPanelId((open) => (open !== null && gone.has(open) ? null : open))
+    // The object they made up has fields less.
     if (objectBoard) reload.current().catch(report)
   }
+  const remove = (id: string) => removeNodes([id])
 
   // A copy without links, next to the original.
   const duplicate = async (id: string) => {
@@ -2168,18 +2223,24 @@ export default function Board({
   // node. The objects outside a flow process belong to the board outside.
   const copySelection = (id?: string) => {
     if (readOnly || objectBoard) return
-    const copyable = (n: FlowNode) => !isDraft(n.id) && (n.type === 'process' || (n.type === 'object' && n.data.boundary === undefined))
     const inSelection = id === undefined || getNode(id)?.selected
-    const chosen = getNodes().filter((n) => copyable(n) && (inSelection ? n.selected : n.id === id))
-    if (chosen.length === 0) return
-    const c: Copied = {
+    const c = copiedOf(getNodes().filter((n) => (inSelection ? n.selected : n.id === id)))
+    if (!c) return
+    writeCopied(c)
+    setCopied(c)
+  }
+
+  // What copying the nodes remembers, if any of them can be copied.
+  const copiedOf = (nodes: FlowNode[]): Copied | null => {
+    const copyable = (n: FlowNode) => !isDraft(n.id) && (n.type === 'process' || (n.type === 'object' && n.data.boundary === undefined))
+    const chosen = nodes.filter(copyable)
+    if (chosen.length === 0) return null
+    return {
       flow: flowId,
       processes: chosen.filter((n) => n.type === 'process').map((n) => Number(n.id)),
       objects: chosen.filter((n) => n.type === 'object').map((n) => objectIdOf(n.id)),
       at: { x: Math.min(...chosen.map((n) => n.position.x)), y: Math.min(...chosen.map((n) => n.position.y)) },
     }
-    writeCopied(c)
-    setCopied(c)
   }
 
   // Pastes what was copied with its top left at a point on the screen: the
@@ -2191,14 +2252,28 @@ export default function Board({
     const point = screen ?? pointer.current ?? (rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
     if (!c || !point || readOnly || objectBoard || structBoard) return
     const at = screenToFlowPosition(point)
+    await pasteMoved(c, at.x - c.at.x, at.y - c.at.y)
+  }
+
+  // Pastes copies moved by dx and dy onto the board shown, and selects them.
+  const pasteMoved = async (c: Copied, dx: number, dy: number) => {
     try {
-      const res = await pasteCopied(c, flowId, boardId, at.x - c.at.x, at.y - c.at.y)
+      const res = await pasteCopied(c, flowId, boardId, dx, dy)
       await loadBoard()
       const ids = new Set([...res.processes.map(String), ...res.objects.map(objectNodeId)])
       setNodes((ns) => ns.map((n) => ({ ...n, selected: ids.has(n.id) })))
     } catch (err) {
       report(err)
     }
+  }
+
+  // Copies of the selected processes and objects next to them, with what is
+  // inside them and the links between them, as pasting brings, leaving
+  // what was copied before as it was.
+  const duplicateSelection = async () => {
+    if (readOnly || objectBoard || structBoard) return
+    const c = copiedOf(getNodes().filter((n) => n.selected))
+    if (c) await pasteMoved(c, DUPLICATE_OFFSET, DUPLICATE_OFFSET)
   }
 
   // The board's history calls go one after another.
@@ -2297,29 +2372,6 @@ export default function Board({
   const showAssistantChanges = useCallback((version: number) => {
     setCompare({ from: version, to: null, assistant: true })
     setDiffListed(true)
-  }, [])
-
-  // Cmd or Ctrl and C copies the selection, and with V pastes it, but not
-  // while typing or with text selected, which they copy and paste as ever.
-  // With Z it undoes the latest change to the board, and with Shift and Z
-  // redoes it, but not while typing, which they undo and redo as ever.
-  const clipboard = useRef({ copySelection, pasteAt, stepHistory })
-  clipboard.current = { copySelection, pasteAt, stepHistory }
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
-      const target = e.target as HTMLElement | null
-      if (target?.isContentEditable || target?.closest('input, textarea, select, dialog')) return
-      const key = e.key.toLowerCase()
-      if (key === 'z') {
-        e.preventDefault()
-        clipboard.current.stepHistory(!e.shiftKey)
-      } else if (e.shiftKey) return
-      else if (key === 'c' && !window.getSelection()?.toString()) clipboard.current.copySelection()
-      else if (key === 'v') clipboard.current.pasteAt()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   // The boards from the top one down to the one shown, then the objects
@@ -2503,6 +2555,362 @@ export default function Board({
     )
   }
 
+  // The run's log or its timeline, in a window over the board; see RunLogs
+  // and RunTimeline. They are the board's, not the run panel's, so they open
+  // from the palette whatever panel shows.
+  const [runWindow, setRunWindow] = useState<'logs' | 'timeline' | null>(null)
+  useEffect(() => setRunWindow(null), [runId])
+
+  // Finding on the board (Cmd-F; see find.ts): what is typed, the board it
+  // was typed on, which the order of the matches starts from, the match gone
+  // to, and a count bumped to give the box the focus again.
+  const [finding, setFinding] = useState<{ query: string; from: Place; at: number | null; focus: number } | null>(null)
+  const structRoot = structBoard ? (contents?.objects.find((o) => o.parent === null && o.owner === null)?.id ?? null) : null
+  const matches = useMemo(
+    () => (finding && contents ? findOnBoards(contents, finding.query, finding.from, structRoot) : []),
+    [finding, contents, structRoot],
+  )
+  const here = (): Place => ({ board: boardId, unfolded })
+  const openFind = () => setFinding((f) => (f ? { ...f, focus: f.focus + 1 } : { query: '', from: here(), at: null, focus: 0 }))
+  const findQuery = (query: string) => setFinding((f) => f && { ...f, query, from: here(), at: null })
+  // The match to centre once its board shows and its node is measured.
+  const [findTarget, setFindTarget] = useState<FindMatch | null>(null)
+  const goToMatch = (step: 1 | -1) => {
+    if (!finding || matches.length === 0) return
+    const at = finding.at === null ? (step === 1 ? 0 : matches.length - 1) : (finding.at + step + matches.length) % matches.length
+    const m = matches[at]
+    setFinding({ ...finding, at })
+    setMenu(null)
+    if (m.board !== boardId || m.unfolded !== unfolded) {
+      centring.current = true
+      setBoardId(m.board)
+      setUnfolded(m.unfolded)
+    }
+    setFindTarget(m)
+  }
+  const closeFind = () => {
+    setFinding(null)
+    setFindTarget(null)
+    centring.current = false
+  }
+  useEffect(() => {
+    const t = findTarget
+    if (!t || boardId !== t.board || unfolded !== t.unfolded || shownBoard !== t.board || shownUnfolded !== t.unfolded) return
+    const node = nodes.find((n) => n.id === t.node)
+    if (node && !node.measured?.width) return
+    setFindTarget(null)
+    centring.current = false
+    if (!node) return
+    setNodes((ns) => ns.map((n) => (Boolean(n.selected) === (n.id === node.id) ? n : { ...n, selected: n.id === node.id })))
+    setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)))
+    const { width = 0, height = 0 } = node.measured ?? {}
+    setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: Math.max(getZoom(), FIND_ZOOM), duration: 300 })
+  }, [findTarget, nodes, boardId, unfolded, shownBoard, shownUnfolded, setNodes, setEdges, setCenter, getZoom])
+
+  // Every process and object on the board, selected.
+  const selectAll = () => setNodes((ns) => ns.map((n) => (n.type === 'process' || n.type === 'object' ? { ...n, selected: true } : n)))
+
+  // Deletes the links and connections selected, and the processes and
+  // objects selected, asking first; false if nothing selected can go.
+  const deleteSelection = () => {
+    if (readOnly) return false
+    const doomed = new Set(
+      getNodes()
+        .filter((n) => n.selected && removable(n.id))
+        .map((n) => n.id),
+    )
+    const links = edges.filter((e) => e.selected && e.deletable !== false && !doomed.has(e.source) && !doomed.has(e.target))
+    if (doomed.size === 0 && links.length === 0) return false
+    const deleteLinks = () => void (links.length > 0 && deleteElements({ edges: links }))
+    if (doomed.size === 0) deleteLinks()
+    else void removeNodes([...doomed], deleteLinks)
+  }
+
+  // Closes what Escape closes first: a note being written, the find box, a
+  // run being picked to compare with, then the panel showing, as the panels
+  // take the column below; false if nothing is open. A menu closes itself.
+  const closeOpen = () => {
+    if (menu || paneMenu) return
+    if (noting) setNoting(null)
+    else if (finding) closeFind()
+    else if (comparing !== null) setComparing(null)
+    else if (panelNode || objectPanelNode) setPanelId(null)
+    else if (mcpOpen) setMCPOpen(false)
+    else if (settingsOpen) setSettingsOpen(false)
+    else if (oplOpen) setOPLOpen(false)
+    else if (codeOpen) setCodeOpen(false)
+    else if (versionsOpen) setVersionsOpen(false)
+    else if (compare && diffListed) setCompare(null)
+    else if (runDetail) setRunId(null)
+    else return false
+  }
+
+  // What the toolbar's Save and the play button may do, which their
+  // shortcuts go by too.
+  const canSave = !versioning && !readOnly
+  const runnable = canRun && !structBoard
+  // The process its panel shows, or else the one process selected, if it
+  // can be tried alone, as its panel's Try does.
+  const triable = (() => {
+    if (readOnly || viewOnly) return undefined
+    const selected = nodes.filter((n) => n.selected && n.type === 'process' && !isDraft(n.id))
+    const n = panelNode ?? (selected.length === 1 ? selected[0] : undefined)
+    return n?.type === 'process' && ['agent', 'script', 'connector'].includes(n.data.kind) ? n : undefined
+  })()
+
+  // The board's shortcuts, from the registry in shortcuts.ts. Keys held down
+  // don't start a run, save or duplicate again with each repeat.
+  useShortcuts({
+    find: () => openFind(),
+    save: (e) => void (canSave && !e.repeat && setNoting('save')),
+    run: (e) => void (runnable && !e.repeat && onPlay()),
+    undo: () => void stepHistory(true),
+    redo: () => void stepHistory(false),
+    // Text selected is copied as ever.
+    copy: () => (window.getSelection()?.toString() ? false : copySelection()),
+    paste: () => void pasteAt(),
+    duplicate: (e) => void (!e.repeat && duplicateSelection()),
+    selectAll,
+    delete: deleteSelection,
+    fit: () => void fitView(FIT_VIEW),
+    close: closeOpen,
+  })
+
+  // What the board offers the command palette: its actions, its views, the
+  // building blocks to add, and opening a run of the flow on it.
+  const cannotChange = viewOnly ? 'Only its owner changes the flow' : 'Not while a run or another version shows'
+  usePaletteSource(() => {
+    const items: PaletteItem[] = []
+    const add = (item: Omit<PaletteItem, 'group'>, group = 'Board') => items.push({ ...item, group })
+    add({
+      id: 'board:save',
+      title: 'Save a version…',
+      shortcut: 'save',
+      words: 'note',
+      disabled: readOnly ? cannotChange : versioning ? 'Saving…' : undefined,
+      run: () => setNoting('save'),
+    })
+    if (!structBoard) {
+      add({
+        id: 'board:publish',
+        title: versions.published !== null && versions.draft ? 'Publish the changes…' : 'Publish…',
+        hint:
+          versions.published === null
+            ? 'Have schedules, the API and records run the board as it is now'
+            : `Version ${versions.published} is published`,
+        disabled: readOnly ? cannotChange : versioning ? 'Saving…' : undefined,
+        run: () => setNoting('publish'),
+      })
+      add({
+        id: 'board:run',
+        title: 'Run the flow',
+        shortcut: 'run',
+        disabled: runnable ? undefined : viewOnly ? cannotChange : starting ? 'Starting…' : 'Connect the start node to a process first',
+        run: () => void onPlay(),
+      })
+      if (versions.published !== null && !viewOnly) {
+        add({
+          id: 'board:run-published',
+          title: `Run the published version, ${versions.published}`,
+          disabled: starting ? 'Starting…' : undefined,
+          run: () => void onPlay(true),
+        })
+      }
+    }
+    if (triable)
+      add({
+        id: 'board:try',
+        title: `Try ${triable.data.name}…`,
+        hint: 'Run only this process, on inputs you give it',
+        words: 'trial',
+        run: () => setTrying(Number(triable.id)),
+      })
+    add({ id: 'board:find', title: 'Find on the board…', shortcut: 'find', words: 'search process object state', run: openFind })
+    add({ id: 'board:fit', title: 'Zoom to fit', shortcut: 'fit', run: () => void fitView(FIT_VIEW) })
+    add({
+      id: 'board:tidy',
+      title: 'Tidy up',
+      hint: 'Lay the board out from the top',
+      words: 'layout arrange',
+      disabled: readOnly ? cannotChange : undefined,
+      run: onTidy,
+    })
+    if (!structBoard && !objectBoard && selectedProcesses.length > 0 && !readOnly) {
+      add({
+        id: 'board:group',
+        title: 'Group into flow',
+        hint: 'Move the selected processes into a new flow process',
+        run: () => void onWrap(),
+      })
+    }
+    add({ id: 'board:select-all', title: 'Select every process and object', shortcut: 'selectAll', run: selectAll })
+    if (!readOnly && !objectBoard && !structBoard && nodes.some((n) => n.selected)) {
+      add({ id: 'board:duplicate', title: 'Duplicate the selection', shortcut: 'duplicate', run: () => void duplicateSelection() })
+    }
+    add({
+      id: 'board:undo',
+      title: 'Undo',
+      shortcut: 'undo',
+      disabled: readOnly ? cannotChange : undefined,
+      run: () => void stepHistory(true),
+    })
+    add({
+      id: 'board:redo',
+      title: 'Redo',
+      shortcut: 'redo',
+      disabled: readOnly ? cannotChange : undefined,
+      run: () => void stepHistory(false),
+    })
+
+    const view = (item: Omit<PaletteItem, 'group'>) => add(item, 'Views')
+    view({
+      id: 'view:versions',
+      title: 'Versions',
+      hint: 'Every saved version, to go back to, publish or compare',
+      words: 'history restore rollback',
+      run: () => {
+        setPanelId(null)
+        setMCPOpen(false)
+        setSettingsOpen(false)
+        setOPLOpen(false)
+        setCodeOpen(false)
+        refreshVersions()
+        setVersionsOpen(true)
+      },
+    })
+    if (versions.published !== null) {
+      view({
+        id: 'view:changes-published',
+        title: `Changes since the published version, ${versions.published}`,
+        words: 'diff compare draft',
+        run: () => onCompare(versions.published!, null),
+      })
+    }
+    if (versions.versions.length > 0) {
+      view({
+        id: 'view:changes',
+        title: 'Changes since a version…',
+        words: 'diff compare',
+        choose: {
+          title: 'Changes since',
+          items: () =>
+            versions.versions.map((v) => ({
+              id: `version:${v.id}`,
+              title: `Version ${v.id}`,
+              group: 'Versions',
+              hint: [v.id === versions.published ? 'published' : '', v.note, formatTime(v.createdAt)].filter(Boolean).join(' · '),
+              words: v.savedBy,
+              run: () => onCompare(v.id, null),
+            })),
+        },
+      })
+    }
+    view({
+      id: 'view:code',
+      title: 'Code',
+      hint: 'The flow as its setup file',
+      words: 'yaml export import setup',
+      run: () => openCode(true),
+    })
+    if (!structBoard) {
+      view({
+        id: 'view:mcp',
+        title: 'MCP servers',
+        hint: 'The MCP servers agents can use',
+        words: 'tools',
+        run: () => openMCPSettings(true),
+      })
+      view({
+        id: 'view:opl',
+        title: 'OPL',
+        hint: "The flow in sentences, in OPM's Object-Process Language",
+        words: 'sentences language',
+        run: () => openOPL(true),
+      })
+      view({
+        id: 'view:settings',
+        title: 'Flow settings',
+        hint: 'The repositories the flow works on, its branches and owner',
+        words: 'repositories branch owner spend',
+        run: () => openFlowSettings(true),
+      })
+    }
+    if (sharedRoot)
+      view({
+        id: 'view:records',
+        title: 'Records',
+        hint: 'The records every flow using the struct wrote',
+        hash: `#/flows/${flowId}/records`,
+      })
+    for (const b of contents?.boards ?? []) {
+      const p = contents?.processes.find((q) => q.id === b.process)
+      if (p && b.process !== boardId)
+        view({
+          id: `board-of:${b.process}`,
+          title: `${p.name}'s board`,
+          words: 'flow process inside zoom',
+          run: () => showProcessBoard(b.process),
+        })
+    }
+    if (boardId !== null || unfolded !== null)
+      view({ id: 'view:top', title: 'The top board', words: 'flow back up', run: () => showProcessBoard(null) })
+
+    if (runDetail) {
+      const run = (item: Omit<PaletteItem, 'group'>) => add(item, 'Run')
+      run({ id: 'run:timeline', title: `Timeline of run #${runDetail.id}`, words: 'steps time axis', run: () => setRunWindow('timeline') })
+      run({ id: 'run:logs', title: `Log of run #${runDetail.id}`, words: 'logs', run: () => setRunWindow('logs') })
+      run({
+        id: 'run:compare',
+        title: `Compare run #${runDetail.id} with…`,
+        words: 'diff side by side',
+        choose: {
+          title: `Compare run #${runDetail.id} with`,
+          items: async () =>
+            (await listRuns(flowId, undefined, undefined, COMPARE_RUNS))
+              .filter((r) => r.id !== runDetail.id)
+              .map((r) => runItem(r, flow.name, { hash: `#/flows/${flowId}/compare/${runDetail.id}/${r.id}` })),
+        },
+      })
+      run({ id: 'run:close', title: `Close run #${runDetail.id}`, hint: 'Back to the board', run: () => setRunId(null) })
+    }
+
+    if (!readOnly && !(structBoard && !objectBoard)) {
+      const blocks: [Block, string][] = [
+        ...(objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS).map((b): [Block, string] => [
+          b,
+          'Building block',
+        ]),
+        ...(objectBoard || structBoard
+          ? []
+          : [
+              ...(connectorTiles ?? []).map((b): [Block, string] => [b, 'Connector']),
+              ...flowBlocks.map((b): [Block, string] => [b, 'Procedure']),
+              ...structBlocks.map((b): [Block, string] => [b, 'Struct']),
+            ]),
+      ]
+      for (const [b, kind] of blocks) {
+        add(
+          {
+            id: `add:${b.id}`,
+            title: `Add ${kind === 'Building block' ? `a ${b.label.toLowerCase()}` : b.label}`,
+            hint: kind === 'Building block' ? b.title : kind,
+            words: `new ${kind}`,
+            run: () => addAtViewportCenter(b),
+          },
+          'Add to the board',
+        )
+      }
+    }
+    return {
+      items,
+      openRun: (f, run) => {
+        if (f !== flowId || structBoard) return false
+        void openRunById(run)
+        return true
+      },
+    }
+  })
+
   const panelColumn = useColumnWidth(PANEL_COLUMN)
 
   // What the comparison highlights on the board shown, if it shows the
@@ -2520,15 +2928,20 @@ export default function Board({
       parentOf: (p) => parents.get(p),
     })
   }, [diff, compare, shownVersion, boardId, contents])
+  // What finding found is outlined too, the match gone to most.
+  const found = useMemo(() => new Set(matches.map((m) => m.node)), [matches])
+  const foundAt = finding?.at != null ? matches[finding.at]?.node : undefined
   const shownNodes = useMemo(
     () =>
-      highlights.nodes.size === 0
+      highlights.nodes.size === 0 && found.size === 0
         ? nodes
         : nodes.map((n) => {
             const change = highlights.nodes.get(n.id)
-            return change ? { ...n, className: `${n.className ?? ''} diff-${change}`.trim() } : n
+            const match = found.has(n.id) ? (n.id === foundAt ? 'find-current' : 'find-match') : undefined
+            if (!change && !match) return n
+            return { ...n, className: [n.className, change && `diff-${change}`, match].filter(Boolean).join(' ') }
           }),
-    [nodes, highlights],
+    [nodes, highlights, found, foundAt],
   )
   const shownEdges = useMemo(
     () =>
@@ -2578,7 +2991,7 @@ export default function Board({
         ) : (
           <span
             className="hint"
-            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, readOnly the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or connector process onto another process to run that one when it fails. Select an object's link into a process to pick how the process takes it: just takes it, uses it as an instrument it doesn't change, or consumes it; for a link from a state, whether the process runs when the object enters it, or only if the object is in it once the process is ready, being skipped otherwise. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select a connection and press Delete to remove it. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too."
+            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, readOnly the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or connector process onto another process to run that one when it fails. Select an object's link into a process to pick how the process takes it: just takes it, uses it as an instrument it doesn't change, or consumes it; for a link from a state, whether the process runs when the object enters it, or only if the object is in it once the process is ready, being skipped otherwise. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select links, processes or objects and press Delete or Backspace to delete them. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too. Cmd/Ctrl+F finds a process, object or state by name, Cmd/Ctrl+K opens the command palette, and ? lists every shortcut."
           >
             Processes connect through the objects they generate and take. Right-click a node for more.
           </span>
@@ -2589,7 +3002,7 @@ export default function Board({
               onClick={() => setNoting(noting === 'save' ? null : 'save')}
               disabled={versioning || readOnly}
               aria-expanded={noting === 'save'}
-              title="Save the board as a new version, with a note saying why if you like"
+              title={`Save the board as a new version, with a note saying why if you like (${shortcutText('save', MAC)})`}
             >
               <SaveIcon /> Save
             </button>
@@ -2712,7 +3125,7 @@ export default function Board({
             disabled={!canRun}
             aria-label="Run flow"
             title={
-              starting ? 'Starting…' : canRun ? 'Run flow' : 'Connect the start node to a process first'
+              starting ? 'Starting…' : canRun ? `Run flow (${shortcutText('run', MAC)})` : 'Connect the start node to a process first'
             }
           >
             <PlayIcon />
@@ -2820,7 +3233,8 @@ export default function Board({
                 zoomOnDoubleClick={false}
                 nodesDraggable={!readOnly}
                 nodesConnectable={!readOnly && !objectBoard}
-                deleteKeyCode={readOnly ? null : undefined}
+                // Deleting goes through the board's shortcuts.
+                deleteKeyCode={null}
               >
                 <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
                 <Controls fitViewOptions={FIT_VIEW} />
@@ -2844,6 +3258,24 @@ export default function Board({
                 ),
               )}
             </nav>
+          )}
+          {finding && (
+            <BoardFind
+              query={finding.query}
+              count={matches.length}
+              at={finding.at}
+              place={(() => {
+                const m = finding.at === null ? undefined : matches[finding.at]
+                if (!m || !contents) return null
+                const what = { process: 'Process', object: 'Object', state: 'State' }[m.kind]
+                return `${what} ${m.name}${m.of ? ` of ${m.of}` : ''}, ${placeOf(m, contents)}`
+              })()}
+              focus={finding.focus}
+              onQuery={findQuery}
+              onNext={() => goToMatch(1)}
+              onPrevious={() => goToMatch(-1)}
+              onClose={closeFind}
+            />
           )}
           {viewOnly && !openRun && (
             <div className="review-banner" role="status">
@@ -3060,12 +3492,12 @@ export default function Board({
         {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && !versionsOpen && !(compare && diffListed) && runDetail && (
           <RunPanel
             run={runDetail}
-            processes={contents?.processes}
             onStop={() => onStop(runDetail.id)}
             onStopStep={(step) => onStopStep(runDetail.id, step)}
             focus={runFocus}
             onClearFocus={() => setRunFocus(null)}
-            onOpenStep={openStep}
+            onLogs={() => setRunWindow('logs')}
+            onTimeline={() => setRunWindow('timeline')}
             comparing={comparing === runDetail.id}
             onCompare={() => setComparing((c) => (c === runDetail.id ? null : runDetail.id))}
             onOpenRun={openRunById}
@@ -3077,6 +3509,10 @@ export default function Board({
           />
         )}
       </div>
+      {runWindow === 'logs' && runDetail && <RunLogs run={runDetail} onClose={() => setRunWindow(null)} />}
+      {runWindow === 'timeline' && runDetail && (
+        <RunTimeline run={runDetail} processes={contents?.processes} onOpenStep={openStep} onClose={() => setRunWindow(null)} />
+      )}
       {trying !== null && (
         <TrialDialog
           process={trying}

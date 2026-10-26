@@ -70,6 +70,11 @@ reads that run's steps, decisions and log. Flows can
 be exported and imported as YAML setup files ([webapp/SETUP.md](webapp/SETUP.md)),
 and [docs/FLOWS.md](docs/FLOWS.md) explains how to author them.
 
+Cmd-K (Ctrl-K) anywhere opens a command palette that goes to a flow, a run,
+a page or a setting by typing part of its name, and on a board does what its
+toolbar and panels do; Cmd-F finds a process, object or state on the board
+and the boards inside it, and `?` lists every shortcut.
+
 ## Getting started
 
 Spoletta runs as three containers: MySQL, the webapp and the worker that

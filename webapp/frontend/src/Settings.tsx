@@ -35,8 +35,9 @@ export type SettingsTab =
   | 'teams'
 
 // The tabs whoever is signed in sees: their own settings, and an admin's
-// over the instance. Without sign-in, there is only the instance's.
-function tabsFor(me: Me): { id: SettingsTab; label: string }[] {
+// over the instance. Without sign-in, there is only the instance's. The
+// command palette offers the same.
+export function tabsFor(me: Me): { id: SettingsTab; label: string }[] {
   const tabs: { id: SettingsTab; label: string }[] = []
   if (me.user) tabs.push({ id: 'account', label: 'Account' })
   if (configures(me)) tabs.push({ id: 'keys', label: 'Model providers' })

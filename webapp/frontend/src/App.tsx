@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { countInbox, getFlow, onInboxChanged, updateFlow, type Flow } from './api'
 import Board from './Board'
+import CommandPalette from './CommandPalette'
 import FlowData from './FlowData'
 import FlowList from './FlowList'
 import Activity from './Activity'
@@ -11,6 +12,7 @@ import Records from './Records'
 import RunCompare from './RunCompare'
 import Schedules from './Schedules'
 import Settings, { type SettingsTab } from './Settings'
+import { ShortcutSheet, useShortcuts } from './Keyboard'
 import TabBar from './TabBar'
 import { TabContext, useTabs } from './tabs'
 
@@ -79,15 +81,27 @@ function useInboxCount(): number | null {
   return count
 }
 
+// The list of flows has an address of #/ or none.
+const sameHash = (a: string, b: string) => (a || '#/') === (b || '#/')
+
 export default function App() {
   const { tabs, active, select, add, close } = useTabs()
   const inbox = useInboxCount()
-  // The inbox opens in the tab showing it, if one does, else in a new one.
-  const onInbox = () => {
-    const open = tabs.find((t) => t.hash === INBOX)
+  // A page opens in the tab showing it, if one does, else in a new one.
+  const openPage = (hash: string) => {
+    if (sameHash(window.location.hash, hash)) return
+    const open = tabs.find((t) => t.id !== active && sameHash(t.hash, hash))
     if (open) select(open.id)
-    else add(INBOX)
+    else add(hash)
   }
+  const onInbox = () => openPage(INBOX)
+  // The command palette and the sheet of shortcuts, over any page.
+  const [palette, setPalette] = useState(false)
+  const [sheet, setSheet] = useState(false)
+  useShortcuts({
+    palette: () => setPalette((open) => !open),
+    sheet: () => setSheet(true),
+  })
   return (
     <>
       <TabBar
@@ -105,6 +119,8 @@ export default function App() {
           <Page key={active} />
         </TabContext.Provider>
       </div>
+      {palette && <CommandPalette onOpen={openPage} onShortcuts={() => setSheet(true)} onClose={() => setPalette(false)} />}
+      {sheet && <ShortcutSheet onClose={() => setSheet(false)} />}
     </>
   )
 }

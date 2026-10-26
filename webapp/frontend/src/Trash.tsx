@@ -33,6 +33,8 @@ export default function Trash() {
       await refresh()
     } catch (err) {
       report(err)
+      // Its name may have been taken since, which the list then says.
+      await refresh()
     }
   }
 

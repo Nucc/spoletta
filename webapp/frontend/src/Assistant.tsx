@@ -3,6 +3,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { askAssistant, clearAssistant, getAssistant, stopAssistant, type AssistantMessage } from './api'
 import { AssistantIcon, StopIcon, TrashIcon } from './icons'
+import { useConfirm } from './Confirm'
 
 // How often a reply going is looked in on.
 const POLL_MS = 1500
@@ -45,6 +46,7 @@ export default function Assistant({
 }) {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<AssistantMessage[] | null>(null)
+  const [confirm, confirmDialog] = useConfirm()
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const list = useRef<HTMLDivElement>(null)
@@ -120,7 +122,15 @@ export default function Assistant({
   }
 
   const stop = () => stopAssistant(flowId).then(load).catch(onError)
-  const clear = () => clearAssistant(flowId).then(load).catch(onError)
+  // The conversation goes for good; what it changed on the board stays.
+  const clear = async () => {
+    const yes = await confirm({
+      title: 'Start the conversation over?',
+      message: <p>The conversation is deleted for good; what the assistant changed on the board stays.</p>,
+      confirm: 'Start over',
+    })
+    if (yes) clearAssistant(flowId).then(load).catch(onError)
+  }
 
   if (!open) {
     return (
@@ -152,6 +162,7 @@ export default function Assistant({
           ×
         </button>
       </header>
+      {confirmDialog}
       <div className="assistant-messages" ref={list}>
         {messages?.length === 0 && (
           <p className="assistant-hint">

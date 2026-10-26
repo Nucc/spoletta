@@ -14,6 +14,7 @@ import {
   type Team,
 } from './api'
 import {
+  ActivityIcon,
   ClockIcon,
   DownloadIcon,
   FlowBuilderIcon,
@@ -195,6 +196,9 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         <h1>
           <FlowBuilderIcon /> Flows
         </h1>
+        <a className="toolbar-link" href="#/activity" title="What runs and fails across the flows, what they spend, and how reviews go">
+          <ActivityIcon /> Activity
+        </a>
         <a className="toolbar-link" href="#/schedules">
           <ClockIcon /> Schedules
         </a>

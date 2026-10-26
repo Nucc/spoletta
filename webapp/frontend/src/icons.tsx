@@ -145,6 +145,13 @@ export const ClockIcon = () => (
   </Icon>
 )
 
+// Runs going up and down, for the Activity page.
+export const ActivityIcon = () => (
+  <Icon>
+    <path d="M1.5 8.5h3l2-5 3 9 2-4h3" />
+  </Icon>
+)
+
 // A favourite's star, filled once starred.
 export const StarIcon = ({ filled = false }: { filled?: boolean }) => (
   <Icon>

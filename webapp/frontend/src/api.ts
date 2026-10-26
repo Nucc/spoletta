@@ -1962,3 +1962,70 @@ export function getSpending(month?: string): Promise<Spending> {
   return request('/api/spending' + (month ? `?month=${encodeURIComponent(month)}` : ''))
 }
 
+// A run the Activity page lists, with its flow's name, and for a failed
+// one, the process whose step failed first and what went wrong.
+export type ActivityRun = FlowRun & { flowName: string; failedProcess?: string; error?: string }
+
+// A flow's runs, each a day of the period: how many started that day, how
+// many of those failed, and the dollars they spent on models, with how many
+// of their calls were to models without a known price, counted at the
+// largest models'.
+export type FlowActivity = {
+  flow: number
+  name: string
+  module: boolean
+  runs: number[]
+  failed: number[]
+  cost: number[]
+  unpriced: number
+}
+
+// A process's steps in the period, how many failed, a retry each counting,
+// and the latest that did: its run, maybe one inside another flow's.
+export type ProcessFailures = {
+  flow: number
+  flowName: string
+  process: number
+  name: string
+  kind: ProcessKind
+  steps: number
+  failed: number
+  lastRun: number
+  lastError: string
+}
+
+// The reviews a human process asked for in the period that someone decided:
+// how long they waited, in seconds, half of them and nine in ten within;
+// how many came with instructions, asking for changes; and the reviews
+// decided in one run, the rounds, over how many runs and at most.
+export type ReviewTimes = {
+  flow?: number
+  flowName?: string
+  process?: number
+  name?: string
+  decided: number
+  median: number
+  p90: number
+  longest: number
+  changes: number
+  runs: number
+  mostRounds: number
+}
+
+// What goes on across every flow one sees, over the last days, each a day
+// in zone.
+export type Activity = {
+  zone: string
+  days: string[]
+  running: { total: number; runs: ActivityRun[] }
+  failed: { total: number; runs: ActivityRun[] }
+  total: FlowActivity
+  flows: FlowActivity[]
+  processes: ProcessFailures[]
+  reviews: ReviewTimes[]
+  allReviews: ReviewTimes
+}
+
+export function getActivity(days: number, zone: string): Promise<Activity> {
+  return request(`/api/activity?${new URLSearchParams({ days: String(days), tz: zone })}`)
+}

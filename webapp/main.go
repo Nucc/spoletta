@@ -150,6 +150,7 @@ func main() {
 	go writeAudit(db)
 	registerAuditRoutes(mux, db)
 	registerSpendingRoutes(mux, db)
+	registerActivityRoutes(mux, db)
 	egress = newEgressBroker(db, proxyURL)
 	registerEgressRoutes(mux, db)
 	go egress.watchTunnels(context.Background())

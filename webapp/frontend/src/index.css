@@ -7271,3 +7271,374 @@ select.flow-owner:disabled {
   border-color: #b6e3ff;
 }
 
+/* The Activity page: what goes on across the flows. */
+.activity {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+}
+
+.activity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.activity-filters .flows-note {
+  margin: 0;
+}
+
+.activity-period {
+  display: inline-flex;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.activity-period button {
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: #1f2328;
+  background: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.activity-period button + button {
+  border-left: 1px solid #d0d7de;
+}
+
+.activity-period button:hover {
+  background: #f6f8fa;
+}
+
+.activity-period button.active {
+  color: #fff;
+  background: #0969da;
+}
+
+/* While the page reads again, it keeps what it showed. */
+.activity-body.loading {
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.activity-card {
+  margin-bottom: 16px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 10px;
+}
+
+.activity-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2328;
+}
+
+.activity-card > .flows-note {
+  margin: 0 0 8px;
+}
+
+.activity-count {
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #57606a;
+  background: #eaeef2;
+  border-radius: 999px;
+}
+
+.activity-now {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.activity-now .activity-card {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .activity-now {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+
+.activity-runs {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.activity-runs li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-top: 1px solid #eaeef2;
+  font-size: 13px;
+}
+
+.activity-runs li:first-child {
+  border-top: none;
+}
+
+.activity-runs a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #1f2328;
+  text-decoration: none;
+}
+
+.activity-runs a:hover .activity-run-flow {
+  color: #0969da;
+  text-decoration: underline;
+}
+
+.activity-run-flow {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.activity-run-id,
+.activity-run-when {
+  color: #656d76;
+}
+
+.activity-run-when {
+  padding-left: 14px;
+  font-size: 12px;
+}
+
+.activity-run-error {
+  padding-left: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #a40e26;
+}
+
+.activity-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.activity-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 16px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 10px;
+}
+
+.activity-tile-label {
+  font-size: 13px;
+  color: #656d76;
+}
+
+.activity-tile-value {
+  font-size: 24px;
+  font-weight: 600;
+  color: #1f2328;
+}
+
+.activity-tile-note {
+  font-size: 12px;
+  color: #656d76;
+}
+
+/* A bar a day, with what the day pointed at holds above it. */
+.day-bars svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.day-bars-readout {
+  min-height: 20px;
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: #1f2328;
+}
+
+.day-bars-readout .flows-note {
+  font-size: 13px;
+}
+
+.day-bars-grid {
+  stroke: #eaeef2;
+  stroke-width: 1;
+}
+
+.day-bars-axis {
+  stroke: #d0d7de;
+  stroke-width: 1;
+}
+
+.day-bars-tick {
+  font-size: 11px;
+  fill: #656d76;
+  font-variant-numeric: tabular-nums;
+}
+
+.day-bars-hit {
+  fill: transparent;
+  outline: none;
+}
+
+.day-bars-day.at .day-bars-hit {
+  fill: rgba(9, 105, 218, 0.06);
+}
+
+.day-bars-day.at path {
+  opacity: 0.85;
+}
+
+.day-bars-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #57606a;
+}
+
+.day-bars-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.day-bars-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.spark {
+  display: block;
+}
+
+.activity-table-wrap {
+  overflow-x: auto;
+}
+
+.activity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.activity-table th {
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: #656d76;
+  white-space: nowrap;
+  border-bottom: 1px solid #d8dee4;
+}
+
+.activity-table td {
+  padding: 6px 8px;
+  color: #1f2328;
+  border-bottom: 1px solid #eaeef2;
+  vertical-align: middle;
+}
+
+.activity-table tr:last-child td {
+  border-bottom: none;
+}
+
+.activity-table .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-table a {
+  color: #0969da;
+  text-decoration: none;
+}
+
+.activity-table a:hover {
+  text-decoration: underline;
+}
+
+.activity-table .activity-bad {
+  color: #a40e26;
+}
+
+.activity-table .activity-all td {
+  font-weight: 600;
+  background: #f6f8fa;
+}
+
+.activity-sort {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.activity-sort.active {
+  color: #1f2328;
+  text-decoration: underline;
+}
+
+.activity-kind {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #656d76;
+}
+
+.activity-error-cell {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #57606a;
+}
+
+.activity-more {
+  margin-top: 8px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: #0969da;
+  background: none;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.activity-footnote {
+  font-size: 12px;
+  line-height: 1.5;
+}

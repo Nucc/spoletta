@@ -685,10 +685,33 @@ func (b *llmBroker) recordUsage(g *llmGrant, provider, model string, u llmUsage)
 		root = g.root
 	}
 	defer b.checkSpent(ctx, g)
-	if _, err := b.db.ExecContext(ctx,
-		`INSERT INTO llm_usage (user_id, run_id, root_run_id, step_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, priced)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		g.user, run, root, step, provider, truncate(model, 255), u.input, u.output, u.cacheRead, u.cacheWrite, cost, priced); err != nil {
+	// The run the call counts toward keeps what its calls cost, for the
+	// Activity page; see activity.go.
+	err := func() error {
+		tx, err := b.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO llm_usage (user_id, run_id, root_run_id, step_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, priced)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			g.user, run, root, step, provider, truncate(model, 255), u.input, u.output, u.cacheRead, u.cacheWrite, cost, priced); err != nil {
+			return err
+		}
+		if g.root != 0 {
+			unpriced := 0
+			if !priced {
+				unpriced = 1
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE runs SET spent_micros = spent_micros + ?, unpriced_calls = unpriced_calls + ? WHERE id = ?",
+				cost, unpriced, g.root); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}()
+	if err != nil {
 		log.Printf("record the usage of %s: %v", provider, err)
 	}
 }

@@ -4,6 +4,7 @@ import { getFlow, updateFlow, type Flow } from './api'
 import Board from './Board'
 import FlowData from './FlowData'
 import FlowList from './FlowList'
+import Activity from './Activity'
 import AuditLog from './Audit'
 import Records from './Records'
 import RunCompare from './RunCompare'
@@ -18,9 +19,11 @@ import { TabContext, useTabs } from './tabs'
 // #/flows/<id>/data for what its runs held, #/flows/<id>/records for a
 // shared struct's records, both with ?q=<search>&sort=<key> for what they
 // show, #/audit for the audit log, with them too, #/schedules for the
-// schedules, #/settings/<tab> for the settings, anything else for the list
-// of flows. #/people, where the people were before the settings, is their
-// tab now. The address is the open tab's; each tab keeps its own (tabs.ts).
+// schedules, #/settings/<tab> for the settings, #/activity for what goes on
+// across the flows, with ?days=<n> for its period, anything else for the
+// list of flows. #/people, where the people were before the settings, is
+// their tab now. The address is the open tab's; each tab keeps its own
+// (tabs.ts).
 type Page =
   | { flow: number; run: number | null }
   | { compare: number; a: number; b: number }
@@ -29,11 +32,13 @@ type Page =
   | { settings: SettingsTab | null }
   | 'schedules'
   | 'audit'
+  | 'activity'
   | null
 
 const pageInHash = (): Page => {
   if (window.location.hash === '#/schedules') return 'schedules'
   if (/^#\/audit(?:\?.*)?$/.test(window.location.hash)) return 'audit'
+  if (/^#\/activity(?:\?.*)?$/.test(window.location.hash)) return 'activity'
   if (window.location.hash === '#/people') return { settings: 'people' }
   const s = /^#\/settings(?:\/(\w+))?$/.exec(window.location.hash)
   if (s) return { settings: (s[1] as SettingsTab | undefined) ?? null }
@@ -67,6 +72,7 @@ function Page() {
   if (page === null) return <FlowList onOpen={(id) => (window.location.hash = `#/flows/${id}`)} />
   if (page === 'schedules') return <Schedules />
   if (page === 'audit') return <AuditLog />
+  if (page === 'activity') return <Activity />
   if ('settings' in page) return <Settings tab={page.settings} />
   if ('compare' in page) return <RunCompare key={`${page.a}-${page.b}`} flow={page.compare} a={page.a} b={page.b} />
   if ('data' in page) return <FlowData key={page.data} id={page.data} />

@@ -3,7 +3,8 @@ package main
 // What agents spend: each call the model proxy (llm.go) passes on is
 // recorded in llm_usage with what it cost, worked out as it is recorded
 // from the model's price, so a price changed later doesn't change what was
-// spent. Prices are dollars a million tokens, as pi's catalog has them, for
+// spent, and added to what the run it counts toward has spent
+// (runs.spent_micros), which the Activity page reads (activity.go). Prices are dollars a million tokens, as pi's catalog has them, for
 // what a call took in, gave out, read from the provider's cache and wrote
 // to it; costs are kept in millionths of a dollar.
 //

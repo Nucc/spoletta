@@ -111,6 +111,7 @@ Flows and procedures have the same shape:
   mcpTools:             # agent: the tools it keeps to of each, by server; all of an MCP server's,
     jira: [search]      #   and a connector's that only read, for a server not named here
   skills: [release-notes]   # agent: the skills it is given, by name: the file's, or the app's
+  credentials: [Jira]   # agent or script: the credentials it calls services with, by name: the app's
   repositories: [app]   # the flow's repositories it works on; all if absent, none if []
   rounds: 3             # agent deciding states: how many times it can send work back
   loops: 5              # how many times it runs round a loop before someone is asked
@@ -142,6 +143,8 @@ Flows and procedures have the same shape:
 ```
 
 A process's `samples` are the inputs saved to try it on alone, as its panel's *Try this process* does: a trial runs only it, on the board as it is, and stores nothing the flow's runs see. Each sample has a name of its own and gives objects the process `takes`, by name, with what they hold and, optionally, one of their states. A process the file gives no `samples` keeps those it has; `samples: []` leaves it none. Export writes them for each process that has any.
+
+A process names its credentials, never holds them: credentials are kept by admins in the settings, under Credentials, secrets and all, and never written in a file. Importing one naming a credential the app hasn't is refused; a name matches whatever its case or spacing, as `Issue tracker` and `issue  TRACKER` name the same one. Only agent and script processes take them. Each credential is reached by the step at `$CREDENTIAL_<NAME>_URL`, with `Authorization: Bearer $CREDENTIALS_TOKEN`; see [docs/FLOWS.md](../docs/FLOWS.md), section 5.3.
 
 ### Links: `takes` and `yields`
 

@@ -218,6 +218,10 @@ by kind:
   instructions once its task calls for them. The flow may use only the
   skills of its owner (theirs, their teams' and everyone's) or, for a team's
   flow, the team's and everyone's.
+- `credentials`: names of credentials an admin keeps in the settings that
+  this agent calls services with, through the webapp's proxy, never seeing
+  their secrets (section 5.3). The flow may use those given everyone, or a
+  team of its owner's, or for a team's flow, the team.
 - In a prompt, `/name` at the start of a line or after a space stands for
   the command of that name kept in the settings, spelled out as the step
   runs. A command taking arguments (`$1`, `$@`, `${1:-default}`) takes the
@@ -233,7 +237,7 @@ by kind:
 **script**
 - `script`: a bash script. Inputs are files in `$INPUTS`. What it prints is
   its output, and a non-zero exit fails the step (section 5.3).
-- `repositories`, as for an agent.
+- `repositories` and `credentials`, as for an agent.
 
 **human**
 - No prompt or script: a person reviews what it takes and decides a state,
@@ -640,7 +644,9 @@ You don't write the plumbing, but the prompts you write sit inside it.
 
 The engine builds it as follows:
 
-1. **Your `prompt`.**
+1. **Your `prompt`.** With `credentials`, a paragraph after it names each
+   service, its base URL and the variable holding its URL at the proxy, and
+   says to send `Authorization: Bearer $CREDENTIALS_TOKEN` (section 5.3).
 2. With `describeFlow`, the line *You carry out the process "Name" of the
    flow described below in OPL…*, then `<flow>…OPL…</flow>`.
 3. The inputs, one element per object:
@@ -702,10 +708,26 @@ definitions do that.
   others can be made to line by line with `stdbuf -oL`, `jq --unbuffered` or
   `grep --line-buffered`. Progress on stderr shows at once.
 - It gets none of the instance's secrets: no model keys, no Sentry or Jira
-  token. A variable such as `$JIRA_TOKEN` is there only if the instance
-  passes it to every script with `CHILD_ENV`; for a service built in, use a
-  connector step instead, or an agent with the service's MCP server. In a workspace, its git (as an agent's)
-  has a token for the run's repositories, which can push.
+  token. To call a service of its own, such as Jira or an internal API, its
+  process picks a **credential** an admin keeps in the settings, under
+  Credentials: the service's base URL and its secret. For each, the step
+  gets `$CREDENTIAL_<NAME>_URL`, the credential's name in capitals with
+  underscores for what isn't a letter or digit (`Issue Tracker` →
+  `$CREDENTIAL_ISSUE_TRACKER_URL`), which is the webapp's proxy standing for
+  the base URL, and one `$CREDENTIALS_TOKEN` for them all. Call a path under
+  it with `Authorization: Bearer $CREDENTIALS_TOKEN` (or the token as basic
+  auth's password); the proxy puts the secret where the service wants it, a
+  header, basic auth or a query parameter, and passes the call on. The token
+  ends with the step, so write the variables, never their values. A path
+  leaving the base URL (`..`, an encoded slash) is refused; a redirect within
+  it comes back as the proxy's URL, so `curl -L` follows it through the
+  proxy. Every call goes in the run's log. The service's host needn't be
+  allowed for internet access, as the webapp makes the call.
+- A variable such as `$JIRA_TOKEN` is there only if the instance passes it
+  to every script with `CHILD_ENV`, which agents read too; prefer a
+  credential. For a service built in, a connector step or an agent with the
+  service's MCP server does without either. In a workspace, its git (as an
+  agent's) has a token for the run's repositories, which can push.
 - Where steps run in containers of their own, a script (as an agent's
   tools) reaches the internet only at the hosts an admin allowed in the
   settings, under Internet access, and its repositories' hosts: a script
@@ -714,13 +736,30 @@ definitions do that.
 - A script can't decide states. Route its output with state rules.
 
 ```bash
-# Prints {"data": ...} for an object without attributes. $JIRA_TOKEN is
-# one the instance passes to scripts with CHILD_ENV.
+# Prints {"data": ...} for an object without attributes. The process picks
+# the credential Jira, whose base URL is https://jira.example.com.
 key=$(jq -r .data "$INPUTS/Ticket_key")
-curl -fsS "https://jira.example.com/rest/api/2/issue/$key" \
-  -H "Authorization: Bearer $JIRA_TOKEN" |
+curl -fsS "$CREDENTIAL_JIRA_URL/rest/api/2/issue/$key" \
+  -H "Authorization: Bearer $CREDENTIALS_TOKEN" |
   jq '{key: .key, summary: .fields.summary, priority: .fields.priority.id | tonumber}'
 ```
+
+In the setup file:
+
+```yaml
+- name: Fetch ticket
+  kind: script
+  credentials: [Jira]
+  script: |
+    key=$(jq -r .data "$INPUTS/Ticket_key")
+    curl -fsS "$CREDENTIAL_JIRA_URL/rest/api/2/issue/$key" \
+      -H "Authorization: Bearer $CREDENTIALS_TOKEN" | jq '{data: .fields.summary}'
+  takes: [Ticket key]
+  yields: [Summary]
+```
+
+A credential is named in the file, never written in it: if the app has none
+of that name, an admin adds it first, and the import says so.
 
 ### 5.4 A person
 
@@ -1549,6 +1588,8 @@ Check them before you import.
   `retries` from 0 to 5; `quorum` at least 1; `remindAfter` and
   `waitAtMost` from 1 to 31536000.
 - `thinking` is one of the listed levels.
+- `credentials` only on an agent or script process, each naming a credential
+  the app has.
 
 **Objects**
 - Part names don't clash with their owner's attribute names, and parts don't
@@ -1606,7 +1647,9 @@ Before drawing anything, find out:
    or fail the run?
 7. **Repeats.** Must the same thing never be processed twice (persistent +
    unique)? Is there a list to handle item by item?
-8. **Tools.** Which repositories, MCP servers, models?
+8. **Tools.** Which repositories, MCP servers, models? Which services do its
+   scripts or agents call with a secret, and is there a credential for each
+   (or must an admin add one)?
 9. **Reuse.** Does this share a piece (a procedure) or a shape (a struct)
    with flows that exist? Export the current setup (`GET /api/setup`) to see
    what is there, and reuse it by name.

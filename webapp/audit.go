@@ -3,13 +3,15 @@ package main
 // The audit log: what the webapp handed steps and what they did with it,
 // and what admins changed, an event each in audit_events, for whom and
 // which run and step. Steps' tokens granted for the model proxy (llm.go),
-// MCP servers (mcp.go), the internet (egress.go) and git (git_tokens.go),
-// and when the model proxy's and the internet's end, as each lets a step
-// do something until then; each internet connection, allowed or refused;
-// calls the model proxy refused, and runs stopped for spending what they
-// may (spend.go); and the limits, internet hosts and model keys admins set.
+// MCP servers (mcp.go), the internet (egress.go), credentials
+// (credentials.go) and git (git_tokens.go), and when the model proxy's,
+// the internet's and credentials' end, as each lets a step do something
+// until then; each internet connection, allowed or refused, and each call
+// through the credential proxy; calls the proxies refused, and runs
+// stopped for spending what they may (spend.go); and the limits, internet
+// hosts, model keys and credentials admins set.
 // What each model call took and cost is in llm_usage, not here. Events
-// never hold a token or a key, only what they reach.
+// never hold a token, a key or a secret, only what they reach.
 //
 // Events are written in the background, so writing one never holds up or
 // fails what it records; should the database fall behind by more than

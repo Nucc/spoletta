@@ -10,8 +10,9 @@ Spoletta keeps that code from the instance's secrets and from other runs.
 4. [Podman and Docker](#podman-and-docker)
 5. [Kubernetes](#kubernetes)
 6. [Internet access](#internet-access)
-7. [Limits and the audit log](#limits-and-the-audit-log)
-8. [Adding a sandbox](#adding-a-sandbox)
+7. [Credentials](#credentials)
+8. [Limits and the audit log](#limits-and-the-audit-log)
+9. [Adding a sandbox](#adding-a-sandbox)
 
 ## The threat model
 
@@ -19,8 +20,8 @@ A step's program (pi and the tools it runs, or a script's bash) is assumed
 hostile. It may read anything it can reach, run anything, and leave traps in
 whatever it can write. It must not be able to:
 
-- read a model provider's key, an MCP server's token, the instance's git
-  token or any other secret;
+- read a model provider's key, an MCP server's token, a credential's
+  secret, the instance's git token or any other secret;
 - read or change another run's workspace, files, session or home, or another
   step's private directory;
 - reach the internet other than the hosts an admin allowed;
@@ -41,6 +42,10 @@ The webapp holds every secret and hands out short-lived tokens instead.
   for the real key. The token ends with the step.
 - **No MCP tokens.** MCP servers are reached through the webapp's MCP proxy
   (`webapp/mcp.go`) with a token of the step's, the same way.
+- **No credentials' secrets.** A service of the step's own, such as Jira, is
+  reached through the webapp's credential proxy (`webapp/credentials.go`)
+  at `$CREDENTIAL_<NAME>_URL` with `$CREDENTIALS_TOKEN`, which the proxy
+  swaps for the credential's secret; see [Credentials](#credentials).
 - **A git token of its own**, for the run's repositories only and lasting an
   hour when it comes from a GitHub App (`webapp/git_tokens.go`), in a file of
   the step's private directory that git finds through `GIT_CONFIG_*`.
@@ -287,6 +292,64 @@ host allowed. pi's own requests go to the webapp directly. Bedrock without a
 key, which signs in with the worker's AWS credentials, isn't supported in a
 container; give it a Bedrock API key in the settings instead.
 
+## Credentials
+
+A script or agent calling a service of its own, such as Jira or an internal
+API, uses a credential an admin keeps in the settings, under Credentials:
+the service's base URL, how its secret goes on each request (a header whose
+value a template makes, basic auth's password, or a query parameter), and
+the secret, sealed with `SECRET_KEY` and never sent back to the browser,
+the worker or the step. Each is everyone's, or only given teams'; a flow
+uses those its owner may, checked as each step starts and as each call is
+made (`webapp/credentials.go`).
+
+A step whose process picks credentials gets, for each, `$CREDENTIAL_<NAME>_URL`,
+the webapp's proxy at `/credentials/<id>`, and one token for them all,
+`$CREDENTIALS_TOKEN`, kept hashed in `proxy_grants` so it works at whichever
+replica a call reaches. It ends with the step, or a while after its timeout
+should the webapp lose the step. The proxy takes the token as a bearer token
+or as basic auth's password, drops it, and puts the secret where the
+credential says before passing the call on, streaming the answer back.
+
+What a step can do with a credential, then, is call its service, as the
+service lets the secret do, at paths under the base URL, while it runs. It
+can't:
+
+- **read the secret.** Neither the worker nor the step ever has it. A
+  token it prints, or leaves in a file, reaches nothing once the step ends.
+- **reach other paths or hosts with it.** The path is joined to the base
+  URL's; one stepping out of it (`..`, `.`, `//`), carrying an encoded slash
+  or backslash (`%2F`, `%5C`), a `%` at all once decoded, which a service
+  decoding again would read as one, or a query or fragment of its making in
+  the path, is refused. The step's query goes on as it sent it, but for a
+  query parameter credential's own, which the secret replaces.
+- **be redirected with it.** The proxy never follows a redirect. One within
+  the base URL comes back as the proxy's URL, so following it goes through
+  the proxy again; one elsewhere comes back without the secret's query
+  parameter, and with no `Location` at all if the secret is still in it.
+- **keep a session got with it.** `Set-Cookie`, `Authorization`-like
+  headers, the credential's own header and any header holding the secret,
+  as sent or encoded, are dropped from the answer. The step's `Cookie` and
+  forwarding headers stay with the proxy too.
+- **reach the webapp's neighbours through it.** The base URL is an admin's,
+  https, or http only at the webapp's own machine (a sidecar), where the
+  secret crosses no network. The proxy never dials a link-local or
+  multicast address, such as the cloud's metadata service, whatever the
+  service's name resolves to, and the host needn't be allowed for internet
+  access, as the webapp, not the step, makes the call.
+- **use a credential its process didn't pick**, or one its flow's owner may
+  no longer use: taking a credential from a team, or removing it, refuses
+  the next call of every step using it.
+
+A service that answers with the secret in its body, such as an echo
+endpoint or an error repeating the key, hands it over; the proxy passes
+bodies on as they come. Give credentials only for services that don't.
+
+A request may send at most 64 MB; a call may take ten minutes, two of them
+waiting for the service to start answering. Each call goes in the run's log
+and the audit log by its method, credential, path without its query, and
+status, never with the secret or the token.
+
 ## Limits and the audit log
 
 Isolation keeps a step from what isn't its own; limits keep a run that
@@ -321,11 +384,12 @@ Bedrock without a key, which signs in with the worker's AWS credentials,
 doesn't go through the proxy, so no spending limit covers it.
 
 The audit log (`webapp/audit.go`, `#/audit` for admins) records each token
-a step is handed for its models, MCP servers, the internet and git, when
-the model and internet ones end, each internet connection, allowed or
-refused, calls the proxy refused, runs stopped for spending what they may,
-and the limits, internet hosts and model keys admins changed: who, which
-run and step, and what, never a token. What each model call took and cost
+a step is handed for its models, MCP servers, the internet, credentials and
+git, when the model, internet and credential ones end, each internet
+connection, allowed or refused, each call through the credential proxy,
+calls the proxies refused, runs stopped for spending what they may, and the
+limits, internet hosts, model keys and credentials admins changed: who,
+which run and step, and what, never a token or a secret. What each model call took and cost
 is in `llm_usage`, shown in the Spending & limits tab and each run's panel.
 
 ## Adding a sandbox

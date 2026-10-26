@@ -1,8 +1,9 @@
 # Sealed secrets and rotating SECRET_KEY
 
-The webapp keeps two kinds of secret for others in MySQL: the model API keys
-admins save in the settings, and the OAuth tokens of each person's MCP
-connections. With `SECRET_KEY` set, each is sealed with AES-256-GCM under a
+The webapp keeps three kinds of secret for others in MySQL: the model API
+keys admins save in the settings, the OAuth tokens of each person's MCP
+connections, and the secrets of the credentials admins keep for scripts and
+agents (see [webapp/credentials.go](../webapp/credentials.go)). With `SECRET_KEY` set, each is sealed with AES-256-GCM under a
 key derived from it, bound to the row it is kept in, so a dump or a backup
 of the database doesn't hand them out. How it works is described at the top
 of [webapp/secrets.go](../webapp/secrets.go).

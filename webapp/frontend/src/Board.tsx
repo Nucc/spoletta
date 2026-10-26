@@ -1545,6 +1545,13 @@ export default function Board({
     setEdges((es) => [...es.filter((e) => e.id !== `${POINTER_PREFIX}${id}`), ...(target === null ? [] : [pointerEdge(id, target)])])
   }
 
+  // A note added and left empty goes without a notice, as if never added.
+  const discardNote = (id: string) => {
+    setNodes((ns) => ns.filter((n) => n.id !== id))
+    setEdges((es) => es.filter((e) => e.source !== id))
+    deleteNote(noteIdOf(id)).catch(report)
+  }
+
   // A note lands empty where it goes, open for writing.
   const addNote = async (screenX: number, screenY: number) => {
     if (unfoldedRef.current !== null || structBoard) return
@@ -2349,8 +2356,8 @@ export default function Board({
 
   // Nodes and edges reach the board through a context whose functions stay
   // the same, so they don't all re-render whenever the board does.
-  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, resizeNote, setNoteText, setNoteColour, pointNote })
-  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, resizeNote, setNoteText, setNoteColour, pointNote }
+  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, resizeNote, setNoteText, setNoteColour, pointNote, discardNote })
+  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, resizeNote, setNoteText, setNoteColour, pointNote, discardNote }
   const actions = useMemo<BoardActions>(
     () => ({
       commitName: (id, name) => latest.current.commitName(id, name),
@@ -2376,6 +2383,7 @@ export default function Board({
       setNoteText: (id, text) => latest.current.setNoteText(id, text),
       setNoteColour: (id, colour) => latest.current.setNoteColour(id, colour),
       pointNote: (id, target) => latest.current.pointNote(id, target),
+      discardNote: (id) => latest.current.discardNote(id),
       editable: !readOnly,
       runShown,
     }),

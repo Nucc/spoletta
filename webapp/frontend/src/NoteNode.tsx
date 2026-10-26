@@ -69,7 +69,7 @@ export default function NoteNode({ id, data, selected }: NodeProps<NoteNodeType>
     save(text)
     setWriting(false)
     // One just added and left empty was added by mistake.
-    if (data.fresh && text.trim() === '') actions.remove(id)
+    if (data.fresh && text.trim() === '') actions.discardNote(id)
   }
 
   useEffect(() => {

@@ -42,6 +42,8 @@ export type BoardActions = {
   setNoteColour: (id: string, colour: NoteColour) => void
   // Points a note at a process or an object, by node id, or at nothing.
   pointNote: (id: string, target: string | null) => void
+  // Drops a note just added and left empty, which nobody deleted.
+  discardNote: (id: string) => void
   // Replaces the states a human's link to an object decides between.
   setDecisionStates: (edgeId: string, states: number[]) => void
   // Sets how an input link's process takes its object.

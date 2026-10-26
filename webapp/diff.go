@@ -318,7 +318,7 @@ func sameFloat(a, b *float64) bool {
 
 // What processes' settings are called where the diff names them.
 var processSettingNames = map[string]string{
-	"mcpServers": "MCP servers", "mcpTools": "MCP tools", "skills": "skills", "connector": "connector",
+	"mcpServers": "MCP servers", "mcpTools": "MCP tools", "skills": "skills", "credentials": "credentials", "connector": "connector",
 	"repositories": "repositories", "flow": "flow it runs", "rounds": "rounds", "loops": "loops",
 	"timeout": "timeout", "retries": "retries", "quorum": "quorum", "describeFlow": "describes the flow",
 	"remindAfter": "reminds every", "waitAtMost": "waits at most",

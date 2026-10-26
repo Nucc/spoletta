@@ -116,6 +116,9 @@ type agentRun struct {
 	// secrets. See credentials.go.
 	Credentials      []credentialAccess `json:"credentials,omitempty"`
 	CredentialsToken string             `json:"credentialsToken,omitempty"`
+	// For a follow-up, the flow whose owner its credentials are checked
+	// against at each call: its run's.
+	credentialsFlow int64
 }
 
 // The pi session of a step that worked in a workspace, which follow-ups carry on.

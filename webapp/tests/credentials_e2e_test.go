@@ -620,8 +620,8 @@ flows:
 	}
 }
 
-// A follow-up of an agent step gets its process's credentials anew, with a
-// token of its own that ends with it.
+// A follow-up of an agent step gets its process's credentials anew, as its
+// run's version picked them, with a token of its own that ends with it.
 func TestFollowUpsGetTheirProcessesCredentials(t *testing.T) {
 	a := newApp(t)
 	svc := newCredentialsService(t)
@@ -647,6 +647,8 @@ func TestFollowUpsGetTheirProcessesCredentials(t *testing.T) {
 		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
 	}
 	step := onlyStep(t, d, "Fix")
+	// The draft dropping the credential leaves the run's version as it was.
+	a.call("PATCH", fmt.Sprintf("/api/processes/%d", fix.ID), map[string]any{"settings": map[string]any{}}, http.StatusOK, nil)
 	a.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/followups", d.ID, step.ID), map[string]any{"message": "Comment on the issue."}, http.StatusCreated, nil)
 	a.waitRun(d.ID, "the follow-up to end", func(d runDetail) bool {
 		s := onlyStep(t, d, "Fix")
@@ -663,5 +665,41 @@ func TestFollowUpsGetTheirProcessesCredentials(t *testing.T) {
 	}
 	if got := credentialsCall(t, "GET", followUp.Credentials[0].URL+"/issues/7", followUp.CredentialsToken, false, ""); got.status != http.StatusForbidden {
 		t.Errorf("after the follow-up, its token got %d", got.status)
+	}
+}
+
+// A step takes the credentials its run's version picked: a run of the
+// version published keeps its credential while the draft picks another,
+// which a run of the board as it is takes, and the version's diff names
+// the change.
+func TestCredentialsComeFromTheRunsVersion(t *testing.T) {
+	a := newApp(t)
+	svc := newCredentialsService(t)
+	published := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Published"), "baseUrl": svc.srv.URL + "/a", "auth": "header", "secret": "published-secret-0123", "everyone": true})
+	draft := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Draft"), "baseUrl": svc.srv.URL + "/b", "auth": "header", "secret": "draft-secret-0123", "everyone": true})
+	f := a.newFlow("Versioned credentials")
+	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindScript, "script": "true", "settings": map[string]any{"credentials": []int64{published.ID}}})
+	a.startAt(f.ID, fetch.ID)
+	v := pubPublish(a, f.ID, "with the published credential")
+	a.call("PATCH", fmt.Sprintf("/api/processes/%d", fetch.ID), map[string]any{"settings": map[string]any{"credentials": []int64{draft.ID}}}, http.StatusOK, nil)
+	a.worker.onScript("Fetch", func(context.Context, scriptRun) runResult { return runResult{OK: true, Output: "fetched"} })
+
+	var onVersion run
+	a.call("POST", fmt.Sprintf("/api/runs?flow=%d", f.ID), map[string]any{"published": true}, http.StatusCreated, &onVersion)
+	if d := a.finish(onVersion.ID); d.Status != runDone {
+		t.Fatalf("the published run %s; steps %s", d.Status, describeSteps(d))
+	}
+	if d := a.finish(a.startRun(f.ID).ID); d.Status != runDone {
+		t.Fatalf("the draft's run %s; steps %s", d.Status, describeSteps(d))
+	}
+	runs := a.worker.scriptRunsSoFar()
+	if len(runs) != 2 || len(runs[0].Credentials) != 1 || runs[0].Credentials[0].Name != published.Name || len(runs[1].Credentials) != 1 || runs[1].Credentials[0].Name != draft.Name {
+		t.Errorf("the runs got %+v and %+v", runs[0].Credentials, runs[1].Credentials)
+	}
+
+	d := pubDiffOf(a, fmt.Sprintf("/api/versions/%d/diff", v.ID))
+	if len(d.Processes) != 1 || len(d.Processes[0].Fields) != 1 || d.Processes[0].Fields[0].Field != "credentials" ||
+		d.Processes[0].Fields[0].Before != fmt.Sprintf("[%d]", published.ID) || d.Processes[0].Fields[0].After != fmt.Sprintf("[%d]", draft.ID) {
+		t.Errorf("the draft against the version published: %+v", d.Processes)
 	}
 }

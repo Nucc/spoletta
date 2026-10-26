@@ -259,8 +259,10 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	if f.ID, err = res.LastInsertId(); err != nil {
 		return f, run, processSettings{}, err
 	}
-	// The process's MCP servers, tools, skills and credentials as it has
-	// them now; one since deleted has none.
+	// The process's MCP servers, tools and skills as it has them now; one
+	// since deleted has none. Its credentials are those of the run's
+	// version, as its step's were, so a draft never gives a run's
+	// follow-ups a credential the version it runs on didn't pick.
 	var uses processSettings
 	if processID != nil {
 		var flow int64
@@ -276,12 +278,20 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 			if msg != "" {
 				return f, run, uses, conflictError(msg)
 			}
-			if run.Credentials, msg, err = stepCredentials(ctx, tx, flow, uses.Credentials); err != nil {
+		}
+		b, err := runBoardOf(ctx, db, runID)
+		if err != nil {
+			return f, run, uses, err
+		}
+		if p, err := b.process(*processID); err == nil {
+			var msg string
+			if run.Credentials, msg, err = stepCredentials(ctx, tx, b.flow, p.Settings.Credentials); err != nil {
 				return f, run, uses, err
 			}
 			if msg != "" {
 				return f, run, uses, conflictError(msg)
 			}
+			run.credentialsFlow = b.flow
 		}
 		run.ProcessID = *processID
 	}
@@ -321,16 +331,10 @@ func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBrok
 	if msg != "" {
 		return runResult{Error: msg}
 	}
-	if len(run.Credentials) > 0 {
-		var flow int64
-		if err := db.QueryRowContext(ctx, "SELECT flow_id FROM processes WHERE id = ?", run.ProcessID).Scan(&flow); err != nil {
-			return runResult{Error: err.Error()}
-		}
-		if run.Credentials, run.CredentialsToken, err = grantCredentials(ctx, who, run.Run, stepID, flow, run.Credentials, time.Duration(run.TimeoutMS)*time.Millisecond); err != nil {
-			return runResult{Error: err.Error()}
-		}
-		defer credentialProxy.revoke(run.CredentialsToken)
+	if run.Credentials, run.CredentialsToken, err = grantCredentials(ctx, who, run.Run, stepID, run.credentialsFlow, run.Credentials, time.Duration(run.TimeoutMS)*time.Millisecond); err != nil {
+		return runResult{Error: err.Error()}
 	}
+	defer credentialProxy.revoke(run.CredentialsToken)
 	return runAgent(ctx, db, workerURL, run, stepID, attempt)
 }
 

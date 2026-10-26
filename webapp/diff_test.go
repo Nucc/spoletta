@@ -128,6 +128,19 @@ func TestDiffOfProcesses(t *testing.T) {
 	}
 }
 
+// The credentials a process picks are a setting the diff names.
+func TestDiffNamesCredentials(t *testing.T) {
+	b := cloneBoard(t, diffBoard())
+	b.Processes[0].Settings.Credentials = []int64{7}
+	d := diffSnapshots(diffBoard(), b)
+	if len(d.Processes) != 1 || len(d.Processes[0].Fields) != 1 {
+		t.Fatalf("processes = %+v", d.Processes)
+	}
+	if f := d.Processes[0].Fields[0]; f.Field != "credentials" || f.Before != "" || f.After != "[7]" {
+		t.Errorf("the credentials went %+v", f)
+	}
+}
+
 func TestDiffOfObjectsStatesAndAttributes(t *testing.T) {
 	b := cloneBoard(t, diffBoard())
 	b.Objects[1].Name = "Article"

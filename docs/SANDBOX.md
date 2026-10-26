@@ -301,7 +301,9 @@ value a template makes, basic auth's password, or a query parameter), and
 the secret, sealed with `SECRET_KEY` and never sent back to the browser,
 the worker or the step. Each is everyone's, or only given teams'; a flow
 uses those its owner may, checked as each step starts and as each call is
-made (`webapp/credentials.go`).
+made (`webapp/credentials.go`). Which ones a step gets is what its run's
+version picked, never the board as it is, so a draft can't hand a run, or
+its follow-ups, a credential the version it runs on didn't pick.
 
 A step whose process picks credentials gets, for each, `$CREDENTIAL_<NAME>_URL`,
 the webapp's proxy at `/credentials/<id>`, and one token for them all,

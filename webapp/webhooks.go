@@ -952,10 +952,12 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 		err = sql.ErrNoRows
 		if webhookToken.MatchString(token) {
 			err = db.QueryRowContext(ctx, `SELECT id, flow_id, name, kind, secret, verify, header, id_header, timestamp_header, events, mapping, enabled, created_by
-				FROM webhooks WHERE token = ?`, token).
+				FROM webhooks WHERE token = ? AND flow_id IN (SELECT id FROM flows WHERE deleted_at IS NULL)`, token).
 				Scan(&h.id, &h.flow, &h.name, &h.kind, &stored, &h.signer.verify, &h.signer.header, &h.signer.idHeader, &h.signer.timestampHeader,
 					&events, &h.mapping, &h.enabled, &h.createdBy)
 		}
+		// One of a flow in the trash is no one's to reach, as the flow isn't
+		// (trash.go).
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "no such webhook", http.StatusNotFound)
 			return

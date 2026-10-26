@@ -96,7 +96,7 @@ export default function Trash() {
           </h2>
           <p className="flows-note">
             The flows, procedures and structs deleted, which you may restore or delete for good; each goes for good on its
-            own after a while. While here, none runs: their schedules wait, the API doesn't find them, and the flows running
+            own after a while. While here, none runs: their schedules wait, the API and webhooks don't find them, and the flows running
             a procedure here fail to; the flows using a struct here have its copies as their own.
           </p>
           {items === null ? (

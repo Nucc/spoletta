@@ -25,7 +25,8 @@ import (
 // or anything in it, as if it didn't exist; only this file's routes, under
 // /api/trash, reach it. It starts no runs: newRun refuses it, so its
 // schedules don't fire, which come back when it is restored, at their next
-// time after then, and the API answers as for a flow that doesn't exist. Runs
+// time after then, and the API and its webhooks answer as for a flow that
+// doesn't exist. Runs
 // going on in it are stopped as it goes, which can't be undone, so moving
 // one with runs going on asks first (stopRuns): its own runs are stopped as
 // the Stop button stops them, and the runs of it other flows' runs started

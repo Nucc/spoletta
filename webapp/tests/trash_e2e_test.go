@@ -404,8 +404,8 @@ func TestTrashLeavesStructCopiesTheirOwn(t *testing.T) {
 }
 
 // A flow in the trash starts no runs: its schedules don't fire, and come
-// back at their next time once it is restored, and the API answers as for
-// a flow that doesn't exist.
+// back at their next time once it is restored, and the API and its
+// webhooks answer as for a flow that doesn't exist.
 func TestTrashStartsNoRuns(t *testing.T) {
 	a := newApp(t)
 	db := secretsDB(t)
@@ -419,6 +419,10 @@ func TestTrashStartsNoRuns(t *testing.T) {
 	a.call("POST", fmt.Sprintf("/api/versions?flow=%d", f.ID), map[string]any{"publish": true}, http.StatusCreated, nil)
 	key := apiNewKey(a, "trash")
 	first := apiStart(a, key.Key, f.ID, nil, http.StatusCreated)
+	hook := hooksAdd(a, f.ID, map[string]any{"name": "Tick hook", "kind": "generic", "verify": "token", "header": "Authorization"})
+	deliver := func() (int, []byte) {
+		return hookDeliver(a, hook, map[string]string{"Authorization": "Bearer " + hook.Secret}, []byte(`{}`))
+	}
 	a.finish(first.ID)
 	s := a.newSchedule(f.ID, everySecond)
 	a.waitScheduledRuns(f.ID, s.ID, 1)
@@ -439,11 +443,17 @@ func TestTrashStartsNoRuns(t *testing.T) {
 	apiRefused(a, key.Key, "GET", fmt.Sprintf("/v1/flows/%d", f.ID), nil, http.StatusNotFound, "flow not found")
 	apiRefused(a, key.Key, "POST", fmt.Sprintf("/v1/flows/%d/runs", f.ID), nil, http.StatusNotFound, "flow not found")
 	apiRefused(a, key.Key, "GET", fmt.Sprintf("/v1/runs/%d", first.ID), nil, http.StatusNotFound, "flow not found")
+	if status, reply := deliver(); status != http.StatusNotFound || !strings.Contains(string(reply), "no such webhook") {
+		t.Errorf("a delivery to the webhook of a flow in the trash = %d %s", status, reply)
+	}
+	a.refused("GET", fmt.Sprintf("/api/webhooks?flow=%d", f.ID), nil, http.StatusNotFound, "flow not found")
 
 	trashRestore(a, f.ID, "")
 	a.waitScheduledRuns(f.ID, s.ID, was+1)
 	a.call("PATCH", fmt.Sprintf("/api/schedules/%d", s.ID), map[string]any{"enabled": false}, http.StatusOK, nil)
 	a.finish(apiStart(a, key.Key, f.ID, nil, http.StatusCreated).ID)
+	status, reply := deliver()
+	a.finish(hookRun(a, status, reply, http.StatusAccepted))
 }
 
 // The trash empties itself of what it kept long enough, each flow once

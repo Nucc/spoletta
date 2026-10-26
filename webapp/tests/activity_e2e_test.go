@@ -54,6 +54,7 @@ type activityReview struct {
 	Process    int64   `json:"process"`
 	Name       string  `json:"name"`
 	Decided    int     `json:"decided"`
+	TimedOut   int     `json:"timedOut"`
 	Median     float64 `json:"median"`
 	P90        float64 `json:"p90"`
 	Longest    float64 `json:"longest"`
@@ -319,6 +320,49 @@ func TestActivityReviews(t *testing.T) {
 	}
 	if page.Running.has(rn.ID) != nil {
 		t.Errorf("the run that ended is listed as going on")
+	}
+}
+
+// A review that waits past its time limit times out, failing instead: no
+// decision, so it counts apart from those decided, and a review that only
+// ever timed out is listed too.
+func TestActivityReviewsTimingOut(t *testing.T) {
+	a, _ := activityApp(t, newApp)
+	b := humanNewReviewBoard(a)
+	rn := a.startRun(b.flow.ID)
+	humanMustDecide(a, rn.ID, a.waitStep(rn.ID, "Review", stepWaiting).ID, map[string]any{"state": b.approved.ID})
+	a.finish(rn.ID)
+	failuresSettings(a, b.review.ID, processSettings{WaitAtMost: ptr(1)})
+	if d := a.finish(a.startRun(b.flow.ID).ID); d.Status != runFailed {
+		t.Fatalf("the run nobody decided %s; steps %s", d.Status, describeSteps(d))
+	}
+
+	f := a.newFlow("Unsigned")
+	write := a.agent(f.ID, "Write", "Write.")
+	note := a.newObject(f.ID, "Note")
+	seen := a.newState(note.ID, "seen")
+	sign := humanHuman(a, f.ID, "Sign")
+	a.output(write.ID, note.ID)
+	a.input(sign.ID, note.ID)
+	humanDecides(a, sign.ID, note.ID, seen.ID)
+	a.startAt(f.ID, write.ID)
+	failuresSettings(a, sign.ID, processSettings{WaitAtMost: ptr(1)})
+	a.worker.onAgent("Write", handsIn(data("a note")))
+	a.finish(a.startRun(f.ID).ID)
+
+	page := activityOf(a, 7, "UTC")
+	byProcess := map[int64]activityReview{}
+	for _, r := range page.Reviews {
+		byProcess[r.Process] = r
+	}
+	if r := byProcess[b.review.ID]; r.Decided != 1 || r.TimedOut != 1 || r.Runs != 1 || r.MostRounds != 1 {
+		t.Errorf("the review decided once and timed out once: %+v", r)
+	}
+	if r := byProcess[sign.ID]; r.Name != "Sign" || r.FlowName != "Unsigned" || r.Decided != 0 || r.TimedOut != 1 || r.Longest != 0 {
+		t.Errorf("the review that only timed out: %+v", r)
+	}
+	if all := page.AllReviews; all.Decided != 1 || all.TimedOut != 2 {
+		t.Errorf("all reviews = %+v", all)
 	}
 }
 

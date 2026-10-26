@@ -155,13 +155,16 @@ type processFailures struct {
 // decided, in seconds, half of them and nine in ten within; how many came
 // with instructions, the changes asked for, which go as a change request to
 // what takes the object next; and the rounds, the reviews decided in one
-// run, on average over the runs with any, and at most.
+// run, on average over the runs with any, and at most. Apart from them, those
+// that waited past their process's time limit with nobody deciding, which
+// failed rather than being decided; see notify.go.
 type reviewTimes struct {
 	Flow       int64   `json:"flow,omitempty"`
 	FlowName   string  `json:"flowName,omitempty"`
 	Process    int64   `json:"process,omitempty"`
 	Name       string  `json:"name,omitempty"`
 	Decided    int     `json:"decided"`
+	TimedOut   int     `json:"timedOut"`
 	Median     float64 `json:"median"`
 	P90        float64 `json:"p90"`
 	Longest    float64 `json:"longest"`
@@ -463,6 +466,32 @@ func reviewsDecided(ctx context.Context, db *sql.DB, p period, seen []int64) ([]
 		latest = append(latest, step.Int64)
 		return nil
 	}, slices.Concat([]any{kindHuman, p.from(), stepDone}, ofArgs)...)
+	if err != nil {
+		return []reviewTimes{}, all, err
+	}
+	// The reviews that failed once they waited past their time limit, which
+	// no decision counts; a process whose reviews all did is listed too.
+	err = scanAll(ctx, db, `SELECT MAX(r.flow_id), s.process_ref, COUNT(*), MAX(s.id)
+		FROM run_steps s JOIN runs r ON r.id = s.run_id
+		WHERE s.kind = ? AND s.started_at >= ? AND s.status = ? AND s.expires_at IS NOT NULL AND s.finished_at >= s.expires_at
+			AND s.process_ref IS NOT NULL AND `+of+`
+		GROUP BY s.process_ref`, func(rows *sql.Rows) error {
+		var flow, process, step int64
+		var n int
+		if err := rows.Scan(&flow, &process, &n, &step); err != nil {
+			return err
+		}
+		all.TimedOut += n
+		rt := byProcess[process]
+		if rt == nil {
+			rt = &reviewTimes{Flow: flow, Process: process}
+			byProcess[process] = rt
+			out = append(out, rt)
+			latest = append(latest, step)
+		}
+		rt.TimedOut = n
+		return nil
+	}, slices.Concat([]any{kindHuman, p.from(), stepError}, ofArgs)...)
 	if err != nil || len(out) == 0 {
 		return []reviewTimes{}, all, err
 	}
@@ -487,12 +516,13 @@ func reviewsDecided(ctx context.Context, db *sql.DB, p period, seen []int64) ([]
 	if err != nil {
 		return nil, all, err
 	}
-	// The reviews decided most, each named as its latest review was.
+	// The reviews that ended most, decided or timed out, each named as its
+	// latest review was.
 	order := make([]int, len(out))
 	for i := range order {
 		order[i] = i
 	}
-	slices.SortStableFunc(order, func(i, j int) int { return out[j].Decided - out[i].Decided })
+	slices.SortStableFunc(order, func(i, j int) int { return out[j].Decided + out[j].TimedOut - out[i].Decided - out[i].TimedOut })
 	if len(order) > listedReviews {
 		order = order[:listedReviews]
 	}

@@ -2153,6 +2153,9 @@ export type ReviewTimes = {
   process?: number
   name?: string
   decided: number
+  // Those that waited past their time limit with nobody deciding, which
+  // failed rather than being decided.
+  timedOut: number
   median: number
   p90: number
   longest: number

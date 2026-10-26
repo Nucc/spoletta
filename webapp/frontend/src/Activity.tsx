@@ -223,7 +223,14 @@ function Totals({ data }: { data: ActivityData }) {
       <Tile
         label="Reviews decided"
         value={all.decided.toLocaleString()}
-        note={all.decided ? `half within ${formatSeconds(all.median)}, nine in ten within ${formatSeconds(all.p90)}` : undefined}
+        note={
+          [
+            all.decided ? `half within ${formatSeconds(all.median)}, nine in ten within ${formatSeconds(all.p90)}` : '',
+            all.timedOut ? `${all.timedOut.toLocaleString()} more timed out` : '',
+          ]
+            .filter(Boolean)
+            .join('; ') || undefined
+        }
       />
     </div>
   )
@@ -524,11 +531,12 @@ function Reviews({ data }: { data: ActivityData }) {
       <h2>Reviews</h2>
       <p className="flows-note">
         The reviews asked for in the period that someone decided, from when each began waiting to when it was decided.
-        Changes asked are decisions that came with instructions, which go back to the work as a change request; the rounds
-        are the times a review was decided in one run.
+        Those that waited past their time limit with nobody deciding timed out, failing instead, and count apart. Changes
+        asked are decisions that came with instructions, which go back to the work as a change request; the rounds are the
+        times a review was decided in one run.
       </p>
       {data.reviews.length === 0 ? (
-        <p className="flows-note">Nobody decided a review in the period.</p>
+        <p className="flows-note">No review was decided, or timed out, in the period.</p>
       ) : (
         <div className="activity-table-wrap">
           <table className="activity-table">
@@ -537,6 +545,7 @@ function Reviews({ data }: { data: ActivityData }) {
                 <th>Review</th>
                 <th>Flow</th>
                 <th className="num">Decided</th>
+                <th className="num">Timed out</th>
                 <th className="num">Half within</th>
                 <th className="num">Nine in ten within</th>
                 <th className="num">Longest</th>
@@ -572,9 +581,11 @@ function ReviewRow({ r, name, flow }: { r: ReviewTimes; name: string; flow?: Rea
       <td>{name}</td>
       <td>{flow}</td>
       <td className="num">{r.decided.toLocaleString()}</td>
-      <td className="num">{formatSeconds(r.median)}</td>
-      <td className="num">{formatSeconds(r.p90)}</td>
-      <td className="num">{formatSeconds(r.longest)}</td>
+      <td className="num">{r.timedOut ? r.timedOut.toLocaleString() : '–'}</td>
+      {/* Only decisions took a time to decide. */}
+      <td className="num">{r.decided ? formatSeconds(r.median) : '–'}</td>
+      <td className="num">{r.decided ? formatSeconds(r.p90) : '–'}</td>
+      <td className="num">{r.decided ? formatSeconds(r.longest) : '–'}</td>
       <td className="num">
         {r.changes.toLocaleString()} · {share(r.changes, r.decided)}
       </td>

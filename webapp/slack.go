@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // The Slack connector reads and posts messages in a workspace's channels
 // through Slack's Web API, with a bot token an admin sets: the app's, which
 // sees only the channels it is invited to. Slack answers a call that failed
 // with a success saying ok: false, which the connector takes as the failure
-// it is.
+// it is. Installed, it also tells people what waits on them, by a direct
+// message from the app; see notify.go.
 
 var slackConnector = &connector{
 	Name:     "slack",
@@ -24,7 +28,8 @@ var slackConnector = &connector{
 	URL: "https://slack.com/api",
 	TokenHelp: "A bot token, starting xoxb-, of a Slack app installed in the workspace, with the scopes " +
 		"channels:read, channels:history, groups:read, groups:history, chat:write, reactions:write, users:read " +
-		"and users:read.email. The app sees only the channels it is invited to.",
+		"and users:read.email. The app sees only the channels it is invited to. It also sends people direct " +
+		"messages when something waits on them, finding them by their email.",
 	failed: notOK,
 	checkToken: func(token string) error {
 		if !regexp.MustCompile(`^xox[bpa]-`).MatchString(token) {
@@ -246,4 +251,58 @@ func slAddReaction(ctx context.Context, c connectorClient, a opArgs) (any, error
 		return nil, err
 	}
 	return map[string]any{"channel": a.str("channel"), "ts": a.str("ts"), "emoji": a.str("emoji")}, nil
+}
+
+// The installed Slack connector people are told on, the first installed
+// with a token, and whether there is one.
+func slackNotifier(ctx context.Context, db *sql.DB) (connectorClient, bool, error) {
+	var servers []struct {
+		id  int64
+		url string
+	}
+	err := scanAll(ctx, db, "SELECT id, url FROM mcp_servers WHERE connector = ? ORDER BY id", func(rows *sql.Rows) error {
+		var s struct {
+			id  int64
+			url string
+		}
+		err := rows.Scan(&s.id, &s.url)
+		servers = append(servers, s)
+		return err
+	}, slackConnector.Name)
+	if err != nil {
+		return connectorClient{}, false, err
+	}
+	for _, s := range servers {
+		token, err := adminToken(ctx, db, s.id, "")
+		if errors.Is(err, errMCPNotConnected) {
+			continue
+		}
+		if err != nil {
+			return connectorClient{}, false, err
+		}
+		return slackConnector.client(s.url, token), true, nil
+	}
+	return connectorClient{}, false, nil
+}
+
+// Sends the person with the email a direct message from the app, saying text
+// in Slack's mrkdwn.
+func slackDirect(ctx context.Context, c connectorClient, email, text string) error {
+	var found struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/users.lookupByEmail", url.Values{"email": {email}}, nil, &found); err != nil {
+		return err
+	}
+	if found.User.ID == "" {
+		return fmt.Errorf("Slack knows nobody with the email %s", email)
+	}
+	return c.do(ctx, http.MethodPost, "/chat.postMessage", nil, map[string]any{"channel": found.User.ID, "text": text, "unfurl_links": false}, nil)
+}
+
+// Text as Slack's mrkdwn shows it, rather than as links or mentions.
+func slackEscape(text string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(text)
 }

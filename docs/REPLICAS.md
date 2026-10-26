@@ -24,6 +24,15 @@ as stopping a step or deciding a review, is recorded there and passed to
 the owner through `replica_commands`, which each replica reads four times
 a second.
 
+Telling people what waits on them is claimed too
+([webapp/notify.go](../webapp/notify.go)): each message is a row in
+`notifications` for its step or run, person and kind, which only one
+replica adds, with the time it was sent. A message claimed by a replica
+that stopped before sending it is sent by another. A review's reminder and
+time limit are kept with its step, by the database's clock; whichever
+replica finds one due first claims it, a time limit by failing the step as
+a decision would, which the replica walking the run then handles.
+
 ## When a replica stops
 
 Each replica says it is alive in `replicas` every sixth of

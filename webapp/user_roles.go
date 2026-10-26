@@ -75,6 +75,21 @@ func mayDecide(u *user, roles, handledBy []string) bool {
 	return false
 }
 
+// Whether the user, holding these roles and with this access to its flow
+// (see flowAccess), may decide a step of the kind waiting for a person: a
+// loop step if they may edit the flow (see loops.go), a review if they see
+// the flow and may decide those handledBy names. The run's panel, the inbox
+// and who is told of it all ask this; see inbox.go and notify.go.
+func decidesStep(u *user, roles []string, access, kind string, handledBy []string) bool {
+	switch {
+	case access == "":
+		return false
+	case kind == kindLoop:
+		return access == accessEdit
+	}
+	return mayDecide(u, roles, handledBy)
+}
+
 // Says why the request's user may not decide a review of a process the
 // roles in handledBy decide, if they may not.
 func refuseDecider(ctx context.Context, db *sql.DB, r *http.Request, handledBy []string) (string, error) {

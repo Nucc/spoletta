@@ -75,6 +75,10 @@ import (
 //
 // A human process waits for a person to review its inputs and set an object
 // to one of the states its output links name; the object keeps its content.
+// Those who may decide it are told it waits on them, and reminded once it
+// has waited as long as its remindAfter says; with waitAtMost, it fails once
+// it has waited that long, as a step running past its timeout does, so a
+// failure connection can handle it. See notify.go.
 // Instructions they leave go as a change request to the processes taking the
 // object in that state. Each decision starts a fresh pass, so review loops
 // can repeat while cycles without a human still run once per pass. The
@@ -113,6 +117,9 @@ type decision struct {
 	entries      map[int64]string
 	// For a loop step: whether its process goes on; see loops.go.
 	goOn bool
+	// Why it failed rather than being decided, as when it waited past its
+	// time limit; see notify.go.
+	expired string
 }
 
 type engine struct {
@@ -127,6 +134,9 @@ type engine struct {
 	// What is closed, and made again, as a step here gives back its
 	// person's slot; see personSlot.
 	stepEnded chan struct{}
+	// Tells people what waits on them, and of runs failing; nil tells
+	// nobody. See notify.go.
+	notify *notifier
 }
 
 // A run in progress.
@@ -240,6 +250,11 @@ func (e *engine) finish(ctx context.Context, id int64, w *walk) string {
 		return status
 	}
 	logRunFinished(e.db, rn)
+	// Only a run of its own is told of: a flow process's or a subflow's run
+	// goes into how the run it is within ends.
+	if rn.Status == runFailed && rn.Parent == nil {
+		go e.notify.runFailed(id)
+	}
 	return rn.Status
 }
 
@@ -322,7 +337,7 @@ func (e *engine) stopStepHere(runID, stepID int64) (going, here bool) {
 // replica walking it.
 func (e *engine) decide(runID, stepID int64, d decision) {
 	if !e.decideHere(runID, stepID, d) {
-		e.ask(runID, commandDecide, stepID, decisionCommand{State: d.state, Instructions: d.instructions, Output: d.output, Entries: d.entries, GoOn: d.goOn})
+		e.ask(runID, commandDecide, stepID, decisionCommand{State: d.state, Instructions: d.instructions, Output: d.output, Entries: d.entries, GoOn: d.goOn, Expired: d.expired})
 	}
 }
 
@@ -347,6 +362,7 @@ type decisionCommand struct {
 	Output       string           `json:"output"`
 	Entries      map[int64]string `json:"entries"`
 	GoOn         bool             `json:"goOn,omitempty"`
+	Expired      string           `json:"expired,omitempty"`
 }
 
 // Asks the replica walking the run, another one alive, to do what the
@@ -383,14 +399,16 @@ func (e *engine) takeCommands() {
 			log.Printf("a decision of step %d of run %d another replica sent: %v", c.step, c.target, err)
 			return
 		}
-		e.decideHere(c.target, c.step, decision{state: d.State, instructions: d.Instructions, output: d.Output, entries: d.Entries, goOn: d.GoOn})
+		e.decideHere(c.target, c.step, decision{state: d.State, instructions: d.Instructions, output: d.Output, entries: d.Entries, goOn: d.GoOn, expired: d.Expired})
 	}
 }
 
 // Records a review as waiting and waits for its decision. The step and the
 // wait start together, so a decision can't come in between. With a question,
-// the step is a loop step asking it instead; see loops.go. False if the run
-// ended first, or the step couldn't be recorded.
+// the step is a loop step asking it instead; see loops.go. A review keeps
+// when its process, as the run's board has it, says to remind those who may
+// decide it and to fail it, and they are told it waits; see notify.go. False
+// if the run ended first, or the step couldn't be recorded.
 func (e *engine) await(ctx context.Context, lr *liveRun, b *runBoard, runID, processID int64, inputs []runInput, question string) (int64, decision, bool) {
 	ch := make(chan decision, 1)
 	kind := ""
@@ -409,6 +427,13 @@ func (e *engine) await(ctx context.Context, lr *liveRun, b *runBoard, runID, pro
 		}
 		return 0, decision{}, false
 	}
+	// A loop step's process isn't a person's, so it neither reminds nor fails.
+	if kind == "" {
+		if err := keepDeadlines(ctx, e.db, stepID, b.processes[processID].Settings); err != nil && ctx.Err() == nil {
+			runLog(e.db, runID, stepID, logError, "when to remind of the review, or fail it, couldn't be recorded, so it is neither: %v", err)
+		}
+	}
+	go e.notify.waiting(runID, stepID)
 	select {
 	case d := <-ch:
 		return stepID, d, true
@@ -1598,6 +1623,11 @@ func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64,
 func (w *walk) runHuman(id int64, p *pass, given []runInput) {
 	stepID, d, ok := w.e.await(w.reviews, w.lr, w.fr.rb, w.run, id, given, "")
 	if !ok {
+		return
+	}
+	// It waited past its time limit, which failed it.
+	if d.expired != "" {
+		w.handleFailure(id, p, given, d.expired)
 		return
 	}
 	var next []func()

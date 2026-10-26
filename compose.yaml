@@ -130,6 +130,21 @@ services:
       OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       PUBLIC_URL: ${PUBLIC_URL:-}
+      # Telling people a review waits on them, reminding them, and telling
+      # them their runs failed, by email: over SMTP to SMTP_HOST, on
+      # SMTP_PORT (587 by default), from SMTP_FROM, such as Spoletta
+      # <spoletta@example.com>, signing in as SMTP_USERNAME with
+      # SMTP_PASSWORD, or the password in a mounted file SMTP_PASSWORD_FILE
+      # names; STARTTLS whenever the server offers it. Without SMTP_HOST
+      # nobody is emailed; with the Slack connector installed, people are
+      # told by a direct message from its app too. Each person picks how in
+      # their settings. The messages link to PUBLIC_URL, which should be set
+      # then. Nobody is told anything without sign-in. See webapp/notify.go.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       # Seals the model keys and MCP tokens the webapp keeps in the
       # database; make one with `openssl rand -base64 32`, and keep it, as
       # the webapp doesn't start without the key it sealed them with. See

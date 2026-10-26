@@ -74,6 +74,12 @@ type processSettings struct {
 	Quorum *int `json:"quorum,omitempty"`
 	// Whether an agent's prompt describes the flow it works in, in OPL; see opl.go.
 	DescribeFlow bool `json:"describeFlow,omitempty"`
+	// How long a human step waits before those who may decide it are
+	// reminded of it, once, and the longest it waits before it fails, as a
+	// step running past its timeout does, so what handles its failure
+	// takes over; in seconds, neither when absent. See notify.go.
+	RemindAfter *int `json:"remindAfter,omitempty"`
+	WaitAtMost  *int `json:"waitAtMost,omitempty"`
 }
 
 // The longest a step may be given, a day, and the most retries.
@@ -81,6 +87,9 @@ const (
 	maxTimeout = 24 * 60 * 60
 	maxRetries = 5
 )
+
+// The longest a human step may wait before it is reminded or fails, a year.
+const maxWait = 365 * 24 * 60 * 60
 
 func (s processSettings) timeout() time.Duration {
 	if s.Timeout == nil {
@@ -126,6 +135,12 @@ func (s processSettings) problem() string {
 	}
 	if s.Quorum != nil && *s.Quorum < 1 {
 		return "quorum must be at least 1"
+	}
+	if s.RemindAfter != nil && (*s.RemindAfter < 1 || *s.RemindAfter > maxWait) {
+		return fmt.Sprintf("remindAfter must be from 1 to %d seconds", maxWait)
+	}
+	if s.WaitAtMost != nil && (*s.WaitAtMost < 1 || *s.WaitAtMost > maxWait) {
+		return fmt.Sprintf("waitAtMost must be from 1 to %d seconds", maxWait)
 	}
 	for _, tools := range s.MCPTools {
 		if len(tools) > maxConnectorArgs*10 {
@@ -493,8 +508,9 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// A human process leaves only through the states it can decide on, while
-// other processes leave through the objects they generate and older direct
+// A human process leaves only through the states it can decide on, and
+// what handles its failure once it waits past its time limit, while other
+// processes leave through the objects they generate and older direct
 // connections. Becoming or ceasing to be human deletes the outputs the new
 // kind can't have: a human's decisions don't say what another process
 // generates, nor the other way round. Ceasing to be human also deletes the
@@ -502,7 +518,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 func dropMismatchedEdges(ctx context.Context, db *sql.DB, id int64, kind string) error {
 	stmts := []string{"DELETE FROM object_links WHERE process_id = ? AND direction = 'output'"}
 	if kind == kindHuman {
-		stmts = append(stmts, "DELETE FROM connections WHERE source_id = ?")
+		stmts = append(stmts, "DELETE FROM connections WHERE source_id = ? AND kind <> '"+connectionFailure+"'")
 	} else {
 		stmts = append(stmts, `DELETE l FROM object_links l JOIN objects o ON o.id = l.object_id
 			WHERE l.process_id = ? AND l.direction = 'input' AND o.human`)

@@ -346,6 +346,7 @@ func (x exporter) process(p process) setupProcess {
 	}
 	sp.Repositories = st.Repositories
 	sp.Rounds, sp.Loops, sp.Timeout, sp.Retries, sp.Quorum, sp.DescribeFlow = st.Rounds, st.Loops, st.Timeout, st.Retries, st.Quorum, st.DescribeFlow
+	sp.RemindAfter, sp.WaitAtMost = st.RemindAfter, st.WaitAtMost
 
 	for _, l := range x.e.s.Links {
 		if l.Process != p.ID {

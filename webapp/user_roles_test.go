@@ -72,3 +72,31 @@ func TestCleanRoles(t *testing.T) {
 		}
 	}
 }
+
+// A loop step is answered by those who may edit its flow; a review by those
+// who see it and may decide it by their roles; nothing by those who don't
+// see the flow.
+func TestDecidesStep(t *testing.T) {
+	someone := &user{ID: 1}
+	for _, c := range []struct {
+		u            *user
+		roles        []string
+		access, kind string
+		handledBy    []string
+		decides      bool
+	}{
+		{nil, nil, accessEdit, kindHuman, []string{"Finance"}, true},
+		{nil, nil, accessEdit, kindLoop, nil, true},
+		{someone, nil, accessEdit, kindLoop, nil, true},
+		{someone, nil, accessReview, kindLoop, nil, false},
+		{someone, []string{"Finance"}, accessReview, kindHuman, []string{"Finance"}, true},
+		{someone, nil, accessReview, kindHuman, []string{"Finance"}, false},
+		{someone, nil, accessEdit, kindHuman, nil, true},
+		{someone, []string{"Finance"}, "", kindHuman, []string{"Finance"}, false},
+		{someone, nil, "", kindHuman, nil, false},
+	} {
+		if got := decidesStep(c.u, c.roles, c.access, c.kind, c.handledBy); got != c.decides {
+			t.Errorf("decidesStep(%+v, %q, %q, %q, %q) = %v, want %v", c.u, c.roles, c.access, c.kind, c.handledBy, got, c.decides)
+		}
+	}
+}

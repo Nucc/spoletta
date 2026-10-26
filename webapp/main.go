@@ -158,6 +158,13 @@ func main() {
 	registerSkillRoutes(mux, db)
 	registerConnectorRoutes(mux, db)
 	eng := newEngine(db, workerURL, mcp, parallelSteps)
+	mail, err := newMailer()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	eng.notify = newNotifier(db, auth != nil, mail, eng)
+	go eng.notify.watch(context.Background(), noticeInterval)
+	registerInboxRoutes(mux, db, eng.notify, auth)
 	llm.overspent = eng.fail
 	registerRunRoutes(mux, db, eng)
 	registerRecordRunRoutes(mux, db, eng)

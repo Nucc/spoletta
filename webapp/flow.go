@@ -96,7 +96,7 @@ func registerFlowRoutes(mux *http.ServeMux, db *sql.DB) {
 				serverError(w, err)
 				return
 			}
-			if !failingKind(kind) {
+			if !failingKind(kind) && kind != kindHuman {
 				http.Error(w, failureSourceMessage, http.StatusBadRequest)
 				return
 			}
@@ -145,7 +145,7 @@ func registerFlowRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-const failureSourceMessage = "only an agent, script or connector process fails, so only one leads to what handles its failure"
+const failureSourceMessage = "only an agent, script or connector process fails, or a human one waiting past its time limit, so only one of those leads to what handles its failure"
 
 func mysqlErrorIs(err error, number uint16) bool {
 	var me *mysql.MySQLError

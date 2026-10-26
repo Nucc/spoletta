@@ -133,6 +133,8 @@ type setupProcess struct {
 	Retries      *int                `yaml:"retries,omitempty"`
 	Quorum       *int                `yaml:"quorum,omitempty"`
 	DescribeFlow bool                `yaml:"describeFlow,omitempty"`
+	RemindAfter  *int                `yaml:"remindAfter,omitempty"`
+	WaitAtMost   *int                `yaml:"waitAtMost,omitempty"`
 	Recording    bool                `yaml:"recording,omitempty"`
 	Prompt       string              `yaml:"prompt,omitempty"`
 	Script       string              `yaml:"script,omitempty"`

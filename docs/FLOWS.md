@@ -290,13 +290,20 @@ Settings for agent, script and connector processes:
   no person deciding in between before someone is asked whether it goes on
   (section 4.4).
 
+Settings for human processes, both in seconds (1 to 31536000, a year):
+- `remindAfter`: once it has waited this long, those who may decide it are
+  reminded, once.
+- `waitAtMost`: once it has waited this long with nobody deciding, it fails
+  as a step past its `timeout` does, so its `onFailure` handler takes over
+  (section 4.6).
+
 Settings for any process:
 - `quorum`: run once this many of the objects it takes without waiting for
   a state exist and hold their conditions, rather than all of them (at
   least 1).
 - `next:` processes that run right after it succeeds.
 - `onFailure:` processes that handle its failure. The source must be an
-  agent, script or connector process.
+  agent, script or connector process, or a human one with `waitAtMost`.
 
 ### 3.4 Links
 
@@ -588,7 +595,7 @@ state they chose.
 
 - An agent, script or connector step fails on an error, a non-zero exit, a reply
   that doesn't match its contract after it was told so, its `timeout`, or a
-  stop by a person.
+  stop by a person. A human step fails only past its `waitAtMost`.
 - `retries` tries it again, each try a step of its own. A stopped step isn't
   retried.
 - A failure **ends its branch**. The rest of the run goes on, but the run
@@ -603,6 +610,16 @@ review shows them its inputs, and they set the object to one of the listed
 states, optionally with instructions. Anything it fills in, they enter as
 JSON matching the object's attributes, or as text for an object without
 attributes. Each decision starts a fresh pass.
+
+Whoever may decide it finds it in their inbox, and is told it waits on them,
+by email and on Slack as they choose: the holders of the roles its human
+objects name, or for a review no human object handles, everyone who sees the
+flow; admins only when nobody else may. Name a role to say who is told.
+`remindAfter` reminds them once it has waited that long. `waitAtMost` fails
+it once it has waited that long, so a review nobody decides doesn't hold the
+run for ever: the failure ends its branch, or goes to its `onFailure`
+handler, which takes what the review took and the failure, as any handler
+does (an escalation, say, or a default decision made by an agent).
 
 ### 4.7 How a run ends
 
@@ -798,6 +815,8 @@ check that each one is what you meant.
 | loops (when set) | `"Fix" asks before going round a loop more than 10 times.` |
 | timeout | `"Fix" fails after 900 seconds.` |
 | retries | `"Fix" is tried again up to 2 times when it fails.` |
+| remindAfter (human) | `"Approve" reminds whoever decides it after 4 hours.` |
+| waitAtMost (human) | `"Approve" fails after waiting 2 days.` |
 | failure connection | `"Escalate" handles a failure of "Fix".` |
 | next connection | `"Open PR" follows "Fix".` |
 
@@ -1521,12 +1540,13 @@ Check them before you import.
 - A named state must be one of that object's states.
 
 **Processes**
-- `onFailure` only from an agent, script or connector process.
+- `onFailure` only from an agent, script, connector or human process.
 - A process can't `next` or `onFailure` to itself. Connections stay within
   one flow.
 - A subflow can't, directly or through other subflows, run its own flow.
 - `rounds` from 1 to 20; `loops` from 1 to 100; `timeout` from 1 to 86400;
-  `retries` from 0 to 5; `quorum` at least 1.
+  `retries` from 0 to 5; `quorum` at least 1; `remindAfter` and
+  `waitAtMost` from 1 to 31536000.
 - `thinking` is one of the listed levels.
 
 **Objects**

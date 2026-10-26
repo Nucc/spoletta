@@ -183,7 +183,7 @@ const (
 	connectionFailure = "failure"
 )
 
-const failureSourceMessage = "only an agent, script or connector process fails, so only one leads to what handles its failure"
+const failureSourceMessage = "only an agent, script or connector process fails, or a human one waiting past its time limit, so only one of those leads to what handles its failure"
 
 // A flow is a board of its own with everything on it: its processes and
 // objects, the boards of its flow processes, its versions and its runs. Each
@@ -442,6 +442,10 @@ type processSettings struct {
 	Quorum *int `json:"quorum,omitempty"`
 	// Whether an agent's prompt describes the flow it works in, in OPL; see opl.go.
 	DescribeFlow bool `json:"describeFlow,omitempty"`
+	// How long a human step waits before those who may decide it are
+	// reminded, and the longest it waits before it fails, in seconds.
+	RemindAfter *int `json:"remindAfter,omitempty"`
+	WaitAtMost  *int `json:"waitAtMost,omitempty"`
 }
 
 const (
@@ -451,6 +455,7 @@ const (
 	maxLoops      = 100
 	maxTimeout    = 24 * 60 * 60
 	maxRetries    = 5
+	maxWait       = 365 * 24 * 60 * 60
 )
 
 // What a step did to a repository it worked on.

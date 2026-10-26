@@ -622,18 +622,16 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		rows.Close()
 		// Who decides a review is the run's board's to say.
 		var b *runBoard
+		access, err := flowAccess(r.Context(), db, requestUser(r), rn.Flow)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		for i, s := range detail.Steps {
-			if s.Kind == kindLoop {
-				if detail.Steps[i].CanDecide, err = mayAnswerLoops(r.Context(), db, requestUser(r), rn.Flow); err != nil {
-					serverError(w, err)
-					return
-				}
+			if s.Kind != kindHuman && s.Kind != kindLoop {
 				continue
 			}
-			if s.Kind != kindHuman {
-				continue
-			}
-			if s.Process != nil {
+			if s.Kind == kindHuman && s.Process != nil {
 				if b == nil {
 					if b, err = runBoardOf(r.Context(), db, id); err != nil {
 						serverError(w, err)
@@ -642,7 +640,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 				}
 				detail.Steps[i].HandledBy = b.handlers(*s.Process)
 			}
-			detail.Steps[i].CanDecide = mayDecide(requestUser(r), roles, detail.Steps[i].HandledBy)
+			detail.Steps[i].CanDecide = decidesStep(requestUser(r), roles, access, s.Kind, detail.Steps[i].HandledBy)
 		}
 
 		orows, err := db.QueryContext(r.Context(),

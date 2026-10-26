@@ -1205,7 +1205,8 @@ func (b *builder) resolveProcess(bp *bproc) error {
 	case !validWidth(p.Width):
 		return problemf("%s: %s", at, invalidWidthMessage)
 	}
-	s := processSettings{Repositories: p.Repositories, Rounds: p.Rounds, Loops: p.Loops, Timeout: p.Timeout, Retries: p.Retries, Quorum: p.Quorum, DescribeFlow: p.DescribeFlow}
+	s := processSettings{Repositories: p.Repositories, Rounds: p.Rounds, Loops: p.Loops, Timeout: p.Timeout, Retries: p.Retries, Quorum: p.Quorum, DescribeFlow: p.DescribeFlow,
+		RemindAfter: p.RemindAfter, WaitAtMost: p.WaitAtMost}
 	for _, m := range p.MCPServers {
 		id, ok := b.mcp[mcpNameKey(m)]
 		if !ok {

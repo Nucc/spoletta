@@ -232,9 +232,9 @@ func TestFailureRefusals(t *testing.T) {
 	a := newApp(t)
 	f := a.newFlow("Refusals")
 	fix := a.agent(f.ID, "Fix", "Fix it.")
-	review := humanHuman(a, f.ID, "Review")
+	outer := nestedFlowProcess(a, f.ID, "Outer", false)
 	escalate := a.agent(f.ID, "Escalate", "Escalate.")
-	a.refused("POST", "/api/connections", map[string]any{"source": review.ID, "target": escalate.ID, "kind": connectionFailure}, http.StatusBadRequest, failureSourceMessage)
+	a.refused("POST", "/api/connections", map[string]any{"source": outer.ID, "target": escalate.ID, "kind": connectionFailure}, http.StatusBadRequest, failureSourceMessage)
 	a.refused("POST", "/api/connections", map[string]any{"source": fix.ID, "target": escalate.ID, "kind": "sometimes"}, http.StatusBadRequest, "kind must be")
 	for _, s := range []processSettings{{Timeout: ptr(0)}, {Timeout: ptr(maxTimeout + 1)}, {Retries: ptr(-1)}, {Retries: ptr(maxRetries + 1)}} {
 		a.refused("PATCH", fmt.Sprintf("/api/processes/%d", fix.ID), map[string]any{"settings": s}, http.StatusBadRequest, "must be from")

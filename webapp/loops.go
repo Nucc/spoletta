@@ -19,7 +19,6 @@ package main
 // since what handles its failure is likely the loop itself.
 
 import (
-	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -165,11 +164,4 @@ func registerLoopRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		eng.decide(runID, id, decision{goOn: *body.GoOn})
 		w.WriteHeader(http.StatusNoContent)
 	})
-}
-
-// Whether the user may answer the run's loop steps: whether they may edit
-// its flow.
-func mayAnswerLoops(ctx context.Context, db *sql.DB, u *user, flow int64) (bool, error) {
-	access, err := flowAccess(ctx, db, u, flow)
-	return access == accessEdit, err
 }

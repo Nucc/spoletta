@@ -116,6 +116,8 @@ Flows and procedures have the same shape:
   loops: 5              # how many times it runs round a loop before someone is asked
   timeout: 600          # seconds
   retries: 2
+  remindAfter: 14400    # human: seconds it waits before whoever decides it is reminded, once
+  waitAtMost: 172800    # human: seconds it waits before it fails, which onFailure can handle
   quorum: 1             # how many of what it takes it waits for
   describeFlow: true    # agent: tell it the flow it works in, in OPL
   recording: true       # flow process: each time it runs is a run of its own
@@ -167,6 +169,9 @@ A process taking an object and yielding it too affects it: it hands the object i
   kind: human
   takes: [Patch, Reviewer]
   yields: [{object: Patch, states: [approved, changes requested]}]
+  remindAfter: 14400    # reminds the reviewer after 4 hours, if still waiting
+  waitAtMost: 172800    # fails after 2 days, and Escalate takes over
+  onFailure: [Escalate]
 ```
 
 ### Objects

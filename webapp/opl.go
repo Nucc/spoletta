@@ -344,6 +344,13 @@ func (o *oplWriter) processSentences(p process, indent string) {
 		}
 		o.line(indent, "%s is tried again up to %d %s when it fails.", name, *st.Retries, times)
 	}
+	// Only a person's review waits to be reminded of, or past its time limit.
+	if p.Kind == kindHuman && st.RemindAfter != nil {
+		o.line(indent, "%s reminds whoever decides it after %s.", name, spokenDuration(*st.RemindAfter))
+	}
+	if p.Kind == kindHuman && st.WaitAtMost != nil {
+		o.line(indent, "%s fails after waiting %s.", name, spokenDuration(*st.WaitAtMost))
+	}
 	for _, c := range o.s.Connections {
 		if c.Source != p.ID {
 			continue

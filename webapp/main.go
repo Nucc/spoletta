@@ -78,6 +78,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if resumeRuns, err = resumingRuns(); err != nil {
+		log.Fatal(err)
+	}
 	if err := joinReplicas(db, timeout); err != nil {
 		log.Fatalf("couldn't join the replicas, or end what those that stopped left running: %v", err)
 	}
@@ -216,12 +219,30 @@ func main() {
 	go takeCommands(context.Background(), db)
 
 	addr := listenAddr(auth != nil)
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("couldn't listen on %s: %v", addr, err)
+	}
 	log.Printf("started; listening on %s", addr)
+	// The runs replicas that stopped walked, this one's own before it
+	// started again among them, are taken over once it listens, as their
+	// steps going again reach its proxies; see adopt.go.
+	if resumeRuns {
+		log.Printf("takes over the runs of replicas that stop (RESUME_RUNS)")
+		adopter.Store(eng)
+		go func() {
+			if err := eng.adoptStopped(context.Background()); err != nil {
+				log.Printf("WARNING: couldn't take over the runs of replicas that stopped: %v", err)
+			}
+		}()
+	} else {
+		log.Printf("ends the runs of replicas that stop, as RESUME_RUNS is false")
+	}
 	// A request's headers come within a deadline, so nobody holds a
 	// connection open by trickling them; bodies, streams and tunnels take
 	// as long as their routes allow (a webhook's delivery has its own).
-	srv := &http.Server{Addr: addr, Handler: egress.wrap(auth.protect(guardFlows(db, mux))), ReadHeaderTimeout: 10 * time.Second}
-	log.Fatal(srv.ListenAndServe())
+	srv := &http.Server{Handler: egress.wrap(auth.protect(guardFlows(db, mux))), ReadHeaderTimeout: 10 * time.Second}
+	log.Fatal(srv.Serve(l))
 }
 
 // Logs which database the webapp works on, never with its password.

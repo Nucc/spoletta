@@ -161,6 +161,9 @@ type runResult struct {
 	// For a script: the lines the worker logged of running it, which go in
 	// its run's log; see logs.go. An agent's come as it goes instead.
 	Log []workerLogLine `json:"log,omitempty"`
+	// For a step a run taken over had done before it moved: that step,
+	// whose objects are what it generated; see adopt.go.
+	past *pastStep
 }
 
 func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
@@ -350,6 +353,11 @@ func recordDecisions(ctx context.Context, db *sql.DB, b *runBoard, stepID int64,
 		outcomes = append(outcomes, name)
 		if d.instructions != "" {
 			instructions = append(instructions, d.instructions)
+			// Each object keeps its own, which a run taken over sends on
+			// with it again; see resume.go.
+			if _, err := db.ExecContext(ctx, "UPDATE run_objects SET instructions = ? WHERE step_id = ? AND object_ref = ?", d.instructions, stepID, object); err != nil {
+				return err
+			}
 		}
 	}
 	if len(outcomes) == 0 {

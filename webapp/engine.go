@@ -106,6 +106,10 @@ import (
 // A subflow process runs another flow's top board the same way, always as a
 // run of that flow; see calls.go. What comes out of it is stored as an agent
 // step's output is, since it is made of objects of this flow.
+//
+// A run outlives the replica walking it: when that one stops, another
+// takes the run over and walks its board again, taking up the steps it
+// stored as it comes to them, and goes on from there; see adopt.go.
 
 // What a human decided on a review: the state they set, if they had any to
 // choose from, and their instructions; and what they entered of the objects
@@ -120,6 +124,9 @@ type decision struct {
 	// Why it failed rather than being decided, as when it waited past its
 	// time limit; see notify.go.
 	expired string
+	// For a decision a run taken over had taken in before it moved, with
+	// what followed from it recorded: its step; see adopt.go.
+	past *pastStep
 }
 
 type engine struct {
@@ -152,6 +159,10 @@ type liveRun struct {
 	reviews map[int64]chan decision
 	// What stops each agent, script or connector step going, by step id.
 	steps map[int64]context.CancelFunc
+	// For a run taken over from a replica that stopped: the steps it stored
+	// there, which its walk, rebuilt, takes up as it comes to them; nil for
+	// a run walked here from its start. See adopt.go.
+	past *pastSteps
 }
 
 func newEngine(db *sql.DB, workerURL string, mcp *mcpBroker, parallelSteps int) *engine {
@@ -238,8 +249,18 @@ func (e *engine) finish(ctx context.Context, id int64, w *walk) string {
 	}
 	if lr != nil {
 		lr.cancel()
+		// A run taken over that ends with a step it stored still open never
+		// came to it again, as its walk went another way; the step ends
+		// with the run.
+		if open := lr.past.open(); len(open) > 0 {
+			runLog(e.db, id, 0, logError, "steps %v it stored before it moved weren't come to again, so they end with it", open)
+		}
 	}
-	rn, err := endRun(context.Background(), e.db, id, status)
+	rn, err := endWalkedRun(context.Background(), e.db, id, status)
+	if errors.Is(err, errNotWalked) {
+		log.Printf("run %d moved to another replica before its walk here was over, so that one ends it", id)
+		return runInterrupted
+	}
 	// Its workspaces aren't needed until a follow-up or a re-run; see
 	// releaseWorkspaces.
 	if w.ws != nil {
@@ -337,7 +358,7 @@ func (e *engine) stopStepHere(runID, stepID int64) (going, here bool) {
 // replica walking it.
 func (e *engine) decide(runID, stepID int64, d decision) {
 	if !e.decideHere(runID, stepID, d) {
-		e.ask(runID, commandDecide, stepID, decisionCommand{State: d.state, Instructions: d.instructions, Output: d.output, Entries: d.entries, GoOn: d.goOn, Expired: d.expired})
+		e.ask(runID, commandDecide, stepID, d.command())
 	}
 }
 
@@ -355,7 +376,8 @@ func (e *engine) decideHere(runID, stepID int64, d decision) bool {
 	return true
 }
 
-// A decision as a command carries it to the replica walking its run.
+// A decision as a command carries it to the replica walking its run, and
+// as its step keeps it until the walk took it in.
 type decisionCommand struct {
 	State        *int64           `json:"state"`
 	Instructions string           `json:"instructions"`
@@ -363,6 +385,14 @@ type decisionCommand struct {
 	Entries      map[int64]string `json:"entries"`
 	GoOn         bool             `json:"goOn,omitempty"`
 	Expired      string           `json:"expired,omitempty"`
+}
+
+func (d decision) command() decisionCommand {
+	return decisionCommand{State: d.state, Instructions: d.instructions, Output: d.output, Entries: d.entries, GoOn: d.goOn, Expired: d.expired}
+}
+
+func (c decisionCommand) decision() decision {
+	return decision{state: c.State, instructions: c.Instructions, output: c.Output, entries: c.Entries, goOn: c.GoOn, expired: c.Expired}
 }
 
 // Asks the replica walking the run, another one alive, to do what the
@@ -399,7 +429,7 @@ func (e *engine) takeCommands() {
 			log.Printf("a decision of step %d of run %d another replica sent: %v", c.step, c.target, err)
 			return
 		}
-		e.decideHere(c.target, c.step, decision{state: d.State, instructions: d.Instructions, output: d.Output, entries: d.Entries, goOn: d.GoOn, expired: d.Expired})
+		e.decideHere(c.target, c.step, d.decision())
 	}
 }
 
@@ -1201,8 +1231,21 @@ func (w *walk) runStep(id int64, p *pass, given []runInput, cr *changeRequest) (
 // returns how its last step went.
 func (w *walk) attempt(id int64, given []runInput, cr *changeRequest) (runResult, bool, bool, int64) {
 	for try := 0; ; try++ {
-		res, ok, stopped, stepID := w.execute(id, given, cr, try+1)
-		if ok || stopped || w.stopped() || try >= w.settings[id].retries() {
+		last := try >= w.settings[id].retries()
+		var res runResult
+		var ok, stopped bool
+		var stepID int64
+		// A run taken over goes as it went up to where it moved; a step
+		// going then goes again on what it took, if its retries let it.
+		if s := w.past().take(id, ranStep, given); s != nil {
+			res, ok, stopped, stepID = w.again(s, !last && !w.stopped())
+			if s.status == stepActive {
+				given, cr = s.inputs, s.cr
+			}
+		} else {
+			res, ok, stopped, stepID = w.execute(id, given, cr, try+1)
+		}
+		if ok || stopped || w.stopped() || last {
 			return res, ok, stopped, stepID
 		}
 	}
@@ -1212,6 +1255,9 @@ func (w *walk) attempt(id int64, given []runInput, cr *changeRequest) (runResult
 // state its link names, the one the agent decided, or else the one its
 // rules say.
 func (w *walk) outcome(id, stepID int64, res runResult) map[int64]value {
+	if res.past != nil {
+		return w.pastValues(id, res.past)
+	}
 	out := map[int64]value{}
 	for _, end := range w.outputs[id] {
 		content, ok := res.Objects[end.object]
@@ -1242,7 +1288,14 @@ func (w *walk) runFlow(id int64) (map[int64]value, bool) {
 	if w.kinds[id] == kindSubflow {
 		var msg string
 		var err error
-		if callee, msg, err = w.fr.call(w.ctx, w.e.db, w.settings[id].Flow); err != nil || msg != "" {
+		// A run taken over runs again the version its subflow ran before it
+		// moved, rather than the flow as it is now; see adopt.go.
+		if s := w.past().peek(id, flowStep); s != nil && s.child != nil {
+			callee, err = w.fr.calledAs(w.ctx, w.e.db, *s.child)
+		} else {
+			callee, msg, err = w.fr.call(w.ctx, w.e.db, w.settings[id].Flow)
+		}
+		if err != nil || msg != "" {
 			if err != nil {
 				runLog(w.e.db, w.run, 0, logError, "the flow of process %d couldn't run: %v", id, err)
 				msg = "The flow it runs couldn't start."
@@ -1325,8 +1378,16 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		inputs = append(inputs, runInput{Name: w.objects[o], State: w.stateNames[v.state], Content: v.content})
 	}
 	db := w.e.db
-	stepID, err := startStep(w.ctx, db, w.fr.rb, w.run, id, stepActive, "", inputs, nil)
-	if err != nil {
+	// A run taken over walks again what its step walked before it moved,
+	// to rebuild what came of it; one that ended then records nothing anew.
+	// See adopt.go.
+	past := w.past().take(id, flowStep, inputs)
+	over := past != nil && past.status != stepActive
+	var stepID int64
+	var err error
+	if past != nil {
+		stepID = past.id
+	} else if stepID, err = startStep(w.ctx, db, w.fr.rb, w.run, id, stepActive, "", inputs, nil); err != nil {
 		if w.ctx.Err() == nil {
 			runLog(w.e.db, w.run, 0, logError, "process %d couldn't be recorded: %v", id, err)
 		}
@@ -1336,7 +1397,27 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 
 	run, lr, ctx := w.run, w.lr, w.reviews
 	recording := w.recording[id] || callee != nil
-	if recording {
+	// How the run of its own ended, if it had before its run moved.
+	ended := ""
+	switch {
+	case recording && past != nil && past.child != nil:
+		run = *past.child
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(w.reviews)
+		if lr, ended, err = w.e.registerAgain(run, cancel); err != nil {
+			cancel()
+			runLog(db, w.run, stepID, logError, "the run of process %d couldn't be taken over: %v", id, err)
+			if !over {
+				w.endStep(stepID, stepError, "Its run couldn't be taken over.")
+			}
+			w.fail()
+			return nil, runFailed, nil
+		}
+	case recording && over:
+		// It ended before it had a run of its own, as when that couldn't start.
+		w.fail()
+		return nil, runFailed, nil
+	case recording:
 		key := ""
 		if it != nil {
 			key = it.key
@@ -1346,7 +1427,7 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		if callee != nil {
 			fr, board = callee, nil
 		}
-		if run, err = startChildRun(w.ctx, db, fr.flow, fr.version, w.run, board, w.names[id], key, stepID); err != nil {
+		if run, err = startChildRun(w.ctx, db, fr.flow, fr.version, w.run, board, w.names[id], key, stepID, fr.published); err != nil {
 			runLog(db, w.run, stepID, logError, "the run of process %d couldn't start: %v", id, err)
 			why := "Its run couldn't start."
 			if errors.Is(err, errInTrash) {
@@ -1399,29 +1480,36 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 	inner.enter()
 
 	var status string
-	if recording {
+	switch {
+	case ended != "":
+		// Walked again only to rebuild it; it keeps how it ended.
+		w.e.forget(run)
+		status = ended
+	case recording:
 		status = w.e.finish(ctx, run, inner)
-	} else {
-		switch {
-		case inner.terminated:
-			status = runTerminated
-		case ctx.Err() != nil:
-			status = runInterrupted
-		case inner.failed:
-			status = runFailed
-		default:
-			status = runDone
-		}
+	case inner.terminated:
+		status = runTerminated
+	case ctx.Err() != nil:
+		status = runInterrupted
+	case inner.failed:
+		status = runFailed
+	default:
+		status = runDone
 	}
 	which := "A process inside"
 	if recording {
 		which = "Run #" + strconv.FormatInt(run, 10)
 	}
+	if over {
+		status = past.ended()
+	}
 
 	switch status {
 	case runDone:
 	case runTerminated:
-		w.endStep(stepID, stepDuplicate, which+" found what it generated already processed.")
+		if !over {
+			w.endStep(stepID, stepDuplicate, which+" found what it generated already processed.")
+		}
 		// Inside this run, the duplicate terminated it.
 		if !recording {
 			w.mu.Lock()
@@ -1431,10 +1519,14 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		}
 		return nil, status, nil
 	case runInterrupted:
-		w.endStep(stepID, stepError, which+" was stopped.")
+		if !over {
+			w.endStep(stepID, stepError, which+stoppedInside)
+		}
 		return nil, status, nil
 	default:
-		w.endStep(stepID, stepError, which+" failed.")
+		if !over {
+			w.endStep(stepID, stepError, which+" failed.")
+		}
 		w.fail()
 		return nil, status, nil
 	}
@@ -1456,6 +1548,9 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 			out[end.object] = v
 		}
 		inner.mu.Unlock()
+	}
+	if over {
+		return out, runDone, nil
 	}
 	contents := map[int64]string{}
 	for o, v := range out {
@@ -1580,8 +1675,12 @@ func notIn(n int) string {
 	return " AND object_ref NOT IN " + placeholders(n)
 }
 
-// Records a step of a process that ran nothing, saying why.
+// Records a step of a process that ran nothing, saying why, unless its
+// run, taken over, recorded it before it moved.
 func (w *walk) note(id int64, status, msg string) {
+	if w.past().take(id, noted(status), []runInput{}) != nil {
+		return
+	}
 	stepID, err := startStep(w.ctx, w.e.db, w.fr.rb, w.run, id, stepActive, "", []runInput{}, nil)
 	if err != nil {
 		runLog(w.e.db, w.run, 0, logError, "process %d couldn't be recorded: %v", id, err)
@@ -1600,13 +1699,13 @@ func (w *walk) endStep(stepID int64, status, msg string) {
 // Starts the run of a recording flow process, or of the flow a subflow
 // process runs, on version of flow, and refers its step in the outer run to
 // it. board is the flow process whose board it runs, nil for the top board.
-func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64, board *int64, name, key string, stepID int64) (int64, error) {
+func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64, board *int64, name, key string, stepID int64, published bool) (int64, error) {
 	// Only of a flow out of the trash, read as moving it there takes it, so
 	// a run started meanwhile is one it sees and stops (trash.go).
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, replica_id)
-		SELECT id, ?, ?, ?, ?, ?, ?, ? FROM flows WHERE id = ? AND deleted_at IS NULL`,
-		runRunning, version, parent, board, name, key, replicaID, flow)
+		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, replica_id, published)
+		SELECT id, ?, ?, ?, ?, ?, ?, ?, ? FROM flows WHERE id = ? AND deleted_at IS NULL`,
+		runRunning, version, parent, board, name, key, replicaID, published, flow)
 	if err != nil {
 		return 0, err
 	}
@@ -1627,7 +1726,7 @@ func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64,
 // processes taking it; then a fresh pass starts from the object they set, for
 // the processes taking it in that state.
 func (w *walk) runHuman(id int64, p *pass, given []runInput) {
-	stepID, d, ok := w.e.await(w.reviews, w.lr, w.fr.rb, w.run, id, given, "")
+	stepID, d, ok := w.review(id, given, "")
 	if !ok {
 		return
 	}
@@ -1643,6 +1742,13 @@ func (w *walk) runHuman(id int64, p *pass, given []runInput) {
 	if d.state != nil {
 		next = append(next, w.setState(id, stepID, d)...)
 	}
+	// What follows from the decision is recorded, so the step needn't keep
+	// it any longer; see adopt.go.
+	if d.past == nil {
+		if _, err := w.e.db.ExecContext(context.Background(), "UPDATE run_steps SET decision = NULL WHERE id = ?", stepID); err != nil {
+			log.Printf("record step %d as taken in: %v", stepID, err)
+		}
+	}
 	all(next)
 }
 
@@ -1650,6 +1756,10 @@ func (w *walk) runHuman(id int64, p *pass, given []runInput) {
 // with it. A unique value another run stored terminates the run, as a step
 // generating it would.
 func (w *walk) enterValues(stepID int64, p *pass, d decision) []func() {
+	// What a run taken over recorded of it before it moved is as it was.
+	if d.past != nil {
+		return w.enterPast(p, d)
+	}
 	dup, err := finishStep(context.Background(), w.e.db, w.fr.rb, stepID, stepDone, d.output, "", d.entries)
 	if err != nil {
 		log.Printf("record entries of step %d: %v", stepID, err)
@@ -1674,6 +1784,12 @@ func (w *walk) enterValues(stepID int64, p *pass, d decision) []func() {
 		entered[o] = value{content: d.entries[o]}
 	}
 	w.applyRules(stepID, entered)
+	return w.goOnWith(p, objects, entered)
+}
+
+// Sets the objects a person entered, and returns the processes that can
+// run with them in pass p.
+func (w *walk) goOnWith(p *pass, objects []int64, entered map[int64]value) []func() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var next []func()
@@ -1701,8 +1817,10 @@ func (w *walk) setState(id, stepID int64, d decision) []func() {
 	w.mu.Lock()
 	content := w.values[object].content
 	w.mu.Unlock()
-	if err := recordDecision(context.Background(), w.e.db, w.fr.rb, stepID, *d.state, content); err != nil {
-		log.Printf("record decision of step %d: %v", stepID, err)
+	if d.past == nil {
+		if err := recordDecision(context.Background(), w.e.db, w.fr.rb, stepID, *d.state, content); err != nil {
+			log.Printf("record decision of step %d: %v", stepID, err)
+		}
 	}
 	if w.stopped() {
 		return nil

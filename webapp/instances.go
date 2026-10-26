@@ -248,30 +248,55 @@ func recordState(ctx context.Context, db *sql.DB, b *runBoard, step, object int6
 // the process the start points at takes it, and one waiting only for it runs
 // once the process moving it on did, on the new value. One that also waits
 // for something ready sooner may run on the old one.
+// The run keeps what it carried in, so a replica taking it over carries in
+// the same (see adopt.go).
 func (w *walk) carry() error {
+	carried := map[int64]*carriedValue{}
 	for _, o := range w.fr.board.Objects {
 		// One given from outside holds what it was given.
 		if o.Parent != nil || o.Owner != nil || !o.Persistent || o.Many || !w.generated[o.ID] || !w.onlyAffected(o.ID) || slices.Contains(w.given, o.ID) {
 			continue
 		}
-		var content, state string
+		var v carriedValue
 		err := w.e.db.QueryRowContext(w.ctx,
 			`SELECT i.content, i.state FROM object_instances i JOIN runs r ON r.id = i.run_id
 			WHERE i.object_id = ? AND r.status = ? ORDER BY r.finished_at DESC, r.id DESC LIMIT 1`, o.ID, runDone).
-			Scan(&content, &state)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			Scan(&v.Content, &v.State)
+		switch {
+		case err == nil:
+			carried[o.ID] = &v
+		case errors.Is(err, sql.ErrNoRows):
+			carried[o.ID] = nil
+		default:
 			return err
 		}
-		w.mu.Lock()
-		if err != nil {
-			w.values[o.ID] = value{}
-			w.unstored[o.ID] = true
-		} else {
-			w.values[o.ID] = value{content: content, state: w.stateNamed(o.ID, state)}
-		}
-		w.mu.Unlock()
 	}
+	if len(carried) > 0 {
+		b, err := json.Marshal(carried)
+		if err != nil {
+			return err
+		}
+		if _, err := w.e.db.ExecContext(w.ctx, "UPDATE runs SET carried = ? WHERE id = ?", b, w.run); err != nil {
+			return err
+		}
+	}
+	w.carryIn(carried)
 	return nil
+}
+
+// Starts the walk with what was carried in of each object: what a run
+// stored, or for nil, nothing stored yet.
+func (w *walk) carryIn(carried map[int64]*carriedValue) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for o, v := range carried {
+		if v == nil {
+			w.values[o] = value{}
+			w.unstored[o] = true
+		} else {
+			w.values[o] = value{content: v.Content, state: w.stateNamed(o, v.State)}
+		}
+	}
 }
 
 // Whether every process generating the object takes it too.

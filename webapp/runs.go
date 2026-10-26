@@ -222,11 +222,19 @@ func startStepAs(ctx context.Context, db *sql.DB, b *runBoard, runID, processID 
 			return 0, err
 		}
 	}
+	// Only into a run this replica walks: one another took over (see
+	// resume.go) is that one's to go on with.
 	res, err := db.ExecContext(ctx,
 		`INSERT INTO run_steps (run_id, process_id, process_ref, process_name, kind, model, thinking, prompt, inputs, change_request, status, output, error, instructions)
-		VALUES (?, (SELECT id FROM processes WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')`,
-		runID, p.ID, p.ID, p.Name, kind, p.Model, p.Thinking, prompt, in, crJSON, status)
+		SELECT id, (SELECT id FROM processes WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '' FROM runs WHERE id = ? AND replica_id = ?`,
+		p.ID, p.ID, p.Name, kind, p.Model, p.Thinking, prompt, in, crJSON, status, runID, replicaID)
 	if err != nil {
+		return 0, err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		if err == nil {
+			err = errNotWalked
+		}
 		return 0, err
 	}
 	id, err := res.LastInsertId()
@@ -237,6 +245,10 @@ func startStepAs(ctx context.Context, db *sql.DB, b *runBoard, runID, processID 
 }
 
 var errNotFound = errors.New("not found")
+
+// What recording a step of a run this replica doesn't walk fails with:
+// another replica took it over; see resume.go.
+var errNotWalked = errors.New("another replica walks the run")
 
 // Finishes a step. A successful step generates its process's output objects
 // on the run's board, each in the state its link names; a human step those
@@ -276,11 +288,18 @@ func finishStepOnce(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, 
 	var runStatus, kind string
 	var process sql.NullInt64
 	var trial bool
+	var walker sql.NullString
 	err = tx.QueryRowContext(ctx,
-		"SELECT r.id, r.status, s.kind, s.process_ref, r.trial_of IS NOT NULL FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
-		Scan(&runID, &runStatus, &kind, &process, &trial)
+		"SELECT r.id, r.status, s.kind, s.process_ref, r.trial_of IS NOT NULL, r.replica_id FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? FOR UPDATE", stepID).
+		Scan(&runID, &runStatus, &kind, &process, &trial, &walker)
 	if err != nil {
 		return nil, err
+	}
+	// A step of a run another replica took over is that one's to end, as it
+	// tries it again or fails it; what this one got of it is dropped. See
+	// resume.go.
+	if runStatus == runRunning && walker.String != replicaID {
+		return nil, errNotWalked
 	}
 	_, err = tx.ExecContext(ctx,
 		"UPDATE run_steps SET status = ?, output = ?, error = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
@@ -378,8 +397,40 @@ func endRun(ctx context.Context, db *sql.DB, id int64, status string) (run, erro
 	if err != nil {
 		return run{}, err
 	}
+	return endedRun(ctx, db, id)
+}
+
+// Ends a run as endRun does once its walk here is over, unless another
+// replica took it over meanwhile, as when this one was taken for stopped:
+// that one goes on with it, so it is left as it is, with errNotWalked.
+func endWalkedRun(ctx context.Context, db *sql.DB, id int64, status string) (run, error) {
+	res, err := db.ExecContext(ctx,
+		"UPDATE runs SET status = ?, finished_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = ? AND replica_id = ?",
+		status, id, runRunning, replicaID)
+	if err != nil {
+		return run{}, err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		if err != nil {
+			return run{}, err
+		}
+		var walker sql.NullString
+		var going bool
+		if err := db.QueryRowContext(ctx, "SELECT replica_id, status = ? FROM runs WHERE id = ?", runRunning, id).Scan(&walker, &going); err != nil {
+			return run{}, err
+		}
+		if going && walker.String != replicaID {
+			return run{}, errNotWalked
+		}
+	}
+	return endedRun(ctx, db, id)
+}
+
+// Closes what a run that ended left open, and releases what it stored
+// unless it ended done.
+func endedRun(ctx context.Context, db *sql.DB, id int64) (run, error) {
 	// Steps left open, such as a review nobody decided, ended with the run.
-	_, err = db.ExecContext(ctx,
+	_, err := db.ExecContext(ctx,
 		"UPDATE run_steps SET status = ?, error = 'The run ended before this step finished.', finished_at = CURRENT_TIMESTAMP(3) WHERE run_id = ? AND status IN (?, ?)",
 		stepError, id, stepActive, stepWaiting)
 	if err != nil {
@@ -448,8 +499,8 @@ func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *in
 	if board.Settings != nil {
 		settings = *board.Settings
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by, replica_id) VALUES (?, ?, ?, ?, ?, ?)",
-		flow, runRunning, version, schedule, startedBy, replicaID)
+	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by, replica_id, published) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		flow, runRunning, version, schedule, startedBy, replicaID, onPublished)
 	if err != nil {
 		return pendingRun{}, err
 	}
@@ -565,8 +616,15 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			// for no limit, in dollars; see spend.go.
 			Spent      float64 `json:"spent"`
 			SpendLimit float64 `json:"spendLimit"`
+			// Each time it moved to another replica, as the one walking
+			// it stopped; see adopt.go.
+			Moves []runMove `json:"moves"`
 		}{run: rn, Steps: []step{}, Objects: []runObject{}}
 		if detail.Spent, detail.SpendLimit, err = runSpent(r.Context(), db, id); err != nil {
+			serverError(w, err)
+			return
+		}
+		if detail.Moves, err = runMoves(r.Context(), db, id); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -799,12 +857,22 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 				return
 			}
 		}
+		// The step keeps the decision whole until the run's walk recorded
+		// what follows from it, so a replica taking the run over carries it
+		// on even if the one walking it stopped before it got it; see
+		// resume.go.
+		d := decision{state: patch.State, instructions: patch.Instructions, output: output, entries: contents}
+		kept, err := json.Marshal(d.command())
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		// Only a review of this run still waiting; deciding one twice would
 		// let the run go on twice.
 		res, err := db.ExecContext(r.Context(),
-			`UPDATE run_steps SET status = ?, outcome = ?, instructions = ?, decided_by = ?, finished_at = CURRENT_TIMESTAMP(3)
+			`UPDATE run_steps SET status = ?, outcome = ?, instructions = ?, decided_by = ?, decision = ?, finished_at = CURRENT_TIMESTAMP(3)
 			WHERE id = ? AND run_id = ? AND kind = ? AND status = ?`,
-			stepDone, outcome, patch.Instructions, requestUserID(r), id, runID, kindHuman, stepWaiting)
+			stepDone, outcome, patch.Instructions, requestUserID(r), kept, id, runID, kindHuman, stepWaiting)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -819,7 +887,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		logStepFinished(db, id, true)
 		// The run records the object in the state set, with the content it has there.
-		eng.decide(runID, id, decision{state: patch.State, instructions: patch.Instructions, output: output, entries: contents})
+		eng.decide(runID, id, d)
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

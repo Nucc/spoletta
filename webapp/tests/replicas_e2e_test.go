@@ -174,13 +174,14 @@ func TestStartingAReplicaLeavesAnothersRunsGoing(t *testing.T) {
 	}
 }
 
-// What a replica ran ends once it stops: at once when it is told to, as
-// another replica finds it left, and once it hasn't said it is alive for
-// the timeout when it is killed.
+// With RESUME_RUNS=false, what a replica ran ends once it stops, rather
+// than being taken over (see adopt_e2e_test.go): at once when it is told
+// to, as another replica finds it left, and once it hasn't said it is
+// alive for the timeout when it is killed.
 func TestAStoppedReplicasRunsEnd(t *testing.T) {
-	const timeout = "REPLICA_TIMEOUT=3s"
+	const timeout, ending = "REPLICA_TIMEOUT=3s", "RESUME_RUNS=false"
 	fw := newFakeWorker(t)
-	a := startApp(t, fw.url, timeout)
+	a := startApp(t, fw.url, timeout, ending)
 	a.worker = fw
 	f := a.newFlow("Left behind")
 	a.startAt(f.ID, a.agent(f.ID, "Work", "Work.").ID)
@@ -188,7 +189,7 @@ func TestAStoppedReplicasRunsEnd(t *testing.T) {
 
 	// Killed: the run ends once the timeout is over since the replica last
 	// said it was alive, a sixth of it before at most, not before.
-	other := startApp(t, fw.url, timeout)
+	other := startApp(t, fw.url, timeout, ending)
 	rn := a.startRun(f.ID)
 	a.waitStep(rn.ID, "Work", stepActive)
 	killed := time.Now()
@@ -206,7 +207,7 @@ func TestAStoppedReplicasRunsEnd(t *testing.T) {
 
 	// Told to stop: it leaves, so another replica ends its run long
 	// before a timeout of a minute.
-	third := startApp(t, fw.url, "REPLICA_TIMEOUT=1m")
+	third := startApp(t, fw.url, "REPLICA_TIMEOUT=1m", ending)
 	rn = third.startRun(f.ID)
 	third.waitStep(rn.ID, "Work", stepActive)
 	third.proc.stop()

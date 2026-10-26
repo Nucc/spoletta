@@ -35,8 +35,8 @@ import (
 	"time"
 )
 
-// This replica's id, set as it starts.
-var replicaID string
+// This replica's id, set as it starts, and the host it runs on.
+var replicaID, replicaHost string
 
 // Whether this replica is leaving, so its row going isn't taken for
 // another replica having taken it for stopped.
@@ -62,6 +62,7 @@ func joinReplicas(db *sql.DB, timeout time.Duration) error {
 	}
 	replicaID = hex.EncodeToString(b)
 	host, _ := os.Hostname()
+	replicaHost = host
 	if _, err := db.Exec("INSERT INTO replicas (id, host) VALUES (?, ?)", replicaID, truncate(host, 255)); err != nil {
 		return err
 	}
@@ -119,13 +120,16 @@ func orphaned(col string) string {
 	return fmt.Sprintf("(%[1]s IS NULL OR %[1]s NOT IN (SELECT id FROM replicas))", col)
 }
 
-// Runs execute in a replica; whatever one ran when it stopped can't
-// continue, so it ends. The replicas that stopped go first; then their open
-// steps, while their runs still read as running; then the runs, whose
-// stored values are released; then the assistant's replies and step
-// follow-ups under way, what other replicas asked of them, their people's
-// slots (engine.go's personSlot) and the tokens their steps were granted. Each run
-// ended so says so in its log, and what was ended is logged.
+// Runs execute in a replica; what one walked when it stopped is taken over
+// by another and carried on (adopt.go), but for trials and runs from before
+// versions were recorded, and every run with RESUME_RUNS=false, which end.
+// The replicas that stopped go first; then the open steps of the runs that
+// end, while those still read as running; then those runs, whose stored
+// values are released; then the assistant's replies and step follow-ups
+// under way, what other replicas asked of them, their people's slots
+// (engine.go's personSlot) and the tokens their steps were granted. Each
+// run ended so says so in its log, and what was ended is logged. Last, once
+// this replica can, it takes over the runs left.
 func endStopped(ctx context.Context, db *sql.DB, timeout time.Duration) error {
 	res, err := db.ExecContext(ctx, "DELETE FROM replicas WHERE seen_at <= CURRENT_TIMESTAMP(3) - INTERVAL ? MICROSECOND", timeout.Microseconds())
 	if err != nil {
@@ -134,8 +138,14 @@ func endStopped(ctx context.Context, db *sql.DB, timeout time.Duration) error {
 	if n, _ := res.RowsAffected(); n > 0 {
 		log.Printf("%d replicas didn't say they were alive for %s, so they stopped", n, timeout)
 	}
+	// A run inside another that ended, which nothing walks, ends too.
+	ending := ""
+	if resumeRuns {
+		ending = ` AND (trial_of IS NOT NULL OR version_id IS NULL OR
+			(parent_run_id IS NOT NULL AND rerun_of IS NULL AND parent_run_id NOT IN (SELECT id FROM (SELECT id FROM runs WHERE status = 'running') going)))`
+	}
 	var runs []int64
-	err = scanAll(ctx, db, "SELECT id FROM runs WHERE status = 'running' AND "+orphaned("replica_id"), func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, "SELECT id FROM runs WHERE status = 'running' AND "+orphaned("replica_id")+ending, func(rows *sql.Rows) error {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			return err
@@ -191,7 +201,13 @@ func endStopped(ctx context.Context, db *sql.DB, timeout time.Duration) error {
 			return err
 		}
 	}
-	return clearGrants(ctx, db, orphaned("replica_id"), "ended, as the server granting it stopped")
+	if err := clearGrants(ctx, db, orphaned("replica_id"), "ended, as the server granting it stopped"); err != nil {
+		return err
+	}
+	if e := adopter.Load(); resumeRuns && e != nil {
+		return e.adoptStopped(ctx)
+	}
+	return nil
 }
 
 // Leaves the replicas and exits once told to stop, as Kubernetes does a

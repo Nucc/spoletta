@@ -274,6 +274,11 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 		// Told to stop, it exits at once, without the race detector's
 		// second of waiting for reports; races are reported as they happen.
 		"GORACE=atexit_sleep_ms=0",
+		// Tests share the database and leave runs going as they end, which
+		// the next test's webapp would take over and carry on with its own
+		// fake worker; so they end, unless a test takes runs over on a
+		// database of its own (see adopt_e2e_test.go).
+		"RESUME_RUNS=false",
 	}
 	w.cmd.Env = append(w.cmd.Env, extra...)
 	w.cmd.Stdout, w.cmd.Stderr = w.log, w.log
@@ -310,8 +315,8 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 }
 
 // Tells the webapp to stop, as Kubernetes does, so it leaves the replicas
-// and the next webapp ends every run it was walking; killed if it doesn't
-// stop. Returns what it logged.
+// and the next webapp takes over, or ends, every run it was walking; killed
+// if it doesn't stop. Returns what it logged.
 func (w *webapp) stop() string {
 	w.cmd.Process.Signal(syscall.SIGTERM)
 	select {

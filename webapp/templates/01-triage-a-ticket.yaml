@@ -1,0 +1,70 @@
+title: Triage a ticket
+description: A person enters a support ticket, an agent decides whether it reports a bug or asks for a feature, and a fix is attempted or a spec written.
+setup:
+  spoletta: 1
+  flows:
+    - name: Triage a ticket
+      start:
+        next: Enter ticket
+      objects:
+        - name: Ticket
+          attributes:
+            - name: summary
+              definition: What the ticket is about, in a line.
+            - name: description
+              definition: Everything its reporter said, with the steps to make it happen if it is a bug.
+        - name: Triage
+          states: [bug, feature]
+        - name: Fix
+          attributes:
+            - name: cause
+              definition: Why the bug happened, in two sentences.
+            - name: change
+              definition: What was changed, and the test that shows it is fixed.
+        - name: Spec
+        - name: Summary
+          end: true
+      processes:
+        - name: Enter ticket
+          kind: human
+          yields: [Ticket]
+        - name: Classify
+          prompt: |
+            Decide whether the Ticket reports a bug (something that worked, or
+            should work, doesn't) or asks for a feature, and say why in a
+            sentence.
+          repositories: []
+          takes: [Ticket]
+          yields:
+            - object: Triage
+              states: [bug, feature]
+        - name: Attempt fix
+          prompt: |
+            Find the cause of the bug the Ticket reports and fix it with the
+            smallest change that is clearly right, with a test that fails
+            without it. Commit, but don't push.
+          repositories: [app]
+          takes:
+            - Ticket
+            - object: Triage
+              state: bug
+              condition: true
+          yields: [Fix]
+        - name: Write spec
+          prompt: |
+            Write a one-page spec of the feature the Ticket asks for: the
+            problem, who has it, what to build, and what to leave out.
+          repositories: []
+          takes:
+            - Ticket
+            - object: Triage
+              state: feature
+              condition: true
+          yields: [Spec]
+        - name: Summarize
+          prompt: |
+            Say what was done about the Ticket in three lines, for whoever
+            reported it: the fix if there is one, or the spec.
+          repositories: []
+          takes: [Ticket, Fix, Spec]
+          yields: [Summary]

@@ -191,6 +191,7 @@ func main() {
 	registerHistoryRoutes(mux, db)
 	registerOPLRoutes(mux, db)
 	registerSetupRoutes(mux, db)
+	registerTemplateRoutes(mux, db)
 	registerAssistantRoutes(mux, db, workerURL)
 	registerAgentRoutes(mux, db, workerURL)
 	registerFileRoutes(mux)

@@ -1,0 +1,54 @@
+title: Answer each question of a list
+description: A person lists questions, an agent drafts an answer to each in a run of its own, and another gathers the answers into one page.
+setup:
+  spoletta: 1
+  flows:
+    - name: Answer each question
+      start:
+        next: List the questions
+      objects:
+        - name: Questions
+          many: true
+          min: 1
+          attributes:
+            - name: question
+              definition: The question, as someone would ask it.
+            - name: context
+              definition: What the answer should take into account; empty if nothing.
+        - name: Answers
+          many: true
+          attributes:
+            - name: question
+              definition: The question answered, as it was asked.
+            - name: answer
+              definition: The answer, in a short paragraph.
+        - name: Page
+          end: true
+      processes:
+        - name: List the questions
+          kind: human
+          yields: [Questions]
+        - name: Each question
+          kind: flow
+          recording: true
+          takes: [Questions]
+          yields: [Answers]
+          board:
+            start:
+              next: Draft the answer
+            processes:
+              - name: Draft the answer
+                prompt: |
+                  Answer the question in Questions plainly and correctly,
+                  taking its context into account. Where you aren't sure,
+                  say what you would need to know.
+                repositories: []
+                takes: [Questions]
+                yields: [Answers]
+        - name: Gather the answers
+          prompt: |
+            Put the Answers together as one page of questions and answers, in
+            an order that reads well, with headings where they help.
+          repositories: []
+          takes: [Answers]
+          yields: [Page]

@@ -1,0 +1,54 @@
+title: Daily digest to Slack
+description: Every weekday morning, an agent sums up what was said in a Slack channel the day before and posts the digest to a channel.
+setup:
+  spoletta: 1
+  flows:
+    - name: Daily digest to Slack
+      schedules:
+        - cron: "0 8 * * 1-5"
+          timezone: UTC
+      start:
+        next: Read the channel
+      objects:
+        - name: Messages
+          many: true
+          attributes:
+            - name: user
+              definition: Who wrote it, by their Slack id.
+            - name: text
+              definition: What it says.
+            - name: ts
+              definition: When it was written, as Slack's timestamp in seconds.
+            - name: replies
+              definition: How many replies its thread has.
+        - name: Digest
+        - name: Posted
+          end: true
+      processes:
+        - name: Read the channel
+          kind: connector
+          connector:
+            server: slack
+            operation: list_messages
+            args:
+              limit: "50"
+          yields: [Messages]
+        - name: Write the digest
+          prompt: |
+            Sum up the Messages written in the last day, those whose ts is
+            within 24 hours of now, for someone who missed them: the
+            decisions made, the questions still open, and what someone asked
+            others to do, a line each, in Slack's mrkdwn. If nothing
+            happened, say so in a line.
+          repositories: []
+          takes: [Messages]
+          yields: [Digest]
+        - name: Post the digest
+          kind: connector
+          connector:
+            server: slack
+            operation: post_message
+            args:
+              text: "{{Digest}}"
+          takes: [Digest]
+          yields: [Posted]

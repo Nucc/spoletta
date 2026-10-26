@@ -1262,21 +1262,36 @@ func (b *builder) resolveProcess(bp *bproc) error {
 		if p.Kind != kindConnector {
 			return problemf("%s: only a connector process has connector settings", at)
 		}
-		id, ok := b.mcp[mcpNameKey(pc.Server)]
-		if !ok {
-			return problemf("%s: there is no connector named %s among the mcpServers; install it there, with connector set", at, quote(pc.Server))
-		}
-		c := findConnector(b.mcpConnectors[id])
-		if c == nil {
-			return problemf("%s: %s is an MCP server, not a connector", at, quote(pc.Server))
-		}
-		op := c.operation(pc.Operation)
-		if op == nil {
-			return problemf("%s: %s has no operation %s", at, c.Title, quote(pc.Operation))
+		var id int64
+		var ops []*operation
+		if strings.TrimSpace(pc.Server) == "" {
+			// None picked yet: its operation is one some connector has.
+			for _, c := range connectors {
+				if op := c.operation(pc.Operation); op != nil {
+					ops = append(ops, op)
+				}
+			}
+			if len(ops) == 0 && pc.Operation != "" {
+				return problemf("%s: no connector has an operation %s", at, quote(pc.Operation))
+			}
+		} else {
+			var ok bool
+			if id, ok = b.mcp[mcpNameKey(pc.Server)]; !ok {
+				return problemf("%s: there is no connector named %s among the mcpServers; install it there, with connector set", at, quote(pc.Server))
+			}
+			c := findConnector(b.mcpConnectors[id])
+			if c == nil {
+				return problemf("%s: %s is an MCP server, not a connector", at, quote(pc.Server))
+			}
+			op := c.operation(pc.Operation)
+			if op == nil {
+				return problemf("%s: %s has no operation %s", at, c.Title, quote(pc.Operation))
+			}
+			ops = []*operation{op}
 		}
 		for name := range pc.Args {
-			if op.param(name) == nil {
-				return problemf("%s: %s takes no argument %s", at, op.Name, quote(name))
+			if !slices.ContainsFunc(ops, func(op *operation) bool { return op.param(name) != nil }) {
+				return problemf("%s: %s takes no argument %s", at, pc.Operation, quote(name))
 			}
 		}
 		s.Connector = &connectorSettings{Server: id, Operation: pc.Operation, Args: pc.Args}

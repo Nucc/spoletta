@@ -144,6 +144,8 @@ Flows and procedures have the same shape:
 
 A process's `samples` are the inputs saved to try it on alone, as its panel's *Try this process* does: a trial runs only it, on the board as it is, and stores nothing the flow's runs see. Each sample has a name of its own and gives objects the process `takes`, by name, with what they hold and, optionally, one of their states. A process the file gives no `samples` keeps those it has; `samples: []` leaves it none. Export writes them for each process that has any.
 
+A connector process's `server` names an installed connector among the `mcpServers`, whose operation it carries out. Left out, the process has none picked yet, as a process made from a template whose connector isn't installed: it keeps its `operation`, which must be one some connector has, and its `args`, for when someone picks a connector in its panel, and the board says it can't run until then. Export leaves it out for such a process, and for one whose connector was removed.
+
 A process names its credentials, never holds them: credentials are kept by admins in the settings, under Credentials, secrets and all, and never written in a file. Importing one naming a credential the app hasn't is refused; a name matches whatever its case or spacing, as `Issue tracker` and `issue  TRACKER` name the same one. Only agent and script processes take them. Each credential is reached by the step at `$CREDENTIAL_<NAME>_URL`, with `Authorization: Bearer $CREDENTIALS_TOKEN`; see [docs/FLOWS.md](../docs/FLOWS.md), section 5.3.
 
 ### Links: `takes` and `yields`

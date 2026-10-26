@@ -1,0 +1,60 @@
+title: Write and critique
+description: An agent writes a piece from a brief a person gives, a second agent critiques it until it is good, and an editor decides once the critic gives up.
+setup:
+  spoletta: 1
+  flows:
+    - name: Write and critique
+      start:
+        next: Give the brief
+      objects:
+        - name: Editor
+          human: true
+        - name: Brief
+          attributes:
+            - name: topic
+              definition: What the piece is about.
+            - name: audience
+              definition: Who reads it, and what they know already.
+            - name: length
+              definition: About how many words it runs to.
+        - name: Draft
+          end: true
+          states: [good, weak]
+      processes:
+        - name: Give the brief
+          kind: human
+          yields: [Brief]
+        - name: Write
+          prompt: |
+            Write the piece the Brief asks for, for its audience and at about
+            its length. Be concrete: an example says more than an adjective.
+          repositories: []
+          takes: [Brief]
+          yields: [Draft]
+        - name: Critique
+          prompt: |
+            Critique the Draft as an editor would, against the Brief. It is
+            good when it is accurate, concrete, right for its audience and
+            near its length; otherwise it is weak, and say exactly what to
+            change.
+          repositories: []
+          rounds: 3
+          takes: [Brief, Draft]
+          yields:
+            - object: Draft
+              states: [good, weak]
+          onFailure: [Editor decides]
+        - name: Rewrite
+          prompt: Rewrite the Draft as the critic asks, keeping to the Brief.
+          repositories: []
+          takes:
+            - Brief
+            - object: Draft
+              state: weak
+          yields: [Draft]
+        - name: Editor decides
+          kind: human
+          takes: [Editor]
+          yields:
+            - object: Draft
+              states: [good, weak]

@@ -1,0 +1,79 @@
+title: Fix with an approval by risk
+description: An agent fixes the bug a person reports and rates how risky its change is; a low-risk fix goes straight to a pull request, a risky one waits for the tech lead.
+setup:
+  spoletta: 1
+  flows:
+    - name: Fix with an approval by risk
+      start:
+        next: Report bug
+      objects:
+        - name: Tech lead
+          human: true
+        - name: Bug
+          attributes:
+            - name: summary
+              definition: What goes wrong, in a line.
+            - name: steps
+              definition: How to make it happen, and what should happen instead.
+        - name: Patch
+          attributes:
+            - name: cause
+              definition: Why the bug happened, in two sentences.
+            - name: change
+              definition: What was changed, and the test that shows it is fixed.
+            - name: risk
+              definition: How risky the change is, as a number from 1 (cosmetic and well tested) to 5 (touches payments, sign-in or stored data).
+          states:
+            - name: low risk
+              rule: risk <= 2
+            - name: risky
+              rule: risk >= 3
+            - approved
+            - changes requested
+        - name: Pull request
+          end: true
+          attributes:
+            - name: url
+              definition: The pull request's address.
+      processes:
+        - name: Report bug
+          kind: human
+          yields: [Bug]
+        - name: Fix
+          prompt: |
+            Find the cause of the Bug and fix it with the smallest change that
+            is clearly right, with a test that fails without it, and commit.
+            Then rate the change's risk honestly: what could it break?
+          repositories: [app]
+          takes: [Bug]
+          yields: [Patch]
+        - name: Approve risky fix
+          kind: human
+          remindAfter: 14400
+          takes:
+            - Tech lead
+            - object: Patch
+              state: risky
+          yields:
+            - object: Patch
+              states: [approved, changes requested]
+        - name: Revise
+          prompt: Revise the Patch as the tech lead asks, keeping its test, and rate its risk again.
+          repositories: [app]
+          takes:
+            - Bug
+            - object: Patch
+              state: changes requested
+          yields: [Patch]
+        - name: Open pull request
+          prompt: |
+            Push the run's branch and open a pull request fixing the Bug,
+            describing the Patch's cause and change, and reply with its address.
+          repositories: [app]
+          takes:
+            - Bug
+            - object: Patch
+              state: low risk
+            - object: Patch
+              state: approved
+          yields: [Pull request]

@@ -1,0 +1,59 @@
+title: Expense claim
+description: Someone fills in an expense claim; a small one is approved by a rule, a larger one goes to finance, and the claimant gets a reply either way.
+setup:
+  spoletta: 1
+  flows:
+    - name: Expense claim
+      start:
+        next: Claim an expense
+      objects:
+        - name: Finance
+          human: true
+        - name: Expense
+          attributes:
+            - name: amount
+              definition: What it cost, as a number, in the company's currency.
+            - name: purpose
+              definition: What it was for, and why it was needed.
+            - name: date
+              definition: When it was spent, as YYYY-MM-DD.
+            - name: receipt
+              definition: Where the receipt is, such as a link to it.
+          states:
+            - name: small
+              rule: amount <= 100
+            - name: needs approval
+              rule: amount > 100
+            - approved
+            - rejected
+        - name: Reply
+          end: true
+      processes:
+        - name: Claim an expense
+          kind: human
+          yields: [Expense]
+        - name: Approve expense
+          kind: human
+          remindAfter: 86400
+          takes:
+            - Finance
+            - object: Expense
+              state: needs approval
+          yields:
+            - object: Expense
+              states: [approved, rejected]
+        - name: Tell the claimant
+          prompt: |
+            Write a short, friendly reply to whoever claimed the Expense,
+            saying whether it was approved; if it was rejected, give the
+            reason finance gave, and if it was approved, say it is paid with
+            the next payroll.
+          repositories: []
+          takes:
+            - object: Expense
+              state: small
+            - object: Expense
+              state: approved
+            - object: Expense
+              state: rejected
+          yields: [Reply]

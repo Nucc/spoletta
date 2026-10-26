@@ -168,9 +168,11 @@ type setupSampleInput struct {
 }
 
 // What a connector process carries out: an operation of a connector's
-// server, by name, with its arguments.
+// server, by name, with its arguments. Without a server, none is picked
+// yet, as when the connector isn't installed: the process keeps the
+// operation and its arguments for when one is.
 type setupConnector struct {
-	Server    string            `yaml:"server"`
+	Server    string            `yaml:"server,omitempty"`
 	Operation string            `yaml:"operation"`
 	Args      map[string]string `yaml:"args,omitempty"`
 }

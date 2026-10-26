@@ -523,6 +523,8 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 
 	decided, timed := other.startRun(f.ID), other.startRun(f.ID)
 	s := a.waitStep(decided.ID, "Approve", stepWaiting)
+	// Both wait before the inbox is read, or it may list the first alone.
+	a.waitStep(timed.ID, "Approve", stepWaiting)
 	if got := inboxOf(inboxAs(a, p, bob), f.ID); len(got) != 2 || got[0].Expires == nil || got[0].Expires.Sub(got[0].Since) != 6*time.Second {
 		t.Errorf("Bob's inbox: %+v", got)
 	}

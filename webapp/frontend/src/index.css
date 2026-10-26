@@ -203,28 +203,51 @@ body {
   background: #f6f8fa;
 }
 
-.toolbar .play {
+/* Run, labelled, joined to the menu of other ways to run; see Toolbar.tsx. */
+.toolbar .run-button {
   flex-shrink: 0;
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-color: #1a7f37;
-  border-radius: 50%;
-  background: #1a7f37;
+  display: inline-flex;
 }
 
-.toolbar .play:not(:disabled) {
+.toolbar .play,
+.toolbar .play-more .toolbar-menu-button {
+  height: 34px;
+  border-color: #1a7f37;
+  background: #1a7f37;
   color: #fff;
 }
 
-.toolbar .play:disabled {
+.toolbar .play {
+  padding: 0 12px 0 14px;
+  font-weight: 600;
+  border-radius: 8px 0 0 8px;
+}
+
+.toolbar .play-more .toolbar-menu-button {
+  padding: 0 8px;
+  border-left-color: rgba(255, 255, 255, 0.4);
+  border-radius: 0 8px 8px 0;
+}
+
+.toolbar .play:hover:not(:disabled),
+.toolbar .play-more .toolbar-menu-button:hover,
+.toolbar .play-more .toolbar-menu-button.open {
+  background: #116329;
+}
+
+.toolbar .play:disabled,
+.toolbar .run-button:has(.play:disabled) .toolbar-menu-button {
   border-color: #d8dee4;
   background: #d8dee4;
+  color: #8c959f;
+}
+
+.toolbar .play:disabled {
   cursor: not-allowed;
+}
+
+.toolbar .run-button:has(.play:disabled) .toolbar-menu-button {
+  border-left-color: #fff;
 }
 
 .toolbar button:disabled {
@@ -240,9 +263,11 @@ body {
   gap: 8px;
 }
 
-.toolbar .versioning + .play,
-.toolbar .problems-anchor + .play {
-  margin-left: 0;
+/* Group into flow and Tidy up, beside the flow's name. */
+.toolbar .toolbar-arrange {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
 }
 
 /* What is wrong with the board, beside Run; see Problems.tsx. */
@@ -287,6 +312,7 @@ body {
 
 .problems-list {
   width: 380px;
+  max-width: calc(100vw - 32px);
   max-height: min(70vh, 520px);
   overflow-y: auto;
   outline: none;
@@ -329,19 +355,6 @@ body {
 
 .toolbar .problems-items .problem button:hover {
   background: #eaeef2;
-}
-
-.toolbar .version-toggle.open {
-  background: #ddf4ff;
-  border-color: #54aeff;
-}
-
-.version-latest {
-  padding: 0 6px;
-  font-size: 12px;
-  color: #656d76;
-  background: #f6f8fa;
-  border-radius: 10px;
 }
 
 .version-panel {
@@ -502,6 +515,7 @@ body {
   right: 0;
   z-index: 20;
   width: 320px;
+  max-width: calc(100vw - 32px);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -546,6 +560,110 @@ body {
   color: #fff;
   background: #1f883d;
   border-color: #1a7f37;
+}
+
+/* A toolbar's menu, under its button; see Toolbar.tsx. */
+.toolbar-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  z-index: 20;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.15);
+}
+
+.toolbar-menu-list.right {
+  right: 0;
+}
+
+.toolbar-menu-list.left {
+  left: 0;
+}
+
+.toolbar-menu-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar-menu-section + .toolbar-menu-section {
+  padding-top: 6px;
+  border-top: 1px solid #eaeef2;
+}
+
+.toolbar-menu-section h3 {
+  margin: 2px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #656d76;
+}
+
+.toolbar .toolbar-menu-list button {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  text-align: left;
+  white-space: normal;
+  border: none;
+  border-radius: 6px;
+  background: none;
+}
+
+.toolbar .toolbar-menu-list button:hover:not(:disabled),
+.toolbar .toolbar-menu-list button:focus-visible {
+  background: #f3f4f6;
+  outline: none;
+}
+
+.toolbar .toolbar-menu-list button.current {
+  background: #ddf4ff;
+}
+
+.toolbar .toolbar-menu-list button:disabled .toolbar-menu-title,
+.toolbar .toolbar-menu-list button:disabled .toolbar-menu-icon {
+  opacity: 0.45;
+}
+
+.toolbar-menu-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  width: 16px;
+  padding-top: 2px;
+}
+
+.toolbar-menu-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toolbar-menu-title {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.toolbar-menu-hint {
+  font-size: 12px;
+  color: #656d76;
+}
+
+.toolbar-menu-list .keys {
+  flex-shrink: 0;
+  padding-top: 1px;
 }
 
 /* What changed between two boards; see Diff.tsx. */
@@ -3260,10 +3378,8 @@ body {
 }
 
 /* The MCP servers agents can use, in the settings, and picked per process. */
-.toolbar .mcp-toggle.open,
-.toolbar .opl-toggle.open,
-.toolbar .code-toggle.open,
-.toolbar .settings-toggle.open {
+/* The views menu while it is open, or one of its views shows. */
+.toolbar .view-menu .toolbar-menu-button.open {
   background: #ddf4ff;
   border-color: #54aeff;
 }
@@ -9124,4 +9240,57 @@ select.flow-owner:disabled {
 /* A subflow process whose procedure is in the trash. */
 .process-node .node-trashed {
   color: #cf222e;
+}
+
+/* At these widths the toolbar keeps to one row: Toolbar.tsx moves its
+   buttons into the views menu, and the labels give way to icons. */
+@media (max-width: 860px) {
+  .board .toolbar {
+    gap: 8px;
+    padding: 8px 16px;
+  }
+}
+
+@media (max-width: 560px) {
+  .board .toolbar h1 .home {
+    font-size: 0;
+  }
+
+  .board .toolbar h1 {
+    gap: 4px;
+  }
+
+  .board .toolbar h1 .crumb-separator {
+    display: none;
+  }
+
+  .board .toolbar .flow-name-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* What opens under a button spans the window under the toolbar. */
+  .board .toolbar {
+    position: relative;
+  }
+
+  .board .toolbar .note-anchor {
+    position: static;
+  }
+
+  .board .toolbar .note-dialog,
+  .board .toolbar .toolbar-menu-list {
+    top: calc(100% + 4px);
+    left: 16px;
+    right: 16px;
+    width: auto;
+  }
+
+  .toolbar .view-menu .toolbar-menu-label {
+    display: none;
+  }
+
+  .toolbar .play {
+    padding: 0 10px;
+  }
 }

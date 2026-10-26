@@ -125,6 +125,28 @@ export const ChevronIcon = () => (
   </Icon>
 )
 
+// What a menu opens from.
+export const ChevronDownIcon = () => (
+  <Icon size={12}>
+    <path d="M3.5 6L8 10.5 12.5 6" />
+  </Icon>
+)
+
+// A window with a column at its side: the board's views, shown beside it.
+export const PanelIcon = () => (
+  <Icon>
+    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+    <path d="M10 2.5v11M11.75 5.5h1M11.75 7.5h1" />
+  </Icon>
+)
+
+// Lines of text: the flow said in sentences, its OPL.
+export const SentencesIcon = () => (
+  <Icon>
+    <path d="M2.5 4h11M2.5 7h11M2.5 10h11M2.5 13h6.5" />
+  </Icon>
+)
+
 export const CheckIcon = () => (
   <Icon size={14}>
     <path d="M3 8.5l3.2 3L13 4.5" />

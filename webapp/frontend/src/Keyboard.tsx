@@ -7,10 +7,11 @@ export const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.te
 // Whether a key pressed now goes to something typed or to a dialog rather
 // than to the page's shortcuts: a field has the focus, or a dialog is open
 // over the page, such as a review, or the focus is in a box that is one,
-// such as the note to save the board with.
+// such as the note to save the board with, or in a menu, which has keys of
+// its own.
 export function typing(target: EventTarget | null): boolean {
   const el = target instanceof Element ? target : null
-  if (el?.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], dialog, [role="dialog"]')) return true
+  if (el?.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], dialog, [role="dialog"], [role="menu"]')) return true
   return document.querySelector('dialog:modal') !== null
 }
 

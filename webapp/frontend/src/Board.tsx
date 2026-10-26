@@ -26,6 +26,7 @@ import ContextMenu, { type MenuItem } from './ContextMenu'
 import { useConfirm } from './Confirm'
 import { useUndoNotice } from './UndoNotice'
 import {
+  ChevronDownIcon,
   CodeIcon,
   CopyIcon,
   FlowBuilderIcon,
@@ -34,6 +35,7 @@ import {
   HistoryIcon,
   PublishIcon,
   LayoutIcon,
+  PanelIcon,
   PasteIcon,
   PencilIcon,
   PlayIcon,
@@ -41,6 +43,8 @@ import {
   TableIcon,
   PlusIcon,
   SaveIcon,
+  ScriptIcon,
+  SentencesIcon,
   TrashIcon,
   ZoomInIcon,
 } from './icons'
@@ -91,7 +95,8 @@ import Assistant from './Assistant'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { SharedRecords } from './Records'
 import { NoteDialog, VersionPanel } from './Versions'
-import { ProblemCount } from './Problems'
+import { ProblemCount, type Refusal } from './Problems'
+import { COMPACT_TOOLBAR, NARROW_TOOLBAR, RunButton, ToolbarMenu, useMedia, type ToolbarItem } from './Toolbar'
 import { BlocksHint, BoardTips, EmptyBoardGuide, useHints, type BoardTip } from './Hints'
 import Presence from './Presence'
 import { DiffPanel, diffCount, highlightsOf, noHighlights, type Highlights } from './Diff'
@@ -1011,6 +1016,18 @@ export default function Board({
     setCodeOpen(open)
   }
 
+  const openVersions = (open: boolean) => {
+    if (open) {
+      setPanelId(null)
+      setMCPOpen(false)
+      setSettingsOpen(false)
+      setOPLOpen(false)
+      setCodeOpen(false)
+      refreshVersions()
+    }
+    setVersionsOpen(open)
+  }
+
   // Does something to the flow's versions, which are read again after.
   const versionChange = async (change: () => Promise<unknown>) => {
     setVersioning(true)
@@ -1082,10 +1099,11 @@ export default function Board({
   }, [compare])
   // What is wrong with the board as it is, as the server works it out,
   // read again as each change is kept; see Problems.tsx. Refusing says the
-  // list opened as Run was refused for its errors.
+  // list opened as Run was refused for the board's errors or the version
+  // published's.
   const [problems, setProblems] = useState<FlowProblems | null>(null)
   const [problemsOpen, setProblemsOpen] = useState(false)
-  const [refusing, setRefusing] = useState(false)
+  const [refusing, setRefusing] = useState<Refusal>(false)
   const refreshProblems = useCallback(
     () =>
       getProblems(flowId).then(
@@ -2414,17 +2432,20 @@ export default function Board({
   }
 
   // Run refuses a board with errors, as the server does: their list opens
-  // instead, worked out again once what is being saved is.
-  const onRunClicked = async () => {
+  // instead, worked out again once what is being saved is. Running the
+  // version published is refused for its own errors, or with none
+  // published for the board's.
+  const onRunClicked = async (published = false) => {
     await changesSettled()
     const found = (await refreshProblems()) ?? problems
-    if (found?.problems.some((p) => p.level === 'error')) {
+    const ofPublished = published && found?.published != null
+    if (ofPublished ? found.published!.errors.length > 0 : found?.problems.some((p) => p.level === 'error')) {
       setProblemsOpen(true)
-      setRefusing(true)
+      setRefusing(ofPublished ? 'published' : 'board')
       return
     }
     setProblemsOpen(false)
-    onPlay()
+    onPlay(published)
   }
 
   // Picking a problem shows the board as it is, on the board its process or
@@ -3086,7 +3107,7 @@ export default function Board({
   useShortcuts({
     find: () => openFind(),
     save: (e) => void (canSave && !e.repeat && setNoting('save')),
-    run: (e) => void (runnable && !e.repeat && onPlay()),
+    run: (e) => void (runnable && !e.repeat && onRunClicked()),
     undo: () => void stepHistory(true),
     redo: () => void stepHistory(false),
     // Text selected is copied as ever.
@@ -3127,17 +3148,21 @@ export default function Board({
       })
       add({
         id: 'board:run',
-        title: 'Run the flow',
+        title: 'Run the board as it is',
+        hint: 'Saved as a version first if it changed',
         shortcut: 'run',
-        disabled: runnable ? undefined : viewOnly ? cannotChange : starting ? 'Starting…' : 'Connect the start node to a process first',
-        run: () => void onPlay(),
+        words: 'start play flow',
+        disabled: runnable ? undefined : viewOnly ? cannotChange : 'Starting…',
+        run: () => void onRunClicked(),
       })
       if (versions.published !== null && !viewOnly) {
         add({
           id: 'board:run-published',
           title: `Run the published version, ${versions.published}`,
+          hint: 'As schedules, the API and runs on records run it',
+          words: 'start play',
           disabled: starting ? 'Starting…' : undefined,
-          run: () => void onPlay(true),
+          run: () => void onRunClicked(true),
         })
       }
     }
@@ -3192,15 +3217,7 @@ export default function Board({
       title: 'Versions',
       hint: 'Every saved version, to go back to, publish or compare',
       words: 'history restore rollback',
-      run: () => {
-        setPanelId(null)
-        setMCPOpen(false)
-        setSettingsOpen(false)
-        setOPLOpen(false)
-        setCodeOpen(false)
-        refreshVersions()
-        setVersionsOpen(true)
-      },
+      run: () => openVersions(true),
     })
     if (versions.published !== null) {
       view({
@@ -3406,6 +3423,192 @@ export default function Board({
     [edges, highlights],
   )
 
+  // The toolbar keeps saving, publishing and running in reach, and the
+  // board's views in one menu; as the window narrows, arranging the board
+  // and then saving and publishing go into that menu too (Toolbar.tsx).
+  const compactToolbar = useMedia(COMPACT_TOOLBAR)
+  const narrowToolbar = useMedia(NARROW_TOOLBAR)
+  const latestVersion = versions.versions[0]?.id
+  const versionShown =
+    versions.current === null
+      ? 'Not saved yet'
+      : `On version ${versions.current}${latestVersion !== undefined && latestVersion !== versions.current ? `, the latest is ${latestVersion}` : ''}`
+  const publishTitle =
+    versions.published === null
+      ? 'Not published: schedules, the API and runs on records run the board as it is. Publish to have them run it as it is now while you go on editing.'
+      : versions.draft
+        ? `Version ${versions.published} is published, and the board has changed since. Publish to have schedules, the API and runs on records run the board as it is now.`
+        : `Version ${versions.published} is published, the board as it is: schedules, the API and runs on records run it.`
+  const openView = versionsOpen ? 'Versions' : codeOpen ? 'Code' : oplOpen ? 'Sentences' : settingsOpen ? 'Settings' : mcpOpen ? 'MCP servers' : null
+  const noteDialog =
+    noting === 'save' ? (
+      <NoteDialog
+        title="Save a version"
+        hint="Keeps the board as it is now as a version to come back to."
+        action="Save"
+        onSubmit={(note) => {
+          setNoting(null)
+          onSave(note)
+        }}
+        onClose={() => setNoting(null)}
+      />
+    ) : noting === 'publish' ? (
+      <NoteDialog
+        title="Publish the board"
+        hint="Schedules, the API and runs on records run the board as it is now, until you publish again; the board stays yours to edit, and Run runs it as it is."
+        action="Publish"
+        onSubmit={(note) => {
+          setNoting(null)
+          onPublish(note)
+        }}
+        onClose={() => setNoting(null)}
+      />
+    ) : null
+  const viewItems: ToolbarItem[] = [
+    {
+      id: 'versions',
+      label: 'Versions',
+      icon: <HistoryIcon />,
+      hint: `${versionShown}. Every saved version, to go back to, publish or compare`,
+      current: versionsOpen,
+      onSelect: () => openVersions(!versionsOpen),
+    },
+    {
+      id: 'code',
+      label: 'Code',
+      icon: <CodeIcon />,
+      hint: 'The flow as its setup file, which Export writes and Import reads',
+      current: codeOpen,
+      onSelect: () => openCode(!codeOpen),
+    },
+    ...(structBoard
+      ? []
+      : [
+          {
+            id: 'opl',
+            label: 'Sentences (OPL)',
+            icon: <SentencesIcon />,
+            hint: "The flow said in sentences, in OPM's Object-Process Language",
+            current: oplOpen,
+            onSelect: () => openOPL(!oplOpen),
+          },
+          {
+            id: 'settings',
+            label: 'Flow settings',
+            icon: <GearIcon />,
+            hint: 'The repositories it works on, its branches and owner, and how other systems start it',
+            current: settingsOpen,
+            onSelect: () => openFlowSettings(!settingsOpen),
+          },
+          {
+            id: 'mcp',
+            label: 'MCP servers',
+            icon: <PlugIcon />,
+            hint: 'The MCP servers agents can use',
+            current: mcpOpen,
+            onSelect: () => openMCPSettings(!mcpOpen),
+          },
+          {
+            id: 'data',
+            label: 'Data',
+            icon: <TableIcon />,
+            hint: 'What each run held of each object, a run per row, on a page of its own',
+            onSelect: () => (window.location.hash = `#/flows/${flowId}/data`),
+          },
+        ]),
+    ...(sharedRoot
+      ? [
+          {
+            id: 'records',
+            label: 'Records',
+            icon: <TableIcon />,
+            hint: 'The records every flow using the struct wrote, a record per row, on a page of its own',
+            onSelect: () => (window.location.hash = `#/flows/${flowId}/records`),
+          },
+        ]
+      : []),
+  ]
+  const versionItems: ToolbarItem[] = [
+    {
+      id: 'save',
+      label: 'Save a version…',
+      icon: <SaveIcon />,
+      hint: 'Keep the board as it is now, with a note saying why if you like',
+      shortcut: 'save',
+      disabled: readOnly ? cannotChange : versioning ? 'Saving…' : undefined,
+      onSelect: () => setNoting('save'),
+    },
+    ...(structBoard
+      ? []
+      : [
+          {
+            id: 'publish',
+            label: versions.published !== null && versions.draft ? 'Publish the changes…' : 'Publish…',
+            icon: <PublishIcon />,
+            hint: publishTitle,
+            disabled: readOnly ? cannotChange : versioning ? 'Saving…' : undefined,
+            onSelect: () => setNoting('publish'),
+          },
+        ]),
+  ]
+  const arrangeItems: ToolbarItem[] = [
+    ...(structBoard
+      ? []
+      : [
+          {
+            id: 'group',
+            label: 'Group into flow',
+            icon: <FlowIcon />,
+            hint: 'Move the selected processes into a new flow process',
+            disabled: readOnly
+              ? cannotChange
+              : objectBoard
+                ? 'Not on the board of an object'
+                : selectedProcesses.length === 0
+                  ? 'Select the processes first; shift-click or drag to select several'
+                  : undefined,
+            onSelect: () => void onWrap(),
+          },
+        ]),
+    {
+      id: 'tidy',
+      label: 'Tidy up',
+      icon: <LayoutIcon />,
+      hint: 'Lay the board out from the top',
+      disabled: readOnly ? cannotChange : undefined,
+      onSelect: onTidy,
+    },
+  ]
+  const cannotRun = viewOnly ? 'Only those who may change the flow run it' : starting ? 'Starting…' : undefined
+  const runItems: ToolbarItem[] = [
+    {
+      id: 'run',
+      label: 'Run the board as it is',
+      icon: <PlayIcon />,
+      hint: 'Saved as a version first if it changed',
+      shortcut: 'run',
+      disabled: cannotRun,
+      onSelect: () => void onRunClicked(),
+    },
+    {
+      id: 'run-published',
+      label: versions.published === null ? 'Run the published version' : `Run the published version, ${versions.published}`,
+      icon: <PublishIcon />,
+      hint: 'As schedules, the API and runs on records run it',
+      disabled: cannotRun ?? (versions.published === null ? 'Nothing is published yet' : undefined),
+      onSelect: () => void onRunClicked(true),
+    },
+    {
+      id: 'try',
+      label: triable ? `Try ${triable.data.name}…` : 'Try the selected process…',
+      icon: <ScriptIcon />,
+      hint: 'Run only that process, on inputs you give it',
+      disabled:
+        cannotRun ?? (readOnly ? cannotChange : triable ? undefined : 'Select an agent, script or connector process, or open its panel'),
+      onSelect: () => triable && setTrying(Number(triable.id)),
+    },
+  ]
+
   return (
     <div className="board">
       <header className="toolbar">
@@ -3423,162 +3626,91 @@ export default function Board({
             onError={report}
           />
         </h1>
-        {!structBoard && (
-          <button
-            onClick={onWrap}
-            disabled={readOnly || objectBoard || selectedProcesses.length === 0}
-            title="Move the selected processes into a new flow process; shift-click or drag to select several"
-          >
-            <FlowIcon /> Group into flow
-          </button>
+        {!compactToolbar && (
+          <div className="toolbar-arrange">
+            {!structBoard && (
+              <button
+                onClick={onWrap}
+                disabled={readOnly || objectBoard || selectedProcesses.length === 0}
+                title="Move the selected processes into a new flow process; shift-click or drag to select several"
+              >
+                <FlowIcon /> Group into flow
+              </button>
+            )}
+            <button onClick={onTidy} disabled={readOnly} title="Lay the board out from the top">
+              <LayoutIcon /> Tidy up
+            </button>
+          </div>
         )}
-        <button onClick={onTidy} disabled={readOnly} title="Lay the board out from the top">
-          <LayoutIcon /> Tidy up
-        </button>
         <Presence people={people} />
         <div className="versioning">
-          <span className="note-anchor">
-            <button
-              onClick={() => setNoting(noting === 'save' ? null : 'save')}
-              disabled={versioning || readOnly}
-              aria-expanded={noting === 'save'}
-              title={`Save the board as a new version, with a note saying why if you like (${shortcutText('save', MAC)})`}
-            >
-              <SaveIcon /> Save
-            </button>
-            {noting === 'save' && (
-              <NoteDialog
-                title="Save a version"
-                hint="Keeps the board as it is now as a version to come back to."
-                action="Save"
-                onSubmit={(note) => {
-                  setNoting(null)
-                  onSave(note)
-                }}
-                onClose={() => setNoting(null)}
-              />
-            )}
-          </span>
-          {!structBoard && (
+          <ToolbarMenu
+            className="view-menu"
+            label={
+              <>
+                <PanelIcon />
+                <span className="toolbar-menu-label">{openView ?? 'Views'}</span>
+                <ChevronDownIcon />
+              </>
+            }
+            title={`The board's views: its versions, code, sentences, settings, MCP servers and data${narrowToolbar ? ', and saving and publishing it' : compactToolbar ? ', and arranging it' : ''}`}
+            ariaLabel="Views"
+            active={openView !== null}
+            sections={[
+              { title: 'Views', items: viewItems },
+              { title: 'Save and publish', items: narrowToolbar ? versionItems : [] },
+              { title: 'Arrange', items: compactToolbar ? arrangeItems : [] },
+            ]}
+          >
+            {narrowToolbar && noteDialog}
+          </ToolbarMenu>
+          {!narrowToolbar && (
+            <span className="note-anchor">
+              <button
+                onClick={() => setNoting(noting === 'save' ? null : 'save')}
+                disabled={versioning || readOnly}
+                aria-expanded={noting === 'save'}
+                title={`Save the board as a new version, with a note saying why if you like (${shortcutText('save', MAC)})`}
+              >
+                <SaveIcon /> Save
+              </button>
+              {noting === 'save' && noteDialog}
+            </span>
+          )}
+          {!narrowToolbar && !structBoard && (
             <span className="note-anchor">
               <button
                 className={`publish-toggle${versions.published === null ? '' : versions.draft ? ' draft' : ' published'}`}
                 onClick={() => setNoting(noting === 'publish' ? null : 'publish')}
                 disabled={versioning || readOnly}
                 aria-expanded={noting === 'publish'}
-                title={
-                  versions.published === null
-                    ? 'Not published: schedules, the API and runs on records run the board as it is. Publish to have them run it as it is now while you go on editing.'
-                    : versions.draft
-                      ? `Version ${versions.published} is published, and the board has changed since. Publish to have schedules, the API and runs on records run the board as it is now.`
-                      : `Version ${versions.published} is published, the board as it is: schedules, the API and runs on records run it.`
-                }
+                title={publishTitle}
               >
                 <PublishIcon />
                 {versions.published === null ? 'Publish' : versions.draft ? 'Publish changes' : 'Published'}
               </button>
-              {noting === 'publish' && (
-                <NoteDialog
-                  title="Publish the board"
-                  hint="Schedules, the API and runs on records run the board as it is now, until you publish again; the board stays yours to edit, and Run runs it as it is."
-                  action="Publish"
-                  onSubmit={(note) => {
-                    setNoting(null)
-                    onPublish(note)
-                  }}
-                  onClose={() => setNoting(null)}
-                />
-              )}
+              {noting === 'publish' && noteDialog}
             </span>
-          )}
-          <button
-            className={`version-toggle${versionsOpen ? ' open' : ''}`}
-            aria-expanded={versionsOpen}
-            onClick={() => {
-              if (!versionsOpen) {
-                setPanelId(null)
-                setMCPOpen(false)
-                setSettingsOpen(false)
-                setOPLOpen(false)
-                setCodeOpen(false)
-                refreshVersions()
-              }
-              setVersionsOpen(!versionsOpen)
-            }}
-            title="Show every saved version"
-          >
-            <HistoryIcon />
-            {versions.current === null ? 'Not saved' : `Version ${versions.current}`}
-            {versions.versions.length > 0 && versions.current !== versions.versions[0].id && (
-              <span className="version-latest">latest {versions.versions[0].id}</span>
-            )}
-          </button>
-          {sharedRoot && (
-            <button onClick={() => (window.location.hash = `#/flows/${flowId}/records`)} title="The records every flow using the struct wrote, a record per row">
-              <TableIcon /> Records
-            </button>
-          )}
-          <button
-            className={`code-toggle${codeOpen ? ' open' : ''}`}
-            aria-expanded={codeOpen}
-            onClick={() => openCode(!codeOpen)}
-            title="The flow as code, the setup file Export writes and Import reads"
-          >
-            <CodeIcon /> Code
-          </button>
-          {!structBoard && (
-            <>
-              <button
-                className={`mcp-toggle${mcpOpen ? ' open' : ''}`}
-                aria-expanded={mcpOpen}
-                onClick={() => openMCPSettings(!mcpOpen)}
-                title="The MCP servers agents can use"
-              >
-                <PlugIcon /> MCP servers
-              </button>
-              <button onClick={() => (window.location.hash = `#/flows/${flowId}/data`)} title="What each run held of each object, a run per row">
-                <TableIcon /> Data
-              </button>
-              <button
-                className={`opl-toggle${oplOpen ? ' open' : ''}`}
-                aria-expanded={oplOpen}
-                onClick={() => openOPL(!oplOpen)}
-                title="The flow in sentences, in OPM's Object-Process Language"
-              >
-                OPL
-              </button>
-              <button
-                className={`settings-toggle${settingsOpen ? ' open' : ''}`}
-                aria-expanded={settingsOpen}
-                onClick={() => openFlowSettings(!settingsOpen)}
-                title="The repositories the flow works on, its branches, and how other systems start it"
-              >
-                <GearIcon /> Settings
-              </button>
-            </>
           )}
         </div>
         {!structBoard && (
           <ProblemCount found={problems} open={problemsOpen} onOpen={openProblems} onPick={pickProblem} refusing={refusing} />
         )}
         {!structBoard && (
-          <button
-            className="play"
-            onClick={() => void onRunClicked()}
+          <RunButton
             disabled={!canRun}
-            aria-label="Run flow"
             title={
               starting
                 ? 'Starting…'
                 : viewOnly
                   ? 'Only those who may change the flow run it'
                   : runErrors > 0
-                    ? `Run flow: it has ${runErrors === 1 ? 'an error' : `${runErrors} errors`} to fix first, which clicking lists`
-                    : `Run flow (${shortcutText('run', MAC)})`
+                    ? `Run the board as it is: it has ${runErrors === 1 ? 'an error' : `${runErrors} errors`} to fix first, which clicking lists`
+                    : `Run the board as it is (${shortcutText('run', MAC)})`
             }
-          >
-            <PlayIcon />
-          </button>
+            onRun={() => void onRunClicked()}
+            sections={[{ items: runItems }]}
+          />
         )}
       </header>
       {error && (

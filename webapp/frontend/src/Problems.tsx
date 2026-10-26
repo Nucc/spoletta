@@ -8,6 +8,11 @@ import { AlertIcon, CheckIcon } from './icons'
 // what Run refuses the board for; warnings what a run may well get past.
 // The version published, which schedules and the API run, says its errors
 // too. It stands alone, so the toolbar can put it where it likes.
+
+// Why the list opened, if Run was refused: for the board's errors, or for
+// the version published's when it was asked to run that.
+export type Refusal = false | 'board' | 'published'
+
 export function ProblemCount({
   found,
   open,
@@ -20,8 +25,7 @@ export function ProblemCount({
   open: boolean
   onOpen: (open: boolean) => void
   onPick: (p: Problem) => void
-  // Whether the list opened as Run was refused for the errors.
-  refusing: boolean
+  refusing: Refusal
 }) {
   const list = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -68,11 +72,11 @@ export function ProblemCount({
           tabIndex={-1}
           onKeyDown={(e) => e.key === 'Escape' && onOpen(false)}
         >
-          <h3>{refusing ? 'Run can’t start yet' : 'Problems'}</h3>
+          <h3>{refusing === 'published' ? 'The published version can’t run' : refusing ? 'Run can’t start yet' : 'Problems'}</h3>
           {none && <p>Nothing is wrong with the board that can be seen before it runs.</p>}
           {errors.length > 0 && (
             <>
-              <p>{refusing ? 'Fix these first; Run refuses the board until then.' : 'Run refuses the board until these are fixed.'}</p>
+              <p>{refusing === 'board' ? 'Fix these first; Run refuses the board until then.' : 'Run refuses the board until these are fixed.'}</p>
               <ProblemItems items={errors} onPick={onPick} />
             </>
           )}
@@ -85,8 +89,9 @@ export function ProblemCount({
           {published && (
             <>
               <p>
-                Version {published.version}, the one published, has {countOf(published.errors.length, 'error')} too. Schedules, the API
-                and runs on records run it; publish the board once it is right.
+                {refusing === 'published'
+                  ? `Version ${published.version}, the one published, has ${countOf(published.errors.length, 'error')}, which it can’t run past. Schedules, the API and runs on records run it too; publish the board once it is right.`
+                  : `Version ${published.version}, the one published, has ${countOf(published.errors.length, 'error')} too. Schedules, the API and runs on records run it; publish the board once it is right.`}
               </p>
               <ul className="problems-items published">
                 {published.errors.map((p, i) => (

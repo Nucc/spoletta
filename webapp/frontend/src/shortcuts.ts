@@ -73,7 +73,7 @@ export const SHORTCUTS: Shortcut[] = [
     combos: [{ key: 'f', mod: true }],
   },
   { id: 'save', scope: 'board', label: 'Save the board as a version', combos: [{ key: 's', mod: true }] },
-  { id: 'run', scope: 'board', label: 'Run the flow', combos: [{ key: 'Enter', mod: true }] },
+  { id: 'run', scope: 'board', label: 'Run the board as it is', combos: [{ key: 'Enter', mod: true }] },
   { id: 'undo', scope: 'board', label: 'Undo the latest change to the board', combos: [{ key: 'z', mod: true }] },
   { id: 'redo', scope: 'board', label: 'Redo the change undone', combos: [{ key: 'z', mod: true, shift: true }] },
   {

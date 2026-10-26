@@ -413,6 +413,64 @@ export function createFlow(
   })
 }
 
+// Something a template needs of the app: a repository its processes work
+// on, which the flow made of it lacks until someone adds it in its
+// settings; a connector, met once installed; or a role, met once someone
+// holds it, or always without sign-in.
+export type TemplateNeed = { kind: 'repository' | 'connector' | 'role'; name: string; title?: string; met: boolean }
+
+// A ready flow to start from, kept in the webapp; see templates.go.
+export type FlowTemplate = {
+  id: string
+  title: string
+  description: string
+  // The name its flow takes, or with a number after it if a flow has it.
+  flow: string
+  // The processes of its top board.
+  steps: { name: string; kind: ProcessKind }[]
+  needs: TemplateNeed[]
+}
+
+export function listTemplates(): Promise<FlowTemplate[]> {
+  return request('/api/templates')
+}
+
+// Makes a new flow of the template, named as it is unless name says, and
+// belonging to owner as a flow made by hand does.
+export function createFromTemplate(
+  id: string,
+  name?: string,
+  owner?: { kind: 'global' } | { kind: 'team' | 'user'; id: number },
+): Promise<Flow> {
+  return request(`/api/templates/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ name, owner }) })
+}
+
+// What is wrong with a board, worked out on the server from the rules the
+// engine keeps to; see problems.go. An error is what a run can't get past,
+// so Run refuses the board; a warning what a run may well get past, or what
+// is set up outside the board. Each is about a process or an object, on the
+// board of the flow process given, or on the top board, or about the board
+// itself.
+export type Problem = {
+  level: 'error' | 'warning'
+  rule: string
+  message: string
+  process?: number
+  object?: number
+  board?: number
+}
+
+export type FlowProblems = {
+  problems: Problem[]
+  // The version the flow published and its errors, as schedules, the API
+  // and runs on records run it; null when none is published.
+  published: { version: number; errors: Problem[] } | null
+}
+
+export function getProblems(flow: number): Promise<FlowProblems> {
+  return request(`/api/flows/${flow}/problems`)
+}
+
 // Puts a copy of a struct's object on a board of a flow, which follows it.
 export function copyStruct(
   struct: number,
@@ -1550,7 +1608,7 @@ export type Version = {
   // when a person saved it, or what saved it on its own first. The note is
   // the person's, saying why.
   savedBy: string
-  reason: '' | 'run' | 'assistant' | 'import'
+  reason: '' | 'run' | 'assistant' | 'import' | 'template'
   note: string
 }
 

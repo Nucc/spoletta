@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react'
 import {
   createFlow,
+  createFromTemplate,
   deleteFlow,
   exportSetup,
   importSetup,
@@ -10,6 +11,7 @@ import {
   setFlowOwner,
   setFlowTags,
   type Flow,
+  type FlowTemplate,
   type Me,
   type Team,
 } from './api'
@@ -30,6 +32,7 @@ import {
 import { formatTime, RUN_LABELS } from './Runs'
 import { Account, configures, useMe } from './Account'
 import { OwnerPicker, ownerLabel } from './Owner'
+import { TemplateDialog, TemplateGallery } from './Templates'
 
 // The main page: the flows that run, each a job of its own, such as fixing
 // exceptions or bumping dependencies, and apart from them the procedures,
@@ -40,7 +43,8 @@ import { OwnerPicker, ownerLabel } from './Owner'
 // or tags hold what is typed in the search, and to a tag. One's favourites,
 // starred, come first in each section, and each flow says how its runs went
 // this week. What is searched and the tag picked are in the address,
-// #/?q=<words>&tag=<tag>.
+// #/?q=<words>&tag=<tag>. A flow can start from a template, offered in
+// place while there is no flow at all.
 export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const me = useMe()
   const [all, setFlows] = useState<Flow[] | null>(null)
@@ -50,6 +54,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const [teams, setTeams] = useState<Team[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [templating, setTemplating] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
 
   const narrowed = !!(whose || query.trim() || tag)
@@ -138,6 +143,12 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
 
   const onCreate = async (name: string, kind: FlowKind) => {
     const f = await createFlow(name, kind, newOwner())
+    onOpen(f.id)
+  }
+
+  // A new flow made of a template, belonging to whoever new ones do.
+  const onTemplate = async (t: FlowTemplate) => {
+    const f = await createFromTemplate(t.id, undefined, newOwner())
     onOpen(f.id)
   }
 
@@ -234,6 +245,18 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         </div>
       )}
       <main className="flows">
+        {all && all.length === 0 && (
+          <section className="flow-section templates-start" aria-label="Start from a template">
+            <h2>Start from a template</h2>
+            <p className="flows-note">
+              Each is a ready flow, made a flow of your own to change as you like; or name a new one below to start from an empty board.
+            </p>
+            <TemplateGallery admin={configures(me)} onUse={onTemplate} onError={report} />
+          </section>
+        )}
+        {templating && (
+          <TemplateDialog admin={configures(me)} onUse={onTemplate} onClose={() => setTemplating(false)} onError={report} />
+        )}
         {all && all.length > 0 && (
           <div className="flows-filters">
             <label className="flows-search">
@@ -295,6 +318,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           button="New flow"
           flows={flows?.filter((f) => kindOf(f) === 'flow') ?? null}
           onCreate={(name) => onCreate(name, 'flow')}
+          onTemplate={() => setTemplating(true)}
           me={me}
           teams={teams}
           onOwner={onOwner}
@@ -556,6 +580,7 @@ function FlowSection({
   onStar,
   onTags,
   onTag,
+  onTemplate,
 }: {
   kind?: FlowKind
   title: string
@@ -576,6 +601,8 @@ function FlowSection({
   onStar: (f: Flow) => void
   onTags: (f: Flow, tags: string[]) => Promise<void>
   onTag: (tag: string) => void
+  // Opens the templates to start a new one from, if it can.
+  onTemplate?: () => void
 }) {
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -610,6 +637,11 @@ function FlowSection({
         <button type="submit" disabled={busy || !name.trim()}>
           <PlusIcon /> {button}
         </button>
+        {onTemplate && (
+          <button type="button" className="flow-new-template" onClick={onTemplate} title="Start from a ready flow, made a flow of your own">
+            New from template
+          </button>
+        )}
       </form>
       {flows === null ? (
         <p className="flows-note">Loading…</p>

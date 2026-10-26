@@ -4,12 +4,14 @@ import type { Version, Versions } from './api'
 const formatTime = (s: string) =>
   new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
 
-// What saved a version on its own, as the list says it.
+// What saved a version on its own, as the list says it, or made the flow
+// it is the first of.
 const REASONS: Record<Version['reason'], string> = {
   '': '',
   run: 'Saved before a run',
   assistant: 'Saved before the assistant changed the flow',
   import: 'Saved before a setup file was imported',
+  template: 'Made from a template',
 }
 
 // Every saved version of the board, newest first, with who saved it, why,

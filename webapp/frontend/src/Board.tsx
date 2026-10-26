@@ -87,6 +87,7 @@ import Assistant from './Assistant'
 import { Sidebar, SidebarGroup } from './Sidebar'
 import { SharedRecords } from './Records'
 import { NoteDialog, VersionPanel } from './Versions'
+import { ProblemCount } from './Problems'
 import { DiffPanel, diffCount, highlightsOf, noHighlights, type Highlights } from './Diff'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
@@ -118,6 +119,7 @@ import {
   getEnd,
   listFlows,
   getStart,
+  getProblems,
   diffVersions,
   getVersionBoard,
   listConnections,
@@ -169,6 +171,8 @@ import {
   type FlowObject,
   defaultBranchPrefix,
   type Flow,
+  type FlowProblems,
+  type Problem,
   type FlowRun,
   type RunFilter,
   type Versions,
@@ -491,7 +495,7 @@ export default function Board({
   useEffect(() => onCopiedElsewhere(() => setCopied(readCopied())), [])
   // Where the pointer is over the canvas, on the screen, for pasting there.
   const pointer = useRef<XYPosition | null>(null)
-  const { getNode, getNodes, screenToFlowPosition, fitView, getViewport, setCenter, getZoom, deleteElements } = useReactFlow<FlowNode>()
+  const { getNode, getNodes, getInternalNode, screenToFlowPosition, fitView, getViewport, setCenter, getZoom, deleteElements } = useReactFlow<FlowNode>()
 
   // Coming back to its tab, the board opens where it was looked at, rather
   // than moving to show all of it.
@@ -999,11 +1003,38 @@ export default function Board({
       if (!/^\/api\/versions(\?|\/\d+\/publish|\/published)/.test(url)) setCompare(null)
     })
   }, [compare])
+  // What is wrong with the board as it is, as the server works it out,
+  // read again as each change is kept; see Problems.tsx. Refusing says the
+  // list opened as Run was refused for its errors.
+  const [problems, setProblems] = useState<FlowProblems | null>(null)
+  const [problemsOpen, setProblemsOpen] = useState(false)
+  const [refusing, setRefusing] = useState(false)
+  const refreshProblems = useCallback(
+    () =>
+      getProblems(flowId).then(
+        (found) => {
+          setProblems(found)
+          return found
+        },
+        () => null,
+      ),
+    [flowId],
+  )
+  useEffect(() => {
+    if (!structBoard) refreshProblems()
+  }, [structBoard, refreshProblems])
+  const openProblems = (open: boolean) => {
+    setRefusing(false)
+    setProblemsOpen(open)
+    if (open) refreshProblems()
+  }
+
   // Once a change is kept: whether the board differs from what is
   // published is read again, and a comparison with the board worked out
   // again. Undoing or redoing ends showing what the assistant changed.
   const boardChanged = useRef((_undone: boolean) => {})
   boardChanged.current = (undone) => {
+    if (!structBoard) refreshProblems()
     if (versions.published !== null) refreshVersions()
     if (compare?.assistant && undone) setCompare(null)
     else if (compare?.to === null) setDiffSeq((n) => n + 1)
@@ -2107,9 +2138,10 @@ export default function Board({
     [readOnly, runShown, updateObjectData],
   )
 
-  const startTarget = edges.find((e) => e.id === START_EDGE_ID)?.target
-  // A run always runs the whole flow, from the top board.
-  const canRun = (reviewing || boardId !== null || startTarget !== undefined) && !starting && !viewOnly
+  // A run always runs the whole flow, from the top board; one with errors
+  // isn't run, and says why.
+  const canRun = !starting && !viewOnly
+  const runErrors = problems?.problems.filter((p) => p.level === 'error').length ?? 0
 
   // Starts a run of the board, which the server executes, and opens it. The
   // board shows the run on its version, which is the board as it is, or
@@ -2128,6 +2160,49 @@ export default function Board({
       setStarting(false)
     }
   }
+
+  // Run refuses a board with errors, as the server does: their list opens
+  // instead, worked out again once what is being saved is.
+  const onRunClicked = async () => {
+    await changesSettled()
+    const found = (await refreshProblems()) ?? problems
+    if (found?.problems.some((p) => p.level === 'error')) {
+      setProblemsOpen(true)
+      setRefusing(true)
+      return
+    }
+    setProblemsOpen(false)
+    onPlay()
+  }
+
+  // Picking a problem shows the board as it is, on the board its process or
+  // object is on, with it selected in the middle; one about the board itself
+  // shows its start.
+  const focusing = useRef<string | null>(null)
+  const pickProblem = (p: Problem) => {
+    setProblemsOpen(false)
+    setRefusing(false)
+    setMenu(null)
+    setPanelId(null)
+    if (runId !== null) setRunId(null)
+    if (compare && compare.to !== null) setCompare(null)
+    setUnfolded(null)
+    setBoardId(p.board ?? null)
+    focusing.current = p.process !== undefined ? String(p.process) : p.object !== undefined ? objectNodeId(p.object) : START_ID
+  }
+  useEffect(() => {
+    const id = focusing.current
+    if (id === null || shownVersion !== null || boardId !== shownBoard || unfolded !== null) return
+    const node = getInternalNode(id)
+    if (!node) return
+    focusing.current = null
+    setNodes((ns) => ns.map((n) => (n.selected === (n.id === id) ? n : { ...n, selected: n.id === id })))
+    const at = node.internals.positionAbsolute
+    setCenter(at.x + (node.measured.width ?? 0) / 2, at.y + (node.measured.height ?? 0) / 2, {
+      zoom: Math.max(getViewport().zoom, 1),
+      duration: 300,
+    })
+  }, [nodes, boardId, shownBoard, shownVersion, unfolded, getInternalNode, setCenter, getViewport, setNodes])
 
   // A re-run started from the open run, or a trial of a process; it opens
   // as a run started with play does, having saved the board as a new version
@@ -3119,13 +3194,22 @@ export default function Board({
           )}
         </div>
         {!structBoard && (
+          <ProblemCount found={problems} open={problemsOpen} onOpen={openProblems} onPick={pickProblem} refusing={refusing} />
+        )}
+        {!structBoard && (
           <button
             className="play"
-            onClick={() => onPlay()}
+            onClick={() => void onRunClicked()}
             disabled={!canRun}
             aria-label="Run flow"
             title={
-              starting ? 'Starting…' : canRun ? `Run flow (${shortcutText('run', MAC)})` : 'Connect the start node to a process first'
+              starting
+                ? 'Starting…'
+                : viewOnly
+                  ? 'Only those who may change the flow run it'
+                  : runErrors > 0
+                    ? `Run flow: it has ${runErrors === 1 ? 'an error' : `${runErrors} errors`} to fix first, which clicking lists`
+                    : `Run flow (${shortcutText('run', MAC)})`
             }
           >
             <PlayIcon />

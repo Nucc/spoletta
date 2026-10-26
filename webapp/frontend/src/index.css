@@ -249,8 +249,87 @@ body {
   gap: 8px;
 }
 
-.toolbar .versioning + .play {
+.toolbar .versioning + .play,
+.toolbar .problems-anchor + .play {
   margin-left: 0;
+}
+
+/* What is wrong with the board, beside Run; see Problems.tsx. */
+.toolbar .problems-toggle {
+  gap: 8px;
+  font-size: 13px;
+}
+
+.toolbar .problems-toggle .problems-none {
+  color: #656d76;
+}
+
+.toolbar .problems-toggle.errors {
+  border-color: #ff8182;
+}
+
+.toolbar .problems-toggle.warnings {
+  border-color: #d4a72c;
+}
+
+.toolbar .problems-toggle.open {
+  background: #f6f8fa;
+}
+
+.problems-errors {
+  color: #cf222e;
+  font-weight: 600;
+}
+
+.problems-warnings {
+  color: #9a6700;
+  font-weight: 600;
+}
+
+.problems-list {
+  width: 380px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  outline: none;
+}
+
+.problems-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.problems-items .problem {
+  border-left: 3px solid #d4a72c;
+  font-size: 13px;
+}
+
+.problems-items .problem.error {
+  border-left-color: #cf222e;
+}
+
+.problems-items.published .problem {
+  padding: 6px 8px;
+  color: #57606a;
+}
+
+.toolbar .problems-items .problem button {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  white-space: normal;
+  font-size: 13px;
+  border: none;
+  border-radius: 0 6px 6px 0;
+  background: #f6f8fa;
+}
+
+.toolbar .problems-items .problem button:hover {
+  background: #eaeef2;
 }
 
 .toolbar .version-toggle.open {
@@ -3140,6 +3219,127 @@ body {
 .flow-new button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.flow-new .flow-new-template {
+  color: #1f2328;
+  background: #fff;
+  border-color: #d0d7de;
+}
+
+.flow-new .flow-new-template:hover {
+  background: #f6f8fa;
+}
+
+/* Templates to start a flow from; see Templates.tsx. */
+.template-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 10px;
+}
+
+.template-card h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.template-description {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #424a53;
+}
+
+.template-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.template-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #424a53;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 999px;
+}
+
+.template-needs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #57606a;
+}
+
+.template-needs li {
+  padding-left: 10px;
+  border-left: 3px solid #d8dee4;
+}
+
+.template-needs li.unmet {
+  border-left-color: #d4a72c;
+}
+
+.template-needs li.met {
+  border-left-color: #2da44e;
+}
+
+.template-card .template-use {
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: #1f883d;
+  border: 1px solid #1f883d;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.template-card .template-use:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.template-dialog {
+  width: min(960px, calc(100vw - 32px));
+  overflow-y: auto;
+}
+
+.template-dialog .template-card {
+  background: #f6f8fa;
+}
+
+@media (max-width: 600px) {
+  .flow-new {
+    flex-wrap: wrap;
+  }
 }
 
 .flows-note {

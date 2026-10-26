@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Hint } from './Hints'
 import {
   clearMCPToken,
   connectMCPServer,
@@ -54,6 +55,9 @@ export function MCPSettingsPanel({
           ×
         </button>
       </header>
+      <Hint id="panel-mcp" className="panel-hint">
+        The servers agents reach tools through; an agent picks those it uses in its panel.
+      </Hint>
       <MCPServers servers={servers} canConfigure={canConfigure} onChanged={onChanged} onError={onError} />
     </aside>
   )

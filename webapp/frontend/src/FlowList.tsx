@@ -251,11 +251,11 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
             <p className="flows-note">
               Each is a ready flow, made a flow of your own to change as you like; or name a new one below to start from an empty board.
             </p>
-            <TemplateGallery admin={configures(me)} onUse={onTemplate} onError={report} />
+            <TemplateGallery admin={configures(me)} signIn={!!me?.signIn} onUse={onTemplate} onError={report} />
           </section>
         )}
         {templating && (
-          <TemplateDialog admin={configures(me)} onUse={onTemplate} onClose={() => setTemplating(false)} onError={report} />
+          <TemplateDialog admin={configures(me)} signIn={!!me?.signIn} onUse={onTemplate} onClose={() => setTemplating(false)} onError={report} />
         )}
         {all && all.length > 0 && (
           <div className="flows-filters">

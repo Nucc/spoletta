@@ -43,7 +43,7 @@ setup:
             - object: Expense
               states: [approved, rejected]
         - name: Tell the claimant
-          prompt: |
+          prompt: >-
             Write a short, friendly reply to whoever claimed the Expense,
             saying whether it was approved; if it was rejected, give the
             reason finance gave, and if it was approved, say it is paid with

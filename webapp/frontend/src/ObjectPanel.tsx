@@ -6,6 +6,7 @@ import { quantityText, type Quantity } from './quantity'
 import QuantityInput from './QuantityInput'
 import { fieldsOf, ownedBy, type Field } from './structure'
 import { openTab } from './tabs'
+import { Hint } from './Hints'
 
 const SAVE_DELAY_MS = 500
 
@@ -140,6 +141,13 @@ export default function ObjectPanel({
           ×
         </button>
       </header>
+      {editable && !module && (
+        <Hint id={human ? 'panel-person' : 'panel-object'} className="panel-hint">
+          {human
+            ? 'A person, named as the role whose holders decide the reviews of the human processes taking it.'
+            : 'What it holds, its attributes, which agents generating it reply with as JSON, and the states it can be in.'}
+        </Hint>
+      )}
       {module && (
         <p className="panel-note module-note">
           A copy of {module.struct ? 'the struct' : 'an object of the procedure'}{' '}

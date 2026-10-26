@@ -34,7 +34,7 @@ setup:
               limit: "50"
           yields: [Messages]
         - name: Write the digest
-          prompt: |
+          prompt: >-
             Sum up the Messages written in the last day, those whose ts is
             within 24 hours of now, for someone who missed them: the
             decisions made, the questions still open, and what someone asked

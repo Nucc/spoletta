@@ -31,6 +31,7 @@ import { MCPServerPicker } from './MCPSettings'
 import { PromptEditor, SkillPicker } from './Skills'
 import { CredentialPicker } from './Credentials'
 import { ConnectorFields } from './ConnectorFields'
+import { Hint } from './Hints'
 import { RepositoryPicker } from './FlowSettings'
 import { ModelOptions } from './ModelProviders'
 import type { RunStatus } from './ProcessNode'
@@ -61,6 +62,16 @@ const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'subflow', label: 'Procedure' },
   { value: 'connector', label: 'Connector' },
 ]
+
+// What each kind of process is, as its panel says above what it edits.
+const KIND_HELP: Record<ProcessKind, string> = {
+  agent: 'An AI agent does what the prompt says with what the process takes; its inputs and what to hand in are added for it.',
+  script: 'A bash script: what the process takes is in $INPUTS, and what it prints is its output.',
+  human: 'A person reviews what it takes, deciding the states its links list, or fills in what it generates.',
+  flow: 'A board of its own, opened with its magnifier; taking a list, it runs once per item.',
+  subflow: 'Runs a procedure, giving it the objects named as those this process takes.',
+  connector: 'Carries out one operation of an installed connector, such as posting to Slack.',
+}
 
 // An object a human process generates without deciding on its states, which
 // the person carrying it out fills in.
@@ -245,6 +256,11 @@ export default function ProcessPanel({
           ×
         </button>
       </header>
+      {!readOnly && (
+        <Hint id={`panel-process-${kind}`} className="panel-hint">
+          {KIND_HELP[kind]}
+        </Hint>
+      )}
       <label className="panel-field">
         <span>Name</span>
         <input value={name} readOnly={readOnly} onChange={(e) => setName(e.target.value)} />

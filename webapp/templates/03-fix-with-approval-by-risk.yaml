@@ -40,7 +40,7 @@ setup:
           kind: human
           yields: [Bug]
         - name: Fix
-          prompt: |
+          prompt: >-
             Find the cause of the Bug and fix it with the smallest change that
             is clearly right, with a test that fails without it, and commit.
             Then rate the change's risk honestly: what could it break?
@@ -66,7 +66,7 @@ setup:
               state: changes requested
           yields: [Patch]
         - name: Open pull request
-          prompt: |
+          prompt: >-
             Push the run's branch and open a pull request fixing the Bug,
             describing the Patch's cause and change, and reply with its address.
           repositories: [app]

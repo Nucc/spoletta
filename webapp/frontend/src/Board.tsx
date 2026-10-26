@@ -88,6 +88,7 @@ import { Sidebar, SidebarGroup } from './Sidebar'
 import { SharedRecords } from './Records'
 import { NoteDialog, VersionPanel } from './Versions'
 import { ProblemCount } from './Problems'
+import { BoardTips, EmptyBoardGuide, useHints, type BoardTip } from './Hints'
 import { DiffPanel, diffCount, highlightsOf, noHighlights, type Highlights } from './Diff'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
@@ -1549,8 +1550,11 @@ export default function Board({
   // While a link is being drawn, the kind of node it can end on, which lights
   // up under the pointer.
   const [linkingTo, setLinkingTo] = useState<'process' | 'object' | null>(null)
+  // Whether it is drawn from a state, which a tip explains.
+  const [fromState, setFromState] = useState(false)
   const onConnectStart: OnConnectStart = (_, { nodeId, handleId, handleType }) => {
     if (!nodeId) return
+    setFromState(stateOfHandle(handleId) !== null)
     if (handleType === 'source') setLinkingTo(isProcess(nodeId) ? 'object' : 'process')
     else if (stateOfHandle(handleId) !== null) setLinkingTo('process')
   }
@@ -1562,6 +1566,7 @@ export default function Board({
   // from its way out: the process takes the object in that state.
   const onConnectEnd: OnConnectEnd = (event, { isValid, fromHandle }) => {
     setLinkingTo(null)
+    setFromState(false)
     if (isValid || !fromHandle) return
     let sourceHandle = fromHandle.id ?? null
     if (fromHandle.type === 'target') {
@@ -2178,7 +2183,7 @@ export default function Board({
   // Picking a problem shows the board as it is, on the board its process or
   // object is on, with it selected in the middle; one about the board itself
   // shows its start.
-  const focusing = useRef<string | null>(null)
+  const [focusing, setFocusing] = useState<string | null>(null)
   const pickProblem = (p: Problem) => {
     setProblemsOpen(false)
     setRefusing(false)
@@ -2188,21 +2193,21 @@ export default function Board({
     if (compare && compare.to !== null) setCompare(null)
     setUnfolded(null)
     setBoardId(p.board ?? null)
-    focusing.current = p.process !== undefined ? String(p.process) : p.object !== undefined ? objectNodeId(p.object) : START_ID
+    setFocusing(p.process !== undefined ? String(p.process) : p.object !== undefined ? objectNodeId(p.object) : START_ID)
   }
   useEffect(() => {
-    const id = focusing.current
+    const id = focusing
     if (id === null || shownVersion !== null || boardId !== shownBoard || unfolded !== null) return
     const node = getInternalNode(id)
     if (!node) return
-    focusing.current = null
+    setFocusing(null)
     setNodes((ns) => ns.map((n) => (n.selected === (n.id === id) ? n : { ...n, selected: n.id === id })))
     const at = node.internals.positionAbsolute
     setCenter(at.x + (node.measured.width ?? 0) / 2, at.y + (node.measured.height ?? 0) / 2, {
       zoom: Math.max(getViewport().zoom, 1),
       duration: 300,
     })
-  }, [nodes, boardId, shownBoard, shownVersion, unfolded, getInternalNode, setCenter, getViewport, setNodes])
+  }, [focusing, nodes, boardId, shownBoard, shownVersion, unfolded, getInternalNode, setCenter, getViewport, setNodes])
 
   // A re-run started from the open run, or a trial of a process; it opens
   // as a run started with play does, having saved the board as a new version
@@ -2988,6 +2993,31 @@ export default function Board({
 
   const panelColumn = useColumnWidth(PANEL_COLUMN)
 
+  // The help the board shows: a guide while the board shows nothing, and a
+  // tip on what is selected or being drawn; see Hints.tsx. They are about
+  // changing the board, so a board only read shows none.
+  const hints = useHints()
+  const loaded = contents !== null && shownVersion === null && shownBoard === boardId
+  const emptyBoard =
+    loaded && !readOnly && !structBoard && !objectBoard && !nodes.some((n) => n.type === 'process' || (boardId === null && n.type === 'object'))
+  const boardTip = ((): BoardTip | null => {
+    if (readOnly || !loaded) return null
+    if (fromState) return 'state'
+    const picked = nodes.filter((n) => n.selected && !isDraft(n.id))
+    const pickedEdges = edges.filter((e) => e.selected)
+    if (picked.length > 1) return 'several'
+    if (picked.length === 1 && pickedEdges.length === 0) {
+      if (picked[0].type === 'process') return 'process'
+      if (picked[0].type === 'object') return structBoard ? 'struct' : 'object'
+    }
+    if (picked.length === 0 && pickedEdges.length === 1) {
+      const e = pickedEdges[0]
+      if (e.data?.link) return e.data.link.direction === 'input' ? 'input' : 'output'
+      if (e.id.startsWith(CONNECTION_PREFIX)) return 'connection'
+    }
+    return structBoard && picked.length === 0 ? 'struct' : null
+  })()
+
   // What the comparison highlights on the board shown, if it shows the
   // newer board; the nodes and edges are drawn with it, so loading the
   // board again keeps it.
@@ -3058,19 +3088,6 @@ export default function Board({
         <button onClick={onTidy} disabled={readOnly} title="Lay the board out from the top">
           <LayoutIcon /> Tidy up
         </button>
-        {structBoard ? (
-          <span className="hint">
-            A struct is one object that flows use. Add objects to give it nested fields, and make one a list in its
-            settings. Double-click an object for its attributes; right-click the struct's to add states.
-          </span>
-        ) : (
-          <span
-            className="hint"
-            title="Drag a building block or a connector from the sidebar onto the canvas, or click it to add one in the middle. Double-click the canvas to add a process, Shift+double-click to add an object. Use + on a link to insert a step, or below a node to add what comes next. Double-click an object to give it attributes, which agents generating it reply with as JSON; unfold it with its magnifier to build what it is made of, attributes and parts that are objects of their own, nested in what it holds, and pick in its settings an object it specializes, whose fields it has too; right-click it to add states; link a human process to an object and pick on the link the states it decides between, or select an agent's link to an object to pick states the agent decides between, readOnly the object if it takes it too, and link a state to the processes that take the object in it. Drag from an agent, script or connector process onto another process to run that one when it fails. Select an object's link into a process to pick how the process takes it: just takes it, uses it as an instrument it doesn't change, or consumes it; for a link from a state, whether the process runs when the object enters it, or only if the object is in it once the process is ready, being skipped otherwise. Select a link to drag its segments; double-click it to reset its route. Double-click a process to edit it, right-click a node to rename it and more; select links, processes or objects and press Delete or Backspace to delete them. Cmd/Ctrl+C copies the selected processes and objects, with what is inside them, and Cmd/Ctrl+V pastes them where the pointer is, on this board or one of another flow; right-click the board to paste too. Cmd/Ctrl+F finds a process, object or state by name, Cmd/Ctrl+K opens the command palette, and ? lists every shortcut."
-          >
-            Processes connect through the objects they generate and take. Right-click a node for more.
-          </span>
-        )}
         <div className="versioning">
           <span className="note-anchor">
             <button
@@ -3288,6 +3305,8 @@ export default function Board({
           onDragOver={onCanvasDragOver}
           onDrop={onCanvasDrop}
         >
+          {emptyBoard && <EmptyBoardGuide inner={boardId !== null} />}
+          {!emptyBoard && <BoardTips tip={boardTip} />}
           <BoardActionsContext.Provider value={actions}>
             <StructFlowsContext.Provider value={structFlows}>
               <ReactFlow
@@ -3403,7 +3422,10 @@ export default function Board({
             <ContextMenu
               x={paneMenu.x}
               y={paneMenu.y}
-              items={[{ label: 'Paste', icon: <PasteIcon />, disabled: copied === null, onSelect: () => pasteAt(paneMenu) }]}
+              items={[
+                { label: 'Paste', icon: <PasteIcon />, disabled: copied === null, onSelect: () => pasteAt(paneMenu) },
+                ...(hints.anyHidden ? [{ label: 'Show the hints again', icon: <span aria-hidden>?</span>, onSelect: hints.showAll }] : []),
+              ]}
               onClose={() => setPaneMenu(null)}
             />
           )}
@@ -3646,7 +3668,9 @@ function FlowName({
   if (draft === null) {
     return (
       <span className="flow-name">
-        {name}
+        <span className="flow-name-text" title={name}>
+          {name}
+        </span>
         <button className="icon-button" onClick={() => setDraft(name)} aria-label="Rename flow" title="Rename flow">
           <PencilIcon />
         </button>

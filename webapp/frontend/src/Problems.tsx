@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { FlowProblems, Problem } from './api'
+import { AlertIcon, CheckIcon } from './icons'
 
 // What is wrong with the board, as the server works it out (problems.go):
 // a count beside Run, its errors apart from its warnings, which opens their
@@ -31,25 +32,30 @@ export function ProblemCount({
   const warnings = found.problems.filter((p) => p.level === 'warning')
   const published = found.published && found.published.errors.length > 0 ? found.published : null
   const none = errors.length === 0 && warnings.length === 0
+  const said = [errors.length > 0 && countOf(errors.length, 'error'), warnings.length > 0 && countOf(warnings.length, 'warning')]
+    .filter(Boolean)
+    .join(' and ')
   const title = none
     ? published
       ? `Nothing is wrong with the board, but version ${published.version}, the one published, has errors`
       : 'Nothing is wrong with the board that can be seen before it runs'
-    : 'What is wrong with the board, before it runs'
+    : `The board has ${said}`
   return (
     <span className="note-anchor problems-anchor">
       <button
-        className={`problems-toggle${errors.length > 0 ? ' errors' : warnings.length > 0 ? ' warnings' : ''}${open ? ' open' : ''}`}
+        className={`problems-toggle${errors.length > 0 ? ' errors' : warnings.length > 0 || published ? ' warnings' : ' none'}${open ? ' open' : ''}`}
         aria-expanded={open}
+        aria-label={none ? (published ? 'Problems: the version published has errors' : 'No problems') : `Problems: ${said}`}
         title={title}
         onClick={() => onOpen(!open)}
       >
-        {none ? (
-          <span className="problems-none">{published ? 'Published version has errors' : 'No problems'}</span>
+        {none && !published ? (
+          <CheckIcon />
         ) : (
           <>
-            {errors.length > 0 && <span className="problems-errors">{countOf(errors.length, 'error')}</span>}
-            {warnings.length > 0 && <span className="problems-warnings">{countOf(warnings.length, 'warning')}</span>}
+            <AlertIcon />
+            {errors.length > 0 && <span className="problems-errors">{errors.length}</span>}
+            {warnings.length > 0 && <span className="problems-warnings">{warnings.length}</span>}
           </>
         )}
       </button>

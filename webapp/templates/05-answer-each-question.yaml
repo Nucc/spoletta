@@ -38,7 +38,7 @@ setup:
               next: Draft the answer
             processes:
               - name: Draft the answer
-                prompt: |
+                prompt: >-
                   Answer the question in Questions plainly and correctly,
                   taking its context into account. Where you aren't sure,
                   say what you would need to know.
@@ -46,7 +46,7 @@ setup:
                 takes: [Questions]
                 yields: [Answers]
         - name: Gather the answers
-          prompt: |
+          prompt: >-
             Put the Answers together as one page of questions and answers, in
             an order that reads well, with headings where they help.
           repositories: []

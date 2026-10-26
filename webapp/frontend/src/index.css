@@ -203,15 +203,6 @@ body {
   background: #f6f8fa;
 }
 
-.toolbar .hint {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #656d76;
-  font-size: 13px;
-}
-
 .toolbar .play {
   flex-shrink: 0;
   margin-left: auto;
@@ -256,19 +247,22 @@ body {
 
 /* What is wrong with the board, beside Run; see Problems.tsx. */
 .toolbar .problems-toggle {
-  gap: 8px;
-  font-size: 13px;
+  gap: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
 }
 
-.toolbar .problems-toggle .problems-none {
-  color: #656d76;
+.toolbar .problems-toggle.none {
+  color: #1a7f37;
 }
 
 .toolbar .problems-toggle.errors {
+  color: #cf222e;
   border-color: #ff8182;
 }
 
 .toolbar .problems-toggle.warnings {
+  color: #9a6700;
   border-color: #d4a72c;
 }
 
@@ -276,14 +270,19 @@ body {
   background: #f6f8fa;
 }
 
-.problems-errors {
-  color: #cf222e;
+.problems-errors,
+.problems-warnings {
+  min-width: 18px;
+  padding: 1px 5px;
   font-weight: 600;
+  text-align: center;
+  color: #fff;
+  border-radius: 999px;
+  background: #cf222e;
 }
 
 .problems-warnings {
-  color: #9a6700;
-  font-weight: 600;
+  background: #9a6700;
 }
 
 .problems-list {
@@ -734,6 +733,96 @@ body {
   position: relative;
   flex: 1;
   min-width: 0;
+}
+
+/* Help where it applies, each hidden for good with its ×; see Hints.tsx. */
+.hint-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #424a53;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+}
+
+.hint-line .hint-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.hint-line .hint-hide {
+  flex-shrink: 0;
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1;
+  color: #656d76;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.hint-line .hint-hide:hover {
+  color: #1f2328;
+}
+
+.panel .panel-hint {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* An empty board's guide, in its middle, and a tip on what is selected,
+   at the bottom of the canvas between its controls and the assistant;
+   neither takes the pointer from the board around it. */
+.board-guide {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 4;
+  width: min(460px, calc(100% - 32px));
+  transform: translate(-50%, -50%);
+  padding: 16px 18px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(31, 35, 40, 0.12);
+}
+
+.board-guide h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: #1f2328;
+}
+
+.board-guide ol {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.board-guide p {
+  margin: 10px 0 0;
+}
+
+.board-tips {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  z-index: 4;
+  width: min(560px, calc(100% - 160px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.board-tips .board-tip {
+  pointer-events: auto;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(31, 35, 40, 0.1);
 }
 
 /* On the left of the board: building blocks, connectors and run history,
@@ -1246,6 +1335,8 @@ body {
   gap: 16px;
   padding: 16px;
   background: #fff;
+  /* What doesn't fit scrolls, rather than the prompt giving way to nothing. */
+  overflow-y: auto;
 }
 
 .panel-header {
@@ -1295,7 +1386,7 @@ body {
 
 .panel-field-grow {
   flex: 1;
-  min-height: 0;
+  min-height: 140px;
 }
 
 .panel-field input,
@@ -3129,10 +3220,27 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
   max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A long name gives way before the toolbar's buttons do. */
+.board .toolbar {
+  gap: 12px;
+}
+
+.board .toolbar h1 {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.toolbar h1 .flow-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .icon-button {

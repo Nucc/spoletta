@@ -10,11 +10,14 @@ import { AgentIcon, ConnectorIcon, FlowIcon, HumanIcon, ScriptIcon, SubflowIcon 
 // from template opens it as a dialog.
 export function TemplateGallery({
   admin,
+  signIn,
   onUse,
   onError,
 }: {
-  // Whether whoever looks may install connectors and give roles.
+  // Whether whoever looks may install connectors and give roles, and
+  // whether people sign in, without which anyone decides reviews.
   admin: boolean
+  signIn: boolean
   onUse: (t: FlowTemplate) => Promise<void>
   onError: (err: unknown) => void
 }) {
@@ -53,7 +56,7 @@ export function TemplateGallery({
             <ul className="template-needs" aria-label="What it needs">
               {t.needs.map((n) => (
                 <li key={`${n.kind}:${n.name}`} className={n.met ? 'met' : 'unmet'}>
-                  <Need need={n} admin={admin} />
+                  <Need need={n} admin={admin} signIn={signIn} />
                 </li>
               ))}
             </ul>
@@ -68,7 +71,7 @@ export function TemplateGallery({
 }
 
 // What a template needs, and what to do while the app hasn't it.
-function Need({ need, admin }: { need: TemplateNeed; admin: boolean }) {
+function Need({ need, admin, signIn }: { need: TemplateNeed; admin: boolean; signIn: boolean }) {
   const settings = (path: string, what: string) =>
     admin ? (
       <a href={`#/settings/${path}`}>in Settings, under {what}</a>
@@ -91,6 +94,12 @@ function Need({ need, admin }: { need: TemplateNeed; admin: boolean }) {
         </>
       )
     case 'role':
+      if (!signIn)
+        return (
+          <>
+            A person to decide its reviews, as <strong>{need.name}</strong>; with sign-in, only those holding that role do.
+          </>
+        )
       return need.met ? (
         <>
           Someone holding the role <strong>{need.name}</strong> decides its reviews.
@@ -106,11 +115,13 @@ function Need({ need, admin }: { need: TemplateNeed; admin: boolean }) {
 // The gallery as a dialog, from New from template.
 export function TemplateDialog({
   admin,
+  signIn,
   onUse,
   onClose,
   onError,
 }: {
   admin: boolean
+  signIn: boolean
   onUse: (t: FlowTemplate) => Promise<void>
   onClose: () => void
   onError: (err: unknown) => void
@@ -131,7 +142,7 @@ export function TemplateDialog({
         </button>
       </header>
       <p className="panel-note">A ready flow to start from, made a flow of your own to change as you like.</p>
-      <TemplateGallery admin={admin} onUse={onUse} onError={onError} />
+      <TemplateGallery admin={admin} signIn={signIn} onUse={onUse} onError={onError} />
     </dialog>
   )
 }

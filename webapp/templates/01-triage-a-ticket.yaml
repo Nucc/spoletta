@@ -29,7 +29,7 @@ setup:
           kind: human
           yields: [Ticket]
         - name: Classify
-          prompt: |
+          prompt: >-
             Decide whether the Ticket reports a bug (something that worked, or
             should work, doesn't) or asks for a feature, and say why in a
             sentence.
@@ -39,7 +39,7 @@ setup:
             - object: Triage
               states: [bug, feature]
         - name: Attempt fix
-          prompt: |
+          prompt: >-
             Find the cause of the bug the Ticket reports and fix it with the
             smallest change that is clearly right, with a test that fails
             without it. Commit, but don't push.
@@ -51,7 +51,7 @@ setup:
               condition: true
           yields: [Fix]
         - name: Write spec
-          prompt: |
+          prompt: >-
             Write a one-page spec of the feature the Ticket asks for: the
             problem, who has it, what to build, and what to leave out.
           repositories: []
@@ -62,7 +62,7 @@ setup:
               condition: true
           yields: [Spec]
         - name: Summarize
-          prompt: |
+          prompt: >-
             Say what was done about the Ticket in three lines, for whoever
             reported it: the fix if there is one, or the spec.
           repositories: []

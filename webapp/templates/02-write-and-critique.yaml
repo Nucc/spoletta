@@ -25,14 +25,14 @@ setup:
           kind: human
           yields: [Brief]
         - name: Write
-          prompt: |
+          prompt: >-
             Write the piece the Brief asks for, for its audience and at about
             its length. Be concrete: an example says more than an adjective.
           repositories: []
           takes: [Brief]
           yields: [Draft]
         - name: Critique
-          prompt: |
+          prompt: >-
             Critique the Draft as an editor would, against the Brief. It is
             good when it is accurate, concrete, right for its audience and
             near its length; otherwise it is weak, and say exactly what to

@@ -160,6 +160,10 @@ services:
       # again if its retries let it. false ends such runs as interrupted
       # instead. See webapp/adopt.go and docs/REPLICAS.md.
       RESUME_RUNS: ${RESUME_RUNS:-true}
+      # How long the trash keeps a flow, procedure or struct deleted before
+      # deleting it for good, with its runs: a number of days such as 30d,
+      # the default, or a duration such as 12h. See webapp/trash.go.
+      TRASH_KEEP: ${TRASH_KEEP:-}
     volumes:
       # Read-only: the webapp checks and serves files; the worker writes them.
       - files:/data/files:ro

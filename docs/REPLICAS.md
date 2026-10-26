@@ -36,7 +36,11 @@ that stopped before sending it is sent by another. A review's reminders and
 time limit are kept with its step, by the database's clock; whichever
 replica finds one due first claims it: a round of reminders by counting it
 and moving the next one on, a time limit by failing the step as a decision
-would, which the replica walking the run then handles.
+would, which the replica walking the run then handles. Every replica
+empties the trash of the flows it kept longer than `TRASH_KEEP`, each
+deleted by whichever replica takes its row first; and moving a flow to the
+trash takes its row as starting a run does, so no run starts on it unseen
+and left going.
 
 ## When a replica stops
 

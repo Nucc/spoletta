@@ -443,6 +443,13 @@ off. After an agent step ends, a person can send it follow-up messages
     alone, whatever its state and rule select. So a flow implementing "the
     open Jira ticket" its query gives it implements the one picked; write
     its query for the scheduled case, and it serves both.
+- Deleting a flow, procedure or struct moves it to the **trash**, from
+  where those who may change it restore it, for 30 days by default. While
+  it is there it runs nothing and exports nowhere: a subflow process running
+  a procedure in the trash fails, saying so, until it is restored or picks
+  another, and the copies of a struct's or procedure's objects there are
+  their flows' own, as they are once it is deleted for good. A shared
+  struct's copies keep its records.
 
 ### 3.9 Schedules
 
@@ -1748,7 +1755,8 @@ starting from it and changing it, rather than writing it anew.
 ### 10.5 Changing a flow later
 
 Export, edit, import. A flow is made over by name, keeping what matches by
-name, so runs and stored instances survive. **Renaming** a process, object,
+name, so runs and stored instances survive. A flow in the trash is neither
+exported nor made over: importing its name makes a new flow. **Renaming** a process, object,
 state or attribute in the file makes a new one and drops the old. The stored
 instances outlive the old object, but the new one doesn't see them, so
 duplicate detection on a unique attribute starts over. Rename in the app

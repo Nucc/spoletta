@@ -145,6 +145,30 @@ export const ClockIcon = () => (
   </Icon>
 )
 
+// A favourite's star, filled once starred.
+export const StarIcon = ({ filled = false }: { filled?: boolean }) => (
+  <Icon>
+    <path
+      d="M8 1.75l1.9 3.9 4.3.6-3.1 3 .75 4.25L8 11.5l-3.85 2 .75-4.25-3.1-3 4.3-.6z"
+      fill={filled ? 'currentColor' : 'none'}
+    />
+  </Icon>
+)
+
+export const SearchIcon = () => (
+  <Icon>
+    <circle cx="7" cy="7" r="4.5" />
+    <path d="M10.25 10.25L14 14" />
+  </Icon>
+)
+
+export const TagIcon = () => (
+  <Icon>
+    <path d="M1.75 2.75v4.5l7 7 5.5-5.5-7-7h-4.5a1 1 0 0 0-1 1z" />
+    <circle cx="5" cy="5" r="1" />
+  </Icon>
+)
+
 export const TerminalIcon = () => (
   <Icon>
     <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />

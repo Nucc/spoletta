@@ -7085,3 +7085,189 @@ select.flow-owner:disabled {
   width: 11px;
   height: 11px;
 }
+
+/* The flow list's search and tag filter, above the sections. */
+.flows-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #656d76;
+  font-size: 14px;
+}
+
+.flows-filters label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.flows-search {
+  flex: 1;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.flows-search:focus-within {
+  border-color: #54aeff;
+  box-shadow: 0 0 0 3px rgba(84, 174, 255, 0.25);
+}
+
+.flows-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 0;
+  font: inherit;
+  border: none;
+  outline: none;
+  background: none;
+}
+
+.flows-filters select {
+  max-width: 200px;
+  padding: 6px 8px;
+  font: inherit;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+}
+
+/* A favourite's star, before its name, and the card beside it with the
+   flow's tags under its name. */
+.flow-list li .flow-star {
+  margin-left: 8px;
+  color: #8c959f;
+}
+
+.flow-list li .flow-star.starred {
+  color: #bf8700;
+}
+
+.flow-card-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.flow-list li .flow-star + .flow-card-body .flow-card {
+  padding-left: 8px;
+}
+
+.flow-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: -6px;
+  padding: 0 16px 12px 8px;
+}
+
+/* Without tags, adding one shows at the card's end as it is pointed at. */
+.flow-tags.empty {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  margin: 0;
+  padding: 0;
+  transform: translateY(-50%);
+}
+
+.flow-tag-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: #656d76;
+  background: none;
+  border: 1px dashed #d0d7de;
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.flow-list li:hover .flow-tag-add,
+.flow-tag-add:focus-visible {
+  opacity: 1;
+}
+
+.flow-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: #57606a;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 999px;
+}
+
+.flow-tag button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.flow-tag-name {
+  padding: 1px 8px;
+}
+
+.flow-tag-name:hover {
+  color: #0969da;
+}
+
+.flow-tag-remove {
+  margin-left: -6px;
+  padding: 1px 7px 1px 3px;
+  color: #8c959f;
+}
+
+.flow-tag-remove:hover {
+  color: #cf222e;
+}
+
+.flow-tag-input {
+  width: 120px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid #54aeff;
+  border-radius: 999px;
+  outline: none;
+}
+
+/* How a flow's runs go: failing, now and then, and going on now. */
+.flow-health {
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  border: 1px solid;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.flow-health.failing {
+  color: #a40e26;
+  background: #ffebe9;
+  border-color: #ffcecb;
+}
+
+.flow-health.flaky {
+  color: #7d4e00;
+  background: #fff8c5;
+  border-color: #f2e08c;
+}
+
+.flow-health.running {
+  color: #0550ae;
+  background: #ddf4ff;
+  border-color: #b6e3ff;
+}
+

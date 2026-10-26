@@ -461,6 +461,17 @@ func (im *importer) importEntry(e *setupEntry) error {
 			return err
 		}
 	}
+	given := e.object.tags()
+	if e.flow != nil {
+		given = e.flow.Tags
+	}
+	tags, msg := cleanTags(given)
+	if msg != "" {
+		return problemf("%s: %s", quote(e.name), msg)
+	}
+	if err := setTags(ctx, tx, fi.id, tags); err != nil {
+		return err
+	}
 	if _, err := recordStep(ctx, tx, fi.id); err != nil {
 		return err
 	}
@@ -1330,6 +1341,9 @@ func (b *builder) resolveObject(bo *bobj) error {
 	}
 	if o.Shared && (!b.isStruct || bo.parent != nil || bo.owner != nil) {
 		return problemf("%s: only a struct's object is shared, and its copies with it", at)
+	}
+	if o.Tags != nil && (!b.isStruct || bo.parent != nil || bo.owner != nil) {
+		return problemf("%s: only flows, procedures and structs have tags, a struct's on its object", at)
 	}
 	if o.Persistent && b.shared(bo) {
 		return problemf("%s: it is a copy of a shared object, which every flow using it stores already; it isn't persistent too", at)

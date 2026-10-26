@@ -133,9 +133,11 @@ func flowAccess(ctx context.Context, db querier, u *user, flow int64) (string, e
 // Deciding a review, which its route lets only those holding its role do.
 var decidePattern = regexp.MustCompile(`^/api/runs/\d+/steps/\d+$`)
 
-// The access a request needs to the flows it is about.
+// The access a request needs to the flows it is about. Starring a flow as
+// a favourite changes nothing in it, so seeing it is enough.
 func neededAccess(r *http.Request) string {
-	if r.Method == http.MethodGet || r.Method == http.MethodHead || (r.Method == http.MethodPatch && decidePattern.MatchString(r.URL.Path)) {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || (r.Method == http.MethodPatch && decidePattern.MatchString(r.URL.Path)) ||
+		favouritePattern.MatchString(r.URL.Path) {
 		return accessReview
 	}
 	return accessEdit
@@ -263,6 +265,9 @@ func registerOwnerRoutes(mux *http.ServeMux, db *sql.DB) {
 		f, err = getFlow(r.Context(), db, id)
 		if err == nil {
 			f.Access, err = flowAccess(r.Context(), db, requestUser(r), id)
+		}
+		if err == nil {
+			f, err = describeFlow(r.Context(), db, r, f)
 		}
 		if err != nil {
 			serverError(w, err)

@@ -441,6 +441,13 @@ have a human fill in what it starts from and still run unattended, so start
 it with an agent, script or connector process that fetches what it works
 on instead.
 
+### 3.10 Tags
+
+`tags: [nightly, billing]` gives a flow, procedure or struct (on its
+object) the words the flow list finds it by and narrows to. They change
+nothing in how it runs. Each is at most 64 characters, a flow has at most
+20, and two differing only in case are one.
+
 ---
 
 ## 4. How a run executes

@@ -213,6 +213,19 @@ type flow struct {
 	Access string `json:"access"`
 	// Its latest run of the whole flow, if any.
 	LastRun *run `json:"lastRun"`
+	// What the flow list shows of it besides: its tags, whether whoever
+	// asked starred it, and how its runs go of late, none for a struct.
+	Tags      []string    `json:"tags"`
+	Favourite bool        `json:"favourite"`
+	Health    *flowHealth `json:"health"`
+}
+
+// The runs of a flow of its own that started in the last week, how many of
+// those failed, and how many are going on now.
+type flowHealth struct {
+	Runs    int `json:"runs"`
+	Failed  int `json:"failed"`
+	Running int `json:"running"`
 }
 
 type flowSettings struct {

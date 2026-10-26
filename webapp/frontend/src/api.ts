@@ -292,6 +292,28 @@ export type Flow = {
   access: 'edit' | 'review'
   // Its latest run of the whole flow, if any.
   lastRun: FlowRun | null
+  // The words it is found by, which those who may change it give it.
+  tags: string[]
+  // Whether whoever asked starred it, which lists it first.
+  favourite: boolean
+  // How its runs of its own go of late; none for a struct, which never runs.
+  health: FlowHealth | null
+}
+
+// The runs of a flow of its own that started in the last 7 days, how many
+// of those failed, and how many are going on now.
+export type FlowHealth = { runs: number; failed: number; running: number }
+
+// Gives the flow these tags, in place of those it had; they come back
+// trimmed, each once whatever its case, in order.
+export async function setFlowTags(id: number, tags: string[]): Promise<string[]> {
+  const res = await send(`/api/flows/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tags }) })
+  return ((await res.json()) as { tags: string[] }).tags
+}
+
+// Stars the flow as one of whoever asks' favourites, or takes the star away.
+export async function setFavourite(id: number, favourite: boolean): Promise<void> {
+  await send(`/api/flows/${id}/favourite`, { method: favourite ? 'PUT' : 'DELETE' })
 }
 
 // Who owns a flow; id and name are the team's or the user's.
@@ -1939,3 +1961,4 @@ export type Spending = {
 export function getSpending(month?: string): Promise<Spending> {
   return request('/api/spending' + (month ? `?month=${encodeURIComponent(month)}` : ''))
 }
+

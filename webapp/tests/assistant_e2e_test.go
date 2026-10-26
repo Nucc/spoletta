@@ -79,8 +79,9 @@ func TestAssistantBuildsTheFlow(t *testing.T) {
 	var s schedule
 	a.call("POST", "/api/schedules", map[string]any{"flow": f.ID, "cron": "0 9 * * 1-5", "timezone": "UTC"}, http.StatusCreated, &s)
 	t.Cleanup(func() { a.do("DELETE", fmt.Sprintf("/api/schedules/%d", s.ID), nil) })
+	a.call("PUT", fmt.Sprintf("/api/flows/%d/tags", f.ID), map[string]any{"tags": []string{"jira"}}, http.StatusOK, nil)
 
-	// The reply leaves out the repositories and schedules, which stay.
+	// The reply leaves out the repositories, schedules and tags, which stay.
 	a.worker.onAgent("Assistant", func(context.Context, agentRun) runResult {
 		return replyWithSetup("I built a flow that fetches a ticket and summarizes it.", name, jiraProcesses)
 	})
@@ -114,6 +115,9 @@ func TestAssistantBuildsTheFlow(t *testing.T) {
 	a.call("GET", fmt.Sprintf("/api/flows/%d", f.ID), nil, http.StatusOK, &got)
 	if len(got.Settings.Repositories) != 1 || got.Settings.BranchPrefix != "jira" {
 		t.Errorf("the settings = %+v, want the repository and branch prefix kept", got.Settings)
+	}
+	if !slices.Equal(got.Tags, []string{"jira"}) {
+		t.Errorf("the tags = %q, want the one there was", got.Tags)
 	}
 	var schedules []schedule
 	a.call("GET", fmt.Sprintf("/api/schedules?flow=%d", f.ID), nil, http.StatusOK, &schedules)

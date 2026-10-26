@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +162,7 @@ mcpServers:
     url: https://jira.example.com/mcp
 structs:
   - name: PFX Ticket
+    tags: [support]
     states: [open, closed]
     attributes:
       - name: title
@@ -186,6 +188,7 @@ procedures:
         end: true
 flows:
   - name: PFX Triage
+    tags: [Nightly, triage, nightly]
     repositories:
       - name: app
         url: https://github.com/example/app
@@ -269,10 +272,24 @@ func TestSetupRoundTrips(t *testing.T) {
 		t.Errorf("Summarize it yields no Summary:\n%s", first)
 	}
 	for _, want := range []string{"copyOf:", "runs: " + prefix + " Summarize", "enabled: false", "relation: aggregation",
-		"specializes: Base", "rule: When it has been reviewed", "role: instrument", "condition: true", "onFailure:", "mcpServers:", "prompt: |"} {
+		"specializes: Base", "rule: When it has been reviewed", "role: instrument", "condition: true", "onFailure:", "mcpServers:", "prompt: |",
+		"tags:\n        - support\n", "tags:\n        - Nightly\n        - triage\n"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("the export has no %q:\n%s", want, first)
 		}
+	}
+	// The flow list shows the tags the file gave, each once.
+	tagsOf := map[string][]string{}
+	var listed []flow
+	a.call("GET", "/api/flows", nil, http.StatusOK, &listed)
+	for _, f := range listed {
+		tagsOf[f.Name] = f.Tags
+	}
+	if got := tagsOf[prefix+" Triage"]; !slices.Equal(got, []string{"Nightly", "triage"}) {
+		t.Errorf("the flow's tags = %q", got)
+	}
+	if got := tagsOf[prefix+" Ticket"]; !slices.Equal(got, []string{"support"}) {
+		t.Errorf("the struct's tags = %q", got)
 	}
 
 	// Importing what was exported changes nothing, ids and all.
@@ -339,6 +356,8 @@ func TestSetupImportMakesOverWhatChanged(t *testing.T) {
 		kept = append(kept, p)
 	}
 	flow["processes"] = kept
+	// A file without the flow's tags takes them away, as it does schedules.
+	delete(flow, "tags")
 	changed, err := yaml.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
@@ -355,6 +374,13 @@ func TestSetupImportMakesOverWhatChanged(t *testing.T) {
 	if p := after["Fetch"]; p.ID != ids["Fetch"] || p.Prompt != "Fetch the oldest ticket." {
 		t.Errorf("Fetch is %+v, want id %d with the new prompt", p, ids["Fetch"])
 	}
+	var got struct {
+		Tags []string `json:"tags"`
+	}
+	a.call("GET", fmt.Sprintf("/api/flows/%d", triage), nil, http.StatusOK, &got)
+	if got.Tags == nil || len(got.Tags) != 0 {
+		t.Errorf("the flow's tags = %#v, want none", got.Tags)
+	}
 }
 
 func TestSetupImportRefusesWhatIsWrong(t *testing.T) {
@@ -369,6 +395,8 @@ func TestSetupImportRefusesWhatIsWrong(t *testing.T) {
 		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: script\n        yields: [{object: O, states: [s]}]\n    objects:\n      - name: O\n        states: [s]\n", "only a human's or an agent's output link lists states"},
 		{"spoletta: 1\nflows:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: script\n        takes: [Jira Ticket, Jira_Ticket]\n    objects:\n      - name: Jira Ticket\n      - name: Jira_Ticket\n", `"P" already takes an object named "Jira Ticket"`},
 		{"spoletta: 1\nprocedures:\n  - name: PFX A\n    processes:\n      - name: P\n        kind: subflow\n        runs: PFX B\n  - name: PFX B\n    processes:\n      - name: Q\n        kind: subflow\n        runs: PFX A\n", "in a circle"},
+		{"spoletta: 1\nflows:\n  - name: PFX A\n    objects:\n      - name: O\n        tags: [x]\n", "only flows, procedures and structs have tags"},
+		{"spoletta: 1\nflows:\n  - name: PFX A\n    tags: [" + strings.Repeat("x", 65) + "]\n", "longer than 64 characters"},
 	} {
 		file := strings.ReplaceAll(c.file, "PFX", prefix)
 		status, body := setupImport(a, file)

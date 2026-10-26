@@ -15,6 +15,7 @@ type exportedFlow struct {
 	name             string
 	module, isStruct bool
 	settings         flowSettings
+	tags             []string
 	s                snapshot
 	procIDs, objIDs  map[int64]string
 	stateIDs         map[int64]string
@@ -39,6 +40,17 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 	})
 	if err != nil {
 		return f, err
+	}
+	ids := make([]int64, len(flows))
+	for i, e := range flows {
+		ids[i] = e.id
+	}
+	tags, err := flowTags(ctx, tx, ids)
+	if err != nil {
+		return f, err
+	}
+	for _, e := range flows {
+		e.tags = tags[e.id]
 	}
 
 	// Which flow each object is in, for copies to name their sources by.
@@ -149,13 +161,15 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 		if e.isStruct {
 			for _, o := range e.s.Objects {
 				if o.Owner == nil && o.Parent == nil {
-					f.Structs = append(f.Structs, x.object(o))
+					so := x.object(o)
+					so.Tags = e.tags
+					f.Structs = append(f.Structs, so)
 					break
 				}
 			}
 			continue
 		}
-		sf := setupFlow{Name: e.name, BranchPrefix: e.settings.BranchPrefix, Schedules: e.schedules, setupBoard: x.board(nil)}
+		sf := setupFlow{Name: e.name, Tags: e.tags, BranchPrefix: e.settings.BranchPrefix, Schedules: e.schedules, setupBoard: x.board(nil)}
 		for _, r := range e.settings.Repositories {
 			sf.Repositories = append(sf.Repositories, setupRepository(r))
 		}

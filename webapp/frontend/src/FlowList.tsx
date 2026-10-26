@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react'
 import {
   createFlow,
   deleteFlow,
@@ -6,12 +6,26 @@ import {
   importSetup,
   listFlows,
   listTeams,
+  setFavourite,
   setFlowOwner,
+  setFlowTags,
   type Flow,
   type Me,
   type Team,
 } from './api'
-import { ClockIcon, DownloadIcon, FlowBuilderIcon, ObjectIcon, PlusIcon, SubflowIcon, TrashIcon, UploadIcon } from './icons'
+import {
+  ClockIcon,
+  DownloadIcon,
+  FlowBuilderIcon,
+  ObjectIcon,
+  PlusIcon,
+  SearchIcon,
+  StarIcon,
+  SubflowIcon,
+  TagIcon,
+  TrashIcon,
+  UploadIcon,
+} from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
 import { Account, configures, useMe } from './Account'
 import { OwnerPicker, ownerLabel } from './Owner'
@@ -21,17 +35,39 @@ import { OwnerPicker, ownerLabel } from './Owner'
 // the flows made to be reused inside others, and the structs, the objects
 // they use. Opening one shows its board. With sign-in, only those one sees
 // are listed: one's own, one's teams', everyone's, and those whose reviews
-// one decides; they can be narrowed to whose they are.
+// one decides; they can be narrowed to whose they are, to those whose name
+// or tags hold what is typed in the search, and to a tag. One's favourites,
+// starred, come first in each section, and each flow says how its runs went
+// this week. What is searched and the tag picked are in the address,
+// #/?q=<words>&tag=<tag>.
 export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const me = useMe()
   const [all, setFlows] = useState<Flow[] | null>(null)
   const [whose, setWhose] = useState('')
+  const [query, setQuery] = useState(() => hashParam('q'))
+  const [tag, setTag] = useState(() => hashParam('tag'))
   const [teams, setTeams] = useState<Team[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const picker = useRef<HTMLInputElement>(null)
 
-  const flows = all && all.filter((f) => !whose || whoseKey(f) === whose)
+  const narrowed = !!(whose || query.trim() || tag)
+  const flows =
+    all &&
+    all
+      .filter((f) => (!whose || whoseKey(f) === whose) && matches(f, query) && (!tag || f.tags.some((t) => sameTag(t, tag))))
+      // Favourites first, each part in the order the server gives, by name.
+      .sort((a, b) => Number(b.favourite) - Number(a.favourite))
+  const tags = all ? allTags(all) : []
+
+  // The search and the tag go in the address, in place, keeping the tab's entry.
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (query) params.set('q', query)
+    if (tag) params.set('tag', tag)
+    const hash = params.toString() ? `#/?${params}` : window.location.hash === '' ? '' : '#/'
+    if (window.location.hash !== hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + hash)
+  }, [query, tag])
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
   const refresh = useCallback(() => listFlows().then(setFlows).catch(report), [report])
@@ -47,6 +83,26 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
 
   const onOwner = (f: Flow, owner: Parameters<typeof setFlowOwner>[1]) =>
     setFlowOwner(f.id, owner).then(refresh, report)
+
+  // What changes of a flow on the list, at once, and back if the server
+  // turns it down.
+  const change = (f: Flow, patch: Partial<Flow>) => setFlows((fs) => fs?.map((x) => (x.id === f.id ? { ...x, ...patch } : x)) ?? null)
+
+  const onStar = (f: Flow) => {
+    change(f, { favourite: !f.favourite })
+    setFavourite(f.id, !f.favourite).catch((err) => {
+      change(f, { favourite: f.favourite })
+      report(err)
+    })
+  }
+
+  const onTags = async (f: Flow, tags: string[]) => {
+    try {
+      change(f, { tags: await setFlowTags(f.id, tags) })
+    } catch (err) {
+      report(err)
+    }
+  }
 
   // Who new flows belong to: the team picked last, else the first of one's
   // teams, else oneself.
@@ -174,6 +230,33 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         </div>
       )}
       <main className="flows">
+        {all && all.length > 0 && (
+          <div className="flows-filters">
+            <label className="flows-search">
+              <SearchIcon />
+              <input
+                type="search"
+                aria-label="Search the flows by name and tag"
+                placeholder="Search by name or tag"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </label>
+            {tags.length > 0 && (
+              <label>
+                <TagIcon />
+                <select aria-label="Tag" value={tags.find((t) => sameTag(t, tag)) ?? ''} onChange={(e) => setTag(e.target.value)}>
+                  <option value="">Every tag</option>
+                  {tags.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        )}
         {me?.user && all && (
           <div className="flows-whose">
             <label>
@@ -213,6 +296,11 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           onOwner={onOwner}
           onDelete={onDelete}
           onError={report}
+          narrowed={narrowed}
+          tags={tags}
+          onStar={onStar}
+          onTags={onTags}
+          onTag={setTag}
         />
         <FlowSection
           kind="module"
@@ -228,6 +316,11 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           onOwner={onOwner}
           onDelete={onDelete}
           onError={report}
+          narrowed={narrowed}
+          tags={tags}
+          onStar={onStar}
+          onTags={onTags}
+          onTag={setTag}
         />
         <FlowSection
           kind="struct"
@@ -243,6 +336,11 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           onOwner={onOwner}
           onDelete={onDelete}
           onError={report}
+          narrowed={narrowed}
+          tags={tags}
+          onStar={onStar}
+          onTags={onTags}
+          onTag={setTag}
         />
       </main>
     </div>
@@ -272,6 +370,27 @@ function whoseChoices(flows: Flow[], me: Me): [string, string][] {
 // Where who new flows belong to is remembered.
 const NEW_OWNER_KEY = 'spoletta.newOwner'
 
+// What the address says of the list: the search, or the tag picked.
+const hashParam = (key: string) => new URLSearchParams(window.location.hash.split('?')[1] ?? '').get(key) ?? ''
+
+// Tags are the same whatever their case.
+const sameTag = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+
+// Whether every word searched for is in the flow's name or one of its tags.
+const matches = (f: Flow, query: string) =>
+  query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((w) => f.name.toLowerCase().includes(w) || f.tags.some((t) => t.toLowerCase().includes(w)))
+
+// Every tag of the flows, each once, spelled as it is first, by name.
+function allTags(flows: Flow[]): string[] {
+  const tags = new Map<string, string>()
+  for (const f of flows) for (const t of f.tags) if (!tags.has(t.toLowerCase())) tags.set(t.toLowerCase(), t)
+  return [...tags.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+}
+
 const usedByLabel = (n: number) => `Used in ${n} ${n === 1 ? 'flow' : 'flows'}`
 
 type FlowKind = 'flow' | 'module' | 'struct'
@@ -284,8 +403,8 @@ const DELETE_TITLES: Record<FlowKind, string> = {
   struct: 'Delete struct',
 }
 
-// What a card says under its name: how many flows use it, and its latest
-// run; a struct never runs.
+// What a card says under its name: how many flows use it, its latest run,
+// and how its runs went this week; a struct never runs.
 function cardStatus(f: Flow, kind: FlowKind) {
   const used = f.usedBy > 0 ? usedByLabel(f.usedBy) : 'Not used yet'
   if (kind === 'struct') return used
@@ -302,7 +421,115 @@ function cardStatus(f: Flow, kind: FlowKind) {
       ) : (
         'Never run'
       )}
+      <Health f={f} />
     </>
+  )
+}
+
+// Whether the flow is failing, by its last run or its runs this week, and
+// how many of its runs are going on.
+function Health({ f }: { f: Flow }) {
+  const h = f.health
+  if (!h) return null
+  const lastFailed = f.lastRun?.status === 'failed'
+  const share = h.runs > 0 ? Math.round((100 * h.failed) / h.runs) : 0
+  const failing = lastFailed || h.failed > 0
+  return (
+    <>
+      {failing && (
+        <span
+          className={lastFailed || share >= 50 ? 'flow-health failing' : 'flow-health flaky'}
+          title={`Of its ${h.runs} runs in the last 7 days, ${h.failed} failed${lastFailed ? ', and its last run did' : ''}.`}
+        >
+          {[lastFailed && 'Last run failed', h.failed > 0 && `${share}% failed this week`].filter(Boolean).join(' · ')}
+        </span>
+      )}
+      {h.running > 0 && (
+        <span className="flow-health running" title="Its runs going on now, those waiting for a person included">
+          {h.running} running
+        </span>
+      )}
+    </>
+  )
+}
+
+// A flow's tags, each narrowing the list to it; those who may change the
+// flow take one away, or add another.
+function FlowTags({
+  f,
+  known,
+  onTags,
+  onTag,
+}: {
+  f: Flow
+  known: string[]
+  onTags: (f: Flow, tags: string[]) => Promise<void>
+  onTag: (tag: string) => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const [text, setText] = useState('')
+  const editable = f.access === 'edit'
+  if (f.tags.length === 0 && !editable) return null
+
+  const add = async () => {
+    const t = text.trim()
+    setAdding(false)
+    setText('')
+    if (t && !f.tags.some((x) => sameTag(x, t))) await onTags(f, [...f.tags, t])
+  }
+  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void add()
+    } else if (e.key === 'Escape') {
+      setAdding(false)
+      setText('')
+    }
+  }
+
+  return (
+    <div className={f.tags.length === 0 ? 'flow-tags empty' : 'flow-tags'}>
+      {f.tags.map((t) => (
+        <span key={t} className="flow-tag">
+          <button className="flow-tag-name" onClick={() => onTag(t)} title={`Show only the flows tagged ${t}`}>
+            {t}
+          </button>
+          {editable && (
+            <button className="flow-tag-remove" onClick={() => void onTags(f, f.tags.filter((x) => x !== t))} aria-label={`Take the tag ${t} away`}>
+              ×
+            </button>
+          )}
+        </span>
+      ))}
+      {editable &&
+        (adding ? (
+          <>
+            <input
+              className="flow-tag-input"
+              autoFocus
+              list={`flow-tags-${f.id}`}
+              aria-label={`A new tag for ${f.name}`}
+              placeholder="Tag"
+              maxLength={64}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={onKey}
+              onBlur={() => void add()}
+            />
+            <datalist id={`flow-tags-${f.id}`}>
+              {known
+                .filter((k) => !f.tags.some((t) => sameTag(t, k)))
+                .map((k) => (
+                  <option key={k} value={k} />
+                ))}
+            </datalist>
+          </>
+        ) : (
+          <button className="flow-tag-add" onClick={() => setAdding(true)} title="Tag it, to find it by">
+            <PlusIcon size={10} /> Tag
+          </button>
+        ))}
+    </div>
   )
 }
 
@@ -320,6 +547,11 @@ function FlowSection({
   onCreate,
   onDelete,
   onError,
+  narrowed,
+  tags,
+  onStar,
+  onTags,
+  onTag,
 }: {
   kind?: FlowKind
   title: string
@@ -334,6 +566,12 @@ function FlowSection({
   onCreate: (name: string) => Promise<void>
   onDelete: (f: Flow) => void
   onError: (err: unknown) => void
+  // Whether the list shows only some flows, and every tag there is.
+  narrowed: boolean
+  tags: string[]
+  onStar: (f: Flow) => void
+  onTags: (f: Flow, tags: string[]) => Promise<void>
+  onTag: (tag: string) => void
 }) {
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -372,15 +610,27 @@ function FlowSection({
       {flows === null ? (
         <p className="flows-note">Loading…</p>
       ) : flows.length === 0 ? (
-        <p className="flows-note">{empty}</p>
+        <p className="flows-note">{narrowed ? `None of the ${title.toLowerCase()} match.` : empty}</p>
       ) : (
         <ul className="flow-list">
           {flows.map((f) => (
             <li key={f.id}>
-              <a className="flow-card" href={`#/flows/${f.id}`}>
-                <span className="flow-card-name">{f.name}</span>
-                <span className="flow-card-run">{cardStatus(f, kind)}</span>
-              </a>
+              <button
+                className={f.favourite ? 'icon-button flow-star starred' : 'icon-button flow-star'}
+                onClick={() => onStar(f)}
+                aria-pressed={f.favourite}
+                aria-label={f.favourite ? `Take ${f.name} out of your favourites` : `Star ${f.name} as a favourite`}
+                title={f.favourite ? 'A favourite of yours, listed first' : 'Star it as a favourite, to list it first'}
+              >
+                <StarIcon filled={f.favourite} />
+              </button>
+              <div className="flow-card-body">
+                <a className="flow-card" href={`#/flows/${f.id}`}>
+                  <span className="flow-card-name">{f.name}</span>
+                  <span className="flow-card-run">{cardStatus(f, kind)}</span>
+                </a>
+                <FlowTags f={f} known={tags} onTags={onTags} onTag={onTag} />
+              </div>
               {me?.user &&
                 (f.access === 'review' ? (
                   <span

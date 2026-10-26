@@ -69,7 +69,9 @@ type setupSkill struct {
 }
 
 type setupFlow struct {
-	Name         string            `yaml:"name"`
+	Name string `yaml:"name"`
+	// Its tags; see tags.go.
+	Tags         []string          `yaml:"tags,omitempty"`
 	Repositories []setupRepository `yaml:"repositories,omitempty"`
 	BranchPrefix string            `yaml:"branchPrefix,omitempty"`
 	Schedules    []setupSchedule   `yaml:"schedules,omitempty"`
@@ -172,8 +174,9 @@ type setupObject struct {
 	Name       string `yaml:"name"`
 	Key        string `yaml:"key,omitempty"`
 	Persistent bool   `yaml:"persistent,omitempty"`
-	// Only a struct's object; see shared.go.
+	// Only a struct's object; see shared.go. Its tags are the struct's.
 	Shared bool     `yaml:"shared,omitempty"`
+	Tags   []string `yaml:"tags,omitempty"`
 	Many   bool     `yaml:"many,omitempty"`
 	Min    int      `yaml:"min,omitempty"`
 	Max    *int     `yaml:"max,omitempty"`
@@ -190,6 +193,14 @@ type setupObject struct {
 	States     []setupState     `yaml:"states,omitempty"`
 	Attributes []setupAttribute `yaml:"attributes,omitempty"`
 	Parts      []setupObject    `yaml:"parts,omitempty"`
+}
+
+// A struct's tags, given on its object; none for no object.
+func (o *setupObject) tags() []string {
+	if o == nil {
+		return nil
+	}
+	return o.Tags
 }
 
 // The object a copy follows: a struct's, or one of a procedure's.

@@ -57,8 +57,8 @@ func TestFlowConditions(t *testing.T) {
 	}
 }
 
-// Reading needs only review access, and so does deciding a review; anything
-// else changes the flow.
+// Reading needs only review access, and so do deciding a review and
+// starring a flow; anything else changes the flow.
 func TestNeededAccess(t *testing.T) {
 	for _, c := range []struct {
 		method, path, want string
@@ -75,6 +75,10 @@ func TestNeededAccess(t *testing.T) {
 		{"POST", "/api/runs/3/steps/4", accessEdit},
 		{"DELETE", "/api/runs/3/steps/4", accessEdit},
 		{"PUT", "/api/flows/1/owner", accessEdit},
+		{"PUT", "/api/flows/1/tags", accessEdit},
+		{"PUT", "/api/flows/1/favourite", accessReview},
+		{"DELETE", "/api/flows/1/favourite", accessReview},
+		{"DELETE", "/api/flows/1/favourite/x", accessEdit},
 		{"POST", "/api/runs", accessEdit},
 	} {
 		r := httptest.NewRequest(c.method, c.path, nil)

@@ -36,6 +36,99 @@ type flow struct {
 	Access string    `json:"access"`
 	// Its latest run of the whole flow, if any.
 	LastRun *run `json:"lastRun"`
+	// What the flow list shows of it besides: its tags (tags.go), whether
+	// whoever asked starred it (favourites.go), and how its runs go of late,
+	// none for a struct, which never runs.
+	Tags      []string    `json:"tags"`
+	Favourite bool        `json:"favourite"`
+	Health    *flowHealth `json:"health"`
+}
+
+// How a flow's runs of its own go: how many started in the last healthFor
+// and how many of those failed, and how many are going on now.
+type flowHealth struct {
+	Runs    int `json:"runs"`
+	Failed  int `json:"failed"`
+	Running int `json:"running"`
+}
+
+const healthFor = 7 * 24 * time.Hour
+
+// The health of each of the flows that ran, by id.
+func flowHealths(ctx context.Context, db rowsQuerier, ids []int64) (map[int64]*flowHealth, error) {
+	health := map[int64]*flowHealth{}
+	if len(ids) == 0 {
+		return health, nil
+	}
+	of := func(id int64) *flowHealth {
+		if health[id] == nil {
+			health[id] = &flowHealth{}
+		}
+		return health[id]
+	}
+	in := placeholders(len(ids))
+	err := scanAll(ctx, db, `SELECT flow_id, COUNT(*), SUM(status = ?) FROM runs
+		WHERE parent_run_id IS NULL AND started_at >= ? AND flow_id IN `+in+` GROUP BY flow_id`, func(rows *sql.Rows) error {
+		var id int64
+		var h flowHealth
+		err := rows.Scan(&id, &h.Runs, &h.Failed)
+		of(id).Runs, of(id).Failed = h.Runs, h.Failed
+		return err
+	}, append([]any{runFailed, time.Now().Add(-healthFor)}, int64Args(ids)...)...)
+	if err != nil {
+		return nil, err
+	}
+	err = scanAll(ctx, db, `SELECT flow_id, COUNT(*) FROM runs
+		WHERE status = ? AND parent_run_id IS NULL AND flow_id IN `+in+` GROUP BY flow_id`, func(rows *sql.Rows) error {
+		var id int64
+		var n int
+		err := rows.Scan(&id, &n)
+		of(id).Running = n
+		return err
+	}, append([]any{runRunning}, int64Args(ids)...)...)
+	return health, err
+}
+
+// Fills in what the flow list shows of each flow besides the flow itself,
+// for whoever asked, a query for all of them each.
+func describeFlows(ctx context.Context, db *sql.DB, r *http.Request, fs []flow) error {
+	ids := make([]int64, len(fs))
+	for i, f := range fs {
+		ids[i] = f.ID
+	}
+	tags, err := flowTags(ctx, db, ids)
+	if err != nil {
+		return err
+	}
+	starred, err := favouriteFlows(ctx, db, favouritesOf(r), ids)
+	if err != nil {
+		return err
+	}
+	health, err := flowHealths(ctx, db, ids)
+	if err != nil {
+		return err
+	}
+	for i := range fs {
+		f := &fs[i]
+		f.Tags, f.Favourite = tags[f.ID], starred[f.ID]
+		if f.Tags == nil {
+			f.Tags = []string{}
+		}
+		if !f.Struct {
+			f.Health = health[f.ID]
+			if f.Health == nil {
+				f.Health = &flowHealth{}
+			}
+		}
+	}
+	return nil
+}
+
+// The flow with what describeFlows fills in.
+func describeFlow(ctx context.Context, db *sql.DB, r *http.Request, f flow) (flow, error) {
+	fs := []flow{f}
+	err := describeFlows(ctx, db, r, fs)
+	return fs[0], err
 }
 
 // The flow a request is about, from ?flow=<id>. Writes the error and returns
@@ -104,6 +197,78 @@ func getFlow(ctx context.Context, db *sql.DB, id int64) (flow, error) {
 	return f, nil
 }
 
+// Every flow the user sees, each as getFlow has it, with how far they may
+// go with it, by name: a query for all of them each, rather than some for
+// each, so a long list comes as quickly as a short one.
+func listFlows(ctx context.Context, db *sql.DB, u *user) ([]flow, error) {
+	see, seeArgs := visibleFlows(u)
+	edit, editArgs := editableFlows(u)
+	fs := []flow{}
+	err := scanAll(ctx, db, "SELECT f.id, f.name, f.module, f.is_struct, f.settings, f.created_at, "+ownerColumns+", "+edit+
+		" FROM flows f WHERE "+see+" ORDER BY f.name, f.id", func(rows *sql.Rows) error {
+		var f flow
+		var ownerUser, ownerTeam sql.NullInt64
+		var ownerName string
+		var editable bool
+		err := rows.Scan(&f.ID, &f.Name, &f.Module, &f.Struct, &f.Settings, &f.CreatedAt, &ownerUser, &ownerTeam, &ownerName, &editable)
+		f.Owner = scanOwner(ownerUser, ownerTeam, ownerName)
+		f.Access = accessReview
+		if editable {
+			f.Access = accessEdit
+		}
+		fs = append(fs, f)
+		return err
+	}, append(editArgs, seeArgs...)...)
+	if err != nil {
+		return nil, err
+	}
+	// How many other flows run each procedure, as usersOf counts them, and
+	// use each struct's object, as structUsers does.
+	called, used := map[int64]int{}, map[int64]int{}
+	err = scanAll(ctx, db, `SELECT CAST(JSON_EXTRACT(settings, '$.flow') AS SIGNED) AS called, COUNT(DISTINCT flow_id) FROM processes
+		WHERE kind = ? AND flow_id <> CAST(JSON_EXTRACT(settings, '$.flow') AS SIGNED) GROUP BY called`, func(rows *sql.Rows) error {
+		var id int64
+		var n int
+		err := rows.Scan(&id, &n)
+		called[id] = n
+		return err
+	}, kindSubflow)
+	if err != nil {
+		return nil, err
+	}
+	err = scanAll(ctx, db, `SELECT src.flow_id, COUNT(DISTINCT o.flow_id) FROM objects o JOIN objects src ON src.id = o.source_id
+		WHERE o.flow_id <> src.flow_id GROUP BY src.flow_id`, func(rows *sql.Rows) error {
+		var id int64
+		var n int
+		err := rows.Scan(&id, &n)
+		used[id] = n
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	last := map[int64]*run{}
+	err = scanAll(ctx, db, "SELECT "+runColumns+" FROM (SELECT MAX(id) AS last_id FROM runs WHERE parent_run_id IS NULL GROUP BY flow_id) l JOIN runs ON runs.id = l.last_id", func(rows *sql.Rows) error {
+		var rn run
+		err := scanRun(rows, &rn)
+		last[rn.Flow] = &rn
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range fs {
+		f := &fs[i]
+		if f.Struct {
+			f.UsedBy = used[f.ID]
+		} else {
+			f.UsedBy = called[f.ID]
+		}
+		f.LastRun = last[f.ID]
+	}
+	return fs, nil
+}
+
 // Deletes a flow with everything in it and every run of it, and returns
 // the runs, whose workspaces are to go too.
 func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
@@ -146,38 +311,14 @@ func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
 func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	// The flows the user sees; see owners.go.
 	mux.HandleFunc("GET /api/flows", func(w http.ResponseWriter, r *http.Request) {
-		cond, args := visibleFlows(requestUser(r))
-		rows, err := db.QueryContext(r.Context(), "SELECT f.id FROM flows f WHERE "+cond+" ORDER BY f.name, f.id", args...)
+		fs, err := listFlows(r.Context(), db, requestUser(r))
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		var ids []int64
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				serverError(w, err)
-				return
-			}
-			ids = append(ids, id)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
+		if err := describeFlows(r.Context(), db, r, fs); err != nil {
 			serverError(w, err)
 			return
-		}
-		fs := []flow{}
-		for _, id := range ids {
-			f, err := getFlow(r.Context(), db, id)
-			if err == nil {
-				f.Access, err = flowAccess(r.Context(), db, requestUser(r), id)
-			}
-			if err != nil {
-				serverError(w, err)
-				return
-			}
-			fs = append(fs, f)
 		}
 		writeJSON(w, http.StatusOK, fs)
 	})
@@ -195,6 +336,9 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return
+		}
+		if err == nil {
+			f, err = describeFlow(r.Context(), db, r, f)
 		}
 		if err != nil {
 			serverError(w, err)
@@ -269,6 +413,9 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 		f, err := getFlow(r.Context(), db, id)
+		if err == nil {
+			f, err = describeFlow(r.Context(), db, r, f)
+		}
 		if err != nil {
 			serverError(w, err)
 			return
@@ -356,6 +503,9 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return
+		}
+		if err == nil {
+			f, err = describeFlow(r.Context(), db, r, f)
 		}
 		if err != nil {
 			serverError(w, err)

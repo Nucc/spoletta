@@ -18,11 +18,12 @@ Import replies with the flows it created and the ones it updated. Since YAML tak
 What importing does:
 
 - A struct, procedure or flow the app doesn't have yet is **created**.
-- One the app already has, by name, is **updated** to match the file. Anything on its boards that the file doesn't have is removed. Processes, objects, states and attributes that match by name, on the same board, keep their ids, so the flow's past runs and the values its persistent objects stored still point to them. The board is saved as a version first, and the import is one step of the board's undo history, so you can go back with Cmd-Z or from Versions. Going back restores the board only. The flow's repositories, branch prefix, schedules and whether it's a procedure stay as imported, and so do MCP servers. Importing over a flow that published a version changes its draft only: its schedules, the API and runs on records go on running the version it published until someone publishes again.
+- One the app already has, by name, is **updated** to match the file. Anything on its boards that the file doesn't have is removed. Processes, objects, states and attributes that match by name, on the same board, keep their ids, so the flow's past runs and the values its persistent objects stored still point to them. The board is saved as a version first, and the import is one step of the board's undo history, so you can go back with Cmd-Z or from Versions. Going back restores the board only. The flow's repositories, branch prefix, schedules, tags and whether it's a procedure stay as imported, and so do MCP servers. Importing over a flow that published a version changes its draft only: its schedules, the API and runs on records go on running the version it published until someone publishes again.
 - Flows that the file doesn't mention stay as they are. Import never deletes a flow.
 - An MCP server is matched by name. Its URL, description, auth and connector are set from the file. A server whose URL or auth changes is signed out, and loses its token.
 - A skill or command is matched by name. Its description, arguments and content are set from the file, and it keeps whoever it belongs to. One the app doesn't have is added as everyone's.
 - A flow's schedules become the file's. Schedules the flow already has with the same cron and time zone are kept; others are removed.
+- A flow's, procedure's or struct's tags become the file's, so one the file gives none loses those it had.
 - The file is imported **whole or not at all**. If anything is wrong, the reply says what and where, and nothing changes. A flow that is running can't be updated.
 
 Exporting refuses while two flows share a name, since the file refers to flows by name.
@@ -80,6 +81,7 @@ Flows and procedures have the same shape:
 
 ```yaml
 - name: Fix exceptions
+  tags: [nightly, billing]      # what the flow list finds it by and narrows to
   repositories:                 # what agents and scripts check out
     - name: app
       url: https://github.com/example/app
@@ -189,7 +191,7 @@ A process taking an object and yielding it too affects it: it hands the object i
 
 ### Structs and copies
 
-A struct is a single object, listed under `structs:`. Its name is the struct's name. Flows and procedures use it through a **copy**:
+A struct is a single object, listed under `structs:`. Its name is the struct's name, and its `tags` are the struct's; no other object has tags. Flows and procedures use it through a **copy**:
 
 ```yaml
 objects:

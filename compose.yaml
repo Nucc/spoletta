@@ -154,6 +154,12 @@ services:
       # add here with the file mounted.
       SECRET_KEY: ${SECRET_KEY:-}
       SECRET_KEY_SECONDARY: ${SECRET_KEY_SECONDARY:-}
+      # A run whose webapp stops, as for a deploy or a crash, is taken over
+      # by the webapp that starts next, or another alive, and goes on from
+      # what it stored: reviews wait again, and a step that was going goes
+      # again if its retries let it. false ends such runs as interrupted
+      # instead. See webapp/adopt.go and docs/REPLICAS.md.
+      RESUME_RUNS: ${RESUME_RUNS:-true}
     volumes:
       # Read-only: the webapp checks and serves files; the worker writes them.
       - files:/data/files:ro

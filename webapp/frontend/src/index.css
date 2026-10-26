@@ -1809,6 +1809,14 @@ body {
   font-weight: 400;
 }
 
+/* A run that moved to another replica as the one walking it stopped. */
+.panel-note.run-move {
+  padding: 6px 8px;
+  border-left: 3px solid #d4a72c;
+  background: #fff8c5;
+  color: #57606a;
+}
+
 .panel-row {
   display: flex;
   gap: 12px;

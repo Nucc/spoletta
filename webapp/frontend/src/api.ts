@@ -1155,9 +1155,21 @@ export type RunObject = {
 
 export const fileUrl = (path: string) => `/api/files?path=${encodeURIComponent(path)}`
 
+// A time the run moved to another replica of the webapp, as the one walking
+// it stopped: from which replica to which, the host it went to, and the
+// steps that were going then, lost, each tried again or failed; see
+// adopt.go.
+export type RunMove = {
+  from: string
+  to: string
+  host: string
+  lost: { step: number; process: string; retried: boolean }[]
+  movedAt: string
+}
+
 // spent is what the run, with its subflows' and items' runs, spent on its
 // models, in dollars, and spendLimit the most it may, 0 for no limit.
-export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[]; spent: number; spendLimit: number }
+export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[]; spent: number; spendLimit: number; moves: RunMove[] }
 
 // Runs a flow on its own whenever its cron expression comes round, on the
 // board as it is, as the Run button does. A time that comes round while its

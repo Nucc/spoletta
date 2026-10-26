@@ -657,7 +657,13 @@ does (an escalation, say, or a default decision made by an agent).
 - **failed**: some branch failed without a handler.
 - **terminated**: a duplicate of a unique value; reviews still waiting end
   undecided.
-- **interrupted**: a person stopped it.
+- **interrupted**: a person stopped it. A run whose server stops, as for a
+  deploy, isn't: another server takes it over and it goes on from what it
+  stored. Its reviews wait again as they were; an agent, script or
+  connector step going then is lost and goes again if its `retries` let it,
+  or else fails, which `onFailure` can handle. So give a step whose work
+  is long or costly `retries` if it should survive a deploy, and keep in
+  mind that a connector step going again may post or write twice.
 
 ---
 

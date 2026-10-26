@@ -166,8 +166,8 @@ ALTER TABLE runs DROP COLUMN label;
   needs the duplicates gone first.
 - **Data changes go in migrations too**, as `UPDATE`s next to the schema
   change they follow from.
-- What must happen on every start rather than once, such as ending runs a
-  stopped replica left running, isn't a migration: it goes in
+- What must happen on every start rather than once, such as taking over or
+  ending runs a stopped replica left running, isn't a migration: it goes in
   `endStopped` in [webapp/replicas.go](../webapp/replicas.go).
 
 A statement with semicolons inside it, such as a trigger, goes between

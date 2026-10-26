@@ -15,6 +15,7 @@ import {
   type ProcessKind,
   type RepoCommits,
   type RunFilter,
+  type RunMove,
   type RunOrigin,
   type RunStanding,
   type RunStep,
@@ -402,6 +403,7 @@ export function RunPanel({
         {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
         {totalUsage(run.steps) && `; its agents used ${formatUsage(totalUsage(run.steps)!)}`}
       </p>
+      {run.moves.length > 0 && <RunMoves moves={run.moves} onOpenStep={(step) => onOpenStep(run.id, step)} />}
       {(run.spent > 0 || run.spendLimit > 0) && (
         <p className="panel-note">
           It spent {formatDollars(run.spent)} on its models
@@ -502,6 +504,31 @@ export const rerunnableFrom = (run: FlowRunDetail, s: RunStep) =>
 
 // What a trial is, and once it is over, what its process handed back and
 // what that cost.
+// Each time the run moved to another replica, as the one walking it
+// stopped, and the steps going then that were lost; a run moved never ends
+// interrupted for it. See adopt.go.
+function RunMoves({ moves, onOpenStep }: { moves: RunMove[]; onOpenStep: (step: number) => void }) {
+  return (
+    <>
+      {moves.map((m, i) => (
+        <p key={i} className="panel-note run-move">
+          Moved {formatTime(m.movedAt)} to {m.host ? `the server on ${m.host}` : 'another server'} (replica {m.to.slice(0, 8)}), as
+          the one running it{m.from && ` (replica ${m.from.slice(0, 8)})`} stopped; it went on from what it had stored.
+          {m.lost.map((l) => (
+            <span key={l.step}>
+              {' '}
+              <button className="link-button" onClick={() => onOpenStep(l.step)}>
+                {l.process}
+              </button>{' '}
+              was going and was lost, {l.retried ? 'so it was tried again.' : 'with no tries left, so it failed.'}
+            </span>
+          ))}
+        </p>
+      ))}
+    </>
+  )
+}
+
 function TrialSummary({ run, onTryAgain }: { run: FlowRunDetail; onTryAgain?: (process: number) => void }) {
   const usage = totalUsage(run.steps)
   const cost = run.spent > 0 ? run.spent : (usage?.cost ?? 0)

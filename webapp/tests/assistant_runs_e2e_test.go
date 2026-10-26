@@ -194,3 +194,43 @@ func TestAssistantIsToldOnlyThisFlowsRuns(t *testing.T) {
 		t.Errorf("the prompt holds another flow's run:\n%s", runs)
 	}
 }
+
+// A procedure's runs are started by subflow processes in runs of other
+// flows: its assistant counts and tells them, the caller's tells none.
+func TestAssistantOfAProcedureIsToldItsRuns(t *testing.T) {
+	a := newApp(t)
+	callee := a.newFlow("Summarize")
+	ticketThere := a.newObject(callee.ID, "Ticket")
+	summarizer := a.agent(callee.ID, "Summarizer", "Summarize the ticket.")
+	a.input(summarizer.ID, ticketThere.ID)
+	a.startAt(callee.ID, summarizer.ID)
+	caller := a.newFlow("Triage")
+	write := a.agent(caller.ID, "Write", "Write a ticket.")
+	ticket := a.newObject(caller.ID, "Ticket")
+	call := a.newProcess(caller.ID, map[string]any{"name": "Call", "kind": kindSubflow, "settings": map[string]any{"flow": callee.ID}})
+	a.output(write.ID, ticket.ID)
+	a.input(call.ID, ticket.ID)
+	a.startAt(caller.ID, write.ID)
+	a.worker.onAgent("Write", handsIn(data("crash in login")))
+	a.worker.onAgent("Summarizer", func(context.Context, agentRun) runResult { return runResult{Error: "the model is overloaded"} })
+	a.worker.onAgent("Assistant", func(context.Context, agentRun) runResult { return runResult{OK: true, Output: "Here."} })
+
+	rn := a.startRun(caller.ID)
+	d := a.finish(rn.ID)
+	child := *onlyStep(t, d, "Call").ChildRun
+
+	prompt := assistantPromptFor(a, callee.ID, fmt.Sprintf("Why did run %d fail?", child))
+	runs, recent := promptSection(prompt, "runs"), promptSection(prompt, "recent_runs")
+	if !strings.Contains(runs, fmt.Sprintf("Run #%d, failed: a run of this flow by a subflow process in run #%d, of another flow.", child, rn.ID)) ||
+		!strings.Contains(runs, "Error: the model is overloaded") {
+		t.Errorf("the procedure's run isn't told:\n%s", runs)
+	}
+	if !strings.Contains(recent, fmt.Sprintf("The flow's latest 1 runs, trials left out, from #%d", child)) {
+		t.Errorf("the procedure's latest runs leave out its run:\n%s", recent)
+	}
+
+	prompt = assistantPromptFor(a, caller.ID, fmt.Sprintf("And run %d?", child))
+	if runs := promptSection(prompt, "runs"); !strings.Contains(runs, fmt.Sprintf("Run #%d is no run of this flow.", child)) || strings.Contains(runs, "Summarizer") {
+		t.Errorf("the caller is told the procedure's run:\n%s", runs)
+	}
+}

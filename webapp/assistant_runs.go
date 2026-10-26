@@ -1079,7 +1079,10 @@ const recentSteps = 8
 
 func loadRecentRuns(ctx context.Context, db *sql.DB, flow int64) (recentRuns, error) {
 	var rr recentRuns
-	rows, err := db.QueryContext(ctx, "SELECT "+runColumns+" FROM runs WHERE flow_id = ? AND parent_run_id IS NULL AND trial_of IS NULL ORDER BY id DESC LIMIT ?",
+	// Runs at their top within the flow: a procedure's are started by
+	// subflow processes in runs of other flows.
+	rows, err := db.QueryContext(ctx, "SELECT "+runColumns+` FROM runs WHERE flow_id = ? AND trial_of IS NULL
+		AND NOT EXISTS (SELECT 1 FROM runs p WHERE p.id = runs.parent_run_id AND p.flow_id = runs.flow_id) ORDER BY id DESC LIMIT ?`,
 		flow, assistantRecentRuns)
 	if err != nil {
 		return rr, err

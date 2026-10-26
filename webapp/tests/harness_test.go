@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -780,14 +781,17 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 }
 
 // What a step prints or says with the step's credentials token where it
-// says {token}, and its first ten characters and the rest where it says
-// {token-head} and {token-tail}, as a script printing it a piece at a time.
+// says {token}, its first ten characters and the rest where it says
+// {token-head} and {token-tail}, as a script printing it a piece at a time,
+// and basic auth's whoever:token in base64 where it says {token-basic}, as
+// curl -v prints it.
 func stepToken(s, token string) string {
 	head, tail := token, ""
 	if len(token) > 10 {
 		head, tail = token[:10], token[10:]
 	}
-	return strings.NewReplacer("{token}", token, "{token-head}", head, "{token-tail}", tail).Replace(s)
+	basic := base64.StdEncoding.EncodeToString([]byte("whoever:" + token))
+	return strings.NewReplacer("{token}", token, "{token-head}", head, "{token-tail}", tail, "{token-basic}", basic).Replace(s)
 }
 
 func (fw *fakeWorker) onAgent(process string, reply func(context.Context, agentRun) runResult) {

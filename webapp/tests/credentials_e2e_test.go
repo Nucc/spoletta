@@ -263,7 +263,8 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 	var tricks []credentialsAnswer
 	// What the script prints holds its token, as with set -x, a piece at a time.
 	a.worker.mu.Lock()
-	a.worker.scriptOutput["Fetch"] = [][2]string{{"stderr", "+ curl -H 'Authorization: Bearer {token-head}"}, {"stderr", "{token-tail}' \"$CREDENTIAL_JIRA_URL\"\n"}, {"stdout", "the token is {token}\n"}}
+	a.worker.scriptOutput["Fetch"] = [][2]string{{"stderr", "+ curl -H 'Authorization: Bearer {token-head}"}, {"stderr", "{token-tail}' \"$CREDENTIAL_JIRA_URL\"\n"},
+		{"stdout", "the token is {token}\n"}, {"stderr", "> Authorization: Basic {token-basic}\n"}}
 	a.worker.mu.Unlock()
 	a.worker.onScript("Fetch", func(_ context.Context, run scriptRun) runResult {
 		token := run.CredentialsToken
@@ -301,7 +302,8 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 			"/..:/..:/other", "/..::$INDEX_ALLOCATION/..::$INDEX_ALLOCATION/other"} {
 			tricks = append(tricks, credentialsCall(t, "GET", jiraURL+path, token, false, ""))
 		}
-		return runResult{OK: true, Output: "fetched with " + token, Log: []logLine{{Time: time.Now(), Level: "info", Message: "bash ran with " + token}}}
+		return runResult{OK: true, Output: "fetched with " + token, Log: []logLine{{Time: time.Now(), Level: "info", Message: "bash ran with " + token},
+			{Time: time.Now(), Level: "info", Message: stepToken("bash printed Authorization: Basic {token-basic}", token)}}}
 	})
 	d := a.finish(a.startRun(f.ID).ID)
 	if d.Status != runDone {
@@ -435,10 +437,12 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 	for _, c := range chunks {
 		printed += c.Text
 	}
-	if !strings.Contains(printed, "Authorization: Bearer [redacted]' ") || !strings.Contains(printed, "the token is [redacted]\n") {
+	if !strings.Contains(printed, "Authorization: Bearer [redacted]' ") || !strings.Contains(printed, "the token is [redacted]\n") ||
+		!strings.Contains(printed, "[redacted]") || strings.Contains(printed, stepToken("{token-basic}", run.CredentialsToken)[12:40]) {
 		t.Errorf("what the script printed was kept as %q", printed)
 	}
 	logLineWith(t, lines, "bash ran with [redacted]")
+	logLineWith(t, lines, "bash printed Authorization: Basic ")
 	all = append(all, printed, step.Output, step.Error)
 	for _, l := range lines {
 		all = append(all, l.Message)
@@ -447,7 +451,8 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 		all = append(all, e.Detail)
 	}
 	all = append(all, a.proc.log.String())
-	for _, secret := range []string{jiraSecret, basicSecret, querySecret, url.QueryEscape(querySecret), run.CredentialsToken, run.CredentialsToken[:10], run.CredentialsToken[10:]} {
+	for _, secret := range []string{jiraSecret, basicSecret, querySecret, url.QueryEscape(querySecret), run.CredentialsToken, run.CredentialsToken[:10], run.CredentialsToken[10:],
+		stepToken("{token-basic}", run.CredentialsToken)[12:40]} {
 		for _, s := range all {
 			if strings.Contains(s, secret) {
 				t.Errorf("%q holds a secret or the token", s)

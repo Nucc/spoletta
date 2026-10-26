@@ -54,13 +54,14 @@ type scriptRun struct {
 	Since *int64 `json:"since,omitempty"`
 }
 
-// The tokens the step is handed, which are blanked out of what is kept of it.
+// The tokens the step is handed, in each form it could print them in
+// (tokenForms), which are blanked out of what is kept of it.
 func (run scriptRun) tokens() []string {
-	tokens := []string{run.CredentialsToken, run.Egress.token()}
+	tokens, users := []string{run.CredentialsToken, run.Egress.token()}, []string{egressUser}
 	if run.Git != nil {
-		tokens = append(tokens, run.Git.Token)
+		tokens, users = append(tokens, run.Git.Token), append(users, run.Git.Username)
 	}
-	return tokens
+	return tokenForms(tokens, users...)
 }
 
 type scriptInput struct {

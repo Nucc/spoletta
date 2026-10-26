@@ -81,6 +81,10 @@ type egressBroker struct {
 // The broker steps' egress goes through; set as the webapp starts.
 var egress *egressBroker
 
+// The username of the proxy's URL a step gets, with its token as the
+// password.
+const egressUser = "step"
+
 func newEgressBroker(db *sql.DB, proxyURL string) *egressBroker {
 	return &egressBroker{db: db, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: grantsIn(db),
 		expiries: map[string]*time.Timer{}, tunnels: map[string]map[net.Conn]bool{}}
@@ -124,7 +128,7 @@ func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl
 	b.mu.Lock()
 	b.expiries[token] = time.AfterFunc(ttl+llmGrantMargin, func() { b.revokeToken(token, "expired") })
 	b.mu.Unlock()
-	u.User = url.UserPassword("step", token)
+	u.User = url.UserPassword(egressUser, token)
 	u.Path = ""
 	audit("internet.grant", who, run, step, "the egress proxy, reaching the hosts allowed and %s", hostList(reaches.Repos))
 	return &egressAccess{URL: u.String()}

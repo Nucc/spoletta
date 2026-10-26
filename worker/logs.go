@@ -8,11 +8,14 @@ package main
 // how it ended, with what went wrong. The lines are streamed as they come,
 // so a step stopped half way keeps those it got to; a script's come with
 // its result to a webapp not asking for a stream.
-// Prompts, keys and tokens are never logged.
+// Prompts, keys and tokens are never logged: the step's tokens are blanked
+// out of what it prints, as set -x or curl -v would print them (hiding).
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +38,8 @@ const maxStepLogBytes = 1 << 20
 type stepLogger struct {
 	label string
 	emit  func(logLine)
+	// Blanks the step's tokens out of each line; see hiding.
+	blank *strings.Replacer
 
 	mu      sync.Mutex
 	lines   []logLine
@@ -49,8 +54,67 @@ func newStepLogger(label string, emit func(logLine)) *stepLogger {
 func (l *stepLogger) infof(format string, args ...any)  { l.add("info", format, args...) }
 func (l *stepLogger) errorf(format string, args ...any) { l.add("error", format, args...) }
 
+// Has the logger blank the step's tokens out of every line it logs from
+// now on, in the worker's log and the webapp's alike, in each form they
+// could be printed in: as they are, in base64 within something longer (a
+// curl -v printing Proxy-Authorization: Basic with a username of the
+// step's making), and as basic auth's user:token for the usernames the
+// step is given. The webapp blanks them out of what it keeps of the step
+// the same way (tokenForms in webapp/credentials.go).
+func (l *stepLogger) hiding(tokens, usernames []string) *stepLogger {
+	var forms []string
+	for _, t := range tokens {
+		if t == "" {
+			continue
+		}
+		forms = append(forms, t)
+		forms = append(forms, base64Within(t)...)
+		for _, u := range usernames {
+			forms = append(forms, base64.StdEncoding.EncodeToString([]byte(u+":"+t)))
+		}
+	}
+	// Longest first, so one holding another is blanked out whole.
+	slices.SortFunc(forms, func(a, b string) int { return len(b) - len(a) })
+	var pairs []string
+	for i, f := range forms {
+		if !slices.Contains(forms[:i], f) {
+			pairs = append(pairs, f, "[redacted]")
+		}
+	}
+	if len(pairs) > 0 {
+		l.blank = strings.NewReplacer(pairs...)
+	}
+	return l
+}
+
+// What of s's base64 shows wherever s is encoded, whatever comes before or
+// after it: for each of the three places s can start at in a group of
+// three bytes, the characters its own whole groups make, in either
+// alphabet; none shorter than eight, which could be anybody's.
+func base64Within(s string) []string {
+	var out []string
+	for skip := 0; skip < 3 && skip < len(s); skip++ {
+		rest := s[skip:]
+		rest = rest[:len(rest)/3*3]
+		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding} {
+			if e := enc.EncodeToString([]byte(rest)); len(e) >= 8 {
+				out = append(out, e)
+			}
+		}
+	}
+	return out
+}
+
+// s without the step's tokens.
+func (l *stepLogger) hide(s string) string {
+	if l == nil || l.blank == nil {
+		return s
+	}
+	return l.blank.Replace(s)
+}
+
 func (l *stepLogger) add(level, format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
+	msg := l.hide(fmt.Sprintf(format, args...))
 	label := "run"
 	if l != nil {
 		label = l.label

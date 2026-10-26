@@ -724,6 +724,25 @@ func credentialRedactor(c credential, secret string) *redactor {
 	return newRedactor(secretForms(c, secret)...).withPieces(secretEncodings(secret)...)
 }
 
+// The forms a step's tokens could be printed in: as they are, in base64
+// within something longer (a curl -v printing Proxy-Authorization: Basic
+// with a username of the step's making), and as basic auth's user:token
+// for each username steps are given.
+func tokenForms(tokens []string, usernames ...string) []string {
+	var forms []string
+	for _, t := range tokens {
+		if t == "" {
+			continue
+		}
+		forms = append(forms, t)
+		forms = append(forms, base64Within(t)...)
+		for _, u := range usernames {
+			forms = append(forms, base64.StdEncoding.EncodeToString([]byte(u+":"+t)))
+		}
+	}
+	return forms
+}
+
 // What stands for a secret or token taken out of what a step gets or
 // what is kept of it.
 const redacted = "[redacted]"

@@ -341,10 +341,16 @@ can't:
 - **hand its token to someone else.** What is kept of the step, what a
   script prints (stdout and stderr, as shown in its terminal window, a
   token printed a piece at a time included, as `set -x` does), an agent's
-  conversation, the worker's log lines and the step's result, has the
-  step's tokens blanked out as it is stored, so nobody who sees the flow
-  can call its services with them while it runs. A token it prints, or
-  leaves in a file, reaches nothing once the step ends.
+  conversation, the worker's log lines, in the run's log and the worker's
+  own, and the step's result, has the step's tokens blanked out, as they
+  are, in base64 within something longer, and as basic auth's `user:token`
+  (as `curl -v` prints `Proxy-Authorization: Basic …`), so nobody who sees
+  the flow can call its services with them while it runs. Its model, MCP,
+  internet and credential tokens reach nothing once the step ends, wherever
+  it printed or left them. Its git token doesn't end with it: a GitHub
+  App's installation token lasts its hour, and `GIT_TOKEN` until it is
+  changed, so a step leaving it in a file or a commit others read hands
+  over the run's repositories for that long.
 - **reach other paths or hosts with it.** The path is joined to the base
   URL's; one stepping out of it (`..`, `.`, `//`), carrying an encoded slash
   or backslash (`%2F`, `%5C`), a `%` at all once decoded, which a service

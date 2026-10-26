@@ -381,16 +381,17 @@ func runAgent(ctx context.Context, db *sql.DB, workerURL string, run agentRun, s
 	return res
 }
 
-// The tokens the step is handed, which are blanked out of what is kept of it.
+// The tokens the step is handed, in each form it could print them in
+// (tokenForms), which are blanked out of what is kept of it.
 func (run agentRun) tokens() []string {
-	tokens := []string{run.MCPToken, run.CredentialsToken, run.Egress.token()}
+	tokens, users := []string{run.MCPToken, run.CredentialsToken, run.Egress.token()}, []string{egressUser}
 	if run.LLM != nil {
 		tokens = append(tokens, run.LLM.Token)
 	}
 	if run.Git != nil {
-		tokens = append(tokens, run.Git.Token)
+		tokens, users = append(tokens, run.Git.Token), append(users, run.Git.Username)
 	}
-	return tokens
+	return tokenForms(tokens, users...)
 }
 
 // Runs the agent in the worker and waits for the result, handing each

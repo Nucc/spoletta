@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -160,6 +161,34 @@ type scriptRequest struct {
 	// When its schedule's last run that got through started, in seconds
 	// since 1970, which $SINCE and $LAST_RUN hold; nil for none.
 	Since *int64 `json:"since"`
+}
+
+// The tokens the step is handed, and the usernames it is given with them,
+// which the worker's log never holds (hiding).
+func (run runRequest) tokens() (tokens, usernames []string) {
+	tokens = []string{run.MCPToken, run.CredentialsToken}
+	if run.LLM != nil {
+		tokens = append(tokens, run.LLM.Token)
+	}
+	return stepTokens(tokens, run.Egress, run.Git)
+}
+
+func (run scriptRequest) tokens() (tokens, usernames []string) {
+	return stepTokens([]string{run.CredentialsToken}, run.Egress, run.Git)
+}
+
+// The tokens with the egress proxy's and git's, if any, and their
+// usernames.
+func stepTokens(tokens []string, egress *egressAccess, git *gitCredentials) ([]string, []string) {
+	var usernames []string
+	if u, err := url.Parse(egress.proxy()); err == nil && u.User != nil {
+		token, _ := u.User.Password()
+		tokens, usernames = append(tokens, token), append(usernames, u.User.Username())
+	}
+	if git != nil {
+		tokens, usernames = append(tokens, git.Token), append(usernames, git.Username, "x-access-token")
+	}
+	return tokens, usernames
 }
 
 // The run's own limit, if it has one, or the worker's.
@@ -355,7 +384,7 @@ func main() {
 		started := time.Now()
 		l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), func(line logLine) {
 			send(map[string]logLine{"log": line})
-		})
+		}).hiding(run.tokens())
 		res := runPi(r.Context(), run, limit(run.TimeoutMS, timeout), l, func(m json.RawMessage) {
 			send(map[string]json.RawMessage{"message": m})
 		})
@@ -390,7 +419,7 @@ func main() {
 		// then {"result": ...}. Otherwise the reply is the result alone, its
 		// log in it.
 		if !strings.Contains(r.Header.Get("Accept"), "application/x-ndjson") {
-			l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), nil)
+			l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), nil).hiding(run.tokens())
 			res := runScript(r.Context(), run, limit(run.TimeoutMS, timeout), l, nil)
 			logOutcome(l, "bash", res, time.Since(started))
 			res.Log = l.kept()
@@ -412,7 +441,7 @@ func main() {
 		}
 		l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), func(line logLine) {
 			send(map[string]logLine{"log": line})
-		})
+		}).hiding(run.tokens())
 		out := newLiveOutput(func(stream, text string) {
 			send(map[string]map[string]string{"output": {"stream": stream, "text": text}})
 		})
@@ -1085,7 +1114,7 @@ func logOutcome(l *stepLogger, with string, res runResult, d time.Duration) {
 	} else {
 		l.errorf("%s failed in %dms: %s", with, d.Milliseconds(), res.Error)
 	}
-	for _, line := range strings.Split(res.Output, "\n") {
+	for _, line := range strings.Split(l.hide(res.Output), "\n") {
 		if res.Output != "" {
 			log.Printf("worker: %s output| %s", l.label, line)
 		}

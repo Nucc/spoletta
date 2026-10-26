@@ -330,6 +330,24 @@ func TestRedactorBlanksPiecesOfSecrets(t *testing.T) {
 	}
 }
 
+// A step's tokens are blanked out as they are, in base64 within something
+// longer, and as basic auth's user:token for the usernames steps get.
+func TestTokenForms(t *testing.T) {
+	token := "Qm9ndXMtdG9rZW4tZm9yLXRlc3RzLW9ubHktMDEyMzQ1"
+	blank := newRedactor(tokenForms([]string{token, ""}, egressUser, "x-access-token")...)
+	for user, whole := range map[string]bool{"step": true, "x-access-token": true, "whoever-they-say": false, "ab": false, "": false} {
+		got := blank.text(base64.StdEncoding.EncodeToString([]byte(user + ":" + token)))
+		// But for the groups holding the username and the token's first and
+		// last bytes, which share them.
+		if left := len(got) - len(redacted); !strings.Contains(got, redacted) || whole && left != 0 || left > (len(user)+1+2)/3*4+4 {
+			t.Errorf("basic auth as %q came out as %s", user, got)
+		}
+	}
+	if got := blank.text("Bearer " + token); got != "Bearer [redacted]" {
+		t.Errorf("the token came out as %s", got)
+	}
+}
+
 // Only the headers a client sends to say what it sends and wants, and
 // those the credential names, go on; never one that could send the call
 // elsewhere, carries the step's token, or the connection names.

@@ -9328,8 +9328,18 @@ select.flow-owner:disabled {
     width: auto;
   }
 
-  .toolbar .view-menu .toolbar-menu-label {
+  .board .toolbar {
+    gap: 6px;
+  }
+
+  .toolbar .view-menu .toolbar-menu-label,
+  .toolbar .view-menu .toolbar-menu-button svg:last-child {
     display: none;
+  }
+
+  .toolbar .view-menu .toolbar-menu-button,
+  .toolbar .problems-toggle {
+    padding: 6px 8px;
   }
 
   .toolbar .play {

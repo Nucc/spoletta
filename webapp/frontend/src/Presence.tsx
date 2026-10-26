@@ -20,11 +20,12 @@ function hue(id: number): number {
 
 // The others with the board open, by their initials in the toolbar; those
 // editing it have a ring and say so. Nobody shows without sign-in, nor when
-// nobody else is there.
-export default function Presence({ people }: { people: BoardViewer[] }) {
+// nobody else is there. Where the toolbar is short of room, as on a phone,
+// fewer show, down to none but their count.
+export default function Presence({ people, max = SHOWN }: { people: BoardViewer[]; max?: number }) {
   if (people.length === 0) return null
-  const shown = people.slice(0, SHOWN)
-  const rest = people.slice(SHOWN)
+  const shown = people.slice(0, max)
+  const rest = people.slice(max)
   const describe = (p: BoardViewer) => `${p.name}${p.editing ? ', editing' : ', looking'}`
   return (
     <ul className="presence" aria-label="Also on this board">
@@ -41,7 +42,8 @@ export default function Presence({ people }: { people: BoardViewer[] }) {
       ))}
       {rest.length > 0 && (
         <li className="presence-person presence-more" title={rest.map(describe).join('\n')} aria-label={rest.map(describe).join('; ')}>
-          +{rest.length}
+          {shown.length > 0 && '+'}
+          {rest.length}
         </li>
       )}
     </ul>

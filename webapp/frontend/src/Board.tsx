@@ -99,7 +99,7 @@ import { Sidebar, SidebarGroup } from './Sidebar'
 import { SharedRecords } from './Records'
 import { NoteDialog, VersionPanel } from './Versions'
 import { ProblemCount, type Refusal } from './Problems'
-import { COMPACT_TOOLBAR, NARROW_TOOLBAR, RunButton, ToolbarMenu, useMedia, type ToolbarItem } from './Toolbar'
+import { COMPACT_TOOLBAR, NARROW_TOOLBAR, PHONE_TOOLBAR, RunButton, ToolbarMenu, useMedia, type ToolbarItem } from './Toolbar'
 import { BlocksHint, BoardTips, EmptyBoardGuide, useHints, type BoardTip } from './Hints'
 import Presence from './Presence'
 import { DiffPanel, diffCount, highlightsOf, noHighlights, type Highlights } from './Diff'
@@ -3443,6 +3443,7 @@ export default function Board({
   // and then saving and publishing go into that menu too (Toolbar.tsx).
   const compactToolbar = useMedia(COMPACT_TOOLBAR)
   const narrowToolbar = useMedia(NARROW_TOOLBAR)
+  const phoneToolbar = useMedia(PHONE_TOOLBAR)
   const latestVersion = versions.versions[0]?.id
   const versionShown =
     versions.current === null
@@ -3665,7 +3666,7 @@ export default function Board({
             </button>
           </div>
         )}
-        <Presence people={people} />
+        <Presence people={people} max={phoneToolbar ? 0 : undefined} />
         <div className="versioning">
           <ToolbarMenu
             className="view-menu"

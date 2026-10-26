@@ -11,6 +11,9 @@ import { ChevronDownIcon, PlayIcon } from './icons'
 // repeat these widths.
 export const COMPACT_TOOLBAR = '(max-width: 1180px)'
 export const NARROW_TOOLBAR = '(max-width: 860px)'
+// A phone's: labels give way to icons, and the others on the board to
+// their count (Presence.tsx).
+export const PHONE_TOOLBAR = '(max-width: 560px)'
 
 // Whether the window matches the media query, followed as it changes; the
 // listener stays the same across renders, as a board re-renders often.

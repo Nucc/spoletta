@@ -34,7 +34,11 @@ package main
 // names, gets the run the first started, through the idempotency key the
 // API's requests use, which the database keeps for every replica. One
 // refused takes nothing, so it can be sent again once what refused it is
-// put right.
+// put right. GitHub's and a generic HMAC sign the body alone, not the id,
+// so whoever captures a signed delivery could send it again under another
+// id; only Slack's timestamp bounds that. A flow that must not handle the
+// same event twice gives what it starts from a unique attribute, which ends
+// a second run as a duplicate (see api.go).
 //
 // A webhook's runs are for whoever added it (runUser), so their limits and
 // access apply: once they are removed, or may no longer run the flow, its
@@ -109,8 +113,9 @@ const (
 	slackTolerance = 5 * time.Minute
 )
 
-// What a generated secret starts with, so it can be told apart.
-const webhookSecretPrefix = "whsec_"
+// What a generated secret starts with, so it can be told apart from other
+// secrets, as an API key is by its own.
+const webhookSecretPrefix = "spwh_"
 
 var (
 	webhookEvent = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}(\.[A-Za-z0-9_-]{1,64})?$`)

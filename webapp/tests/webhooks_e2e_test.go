@@ -168,7 +168,7 @@ func TestWebhooksStartRunsFromGitHub(t *testing.T) {
 	}
 	h := hooksAdd(a, tf.flow.ID, map[string]any{"name": "Issues", "kind": "github", "events": []string{"issues.labeled", "pull_request"}, "mapping": mapping})
 	secret := h.Secret
-	if !strings.HasPrefix(secret, "whsec_") || h.Hint != secret[len(secret)-4:] || !h.Enabled || len(h.Problems) != 0 {
+	if !strings.HasPrefix(secret, "spwh_") || h.Hint != secret[len(secret)-4:] || !h.Enabled || len(h.Problems) != 0 {
 		t.Fatalf("made %+v", h)
 	}
 	if v := secretsStored(t, db, "SELECT secret FROM webhooks WHERE id = ?", h.ID); !strings.HasPrefix(v, "sealed:v1:") || strings.Contains(v, secret) {
@@ -212,7 +212,7 @@ func TestWebhooksStartRunsFromGitHub(t *testing.T) {
 	if status != http.StatusUnauthorized || !strings.Contains(string(reply), "no X-Hub-Signature-256") {
 		t.Errorf("unsigned = %d %s", status, reply)
 	}
-	status, reply = hookGitHub(a, h, "whsec_another-secret-entirely", "issues", "forged", hookIssue(8, "Toner", "labeled"))
+	status, reply = hookGitHub(a, h, "spwh_another-secret-entirely", "issues", "forged", hookIssue(8, "Toner", "labeled"))
 	if status != http.StatusUnauthorized || !strings.Contains(string(reply), "doesn't match") {
 		t.Errorf("signed with another secret = %d %s", status, reply)
 	}
@@ -360,7 +360,7 @@ func TestWebhooksRefusedDeliveriesTakeNothing(t *testing.T) {
 	var renewed webhook
 	fields["newSecret"] = true
 	a.call("PUT", fmt.Sprintf("/api/webhooks/%d", h.ID), fields, http.StatusOK, &renewed)
-	if !strings.HasPrefix(renewed.Secret, "whsec_") || renewed.Secret == h.Secret {
+	if !strings.HasPrefix(renewed.Secret, "spwh_") || renewed.Secret == h.Secret {
 		t.Errorf("the new secret is %q", renewed.Secret)
 	}
 	if status, _ := hookGitHub(a, h, h.Secret, "issues", "old-secret", hookIssue(5, "Fax", "opened")); status != http.StatusUnauthorized {

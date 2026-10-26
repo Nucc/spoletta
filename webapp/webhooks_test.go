@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const testHookSecret = "whsec_0123456789abcdef"
+const testHookSecret = "spwh_0123456789abcdef"
 
 func signedHex(secret string, parts ...string) string {
 	b := make([][]byte, len(parts))

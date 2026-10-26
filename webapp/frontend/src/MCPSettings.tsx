@@ -13,6 +13,7 @@ import {
   type MCPServer,
   type MCPTool,
 } from './api'
+import { useConfirm } from './Confirm'
 
 // What pi takes as a server name; it names the tools mcp__<name>__<tool>.
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -101,9 +102,19 @@ export function MCPServers({
   }
 
   const act = (f: () => Promise<void>) => f().then(onChanged, onError)
+  const [confirm, confirmDialog] = useConfirm()
+  const remove = async (s: MCPServer) => {
+    const yes = await confirm({
+      title: `Remove ${s.name}?`,
+      message: <p>Agents picking it lose it, and everyone's sign-ins to it go. This can't be undone.</p>,
+      confirm: 'Remove',
+    })
+    if (yes) act(() => deleteMCPServer(s.id))
+  }
 
   return (
     <>
+      {confirmDialog}
       <p className="panel-note">
         Servers agents can use. Connect each by signing in, or for one taking a token, have an admin set it for
         everyone; then pick, in an agent process's panel, the ones it may use and, if you like, which of their tools.
@@ -124,7 +135,7 @@ export function MCPServers({
               onSetToken={(token) => act(() => setMCPToken(s.id, token))}
               onClearToken={() => act(() => clearMCPToken(s.id))}
               onDescribe={(d) => act(() => updateMCPServer(s.id, { description: d }).then(() => undefined))}
-              onRemove={() => act(() => deleteMCPServer(s.id))}
+              onRemove={() => remove(s)}
             />
           ))}
         </ul>

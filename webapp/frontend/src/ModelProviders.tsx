@@ -22,6 +22,7 @@ import {
   type Models,
 } from './api'
 import { formatTime } from './Runs'
+import { useConfirm } from './Confirm'
 
 // Where agents' models come from, which admins set up: the providers added
 // here, each with the models picked of it and its key, saved here or kept
@@ -45,9 +46,16 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
     setProviders(p)
     refreshModels()
   }
-  const remove = async (id: string) => {
+  const [confirm, confirmDialog] = useConfirm()
+  const remove = async (p: ModelProvider) => {
+    const yes = await confirm({
+      title: `Remove ${p.name || p.id}?`,
+      message: <p>Agents using its models fail to run until they pick others, and a key saved for it goes. This can't be undone.</p>,
+      confirm: 'Remove',
+    })
+    if (!yes) return
     try {
-      changed(await deleteModelProvider(id))
+      changed(await deleteModelProvider(p.id))
     } catch (err) {
       onError(err)
     }
@@ -62,6 +70,7 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
 
   return (
     <section className="flow-section" aria-label="Model providers">
+      {confirmDialog}
       <h2>Model providers</h2>
       <p className="flows-note">
         Where agents' models come from. Add a provider with its key, or your own AI gateway as a custom provider; its
@@ -75,7 +84,7 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
         providers.providers.length > 0 && (
           <ul className="flow-list key-list">
             {providers.providers.map((p) => (
-              <ProviderItem key={p.id} provider={p} onEdit={() => setEditing(p)} onRemove={() => remove(p.id)} />
+              <ProviderItem key={p.id} provider={p} onEdit={() => setEditing(p)} onRemove={() => remove(p)} />
             ))}
           </ul>
         )
@@ -517,7 +526,14 @@ function WorkerKeys({ onError }: { onError: (err: unknown) => void }) {
       return false
     }
   }
+  const [confirm, confirmDialog] = useConfirm()
   const remove = async (env: string) => {
+    const yes = await confirm({
+      title: `Remove the key in ${env}?`,
+      message: <p>Agents reach its provider with the webapp's environment's key then, if it has one. This can't be undone.</p>,
+      confirm: 'Remove',
+    })
+    if (!yes) return
     try {
       await deleteModelKey(env)
       await refresh()
@@ -531,6 +547,7 @@ function WorkerKeys({ onError }: { onError: (err: unknown) => void }) {
   if (keys === null || (settable.length === 0 && elsewhere.length === 0 && !keys.workerError)) return null
   return (
     <div className="worker-keys">
+      {confirmDialog}
       <h3>From the worker's pi config</h3>
       <p className="flows-note">
         The models of the worker's own models.json and settings.json, of providers not added above, and the keys they

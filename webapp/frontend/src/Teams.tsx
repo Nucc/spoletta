@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { createTeam, deleteTeam, listTeams, listUsers, updateTeam, type Team, type User } from './api'
 import { PlusIcon, TrashIcon } from './icons'
+import { useConfirm } from './Confirm'
 
 // The teams, which own flows together. Everyone sees them, and who is in
 // them; admins and team managers make them and say who is in them.
 export function TeamsSection({ canManage, onError }: { canManage: boolean; onError: (err: unknown) => void }) {
   const [teams, setTeams] = useState<Team[] | null>(null)
   const [people, setPeople] = useState<User[]>([])
+  const [confirm, confirmDialog] = useConfirm()
   const [name, setName] = useState('')
 
   const refresh = useCallback(async () => setTeams(await listTeams()), [])
@@ -68,11 +70,19 @@ export function TeamsSection({ canManage, onError }: { canManage: boolean; onErr
               canManage={canManage}
               onRename={(name) => act(() => updateTeam(t.id, { name }))}
               onMembers={(members) => act(() => updateTeam(t.id, { members }))}
-              onDelete={() => window.confirm(`Delete the team ${t.name}?`) && act(() => deleteTeam(t.id))}
+              onDelete={async () => {
+                const yes = await confirm({
+                  title: `Delete the team ${t.name}?`,
+                  message: <p>What it owns must be given to someone else first. This can't be undone.</p>,
+                  confirm: 'Delete',
+                })
+                if (yes) act(() => deleteTeam(t.id))
+              }}
             />
           ))}
         </ul>
       )}
+      {confirmDialog}
     </section>
   )
 }

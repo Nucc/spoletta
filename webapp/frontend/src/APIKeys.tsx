@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { createAPIKey, deleteAPIKey, getFlowAPI, listAPIKeys, type APIKey, type FlowAPI, type JSONSchema } from './api'
 import { PlusIcon } from './icons'
+import { useConfirm } from './Confirm'
 
 // The API keys of whoever is signed in, which other systems start flows
 // with as them. A new key shows once, as it is made.
@@ -8,6 +9,7 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
   const [keys, setKeys] = useState<APIKey[] | null>(null)
   const [name, setName] = useState('')
   const [made, setMade] = useState<APIKey | null>(null)
+  const [confirm, confirmDialog] = useConfirm()
 
   const refresh = useCallback(async () => setKeys(await listAPIKeys()), [])
 
@@ -28,7 +30,12 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
   }
 
   const onDelete = async (k: APIKey) => {
-    if (!window.confirm(`Delete the key ${k.name}? Whatever uses it is turned away from then on.`)) return
+    const yes = await confirm({
+      title: `Delete the key ${k.name}?`,
+      message: <p>Whatever uses it is turned away from then on. This can't be undone.</p>,
+      confirm: 'Delete',
+    })
+    if (!yes) return
     try {
       await deleteAPIKey(k.id)
       if (made?.id === k.id) setMade(null)
@@ -92,6 +99,7 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
           ))}
         </ul>
       )}
+      {confirmDialog}
     </section>
   )
 }

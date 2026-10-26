@@ -6351,13 +6351,6 @@ select.flow-owner:disabled {
   gap: 4px;
 }
 
-.directory-remove {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  align-items: baseline;
-}
-
 .directory-remove-button {
   align-self: flex-start;
   color: #656d76;
@@ -8721,4 +8714,182 @@ select.flow-owner:disabled {
 .panel-durations .panel-field {
   flex: 1;
   min-width: 0;
+}
+
+/* Asking before what can't be undone; see Confirm.tsx. */
+.confirm-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 20px;
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(31, 35, 40, 0.3);
+}
+
+.confirm-dialog::backdrop {
+  background: rgba(31, 35, 40, 0.4);
+}
+
+.confirm-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.confirm-message {
+  font-size: 14px;
+  color: #424a53;
+}
+
+.confirm-message p {
+  margin: 0 0 8px;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.confirm-actions button {
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 14px;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.confirm-actions button.danger {
+  color: #fff;
+  background: #cf222e;
+  border-color: #a40e26;
+}
+
+.confirm-actions button:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
+.confirm-actions button.danger:hover {
+  background: #a40e26;
+}
+
+/* What was just deleted, with a button undoing it; see UndoNotice.tsx. */
+.undo-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 50;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px 10px 16px;
+  font-size: 14px;
+  color: #fff;
+  background: #24292f;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.3);
+}
+
+.undo-notice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.undo-notice button {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  font: inherit;
+  color: #fff;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.undo-notice .undo-notice-undo {
+  font-weight: 600;
+  color: #80ccff;
+}
+
+.undo-notice button:hover:not(:disabled),
+.undo-notice button:focus-visible {
+  background: rgba(255, 255, 255, 0.15);
+  outline: none;
+}
+
+.undo-notice .undo-notice-close {
+  font-size: 18px;
+  line-height: 1;
+  color: #d0d7de;
+}
+
+/* The trash's flows; see Trash.tsx. */
+.trash-list li {
+  flex-wrap: wrap;
+}
+
+.trash-list .flow-card-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trash-used {
+  font-size: 13px;
+  color: #9a6700;
+}
+
+.trash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0 8px 16px;
+}
+
+.trash-actions button,
+.trash-rename button {
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 13px;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.trash-actions button.danger {
+  color: #cf222e;
+}
+
+.trash-actions button.danger:hover:not(:disabled) {
+  color: #fff;
+  background: #cf222e;
+  border-color: #a40e26;
+}
+
+.trash-rename {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trash-rename input {
+  flex: 1;
+  min-width: 160px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+/* A subflow process whose procedure is in the trash. */
+.process-node .node-trashed {
+  color: #cf222e;
 }

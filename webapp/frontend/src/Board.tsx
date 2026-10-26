@@ -23,6 +23,8 @@ import {
 import { BoardActionsContext, StructFlowsContext, type BoardActions } from './actions'
 import { ColumnResizer, useColumnWidth } from './ColumnResizer'
 import ContextMenu, { type MenuItem } from './ContextMenu'
+import { useConfirm } from './Confirm'
+import { useUndoNotice } from './UndoNotice'
 import {
   CodeIcon,
   CopyIcon,
@@ -669,6 +671,7 @@ export default function Board({
         recording: p.recording,
         settings: p.settings,
         editing,
+        trashedFlow: p.trashedFlow,
       },
     }),
     [],
@@ -1308,7 +1311,7 @@ export default function Board({
     if (isDraft(id)) return false
     if (node?.type === 'object') return !node.data.human && objectIdOf(id) !== unfolded
     if (node?.type !== 'process') return false
-    return node.data.kind === 'flow' || (node.data.kind === 'subflow' && node.data.settings.flow !== undefined)
+    return node.data.kind === 'flow' || (node.data.kind === 'subflow' && node.data.settings.flow !== undefined && node.data.trashedFlow === undefined)
   }
 
   // Shows the object unfolded, under the board of the object it makes up.
@@ -1589,18 +1592,18 @@ export default function Board({
     }
   }
 
-  const onEdgesDelete: OnEdgesDelete<FlowEdge> = (deleted) => {
-    for (const e of deleted) {
-      const req =
-        e.id === START_EDGE_ID
-          ? updateStart(flowId, boardId, { target: null })
-          : e.id.startsWith(END_EDGE_PREFIX)
-            ? updateObject(Number(e.id.slice(END_EDGE_PREFIX.length)), { end: false })
-            : e.id.startsWith(LINK_PREFIX)
-              ? deleteLink(Number(e.id.slice(LINK_PREFIX.length)))
-              : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length)))
-      req.catch(report)
-    }
+  const onEdgesDelete: OnEdgesDelete<FlowEdge> = (gone) => {
+    const told = removing.current
+    const reqs = gone.map((e) =>
+      e.id === START_EDGE_ID
+        ? updateStart(flowId, boardId, { target: null })
+        : e.id.startsWith(END_EDGE_PREFIX)
+          ? updateObject(Number(e.id.slice(END_EDGE_PREFIX.length)), { end: false })
+          : e.id.startsWith(LINK_PREFIX)
+            ? deleteLink(Number(e.id.slice(LINK_PREFIX.length)))
+            : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length))),
+    )
+    Promise.all(reqs).then(() => told || deleted(gone.length === 1 ? 'the link' : `${gone.length} links`), report)
   }
 
   const newProcess = (position: XYPosition, kind: ProcessKind = 'agent') =>
@@ -1688,6 +1691,32 @@ export default function Board({
     }
   }
 
+  // Deleting from the board can be undone, so it asks nothing: a notice
+  // says what went, offering to undo it, until the next change, which undoing
+  // would undo instead. A run of the board as it is holds it, refusing undo
+  // (lockBoard), so while one goes deleting asks first.
+  const [confirm, confirmDialog] = useConfirm()
+  const [showUndo, dismissUndo, undoNotice] = useUndoNotice()
+  useEffect(() => onChanged(dismissUndo), [dismissUndo])
+  const boardHeld = runs.some((r) => r.status === 'running' && r.version !== versions.published)
+  const mayDelete = async (what: string, goes: string) =>
+    !boardHeld ||
+    confirm({
+      title: `Delete ${what}?`,
+      message: (
+        <p>
+          {goes && `${goes} `}A run of the board is going on, so this can't be undone until it ends.
+        </p>
+      ),
+      confirm: 'Delete',
+    })
+  const deleted = (what: string) => {
+    if (!boardHeld) showUndo({ message: `Deleted ${what}`, undo: () => stepHistory(true) })
+  }
+  // While processes and objects are being deleted, the links deleted with
+  // them are told of in their notice rather than one of their own.
+  const removing = useRef(false)
+
   // Whether a node can be deleted: not the start or end, an object outside a
   // flow process, which belongs to the board outside, one shown beside an
   // unfolded object, or a struct's own object, which goes only with it.
@@ -1706,9 +1735,11 @@ export default function Board({
   }
 
   // Their links go with them on the server, and a flow process's board with
-  // all on it; runs keep their record of them. One question asks for all,
-  // and once it is answered yes, whatever else was to go with them goes.
-  const removeNodes = async (ids: string[], confirmed?: () => void) => {
+  // all on it; runs keep their record of them. They go at once, with a
+  // notice offering to undo it, or while a run holds the board once asked;
+  // then whatever else was to go with them goes too (confirmed), such as the
+  // links selected beside them, links many, told of in the same notice.
+  const removeNodes = async (ids: string[], confirmed?: () => void, links = 0) => {
     let chosen = ids.filter(removable).map((id) => getNode(id)!)
     // What an object deleted is made of goes with it.
     if (objectBoard) {
@@ -1717,39 +1748,47 @@ export default function Board({
     }
     if (chosen.length === 0) return
     const node = chosen[0]
+    const one = chosen.length === 1
     const flowsInside = chosen.some((n) => n.type === 'process' && n.data.kind === 'flow')
-    const inside =
-      chosen.length === 1 && flowsInside
-        ? ', its links and everything on its board'
-        : chosen.length === 1 && node.type === 'object' && objectBoard
-          ? ' and everything it is made of'
-          : chosen.length === 1
-            ? ' and its links'
+    const goes =
+      one && flowsInside
+        ? 'Its links go with it, and everything on its board.'
+        : one && node.type === 'object' && objectBoard
+          ? 'Everything it is made of goes with it.'
+          : one
+            ? 'Its links go with it.'
             : flowsInside
-              ? ', their links and everything on their boards'
+              ? 'Their links go with them, and everything on their boards.'
               : objectBoard
-                ? ' and everything they are made of'
-                : ' and their links'
+                ? 'Everything they are made of goes with them.'
+                : 'Their links go with them.'
     const what =
-      chosen.length === 1 && node.type !== 'start' && node.type !== 'end' ? `“${node.data.name}”` : `${chosen.length} processes and objects`
-    if (!window.confirm(`Delete ${what}${inside}?`)) return
-    confirmed?.()
+      (one && node.type !== 'start' && node.type !== 'end' ? `“${node.data.name}”` : `${chosen.length} processes and objects`) +
+      (links === 0 ? '' : links === 1 ? ' and a link' : ` and ${links} links`)
+    if (!(await mayDelete(what, goes))) return
+    removing.current = true
     const gone = new Set<string>()
-    for (const n of chosen) {
-      try {
-        if (n.type === 'object') await deleteObject(objectIdOf(n.id))
-        else await deleteProcess(Number(n.id))
-        gone.add(n.id)
-      } catch (err) {
-        report(err)
-        break
+    try {
+      confirmed?.()
+      for (const n of chosen) {
+        try {
+          if (n.type === 'object') await deleteObject(objectIdOf(n.id))
+          else await deleteProcess(Number(n.id))
+          gone.add(n.id)
+        } catch (err) {
+          report(err)
+          break
+        }
       }
+    } finally {
+      removing.current = false
     }
     setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
     setEdges((es) => es.filter((e) => !gone.has(e.source) && !gone.has(e.target)))
     setPanelId((open) => (open !== null && gone.has(open) ? null : open))
     // The object they made up has fields less.
     if (objectBoard) reload.current().catch(report)
+    if (gone.size > 0) deleted(what)
   }
   const remove = (id: string) => removeNodes([id])
 
@@ -1825,13 +1864,14 @@ export default function Board({
   const removeState = async (objectId: string, stateId: number) => {
     const node = getNode(objectId)
     const state = node?.type === 'object' ? node.data.states.find((s) => s.id === stateId) : undefined
-    if (!state || readOnly || !window.confirm(`Delete state “${state.name}” and its links?`)) return
+    if (!state || readOnly || !(await mayDelete(`the state “${state.name}”`, 'The links naming it go with it.'))) return
     try {
       await deleteState(stateId)
     } catch (err) {
       report(err)
       return
     }
+    deleted(`the state “${state.name}”`)
     setStates(objectId, (ss) => ss.filter((s) => s.id !== stateId))
     setEdges((es) =>
       es.flatMap((e) => {
@@ -2014,13 +2054,14 @@ export default function Board({
   const removeAttribute = async (objectId: string, id: number) => {
     const node = getNode(objectId)
     const attribute = node?.type === 'object' ? node.data.attributes.find((a) => a.id === id) : undefined
-    if (!attribute || readOnly || !window.confirm(`Delete attribute “${attribute.name}”?`)) return false
+    if (!attribute || readOnly || !(await mayDelete(`the attribute “${attribute.name}”`, 'What runs stored of it stays with them.'))) return false
     try {
       await deleteAttribute(id)
     } catch (err) {
       report(err)
       return false
     }
+    deleted(`the attribute “${attribute.name}”`)
     setAttributes(objectId, (as) => as.filter((a) => a.id !== id))
     restructured()
     return true
@@ -2691,7 +2732,8 @@ export default function Board({
   const selectAll = () => setNodes((ns) => ns.map((n) => (n.type === 'process' || n.type === 'object' ? { ...n, selected: true } : n)))
 
   // Deletes the links and connections selected, and the processes and
-  // objects selected, asking first; false if nothing selected can go.
+  // objects selected, offering to undo it, or while a run holds the board
+  // asking first; false if nothing selected can go.
   const deleteSelection = () => {
     if (readOnly) return false
     const doomed = new Set(
@@ -2702,8 +2744,8 @@ export default function Board({
     const links = edges.filter((e) => e.selected && e.deletable !== false && !doomed.has(e.source) && !doomed.has(e.target))
     if (doomed.size === 0 && links.length === 0) return false
     const deleteLinks = () => void (links.length > 0 && deleteElements({ edges: links }))
-    if (doomed.size === 0) deleteLinks()
-    else void removeNodes([...doomed], deleteLinks)
+    if (doomed.size > 0) void removeNodes([...doomed], deleteLinks, links.length)
+    else void mayDelete(links.length === 1 ? 'the link' : `${links.length} links`, '').then((yes) => yes && deleteLinks())
   }
 
   // Closes what Escape closes first: a note being written, the find box, a
@@ -3438,6 +3480,7 @@ export default function Board({
           <ProcessPanel
             key={panelNode.id}
             id={Number(panelNode.id)}
+            trashedFlow={panelNode.data.trashedFlow}
             initial={{
               name: panelNode.data.name,
               kind: panelNode.data.kind,
@@ -3650,6 +3693,8 @@ export default function Board({
           onClose={() => setReviewId(null)}
         />
       )}
+      {confirmDialog}
+      {undoNotice}
     </div>
   )
 }

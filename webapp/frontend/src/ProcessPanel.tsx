@@ -104,6 +104,7 @@ export type Review = {
 // Edits one process; mount with key={id} so switching processes resets the form.
 export default function ProcessPanel({
   id,
+  trashedFlow,
   initial,
   models,
   mcpServers,
@@ -130,6 +131,8 @@ export default function ProcessPanel({
   onError,
 }: {
   id: number
+  // For a subflow process, the procedure it runs if that is in the trash.
+  trashedFlow?: string
   initial: Fields
   // Models pi offers, or null while they load.
   models: Models | null
@@ -338,6 +341,7 @@ export default function ProcessPanel({
           key="subflow"
           flows={flows}
           flow={settings.flow}
+          trashed={trashedFlow !== undefined && settings.flow === initial.settings.flow ? trashedFlow : undefined}
           takes={takes}
           generates={generates}
           shapes={shapes}
@@ -1030,6 +1034,7 @@ function EntryItem({ fields, value, onChange }: { fields: Field[]; value: Draft;
 function SubflowFields({
   flows,
   flow,
+  trashed,
   takes,
   generates,
   shapes,
@@ -1040,6 +1045,9 @@ function SubflowFields({
 }: {
   flows: Flow[] | null
   flow: number | undefined
+  // The name of the procedure it runs, if that is in the trash, whose board
+  // can't be read.
+  trashed: string | undefined
   takes: string[]
   generates: string[]
   shapes: Record<string, string>
@@ -1053,7 +1061,7 @@ function SubflowFields({
   const [names, setNames] = useState<Map<string, string> | null>(null)
   useEffect(() => {
     setNames(null)
-    if (flow === undefined) return
+    if (flow === undefined || trashed !== undefined) return
     let stale = false
     listObjects(flow)
       .then(
@@ -1065,7 +1073,7 @@ function SubflowFields({
     return () => {
       stale = true
     }
-  }, [flow])
+  }, [flow, trashed])
 
   const gone = flow !== undefined && flows !== null && !flows.some((f) => f.id === flow)
   const matches = (label: string, list: string[]) =>
@@ -1100,7 +1108,9 @@ function SubflowFields({
         >
           <option value="">Pick a procedure…</option>
           {flow !== undefined && (flows === null || gone) && (
-            <option value={flow}>{gone ? `Flow #${flow} (deleted)` : `Flow #${flow}`}</option>
+            <option value={flow}>
+              {trashed !== undefined ? `${trashed} (in the trash)` : gone ? `Flow #${flow} (deleted)` : `Flow #${flow}`}
+            </option>
           )}
           {flows
             ?.filter((f) => f.module || f.id === flow)
@@ -1111,6 +1121,12 @@ function SubflowFields({
           ))}
         </select>
       </label>
+      {trashed !== undefined && (
+        <p className="panel-warning">
+          {trashed} is in the trash, so this fails to run it until someone restores it from the trash; or pick another
+          procedure.
+        </p>
+      )}
       <p className="panel-note">
         Each time it runs is a run of that flow. The objects it takes are given to the objects of the same names on
         that flow's top board, and it generates what the run leaves of the objects named like the ones it generates.

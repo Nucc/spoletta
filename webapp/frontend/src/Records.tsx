@@ -19,6 +19,7 @@ import { RecordDialog } from './RecordDialog'
 import { RecordRunDialog } from './RecordRunDialog'
 import { formatTime } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch } from './Search'
+import { useConfirm } from './Confirm'
 
 // How often the records are asked for again, as flows write them.
 const REFRESH_MS = 10_000
@@ -127,6 +128,7 @@ export default function RecordsPage({ id }: { id: number }) {
   const [running, setRunning] = useState<number[] | null>(null)
   const [ticked, setTicked] = useState<Set<number>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
+  const [confirm, confirmDialog] = useConfirm()
   const columns = useColumnWidths(`records-columns-${id}`)
 
   useEffect(() => {
@@ -168,12 +170,12 @@ export default function RecordsPage({ id }: { id: number }) {
 
   const deleteTicked = async () => {
     const n = ticked.size
-    if (
-      !window.confirm(
-        `Delete ${n === 1 ? 'this record' : `these ${n} records`}? Flows using ${name} no longer find ${n === 1 ? 'it' : 'them'}.`,
-      )
-    )
-      return
+    const yes = await confirm({
+      title: `Delete ${n === 1 ? 'this record' : `these ${n} records`}?`,
+      message: <p>Flows using {name} no longer find {n === 1 ? 'it' : 'them'}. This can't be undone.</p>,
+      confirm: 'Delete',
+    })
+    if (!yes) return
     setActionError(null)
     try {
       await deleteSharedRecords(id, [...ticked])
@@ -418,6 +420,7 @@ export default function RecordsPage({ id }: { id: number }) {
         />
       )}
       {running !== null && <RecordRunDialog struct={id} name={name} records={running} onClose={() => (setRunning(null), load())} />}
+      {confirmDialog}
       {opened && <ValueDialog opened={opened} onOpen={setOpened} onClose={() => setOpened(null)} onFilter={filterBy} />}
     </div>
   )

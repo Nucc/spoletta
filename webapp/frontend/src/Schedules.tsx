@@ -12,6 +12,7 @@ import {
 } from './api'
 import { ClockIcon, FlowBuilderIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
+import { useConfirm } from './Confirm'
 
 // The common times, offered before writing a cron expression by hand.
 const PRESETS: { cron: string; label: string }[] = [
@@ -48,6 +49,7 @@ export default function Schedules() {
   const [flows, setFlows] = useState<Flow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<number | null>(null)
+  const [confirm, confirmDialog] = useConfirm()
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
   const refresh = useCallback(() => listSchedules().then(setSchedules).catch(report), [report])
@@ -74,7 +76,12 @@ export default function Schedules() {
   }
 
   const onDelete = async (s: Schedule) => {
-    if (!window.confirm(`Delete the schedule running ${s.flowName}? Its runs stay.`)) return
+    const yes = await confirm({
+      title: `Delete the schedule running ${s.flowName}?`,
+      message: <p>Its runs stay. This can't be undone.</p>,
+      confirm: 'Delete',
+    })
+    if (!yes) return
     try {
       await deleteSchedule(s.id)
       await refresh()
@@ -159,6 +166,7 @@ export default function Schedules() {
           )}
         </section>
       </main>
+      {confirmDialog}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { SharedRecord } from './api'
+import { useConfirm } from './Confirm'
 
 // A record of a shared struct written by hand: a new one, or one a flow
 // wrote corrected, its state and each of its fields, those the struct has
@@ -60,6 +61,7 @@ export function RecordDialog({
   const [state, setState] = useState(record?.state ?? '')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [confirm, confirmDialog] = useConfirm()
 
   useEffect(() => {
     const dialog = ref.current
@@ -176,7 +178,14 @@ export function RecordDialog({
               type="button"
               className="record-delete"
               disabled={saving}
-              onClick={() => window.confirm('Delete this record? Flows using the struct no longer find it.') && run(onDelete)}
+              onClick={async () => {
+                const yes = await confirm({
+                  title: 'Delete this record?',
+                  message: <p>Flows using the struct no longer find it. This can't be undone.</p>,
+                  confirm: 'Delete',
+                })
+                if (yes) run(onDelete)
+              }}
             >
               Delete
             </button>
@@ -189,6 +198,7 @@ export function RecordDialog({
           </button>
         </div>
       </form>
+      {confirmDialog}
     </dialog>
   )
 }

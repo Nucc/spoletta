@@ -14,6 +14,7 @@ import Schedules from './Schedules'
 import Settings, { type SettingsTab } from './Settings'
 import { ShortcutSheet, useShortcuts } from './Keyboard'
 import TabBar from './TabBar'
+import Trash from './Trash'
 import { TabContext, useTabs } from './tabs'
 
 // The page the URL's hash names: #/flows/<id> for a flow's board,
@@ -25,7 +26,7 @@ import { TabContext, useTabs } from './tabs'
 // show, #/audit for the audit log, with them too, #/schedules for the
 // schedules, #/inbox for what waits on the person, #/settings/<tab> for the
 // settings, #/activity for what goes on across the flows, with ?days=<n>
-// for its period, anything else for the
+// for its period, #/trash for the flows deleted, anything else for the
 // list of flows. #/people, where the people were before the settings, is
 // their tab now. The address is the open tab's; each tab keeps its own
 // (tabs.ts).
@@ -39,6 +40,7 @@ type Page =
   | 'audit'
   | 'activity'
   | 'inbox'
+  | 'trash'
   | null
 
 const INBOX = '#/inbox'
@@ -46,6 +48,7 @@ const INBOX = '#/inbox'
 const pageInHash = (): Page => {
   if (window.location.hash === '#/schedules') return 'schedules'
   if (window.location.hash === INBOX) return 'inbox'
+  if (window.location.hash === '#/trash') return 'trash'
   if (/^#\/audit(?:\?.*)?$/.test(window.location.hash)) return 'audit'
   if (/^#\/activity(?:\?.*)?$/.test(window.location.hash)) return 'activity'
   if (window.location.hash === '#/people') return { settings: 'people' }
@@ -132,6 +135,7 @@ function Page() {
   if (page === 'audit') return <AuditLog />
   if (page === 'activity') return <Activity />
   if (page === 'inbox') return <Inbox />
+  if (page === 'trash') return <Trash />
   if ('settings' in page) return <Settings tab={page.settings} />
   if ('compare' in page) return <RunCompare key={`${page.a}-${page.b}`} flow={page.compare} a={page.a} b={page.b} />
   if ('data' in page) return <FlowData key={page.data} id={page.data} />

@@ -16,6 +16,7 @@ import {
 import { useMe } from './Account'
 import { PlusIcon } from './icons'
 import { OwnerPicker } from './Owner'
+import { useConfirm } from './Confirm'
 
 // Skills and commands, written for agents in the settings: a skill an agent
 // process picks, a command its prompt names as /name. Each is its maker's
@@ -57,6 +58,7 @@ function SkillList({ kind, me, teams, onError }: { kind: SkillKind; me: Me | nul
   const [items, setItems] = useState<Skill[] | null>(null)
   // What is being written: a new one, or the one of this id.
   const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [confirm, confirmDialog] = useConfirm()
   const words = WORDS[kind]
 
   const refresh = useCallback(() => listSkills(kind).then(setItems, onError), [kind, onError])
@@ -85,7 +87,12 @@ function SkillList({ kind, me, teams, onError }: { kind: SkillKind; me: Me | nul
 
   const remove = async (s: Skill) => {
     const uses = kind === 'skill' ? 'Agents picking it fail to run until it is unpicked.' : 'Prompts naming it pass /' + s.name + ' on as written.'
-    if (!window.confirm(`Delete the ${words.one} ${s.name}? ${uses}`)) return
+    const yes = await confirm({
+      title: `Delete the ${words.one} ${s.name}?`,
+      message: <p>{uses} This can't be undone.</p>,
+      confirm: 'Delete',
+    })
+    if (!yes) return
     try {
       await deleteSkill(kind, s.id)
       await refresh()
@@ -150,6 +157,7 @@ function SkillList({ kind, me, teams, onError }: { kind: SkillKind; me: Me | nul
           )}
         </ul>
       )}
+      {confirmDialog}
     </section>
   )
 }

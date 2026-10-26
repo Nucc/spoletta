@@ -13,6 +13,7 @@ import {
   type MCPServer,
 } from './api'
 import { ServiceLogo } from './logos'
+import { useConfirm } from './Confirm'
 
 // The order categories show in; any other comes after them.
 const CATEGORIES = ['Code', 'Communication', 'Ticketing', 'Support', 'Docs', 'Monitoring', 'Home', 'Other']
@@ -310,8 +311,8 @@ function ServerSetup({
 }) {
   const [token, setToken] = useState('')
   const [url, setUrl] = useState(s.url)
-  const [removing, setRemoving] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [confirm, confirmDialog] = useConfirm()
   const act = async (f: () => Promise<unknown>, after = onChanged) => {
     setBusy(true)
     try {
@@ -411,22 +412,23 @@ function ServerSetup({
           )}
         </form>
       )}
-      {canConfigure &&
-        (removing ? (
-          <div className="directory-remove">
-            <span>Remove {s.name}? Processes using it stop working.</span>
-            <button className="link-button danger" disabled={busy} onClick={() => act(() => deleteMCPServer(s.id), onRemoved)}>
-              Remove
-            </button>
-            <button className="link-button" onClick={() => setRemoving(false)}>
-              Keep it
-            </button>
-          </div>
-        ) : (
-          <button className="link-button directory-remove-button" onClick={() => setRemoving(true)}>
-            Uninstall
-          </button>
-        ))}
+      {canConfigure && (
+        <button
+          className="link-button directory-remove-button"
+          disabled={busy}
+          onClick={async () => {
+            const yes = await confirm({
+              title: `Remove ${s.name}?`,
+              message: <p>Processes using it stop working. This can't be undone.</p>,
+              confirm: 'Remove',
+            })
+            if (yes) act(() => deleteMCPServer(s.id), onRemoved)
+          }}
+        >
+          Uninstall
+        </button>
+      )}
+      {confirmDialog}
     </div>
   )
 }

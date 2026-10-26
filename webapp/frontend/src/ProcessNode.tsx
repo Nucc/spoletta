@@ -29,6 +29,9 @@ export type ProcessNodeData = {
   // Whether the run shown can be re-run from this process: it ended, and
   // the process ran in it rather than being copied from an earlier run.
   rerunnable?: boolean
+  // For a subflow process, the procedure it runs if that is in the trash,
+  // which it fails to run until restored.
+  trashedFlow?: string
 }
 
 export type RunStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate' | 'skipped'
@@ -101,13 +104,19 @@ export default function ProcessNode({ id, data, selected, width }: NodeProps<Pro
         ) : (
           <>
             <span className="node-name">{data.name}</span>
-            <Subtitle text={subtitle(data)} status={data.status && STATUS_LABELS[data.status]} />
+            {data.trashedFlow !== undefined && !data.status ? (
+              <span className="node-subtitle node-trashed" title={`${data.trashedFlow} is in the trash; this fails to run it until it is restored`}>
+                Procedure · in the trash
+              </span>
+            ) : (
+              <Subtitle text={subtitle(data)} status={data.status && STATUS_LABELS[data.status]} />
+            )}
           </>
         )}
       </div>
       {!draft && (
         <span className="node-buttons nodrag">
-          {(data.kind === 'flow' || (data.kind === 'subflow' && data.settings.flow !== undefined)) && (
+          {(data.kind === 'flow' || (data.kind === 'subflow' && data.settings.flow !== undefined && data.trashedFlow === undefined)) && (
             <button
               title={data.kind === 'flow' ? 'Zoom in' : 'Open the flow it runs'}
               aria-label="Zoom in"

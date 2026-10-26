@@ -3,6 +3,7 @@ import { addUser, listRoles, listUsers, removeUser, updateUser, type User } from
 import { useMe } from './Account'
 import { PlusIcon, TrashIcon } from './icons'
 import { formatTime } from './Runs'
+import { useConfirm } from './Confirm'
 
 // The people who sign in, for admins: adding someone, before they first sign
 // in if need be, making them an admin or a team manager, giving them roles,
@@ -11,6 +12,7 @@ import { formatTime } from './Runs'
 export function PeopleSection({ onError }: { onError: (err: unknown) => void }) {
   const [people, setPeople] = useState<User[] | null>(null)
   const [roles, setRoles] = useState<string[]>([])
+  const [confirm, confirmDialog] = useConfirm()
   const me = useMe()
   const [email, setEmail] = useState('')
 
@@ -46,12 +48,12 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
   }
 
   const onRemove = async (p: User) => {
-    if (
-      !window.confirm(
-        `Remove ${p.name || p.email}? They are signed out and can't sign in until added back; their flows become yours.`,
-      )
-    )
-      return
+    const yes = await confirm({
+      title: `Remove ${p.name || p.email}?`,
+      message: <p>They are signed out and can't sign in until added back; their flows become yours.</p>,
+      confirm: 'Remove',
+    })
+    if (!yes) return
     try {
       await removeUser(p.id)
       await refresh()
@@ -138,6 +140,7 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
           })}
         </ul>
       )}
+      {confirmDialog}
     </section>
   )
 }

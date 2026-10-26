@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEv
 import {
   createFlow,
   createFromTemplate,
-  deleteFlow,
   exportSetup,
   importSetup,
   listFlows,
   listTeams,
+  restoreFlow,
   setFavourite,
   setFlowOwner,
   setFlowTags,
+  trashFlow,
   type Flow,
   type FlowTemplate,
   type Me,
@@ -33,6 +34,8 @@ import { formatTime, RUN_LABELS } from './Runs'
 import { Account, configures, useMe } from './Account'
 import { OwnerPicker, ownerLabel } from './Owner'
 import { TemplateDialog, TemplateGallery } from './Templates'
+import { useConfirm } from './Confirm'
+import { useUndoNotice } from './UndoNotice'
 
 // The main page: the flows that run, each a job of its own, such as fixing
 // exceptions or bumping dependencies, and apart from them the procedures,
@@ -44,7 +47,9 @@ import { TemplateDialog, TemplateGallery } from './Templates'
 // starred, come first in each section, and each flow says how its runs went
 // this week. What is searched and the tag picked are in the address,
 // #/?q=<words>&tag=<tag>. A flow can start from a template, offered in
-// place while there is no flow at all.
+// place while there is no flow at all. Deleting one moves it to the trash,
+// which can be undone, so it asks nothing first unless runs going on in it
+// would stop.
 export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const me = useMe()
   const [all, setFlows] = useState<Flow[] | null>(null)
@@ -56,6 +61,8 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [templating, setTemplating] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
+  const [confirm, confirmDialog] = useConfirm()
+  const [showUndo, , undoNotice] = useUndoNotice()
 
   const narrowed = !!(whose || query.trim() || tag)
   const flows =
@@ -153,17 +160,25 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   }
 
   const onDelete = async (f: Flow) => {
-    const used =
-      f.usedBy === 0
-        ? ''
-        : f.struct
-          ? ` ${usedByLabel(f.usedBy)}; its copies there become objects of their own.`
-          : ` ${usedByLabel(f.usedBy)}; they will fail to run it.`
-    const what = f.struct ? 'what makes up its object and its versions' : 'everything on its board, its versions and its runs'
-    if (!window.confirm(`Delete ${f.name}, with ${what}?${used}`)) return
+    setError(null)
     try {
-      await deleteFlow(f.id)
+      const { running } = await trashFlow(f.id)
+      if (running > 0) {
+        const stop = await confirm({
+          title: `Move ${f.name} to the trash?`,
+          message: (
+            <p>
+              {running === 1 ? 'A run is' : `${running} runs are`} going on in it, which moving it to the trash stops; that
+              can't be undone. The {KIND_WORDS[kindOf(f)]} itself can be restored from the trash.
+            </p>
+          ),
+          confirm: running === 1 ? 'Stop it and move' : 'Stop them and move',
+        })
+        if (!stop) return
+        await trashFlow(f.id, true)
+      }
       await refresh()
+      showUndo({ message: trashedMessage(f), undo: () => restoreFlow(f.id).then(refresh, report) })
     } catch (err) {
       report(err)
     }
@@ -212,6 +227,9 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
         </a>
         <a className="toolbar-link" href="#/schedules">
           <ClockIcon /> Schedules
+        </a>
+        <a className="toolbar-link" href="#/trash" title="What was deleted, to restore or delete for good">
+          <TrashIcon /> Trash
         </a>
         {configures(me) && (
           <>
@@ -371,6 +389,8 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           onTag={setTag}
         />
       </main>
+      {confirmDialog}
+      {undoNotice}
     </div>
   )
 }
@@ -426,9 +446,23 @@ type FlowKind = 'flow' | 'module' | 'struct'
 const kindOf = (f: Flow): FlowKind => (f.struct ? 'struct' : f.module ? 'module' : 'flow')
 
 const DELETE_TITLES: Record<FlowKind, string> = {
-  flow: 'Delete flow',
-  module: 'Delete procedure',
-  struct: 'Delete struct',
+  flow: 'Move the flow to the trash',
+  module: 'Move the procedure to the trash',
+  struct: 'Move the struct to the trash',
+}
+
+const KIND_WORDS: Record<FlowKind, string> = { flow: 'flow', module: 'procedure', struct: 'struct' }
+
+// What moving it to the trash did, as its notice says, with what that does
+// to the flows using it.
+function trashedMessage(f: Flow): string {
+  const moved = `Moved ${f.name} to the trash`
+  const n = f.usedBy
+  if (n === 0) return moved
+  const flows = n === 1 ? 'the flow' : `the ${n} flows`
+  return f.struct
+    ? `${moved}; ${flows} using it keep their copies as their own until it comes back`
+    : `${moved}; ${flows} running it fail to until it comes back`
 }
 
 // What a card says under its name: how many flows use it, its latest run,

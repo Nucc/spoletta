@@ -14,6 +14,7 @@ import {
 } from './api'
 import { useMe } from './Account'
 import { PlusIcon } from './icons'
+import { useConfirm } from './Confirm'
 
 // Credentials, kept by admins: a service's base URL and secret, which
 // scripts and agents call it with through the webapp's proxy without ever
@@ -24,6 +25,7 @@ export function CredentialsSection({ onError }: { onError: (err: unknown) => voi
   const [teams, setTeams] = useState<Team[]>([])
   // What is being written: a new one, or the one of this id.
   const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [confirm, confirmDialog] = useConfirm()
 
   const refresh = useCallback(() => listCredentials().then(setItems, onError), [onError])
   useEffect(() => {
@@ -43,7 +45,12 @@ export function CredentialsSection({ onError }: { onError: (err: unknown) => voi
   }
 
   const remove = async (c: Credential) => {
-    if (!window.confirm(`Remove the credential ${c.name}? Processes picking it fail to run until it is unpicked, and steps going lose it.`)) return
+    const yes = await confirm({
+      title: `Remove the credential ${c.name}?`,
+      message: <p>Processes picking it fail to run until it is unpicked, and steps going lose it. This can't be undone.</p>,
+      confirm: 'Remove',
+    })
+    if (!yes) return
     try {
       await deleteCredential(c.id)
       await refresh()
@@ -106,6 +113,7 @@ export function CredentialsSection({ onError }: { onError: (err: unknown) => voi
           )}
         </ul>
       )}
+      {confirmDialog}
     </section>
   )
 }

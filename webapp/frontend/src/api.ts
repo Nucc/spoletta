@@ -94,6 +94,10 @@ export type Process = {
   // For flow processes: each time it runs is a run of its own.
   recording: boolean
   settings: ProcessSettings
+  // For a subflow process whose procedure is in the trash, that procedure's
+  // name: it fails to run it until it is restored. Only the board as it is
+  // says so, not a version.
+  trashedFlow?: string
 }
 
 export type Start = {
@@ -607,9 +611,53 @@ export function updateFlow(id: number, patch: Partial<Pick<Flow, 'name' | 'modul
   return request(`/api/flows/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
-// Everything in it goes with it, its runs too.
-export function deleteFlow(id: number): Promise<void> {
-  return request(`/api/flows/${id}`, { method: 'DELETE' })
+// Moves the flow to the trash, where it can be restored from, unless runs
+// are going on in it and stopRuns doesn't say to stop them, which can't be
+// undone: then it moves nothing and says how many are going on.
+export async function trashFlow(id: number, stopRuns = false): Promise<{ running: number }> {
+  const url = `/api/flows/${id}`
+  const res = await fetch(url, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stopRuns }) })
+  if (res.status === 401) signIn()
+  if (res.status === 409) {
+    const refused = (await res.json().catch(() => null)) as { running?: number } | null
+    if (typeof refused?.running === 'number') return { running: refused.running }
+  }
+  if (!res.ok) throw new Error(`DELETE ${url}: ${res.status} ${await res.text()}`)
+  return { running: 0 }
+}
+
+// A flow, procedure or struct in the trash, which those who may change it
+// restore or delete for good; the trash empties itself of it at goesAt.
+export type TrashedFlow = {
+  id: number
+  name: string
+  module: boolean
+  struct: boolean
+  owner: FlowOwner
+  deletedAt: string
+  // Who moved it there; empty without sign-in.
+  deletedBy: string
+  goesAt: string
+  // Whether a flow out of the trash has its name, so it comes back under another.
+  nameTaken: boolean
+  // How many flows run it, or have copies of its object, which fail to run
+  // it, or have the copies as their own, until it comes back.
+  usedBy: number
+}
+
+// What whoever asks may restore, the latest moved there first.
+export function listTrash(): Promise<TrashedFlow[]> {
+  return request('/api/trash')
+}
+
+// Brings it back, under name if given, as its own was taken.
+export function restoreFlow(id: number, name?: string): Promise<Flow> {
+  return request(`/api/trash/${id}/restore`, { method: 'POST', body: JSON.stringify(name ? { name } : {}) })
+}
+
+// Everything in it goes with it, its runs and versions too.
+export function deleteForGood(id: number): Promise<void> {
+  return request(`/api/trash/${id}`, { method: 'DELETE' })
 }
 
 export function listProcesses(flow: number): Promise<Process[]> {

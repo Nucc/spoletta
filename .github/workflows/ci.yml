@@ -80,10 +80,12 @@ jobs:
       # The tests' output goes to a file, shown once they end: with -v the
       # test binary writes straight to the step's output, and a process a
       # test leaves behind would hold it open and keep the step from ending.
+      # It is shown with each line cut short: a test logging a line of half
+      # a megabyte, as the step log's cap test does, stalls the job's log.
       - run: |
           go build ./... && go vet ./...
           rc=0; timeout -k 5 180 go test -v -race -timeout 150s . > test.log 2>&1 || rc=$?
-          echo "go test exited $rc"; cat test.log
+          echo "go test exited $rc"; cut -c1-2000 test.log
           echo "--- still running:"; ps -eo pid,ppid,pgid,etimes,user,args --forest
           for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q test.log && echo "holds output: $p $(tr '\0' ' ' < $p/cmdline)"; done
           exit $rc

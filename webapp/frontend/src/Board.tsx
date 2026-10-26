@@ -2280,10 +2280,10 @@ export default function Board({
   const assistantApplied = useCallback(
     async (version: number | null) => {
       closePanels()
+      setRunId(null)
       window.clearTimeout(recordTimer.current)
       await Promise.all([loadBoard(), refreshVersions(), onReload()])
       if (version !== null) {
-        setRunId(null)
         setCompare({ from: version, to: null, assistant: true })
         setDiffListed(false)
       }

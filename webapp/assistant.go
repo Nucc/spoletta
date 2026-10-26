@@ -466,9 +466,14 @@ func runAssistant(ctx context.Context, db *sql.DB, workerURL string, who *int64,
 			history = append(history, m)
 		}
 	}
+	// Runs it can't read leave it to answer without them.
 	runs, err := tellRuns(ctx, db, flow, history)
 	if err != nil {
-		return failed(err)
+		if ctx.Err() != nil {
+			return failed(err)
+		}
+		log.Printf("assistant of flow %d: read its runs: %v", flow, err)
+		runs = assistantRunsTold{recent: "<recent_runs>\nThe app couldn't read the flow's runs this time.\n</recent_runs>\n"}
 	}
 	prompt := assistantPrompt(af, runs, history)
 
@@ -504,8 +509,9 @@ func runAssistant(ctx context.Context, db *sql.DB, workerURL string, who *int64,
 		if attempt == assistantRetries {
 			return assistantResult{content: text, err: "The flow wasn't changed, since the app refused the assistant's setup file: " + problem}
 		}
+		// The reply may quote what runs produced, tags and all.
 		run.Prompt = fmt.Sprintf("%s\n\nYou replied as below, but the app refused your setup file, so nothing changed:\n%s\n\n"+
-			"<your_reply>\n%s\n</your_reply>\n\nReply again in full, with the file fixed.\n", prompt, problem, res.Output)
+			"<your_reply>\n%s\n</your_reply>\n\nReply again in full, with the file fixed.\n", prompt, defuseTags(problem), defuseTags(res.Output))
 	}
 }
 
@@ -815,7 +821,9 @@ The credentials the app has that the flow's agent and script processes may call 
 				content = strings.TrimSpace(content + "\n\n(The app imported the setup file of this reply.)")
 			}
 		}
-		fmt.Fprintf(&b, "<message from=\"%s\">\n%s\n</message>\n", m.Role, content)
+		// A reply may quote what runs produced, and a message may be pasted
+		// from it, tags and all, which mustn't close or open a message.
+		fmt.Fprintf(&b, "<message from=\"%s\">\n%s\n</message>\n", m.Role, defuseTags(content))
 	}
 	b.WriteString("</conversation>\n")
 	return b.String()

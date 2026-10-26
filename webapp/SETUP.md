@@ -2,7 +2,7 @@
 
 A setup file describes everything built in the app as YAML. That covers the MCP servers, the skills and commands, the structs, the procedures and the flows, with every board, process, object, link and schedule on them. You can keep it under version control, edit it by hand, or have an LLM write it, and then import it into any instance of the app.
 
-It leaves out what runs produce: runs, versions, undo history, and the values that persistent objects stored. MCP servers' sign-ins and tokens stay out too, so after importing a server you sign in to it again, or an admin sets its token. Who a flow, skill or command belongs to stays out as well.
+It leaves out what runs produce: runs, versions and which of them a flow published, undo history, and the values that persistent objects stored. MCP servers' sign-ins and tokens stay out too, so after importing a server you sign in to it again, or an admin sets its token. Who a flow, skill or command belongs to stays out as well.
 
 ## Exporting and importing
 
@@ -18,7 +18,7 @@ Import replies with the flows it created and the ones it updated. Since YAML tak
 What importing does:
 
 - A struct, procedure or flow the app doesn't have yet is **created**.
-- One the app already has, by name, is **updated** to match the file. Anything on its boards that the file doesn't have is removed. Processes, objects, states and attributes that match by name, on the same board, keep their ids, so the flow's past runs and the values its persistent objects stored still point to them. The board is saved as a version first, and the import is one step of the board's undo history, so you can go back with Cmd-Z or from Versions. Going back restores the board only. The flow's repositories, branch prefix, schedules and whether it's a procedure stay as imported, and so do MCP servers.
+- One the app already has, by name, is **updated** to match the file. Anything on its boards that the file doesn't have is removed. Processes, objects, states and attributes that match by name, on the same board, keep their ids, so the flow's past runs and the values its persistent objects stored still point to them. The board is saved as a version first, and the import is one step of the board's undo history, so you can go back with Cmd-Z or from Versions. Going back restores the board only. The flow's repositories, branch prefix, schedules and whether it's a procedure stay as imported, and so do MCP servers. Importing over a flow that published a version changes its draft only: its schedules, the API and runs on records go on running the version it published until someone publishes again.
 - Flows that the file doesn't mention stay as they are. Import never deletes a flow.
 - An MCP server is matched by name. Its URL, description, auth and connector are set from the file. A server whose URL or auth changes is signed out, and loses its token.
 - A skill or command is matched by name. Its description, arguments and content are set from the file, and it keeps whoever it belongs to. One the app doesn't have is added as everyone's.

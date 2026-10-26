@@ -1,9 +1,12 @@
 package main
 
 // Other systems start flows over HTTP with an API key, as a person does with
-// the Run button, and read back what the runs left. Each flow has an address
-// of its own, /v1/flows/<id>/runs, and takes what it starts from: the objects
-// on its top board that some process there takes but none generates, which
+// the Run button, and read back what the runs left. A run started this way
+// runs the version the flow published, or its board as it is while it
+// publishes none (see publish.go), and what it takes is that version's.
+// Each flow has an address of its own, /v1/flows/<id>/runs, and takes what
+// it starts from: the objects on its top board that some process there
+// takes but none generates, which
 // a run from the Run button starts with empty. Those are given to the run as
 // a subflow process gives its objects to the flow it runs (see calls.go), so
 // the process the start points at takes them all, and the others taking them
@@ -705,7 +708,8 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 		writeJSON(w, http.StatusOK, d)
 	})
 
-	// Starts a run of the flow on its board as it is, given its inputs:
+	// Starts a run of the flow on the version it published, or its board as
+	// it is, given its inputs:
 	// {"inputs": {"<object>": ...}, "states": {"<object>": "<state>"}}. An
 	// Idempotency-Key header makes sending it again return the same run.
 	mux.HandleFunc("POST /v1/flows/{id}/runs", func(w http.ResponseWriter, r *http.Request) {

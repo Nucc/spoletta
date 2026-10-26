@@ -15,8 +15,9 @@ import (
 
 // A person picks which record a flow works on: on a shared struct's Records
 // page they start a run of a flow querying the struct's object on one
-// record, or one run on each of several. The run is the flow's as the Run
-// button starts it, on its board as it is, but each of its query links on
+// record, or one run on each of several. The run is the flow's as a
+// schedule starts it, on the version the flow published or its board as it
+// is while it publishes none (see publish.go), but each of its query links on
 // the record's store reads that record alone, whatever the query's state
 // and rule, as a list of one; a query on another store, or on a persistent
 // object's stored instances, reads as it would. So a flow implementing the

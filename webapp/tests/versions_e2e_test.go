@@ -371,7 +371,8 @@ func TestRunsKeepDeletedProcesses(t *testing.T) {
 	}
 }
 
-// A run follows the board as it goes, so it can't be rewritten under it.
+// A run of the board holds it: it can't be brought back to another version
+// while the run goes, though the run reads its own version.
 func TestRestoreRefusedWhileRunning(t *testing.T) {
 	a := newApp(t)
 	f := a.newFlow("Busy")

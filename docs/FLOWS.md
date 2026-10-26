@@ -432,8 +432,9 @@ off. After an agent step ends, a person can send it follow-up messages
 ### 3.9 Schedules
 
 `schedules: [{cron: "0 7 * * 1-5", timezone: Europe/London}]` runs the flow
-on its own. The cron has five fields (or a descriptor such as `@hourly`), and
-the timezone is an IANA zone given separately. A time is skipped if the
+on its own: the version the flow published, or its board as it is while it
+publishes none (4.1a). The cron has five fields (or a descriptor such as
+`@hourly`), and the timezone is an IANA zone given separately. A time is skipped if the
 flow's last run is still going (for example, waiting on a person), and times
 missed while the server was down are skipped too. A scheduled flow can't
 have a human fill in what it starts from and still run unattended, so start
@@ -478,6 +479,32 @@ process take the request object, with nothing generating it. Connect to the
 end what the caller should get back: `GET /v1/runs/<id>` returns what the run
 left of those objects. A flow starting from a human or a fetching process
 takes no inputs.
+
+### 4.1a Which version a run runs
+
+A run runs on a **version** of the flow: a snapshot of every board and of
+the flow's settings. It takes its processes, prompts, scripts, settings,
+objects, states and attributes from that version, not from the board as it
+is while it goes, so editing the board reaches only the runs after.
+
+A flow can **publish** one of its versions (Publish, beside Save; or any
+older version from the Versions panel, which rolls back to it). The board
+is then its draft, and:
+
+- **Run** on the board, and **re-running** a run from one of its processes,
+  run the board as it is (saved as a version first if it changed); a person
+  can run the version published by hand from the Versions panel.
+- A **schedule**'s run, a run **over the API** and a run started **on a
+  record** run the **version published**. What the API says the flow takes,
+  and which records its queries select, are that version's too.
+- A **subflow** process in a run of a version published runs the version
+  its procedure published, if it has one, and its board as it is
+  otherwise; in a run of the board, it runs the procedure's board as it is.
+
+A flow that never published a version runs its board as it is everywhere.
+So publish a flow that schedules or other systems run before editing it, and
+publish its procedures too. Publishing changes nothing on the board, and
+bringing the board back to a version leaves what is published as it is.
 
 ### 4.2 Readiness
 
@@ -815,7 +842,9 @@ Conventions that matter when writing one:
   alone. A flow made over keeps the processes, objects, states and attributes
   that match by name, so its runs and stored instances still refer to them.
   It is saved as a version first, and the import is a step of its history,
-  so it can be undone.
+  so it can be undone. A file is one board: it carries no versions and
+  nothing of which version a flow published, and importing over a flow
+  changes its draft, leaving the version it published as it was.
 - **Positions are optional.** `x`, `y`, `width`, link `at` and `route` are
   for round-tripping a board someone drew. When you write a flow, leave them
   out: import lays the board out in layers from the start and `next`, with

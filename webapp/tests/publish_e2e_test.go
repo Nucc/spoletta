@@ -532,6 +532,17 @@ func TestVersionDiffs(t *testing.T) {
 	a.refused("GET", fmt.Sprintf("/api/versions/%d/diff?to=%d", first.ID, elsewhere.ID), nil, http.StatusBadRequest, "different flows")
 	a.refused("GET", "/api/versions/999999999/diff", nil, http.StatusNotFound, "version not found")
 	a.refused("GET", fmt.Sprintf("/api/versions/%d/diff?to=x", first.ID), nil, http.StatusBadRequest, "invalid version")
+
+	// Going back to a version brings back its board, not the flow's settings.
+	verRestore(a, first.ID)
+	var got flow
+	a.call("GET", fmt.Sprintf("/api/flows/%d", f.ID), nil, http.StatusOK, &got)
+	if len(got.Settings.Repositories) != 1 || len(verProcesses(a, f.ID)) != 1 {
+		t.Errorf("after going back, the settings are %+v and the board has %d processes", got.Settings, len(verProcesses(a, f.ID)))
+	}
+	if d := pubDiffOf(a, fmt.Sprintf("/api/versions/%d/diff", first.ID)); len(d.Settings) != 1 || len(d.Processes) != 0 {
+		t.Errorf("the board gone back differs from its version in %+v", d)
+	}
 }
 
 // A board a setup file made over by name is compared by name where its ids

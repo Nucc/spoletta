@@ -13,7 +13,9 @@ import (
 
 // A run can be re-run from one of its processes, to try that process again
 // after fixing what it took or the process itself. The re-run is a new run
-// on the board as it is now. What the processes before it generated is
+// on the board as it is now, even of a run of the version published, since
+// a person starts it by hand from the board as they do with the Run button
+// (see publish.go). What the processes before it generated is
 // copied from the run, as a step of its own, and the re-run starts at the
 // process, taking what it took then, or what the person re-running it put
 // in its place. The process and what follows it run anew: the objects they

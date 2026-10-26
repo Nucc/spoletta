@@ -857,9 +857,9 @@ export default function Board({
   const onPublishVersion = (id: number) => versionChange(() => publishVersion(id))
   const onUnpublish = () => versionChange(() => unpublish(flowId))
 
-  // Brings the board back to a saved version, with the flow's settings it
-  // kept. The run shown on the board belongs to the board it left, so it
-  // closes, as does a comparison with the board.
+  // Brings the board back to a saved version. The run shown on the board
+  // belongs to the board it left, so it closes, as does a comparison with
+  // the board.
   const onRestore = async (id: number) => {
     setVersioning(true)
     try {
@@ -868,7 +868,7 @@ export default function Board({
       setMenu(null)
       setRunId(null)
       setCompare(null)
-      await Promise.all([loadBoard(), refreshVersions(), onReload()])
+      await Promise.all([loadBoard(), refreshVersions()])
     } catch (err) {
       report(err)
     } finally {
@@ -2135,9 +2135,8 @@ export default function Board({
         await changesSettled()
         return undo ? undoHistory(flowId) : redoHistory(flowId)
       })
-      // The flow's settings come back with the board.
       if (h.changed) {
-        await Promise.all([loadBoard(), onReload()])
+        await loadBoard()
         boardChanged.current(true)
       }
     } catch (err) {

@@ -16,7 +16,8 @@ import (
 // A version is a saved snapshot of a flow's whole board: its processes, objects
 // with their states and attributes, links, connections and start node, and
 // the flow's settings. Saving always adds a version on top, and jumping to
-// one rewrites the board as it was, so no version is ever lost. The board
+// one rewrites the board as it was, leaving the settings, so no version is
+// ever lost. The board
 // keeps its rows' ids across jumps: runs refer to processes and objects by
 // id, and persistent objects remember what runs stored by object and
 // attribute id. A flow may publish one of its versions for the runs nobody
@@ -121,8 +122,10 @@ type snapshot struct {
 	End *boardEnd `json:"end,omitempty"`
 	// Flow processes' boards; versions from before them have none.
 	Boards []innerBoard `json:"boards"`
-	// The flow's settings, its repositories say; versions from before they
-	// were kept have none, and restoring one leaves them as they are.
+	// The flow's settings, its repositories say, which a run of the version
+	// works with and a diff compares; versions from before they were kept
+	// have none. Bringing the board back to a version, or undoing, leaves
+	// the flow's settings as they are, and history steps keep none.
 	Settings *flowSettings `json:"settings,omitempty"`
 }
 
@@ -463,11 +466,6 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			if err := ensureBoard(ctx, tx, p.ID); err != nil {
 				return err
 			}
-		}
-	}
-	if s.Settings != nil {
-		if _, err := tx.ExecContext(ctx, "UPDATE flows SET settings = ? WHERE id = ?", s.Settings, flow); err != nil {
-			return err
 		}
 	}
 	var endX, endY *float64

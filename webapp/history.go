@@ -37,10 +37,18 @@ func currentStep(ctx context.Context, tx *sql.Tx, flow int64) (int64, []byte, er
 	return id, body, err
 }
 
+// The board as a step keeps it: without the flow's settings, which undoing
+// leaves as they are.
+func boardStep(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error) {
+	s, err := takeSnapshot(ctx, tx, flow)
+	s.Settings = nil
+	return s, err
+}
+
 // Adds the board as it is as a step, unless the board is on the step it
 // already is; a step added drops the steps undone. Says whether it added one.
 func recordStep(ctx context.Context, tx *sql.Tx, flow int64) (bool, error) {
-	s, err := takeSnapshot(ctx, tx, flow)
+	s, err := boardStep(ctx, tx, flow)
 	if err != nil {
 		return false, err
 	}
@@ -90,7 +98,7 @@ func goToStep(ctx context.Context, tx *sql.Tx, flow, step int64) error {
 	if err := rewriteBoard(ctx, tx, flow, s); err != nil {
 		return err
 	}
-	if s, err := takeSnapshot(ctx, tx, flow); err != nil {
+	if s, err := boardStep(ctx, tx, flow); err != nil {
 		return err
 	} else if body, err = json.Marshal(s); err != nil {
 		return err

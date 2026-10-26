@@ -17,8 +17,10 @@ import (
 
 // The engine executes runs in the server, so a run goes on without the page
 // that started it, and a review can wait as long as it takes. Each run walks
-// the board as its version has it; the steps it records are what the board
-// shows of it.
+// the board as its version has it, and its steps take their processes, the
+// objects they generate and how those are stored from the version too (see
+// run_board.go), so what is edited on the board meanwhile reaches only the
+// runs after; the steps it records are what the board shows of it.
 //
 // A process that succeeds generates its output objects, which hold what it
 // printed, or for an object with attributes its part of the checked reply,

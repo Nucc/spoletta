@@ -17,8 +17,9 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// A schedule runs a flow on its own, whenever its cron expression says, as
-// the Run button would: on the board as it is. The server checks every
+// A schedule runs a flow on its own, whenever its cron expression says: the
+// version the flow published, or its board as it is while it publishes none,
+// as the Run button would (see publish.go). The server checks every
 // second for schedules due, and each one due starts a run unless its last
 // run is still going, such as one waiting on a person; that time is skipped.
 // Times missed while the server was down are skipped too: a schedule only

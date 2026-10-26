@@ -223,10 +223,11 @@ func findTemplate(id string) (flowTemplate, bool, error) {
 	return ts[i], true, nil
 }
 
-// The first name of the form name, name 2, name 3… no flow has.
+// The first name of the form name, name 2, name 3… no flow has, of those
+// out of the trash, which leaves its flows' names free (trash.go).
 func freeFlowName(ctx context.Context, tx *sql.Tx, name string) (string, error) {
 	taken := map[string]bool{}
-	err := scanAll(ctx, tx, "SELECT name FROM flows WHERE name = ? OR name LIKE ?", func(rows *sql.Rows) error {
+	err := scanAll(ctx, tx, "SELECT name FROM flows WHERE (name = ? OR name LIKE ?) AND deleted_at IS NULL", func(rows *sql.Rows) error {
 		var n string
 		err := rows.Scan(&n)
 		taken[n] = true

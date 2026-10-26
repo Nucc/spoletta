@@ -708,3 +708,19 @@ func TestTrashKeepsLinksThroughSetupFiles(t *testing.T) {
 		t.Errorf("restored, the caller ran %s; steps %s", d.Status, describeSteps(d))
 	}
 }
+
+// A flow made from a template takes the template's name again once the one
+// that had it is in the trash, rather than a number after it.
+func TestTrashFreesTemplatesNames(t *testing.T) {
+	a := setupApp(t)
+	first := tplUse(a, "expense-claim", nil)
+	if second := tplUse(a, "expense-claim", nil); second.Name != first.Name+" 2" {
+		t.Fatalf("a second flow of the template is named %q, after %q", second.Name, first.Name)
+	} else {
+		trashMove(a, second.ID)
+	}
+	trashMove(a, first.ID)
+	if again := tplUse(a, "expense-claim", nil); again.Name != first.Name {
+		t.Errorf("with the template's flows in the trash, a new one is named %q, not %q", again.Name, first.Name)
+	}
+}

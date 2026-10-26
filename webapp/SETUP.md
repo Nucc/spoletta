@@ -250,6 +250,10 @@ Export does this by itself.
 
 Use the board's Tidy button afterwards for a better layout.
 
+## Templates
+
+The flows people start from on the flow list (*New from template*) are setup files kept in the webapp, `webapp/templates/*.yaml`, read in their names' order (a number first orders them, and isn't part of the template's id). Each holds a `title`, a one-line `description` and, under `setup`, a setup file of one flow alone: no MCP servers, skills, commands, structs or procedures, nor repositories of the flow's own, since importing those would make over what the app has of the same name. Its processes name the repositories they work on, and its connector processes name their connector by the connector's name (`server: slack`), which becomes the first installed one of it, or none while none is. What it needs is worked out from that, with its people's roles. A template is imported as a new flow, named apart from every flow the app has, with its schedules turned off.
+
 ## Writing a setup with an LLM
 
 Give the LLM this file and, ideally, an export of your current setup as an example, then describe the flow you want. Things worth telling it:

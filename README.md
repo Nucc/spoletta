@@ -63,6 +63,9 @@ runs put side by side to see where they went differently.
 
 ![A finished run on the board: Triage, Fix and Approve risky fix are done, the ticket is a bug and its risk high](docs/images/run.png)
 
+A new flow can start from a template, a ready flow such as triaging a
+ticket or a daily digest posted to Slack, and the board says what is wrong
+with a flow before it runs, Run refusing one with errors a run can't get past.
 Each flow also has an assistant, a chat at the bottom right of its board,
 that changes the flow for you from a description of what you want, and
 explains its runs: ask it why run 412 failed, or from a run's panel, and it

@@ -249,6 +249,9 @@ by kind:
   connector among the `mcpServers`, `operation` one of its operations, and
   `args` its arguments as text, in which `{{Object}}` and
   `{{Object.attribute}}` stand for what the step takes (section 5.5).
+  Without `server`, none is picked yet, as when the connector isn't
+  installed: the process keeps its operation and arguments, and the flow
+  can't run until someone picks one.
 - GitHub's operations that read: `list_issues`, `search_issues`,
   `get_issue`, `list_comments`, `list_pull_requests`, `get_pull_request`,
   `list_pull_request_files`, `get_file`. Those that change GitHub:
@@ -1672,6 +1675,12 @@ missing sentences.
 
 ### 10.3 Write the setup file
 
+The flow list's templates (*New from template*) are ready flows of the
+kinds in section 8: triage, a write-and-critique loop, a fix approved by
+its risk, a digest posted to Slack, a flow per item of a list and a form
+a person fills in. When one is close to what the user wants, suggest
+starting from it and changing it, rather than writing it anew.
+
 - Start with `spoletta: 1`. Include only the flows you create or change (the
   import leaves others alone), plus any structs, procedures and MCP servers
   they name that don't exist yet.
@@ -1686,11 +1695,21 @@ missing sentences.
 
 1. `POST /api/setup` with the file. If it is refused, the message says what
    is wrong; fix it and import again. Nothing changed meanwhile.
-2. Read back the OPL (`GET /api/flows/{id}/opl`, flow ids from
+2. Read what is wrong with the board (`GET /api/flows/{id}/problems`), as
+   the board shows beside Run. Errors are what a run can't get past as it
+   is drawn (no start, a subflow running no flow, a connector process
+   without its connector, operation or an argument it needs), and Run
+   refuses the flow until they are fixed. Warnings are what a run may get
+   past or what is set up outside the flow: an object nothing generates
+   (common mistake 1), a process nothing leads to, an agent with no model,
+   a review whose role nobody holds, a repository the flow lacks, or a
+   skill, MCP server, credential or token it can't use. Fix what is yours
+   to fix, and tell the user the rest.
+3. Read back the OPL (`GET /api/flows/{id}/opl`, flow ids from
    `GET /api/flows`) and compare it with your draft sentence by sentence.
-3. Tell the user what needs their hands: signing in to any new MCP server in
+4. Tell the user what needs their hands: signing in to any new MCP server in
    the settings, a connector's token, and the first run.
-4. Suggest a first run by hand, even for a scheduled flow, and watching its
+5. Suggest a first run by hand, even for a scheduled flow, and watching its
    steps. A process can be tried first on its own, from its panel's *Try this
    process*: a trial runs only it, on inputs the user gives it, and stores
    nothing real runs see (persistent objects, shared records and `$SINCE`

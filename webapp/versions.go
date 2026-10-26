@@ -46,7 +46,8 @@ type saving struct {
 
 // Why a version was saved on its own: before a run on the board as it was,
 // such as one a subflow process started, and before the assistant or a
-// setup file changed the flow.
+// setup file changed the flow; a flow made from a template saves its first
+// as savedForTemplate (see templates.go).
 const (
 	savedForRun       = "run"
 	savedForAssistant = "assistant"

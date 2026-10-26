@@ -941,12 +941,19 @@ body {
   bottom: 16px;
   left: 50%;
   z-index: 4;
-  width: min(560px, calc(100% - 160px));
+  display: flex;
+  flex-direction: column;
+  /* Clear of the zoom controls and the assistant, or on a canvas too
+     narrow for that, as on a phone, nearly as wide as it; never taller. */
+  width: min(560px, max(calc(100% - 160px), min(calc(100% - 16px), 240px)));
+  max-height: calc(100% - 32px);
   transform: translateX(-50%);
   pointer-events: none;
 }
 
 .board-tips .board-tip {
+  min-height: 0;
+  overflow-y: auto;
   pointer-events: auto;
   background: #fff;
   box-shadow: 0 2px 8px rgba(31, 35, 40, 0.1);

@@ -1,8 +1,9 @@
 # What a step's container runs when steps run in containers of their own
 # (SANDBOX=podman; see sandbox_podman.go): pi, with the extensions the
 # worker gives it, and bash, git, curl and jq for agents' tools and
-# scripts. Nothing of the worker's: it stays in the worker's image.
-FROM docker.io/library/node:22-alpine
+# scripts. Nothing of the worker's: it stays in the worker's image. Node
+# names its patch release, as in the worker's image.
+FROM docker.io/library/node:22.23.4-alpine
 
 RUN apk add --no-cache bash curl git jq
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4

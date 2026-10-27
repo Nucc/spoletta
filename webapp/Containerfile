@@ -1,4 +1,6 @@
-FROM docker.io/library/node:22-alpine AS frontend
+# The bases name their patch releases, so a base cached from before a
+# security release can't stand in for the one patched.
+FROM docker.io/library/node:22.23.4-alpine AS frontend
 
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./
@@ -6,7 +8,7 @@ RUN npm ci
 COPY frontend/ .
 RUN npm run build
 
-FROM docker.io/library/golang:1.25-alpine AS build
+FROM docker.io/library/golang:1.27.3-alpine AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -19,7 +21,7 @@ COPY migrations ./migrations
 COPY templates ./templates
 RUN CGO_ENABLED=0 go build -o /out/webapp .
 
-FROM docker.io/library/alpine:3.20
+FROM docker.io/library/alpine:3.24
 
 COPY --from=build /out/webapp /usr/local/bin/webapp
 COPY --from=frontend /src/dist /srv/static

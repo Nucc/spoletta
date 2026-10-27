@@ -2,6 +2,8 @@ module webapp
 
 go 1.24.0
 
+toolchain go1.27.3
+
 require (
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/pressly/goose/v3 v3.26.0

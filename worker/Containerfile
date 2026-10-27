@@ -1,4 +1,6 @@
-FROM docker.io/library/golang:1.25-alpine AS build
+# The bases name their patch releases, so a base cached from before a
+# security release can't stand in for the one patched.
+FROM docker.io/library/golang:1.27.3-alpine AS build
 
 WORKDIR /src
 COPY worker/go.mod ./
@@ -6,7 +8,7 @@ COPY worker/*.go ./
 RUN CGO_ENABLED=0 go build -o /out/worker .
 
 # pi is an npm package, so the worker runs on a Node image.
-FROM docker.io/library/node:22-alpine
+FROM docker.io/library/node:22.23.4-alpine
 
 # git and bash give the agent's tools something to work with, and scripts
 # get curl and jq to call APIs. su-exec drops root as the worker starts.

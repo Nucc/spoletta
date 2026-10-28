@@ -453,6 +453,24 @@ export default function ProcessPanel({
               setSettings(({ waitAtMost: _, ...rest }) => (waitAtMost === undefined ? rest : { ...rest, waitAtMost }))
             }
           />
+          <DurationSetting
+            label="Hand on after"
+            title="How long it waits with nobody deciding before the roles below may decide it too, and are told so, such as 1d; never when empty"
+            value={settings.escalateAfter}
+            readOnly={readOnly}
+            onChange={(escalateAfter) =>
+              setSettings(({ escalateAfter: _, ...rest }) => (escalateAfter === undefined ? rest : { ...rest, escalateAfter }))
+            }
+          />
+          <RolesSetting
+            label="Hand on to"
+            title="The roles that may decide it too once it has waited that long, such as Lead, Finance; those who decide it now still may"
+            value={settings.escalateTo}
+            readOnly={readOnly}
+            onChange={(escalateTo) =>
+              setSettings(({ escalateTo: _, ...rest }) => (escalateTo === undefined ? rest : { ...rest, escalateTo }))
+            }
+          />
         </div>
       )}
       {(kind === 'agent' || kind === 'script' || kind === 'connector') && (
@@ -748,6 +766,48 @@ function DurationSetting({
           if (e.target.value.trim() === '') return onChange(undefined)
           const n = parseDuration(e.target.value)
           if (n !== null && n >= 1 && n <= MAX_WAIT) onChange(n)
+        }}
+      />
+    </label>
+  )
+}
+
+// Roles typed as a list separated by commas; none when empty.
+function RolesSetting({
+  label,
+  title,
+  value,
+  readOnly,
+  onChange,
+}: {
+  label: string
+  title: string
+  value: string[] | undefined
+  readOnly: boolean
+  onChange: (roles: string[] | undefined) => void
+}) {
+  const parse = (t: string) => {
+    const roles = t
+      .split(',')
+      .map((r) => r.trim())
+      .filter(Boolean)
+    return roles.length > 0 ? roles : undefined
+  }
+  const [text, setText] = useState((value ?? []).join(', '))
+  useEffect(() => {
+    setText((t) => ((parse(t) ?? []).join(',') === (value ?? []).join(',') ? t : (value ?? []).join(', ')))
+  }, [value])
+  return (
+    <label className="panel-field" title={title}>
+      <span>{label}</span>
+      <input
+        type="text"
+        value={text}
+        placeholder="Nobody"
+        readOnly={readOnly}
+        onChange={(e) => {
+          setText(e.target.value)
+          onChange(parse(e.target.value))
         }}
       />
     </label>

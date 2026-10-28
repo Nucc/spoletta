@@ -84,7 +84,15 @@ type processSettings struct {
 	// takes over; in seconds, neither when absent. See notify.go.
 	RemindAfter *int `json:"remindAfter,omitempty"`
 	WaitAtMost  *int `json:"waitAtMost,omitempty"`
+	// How long a human step waits, in seconds, before the roles escalateTo
+	// names may decide it too, beside those its people name, and are told
+	// so; never when either is absent. See notify.go.
+	EscalateAfter *int     `json:"escalateAfter,omitempty"`
+	EscalateTo    []string `json:"escalateTo,omitempty"`
 }
+
+// The most roles a review is handed on to.
+const maxEscalateTo = 10
 
 // The longest a step may be given, a day, and the most retries.
 const (
@@ -145,6 +153,17 @@ func (s processSettings) problem() string {
 	}
 	if s.WaitAtMost != nil && (*s.WaitAtMost < 1 || *s.WaitAtMost > maxWait) {
 		return fmt.Sprintf("waitAtMost must be from 1 to %d seconds", maxWait)
+	}
+	if s.EscalateAfter != nil && (*s.EscalateAfter < 1 || *s.EscalateAfter > maxWait) {
+		return fmt.Sprintf("escalateAfter must be from 1 to %d seconds", maxWait)
+	}
+	if len(s.EscalateTo) > maxEscalateTo {
+		return fmt.Sprintf("a review is handed on to at most %d roles", maxEscalateTo)
+	}
+	for _, r := range s.EscalateTo {
+		if strings.TrimSpace(r) == "" || len(r) > maxRoleName {
+			return fmt.Sprintf("a role a review is handed on to must be from 1 to %d characters", maxRoleName)
+		}
 	}
 	if len(s.Credentials) > maxProcessCredentials {
 		return fmt.Sprintf("a process picks at most %d credentials", maxProcessCredentials)

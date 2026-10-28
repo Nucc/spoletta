@@ -59,6 +59,10 @@ export type ProcessSettings = {
   // handles its failure takes over; in seconds, neither when absent.
   remindAfter?: number
   waitAtMost?: number
+  // How long a human step waits, in seconds, before the roles escalateTo
+  // names may decide it too, and are told so; never when either is absent.
+  escalateAfter?: number
+  escalateTo?: string[]
 }
 
 export const DEFAULT_ROUNDS = 3
@@ -1192,6 +1196,8 @@ export type RunStep = {
   // the flow.
   decidedBy: string
   handledBy?: string[]
+  // Whether a review was handed on to more roles, which handledBy includes.
+  escalated?: boolean
   canDecide: boolean
   // For a recording flow process: the run its board ran as.
   childRun: number | null
@@ -1708,6 +1714,8 @@ export type InboxItem = {
   detail: string
   // The roles that decide it, none when anyone does.
   handledBy: string[]
+  // Whether it was handed on to more roles, which handledBy includes.
+  escalated: boolean
   // Who started its run, when someone did.
   startedBy: string
   since: string

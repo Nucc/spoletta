@@ -118,6 +118,7 @@ function InboxRow({ item }: { item: InboxItem }) {
       <span className="inbox-when">
         Waiting since {formatTime(item.since)}
         {item.handledBy.length > 0 && ` · for ${item.handledBy.join(' or ')}`}
+        {item.escalated && <strong> · handed on, as nobody decided it in time</strong>}
         {item.expires && <strong> · fails {formatTime(item.expires)} if nobody decides</strong>}
       </span>
     </a>

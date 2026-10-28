@@ -67,6 +67,16 @@ func TestWaitingNotice(t *testing.T) {
 	if m := w.notice("l", "s", false); !strings.Contains(m.subject, "waits for you to fill it in") {
 		t.Errorf("input subject = %q", m.subject)
 	}
+
+	// Those a review is handed on to are told so.
+	w.waits, w.handedTo = waitsReview, []string{"Lead", "Head of finance"}
+	m = w.notice("l", "s", false)
+	if !strings.HasPrefix(m.subject, `Handed on to you: "Approve <payment>" waits for your review`) || !strings.HasPrefix(m.slack, "Handed on to you: ") {
+		t.Errorf("handed on subject = %q, slack = %q", m.subject, m.slack)
+	}
+	if !strings.Contains(m.text, `handed on to "Lead" and "Head of finance" too`) {
+		t.Errorf("handed on text:\n%s", m.text)
+	}
 }
 
 func TestFailedRunNotice(t *testing.T) {

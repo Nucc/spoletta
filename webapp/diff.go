@@ -328,6 +328,7 @@ var processSettingNames = map[string]string{
 	"repositories": "repositories", "flow": "flow it runs", "rounds": "rounds", "loops": "loops",
 	"timeout": "timeout", "retries": "retries", "quorum": "quorum", "describeFlow": "describes the flow",
 	"remindAfter": "reminds every", "waitAtMost": "waits at most",
+	"escalateAfter": "hands on after", "escalateTo": "hands on to",
 }
 
 // The fields of two values marshalled as JSON objects that differ, each

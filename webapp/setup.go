@@ -153,11 +153,15 @@ type setupProcess struct {
 	DescribeFlow bool                `yaml:"describeFlow,omitempty"`
 	RemindAfter  *int                `yaml:"remindAfter,omitempty"`
 	WaitAtMost   *int                `yaml:"waitAtMost,omitempty"`
-	Recording    bool                `yaml:"recording,omitempty"`
-	Prompt       string              `yaml:"prompt,omitempty"`
-	Script       string              `yaml:"script,omitempty"`
-	Takes        []setupLink         `yaml:"takes,omitempty"`
-	Yields       []setupLink         `yaml:"yields,omitempty"`
+	// The seconds a review waits before the roles escalateTo names may
+	// decide it too; see notify.go.
+	EscalateAfter *int        `yaml:"escalateAfter,omitempty"`
+	EscalateTo    []string    `yaml:"escalateTo,omitempty"`
+	Recording     bool        `yaml:"recording,omitempty"`
+	Prompt        string      `yaml:"prompt,omitempty"`
+	Script        string      `yaml:"script,omitempty"`
+	Takes         []setupLink `yaml:"takes,omitempty"`
+	Yields        []setupLink `yaml:"yields,omitempty"`
 	// The processes that run after it, and those that run instead once it fails.
 	Next      []string `yaml:"next,omitempty"`
 	OnFailure []string `yaml:"onFailure,omitempty"`

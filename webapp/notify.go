@@ -8,6 +8,9 @@ package main
 // started fails. A review whose
 // process has waitAtMost fails once it has waited that long, as a step
 // running past its timeout does, so what handles its failure takes over.
+// One whose process has escalateAfter is handed on once it has waited that
+// long: the roles its escalateTo names may then decide it too, beside those
+// who could before, who still may, and those it now waits on are told.
 //
 // Each message goes by email (mail.go), when the webapp has an SMTP server,
 // and as a Slack direct message from the Slack connector's app, when one is
@@ -40,6 +43,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -50,7 +54,9 @@ import (
 const (
 	noticeWaiting  = "waiting"
 	noticeReminder = "reminder"
-	noticeFailed   = "failed"
+	// A review handed on to more roles, told to those it now waits on too.
+	noticeEscalated = "escalated"
+	noticeFailed    = "failed"
 )
 
 // What a step waiting for a person waits for: a decision on a review, what
@@ -100,26 +106,44 @@ func newNotifier(db *sql.DB, signIn bool, mail *mailer, eng *engine) *notifier {
 	return n
 }
 
-// Records when a review is due to be reminded of first and to fail, from
-// when it started waiting by the database's clock, as its process's
-// settings say; none reminds at or after it fails.
+// Records when a review is due to be reminded of first, to be handed on
+// and to fail, from when it started waiting by the database's clock, as
+// its process's settings say; none reminds or is handed on at or after it
+// fails.
 func keepDeadlines(ctx context.Context, db *sql.DB, step int64, s processSettings) error {
-	if s.RemindAfter == nil && s.WaitAtMost == nil {
+	before := func(at *int) *int {
+		if at != nil && s.WaitAtMost != nil && *at >= *s.WaitAtMost {
+			return nil
+		}
+		return at
+	}
+	remind, escalate := before(s.RemindAfter), before(s.EscalateAfter)
+	if len(s.EscalateTo) == 0 {
+		escalate = nil
+	}
+	if remind == nil && escalate == nil && s.WaitAtMost == nil {
 		return nil
 	}
-	remind := s.RemindAfter
-	if remind != nil && s.WaitAtMost != nil && *remind >= *s.WaitAtMost {
-		remind = nil
-	}
 	_, err := db.ExecContext(ctx,
-		"UPDATE run_steps SET remind_at = started_at + INTERVAL ? SECOND, expires_at = started_at + INTERVAL ? SECOND WHERE id = ?",
-		remind, s.WaitAtMost, step)
+		`UPDATE run_steps SET remind_at = started_at + INTERVAL ? SECOND, escalate_at = started_at + INTERVAL ? SECOND,
+		expires_at = started_at + INTERVAL ? SECOND WHERE id = ?`,
+		remind, escalate, s.WaitAtMost, step)
 	return err
 }
 
 // The people told a step waits on them, by id, as above, the roles deciding
-// it as its run's board has them.
+// it as its run's board has them, those it was handed on to too once it was.
 func deciders(ctx context.Context, db *sql.DB, step int64) ([]int64, error) {
+	var escalated bool
+	if err := db.QueryRowContext(ctx, "SELECT escalated FROM run_steps WHERE id = ?", step).Scan(&escalated); err != nil {
+		return nil, err
+	}
+	return decidersAs(ctx, db, step, escalated)
+}
+
+// The people told a step waits on them, as deciders, as if it was handed
+// on, or not.
+func decidersAs(ctx context.Context, db *sql.DB, step int64, escalated bool) ([]int64, error) {
 	var kind string
 	var process sql.NullInt64
 	var run, flow int64
@@ -134,7 +158,7 @@ func deciders(ctx context.Context, db *sql.DB, step int64) ([]int64, error) {
 		if err != nil {
 			return nil, err
 		}
-		handledBy = b.handlers(process.Int64)
+		handledBy = b.deciders(process.Int64, escalated)
 	}
 	var people []user
 	err = scanAll(ctx, db, "SELECT id, email, name, admin, team_manager FROM users WHERE removed_at IS NULL ORDER BY id", func(rows *sql.Rows) error {
@@ -259,7 +283,8 @@ func (n *notifier) watch(ctx context.Context, interval time.Duration) {
 		for _, f := range []struct {
 			what string
 			do   func(context.Context) error
-		}{{"fail the reviews past their time limits", n.expire}, {"remind of the reviews due", n.remind}, {"send what stopped replicas claimed", n.resend}} {
+		}{{"fail the reviews past their time limits", n.expire}, {"remind of the reviews due", n.remind},
+			{"hand on the reviews due", n.escalate}, {"send what stopped replicas claimed", n.resend}} {
 			if err := f.do(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("WARNING: couldn't %s: %v", f.what, err)
 			}
@@ -379,6 +404,87 @@ func (n *notifier) remind(ctx context.Context) error {
 	return nil
 }
 
+// Hands on each review due to be, as its process's escalateAfter says,
+// to the roles its escalateTo names, who may then decide it too. Marking
+// it handed on claims it, along with the claims telling those who may now
+// decide it and couldn't before, so a replica stopping in between leaves
+// both or neither, and only one replica hands it on. One past its time
+// limit isn't handed on.
+func (n *notifier) escalate(ctx context.Context) error {
+	type due struct {
+		step, run, process int64
+		waited             int
+	}
+	var steps []due
+	err := scanAll(ctx, n.db, `SELECT id, run_id, COALESCE(process_ref, 0), TIMESTAMPDIFF(SECOND, started_at, escalate_at) FROM run_steps
+		WHERE status = ? AND escalate_at <= CURRENT_TIMESTAMP(3) ORDER BY escalate_at LIMIT 100`, func(rows *sql.Rows) error {
+		var d due
+		err := rows.Scan(&d.step, &d.run, &d.process, &d.waited)
+		steps = append(steps, d)
+		return err
+	}, stepWaiting)
+	if err != nil {
+		return err
+	}
+	for _, d := range steps {
+		var claims []int64
+		handed := false
+		err := inTx(ctx, n.db, func(tx *sql.Tx) error {
+			res, err := tx.ExecContext(ctx, `UPDATE run_steps SET escalated = TRUE, escalate_at = NULL
+				WHERE id = ? AND status = ? AND escalate_at IS NOT NULL AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(3))`,
+				d.step, stepWaiting)
+			if err != nil {
+				return err
+			}
+			if k, err := res.RowsAffected(); err != nil || k == 0 {
+				return err
+			}
+			handed = true
+			if !n.signIn {
+				return nil
+			}
+			before, err := decidersAs(ctx, n.db, d.step, false)
+			if err != nil {
+				return err
+			}
+			after, err := decidersAs(ctx, n.db, d.step, true)
+			if err != nil {
+				return err
+			}
+			for _, p := range after {
+				if slices.Contains(before, p) {
+					continue
+				}
+				id, err := claimNotice(ctx, tx, d.run, d.step, p, noticeEscalated, 0)
+				if err != nil {
+					return err
+				}
+				if id != 0 {
+					claims = append(claims, id)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			runLog(n.db, d.run, d.step, logError, "handing step %d on couldn't be claimed: %v", d.step, err)
+			continue
+		}
+		if handed {
+			roles := "the roles it escalates to"
+			if b, err := runBoardOf(ctx, n.db, d.run); err == nil && len(b.processes[d.process].Settings.EscalateTo) > 0 {
+				roles = quotedList(b.processes[d.process].Settings.EscalateTo)
+			}
+			runLog(n.db, d.run, d.step, logInfo, "handed on to %s too, as nobody decided it in %s", roles, spokenDuration(d.waited))
+		}
+		go func() {
+			for _, id := range claims {
+				n.deliver(id)
+			}
+		}()
+	}
+	return nil
+}
+
 // Sends what replicas that stopped claimed but never sent, each claimed
 // again first, so only one replica sends it.
 func (n *notifier) resend(ctx context.Context) error {
@@ -459,7 +565,7 @@ func (n *notifier) deliver(id int64) {
 		m, err = n.failedNotice(ctx, run)
 		ok = err == nil
 	} else {
-		m, ok, err = n.waitingNotice(ctx, step, kind == noticeReminder)
+		m, ok, err = n.waitingNotice(ctx, step, kind)
 	}
 	if err != nil {
 		runLog(n.db, run, step, logError, "what to tell %s couldn't be put together: %v", p.label(), err)
@@ -493,9 +599,9 @@ func (n *notifier) deliver(id int64) {
 }
 
 // What a review, or a loop question, waiting tells those who may decide it,
-// or reminds them of, with the process as its run's board has it; false if
-// it no longer waits.
-func (n *notifier) waitingNotice(ctx context.Context, step int64, reminder bool) (notice, bool, error) {
+// reminds them of, or tells those it is handed on to, as kind says, with
+// the process as its run's board has it; false if it no longer waits.
+func (n *notifier) waitingNotice(ctx context.Context, step int64, kind string) (notice, bool, error) {
 	var w waitingStep
 	var status string
 	var process sql.NullInt64
@@ -514,8 +620,11 @@ func (n *notifier) waitingNotice(ctx context.Context, step int64, reminder bool)
 			return notice{}, false, err
 		}
 		w.waits, w.instructions = reviewWaits(b, process.Int64), b.processes[process.Int64].Prompt
+		if kind == noticeEscalated {
+			w.handedTo = b.processes[process.Int64].Settings.EscalateTo
+		}
 	}
-	return w.notice(n.base+reviewPath(w.flow, w.run, step), n.base+"/#/settings/account", reminder), true, nil
+	return w.notice(n.base+reviewPath(w.flow, w.run, step), n.base+"/#/settings/account", kind == noticeReminder), true, nil
 }
 
 // Where the board opens on a run with a step's review showing.
@@ -532,6 +641,9 @@ type waitingStep struct {
 	question, instructions string
 	since                  time.Time
 	expires                *time.Time
+	// The roles it was handed on to, telling those holding them; none for
+	// any other message.
+	handedTo []string
 }
 
 // What a review of the process, as the board has it, waits for: a decision
@@ -574,11 +686,18 @@ func (w waitingStep) notice(link, settings string, reminder bool) notice {
 	}
 	where := fmt.Sprintf("in run %d of %s", w.run, flow)
 	m := notice{subject: fmt.Sprintf("%s %s, %s", name, what, where), about: fmt.Sprintf("%s %s", name, what)}
-	if reminder {
+	switch {
+	case reminder:
 		m.subject = "Reminder: " + m.subject
+	case len(w.handedTo) > 0:
+		m.subject = "Handed on to you: " + m.subject
+		m.about += ", handed on"
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s, %s, since %s.\n", name, what, where, spokenTime(w.since))
+	if len(w.handedTo) > 0 {
+		fmt.Fprintf(&b, "Nobody decided it in time, so it is handed on to %s too.\n", quotedList(w.handedTo))
+	}
 	if w.expires != nil {
 		fmt.Fprintf(&b, "If nobody decides it by %s, it fails.\n", spokenTime(*w.expires))
 	}
@@ -590,6 +709,9 @@ func (w waitingStep) notice(link, settings string, reminder bool) notice {
 	fmt.Fprintf(&b, "\n%s: %s\n\nYou are told as you may decide it. Say what you are told of, and how, in your settings: %s\n", open, link, settings)
 	m.text = b.String()
 	m.slack = fmt.Sprintf("*%s* %s, %s. <%s|%s>", slackEscape(name), slackEscape(what), slackEscape(where), link, open)
+	if len(w.handedTo) > 0 {
+		m.slack = "Handed on to you: " + m.slack
+	}
 	return m
 }
 

@@ -162,6 +162,25 @@ func (b *runBoard) handlers(process int64) []string {
 	return names
 }
 
+// The roles deciding a review of the process: those its people name, and
+// once it is escalated, those its process hands it on to, each once
+// whatever its case, sorted; none when anyone decides it, which handing it
+// on leaves as it is. See notify.go.
+func (b *runBoard) deciders(process int64, escalated bool) []string {
+	names := b.handlers(process)
+	if !escalated || len(names) == 0 {
+		return names
+	}
+	for _, r := range b.processes[process].Settings.EscalateTo {
+		r = strings.TrimSpace(r)
+		if r != "" && !slices.ContainsFunc(names, func(n string) bool { return roleKey(n) == roleKey(r) }) {
+			names = append(names, r)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 // The store a shared object reads and writes, 0 if it isn't shared.
 func (b *runBoard) store(object int64) int64 {
 	if s := b.objects[object].Store; s != nil {

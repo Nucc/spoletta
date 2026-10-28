@@ -9164,9 +9164,13 @@ select.flow-owner:disabled {
   font-size: 14px;
 }
 
-/* A human process's reminder and time limit, side by side. */
+/* A human process's reminder, time limit and handing on, two by two. */
+.panel-durations {
+  flex-wrap: wrap;
+}
+
 .panel-durations .panel-field {
-  flex: 1;
+  flex: 1 1 40%;
   min-width: 0;
 }
 

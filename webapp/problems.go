@@ -388,21 +388,48 @@ func (c *problemCheck) innerStart(flowProcess int64) int64 {
 }
 
 // A review is decided by those holding a role its people name, or admins
-// when nobody does; and a reminder due at or after its time limit never
-// goes.
+// when nobody does; a reminder, or handing it on, due at or after its time
+// limit never comes; and it is handed on only with both a time and roles to
+// hand it to, and only when a role decides it at all.
 func (c *problemCheck) human(p process) {
 	s := p.Settings
 	if s.RemindAfter != nil && s.WaitAtMost != nil && *s.RemindAfter >= *s.WaitAtMost {
 		c.onProcess(problemWarning, "reminder", p, "%s reminds every %s but fails after %s, so nobody is ever reminded: make the reminder shorter.",
 			quote(p.Name), durationText(*s.RemindAfter), durationText(*s.WaitAtMost))
 	}
-	if !c.f.signIn {
-		return
-	}
 	var roles []string
 	for _, l := range c.links[p.ID] {
 		if o := c.objs[l.Object]; l.Direction == directionInput && o.Human && !slices.Contains(roles, strings.TrimSpace(o.Name)) {
 			roles = append(roles, strings.TrimSpace(o.Name))
+		}
+	}
+	switch {
+	case s.EscalateAfter != nil && len(s.EscalateTo) == 0:
+		c.onProcess(problemWarning, "escalation", p, "%s hands its review on after %s but names no role to hand it to: name one, or clear the time.",
+			quote(p.Name), durationText(*s.EscalateAfter))
+	case s.EscalateAfter == nil && len(s.EscalateTo) > 0:
+		c.onProcess(problemWarning, "escalation", p, "%s names %s to hand its review on to but no time to wait first, so it is never handed on.",
+			quote(p.Name), quotedList(s.EscalateTo))
+	case s.EscalateAfter != nil && s.WaitAtMost != nil && *s.EscalateAfter >= *s.WaitAtMost:
+		c.onProcess(problemWarning, "escalation", p, "%s hands its review on after %s but fails after %s, so it is never handed on: make the wait shorter.",
+			quote(p.Name), durationText(*s.EscalateAfter), durationText(*s.WaitAtMost))
+	case s.EscalateAfter != nil && len(roles) == 0:
+		c.onProcess(problemWarning, "escalation", p, "Anyone who sees the flow decides %s already, so handing it on to %s changes nothing: connect the people who decide it first.",
+			quote(p.Name), quotedList(s.EscalateTo))
+	}
+	if !c.f.signIn {
+		return
+	}
+	if s.EscalateAfter != nil && len(roles) > 0 {
+		var unheld []string
+		for _, r := range s.EscalateTo {
+			if !c.f.roles[roleKey(r)] {
+				unheld = append(unheld, strings.TrimSpace(r))
+			}
+		}
+		if len(unheld) > 0 {
+			c.onProcess(problemWarning, "role", p, "Nobody holds the role %s, which %s is handed on to: an admin gives the role in Settings, under People.",
+				quotedList(unheld), quote(p.Name))
 		}
 	}
 	if len(roles) == 0 || slices.ContainsFunc(roles, func(r string) bool { return c.f.roles[roleKey(r)] }) {

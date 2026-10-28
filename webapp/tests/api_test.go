@@ -461,6 +461,10 @@ type processSettings struct {
 	// reminded, and the longest it waits before it fails, in seconds.
 	RemindAfter *int `json:"remindAfter,omitempty"`
 	WaitAtMost  *int `json:"waitAtMost,omitempty"`
+	// The seconds a review waits before the roles escalateTo names may
+	// decide it too.
+	EscalateAfter *int     `json:"escalateAfter,omitempty"`
+	EscalateTo    []string `json:"escalateTo,omitempty"`
 }
 
 const (
@@ -769,6 +773,7 @@ type step struct {
 	DecidedBy    string   `json:"decidedBy"`
 	HandledBy    []string `json:"handledBy"`
 	CanDecide    bool     `json:"canDecide"`
+	Escalated    bool     `json:"escalated"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,

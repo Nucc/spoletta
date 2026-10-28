@@ -34,6 +34,7 @@ type inboxItem struct {
 	Waits       string     `json:"waits"`
 	Detail      string     `json:"detail"`
 	HandledBy   []string   `json:"handledBy"`
+	Escalated   bool       `json:"escalated"`
 	StartedBy   string     `json:"startedBy"`
 	Since       time.Time  `json:"since"`
 	Expires     *time.Time `json:"expires"`
@@ -610,6 +611,85 @@ func TestNotifyPastPeopleInTeams(t *testing.T) {
 		t.Errorf("Carl's inbox: %+v", got)
 	}
 	a.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
+}
+
+// A review left waiting escalateAfter is handed on, once though two
+// replicas watch: the roles escalateTo names may then decide it too,
+// seeing its flow though they saw nothing of it before, and only they are
+// told, as it is handed on to them; those who could decide it still may.
+func TestReviewIsHandedOnOnce(t *testing.T) {
+	p := newFakeProvider(t)
+	smtp := newInboxSMTP(t)
+	a := inboxApp(t, p, "", smtp.env()...)
+	other := inboxApp(t, p, a.worker.url, smtp.env()...)
+	other.worker = a.worker
+	usersSignIn(a, p, usersAda)
+	other.client = a.client
+	bob, carl := usersNewPerson("Bob"), usersNewPerson("Carl")
+	usersAdd(a, bob.email, "Editor")
+	lead := usersAdd(a, carl.email, "Lead")
+	db := secretsDB(t)
+
+	// Ada's own flow, which Carl sees only as a review is handed on to him.
+	b := humanNewReviewBoard(a)
+	failuresSettings(a, b.review.ID, processSettings{EscalateAfter: ptr(1), EscalateTo: []string{"Lead"}})
+	var opl struct {
+		Text string `json:"text"`
+	}
+	a.call("GET", fmt.Sprintf("/api/flows/%d/opl", b.flow.ID), nil, http.StatusOK, &opl)
+	if want := `"Review" is handed on to Lead after waiting 1 second.`; !strings.Contains(opl.Text, want) {
+		t.Errorf("OPL lacks %s:\n%s", want, opl.Text)
+	}
+
+	rn := other.startRun(b.flow.ID)
+	review := a.waitStep(rn.ID, "Review", stepWaiting)
+	inboxEventually(t, "Carl being told it is handed on to him", func() bool {
+		return slices.ContainsFunc(smtp.to(carl.email), func(m inboxMail) bool {
+			return strings.HasPrefix(m.subject, fmt.Sprintf(`Handed on to you: "Review" waits for your review, in run %d of`, rn.ID))
+		})
+	})
+	asCarl := inboxAs(a, p, carl)
+	got := inboxOf(asCarl, b.flow.ID)
+	if len(got) != 1 || got[0].Step != review.ID || !got[0].Escalated || !slices.Equal(got[0].HandledBy, []string{"Editor", "Lead"}) {
+		t.Fatalf("Carl's inbox: %+v", got)
+	}
+	logLineWith(t, a.runLogs(rn.ID, 0), `handed on to "Lead" too, as nobody decided it in 1 second`)
+	var d runDetail
+	asCarl.call("GET", fmt.Sprintf("/api/runs/%d", rn.ID), nil, http.StatusOK, &d)
+	if s := onlyStep(t, d, "Review"); !s.CanDecide || !s.Escalated {
+		t.Errorf("Carl's view of the review: can decide %v, escalated %v", s.CanDecide, s.Escalated)
+	}
+	if got := inboxOf(inboxAs(a, p, bob), b.flow.ID); len(got) != 1 {
+		t.Errorf("Bob's inbox once it is handed on: %+v", got)
+	}
+
+	// Carl alone was told it is handed on, once.
+	time.Sleep(1500 * time.Millisecond)
+	var told []int64
+	rows, err := db.Query("SELECT user_id FROM notifications WHERE step_id = ? AND kind = 'escalated'", review.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		told = append(told, id)
+	}
+	rows.Close()
+	if !slices.Equal(told, []int64{lead.ID}) {
+		t.Errorf("told it is handed on: %v, want Carl alone, once", told)
+	}
+
+	humanMustDecide(asCarl, rn.ID, review.ID, map[string]any{"state": b.approved.ID})
+	if d := a.finish(rn.ID); d.Status != runDone || onlyStep(t, d, "Review").DecidedBy != "Carl" {
+		t.Errorf("the run %s, the review decided by %q: %s", d.Status, onlyStep(t, d, "Review").DecidedBy, describeSteps(d))
+	}
+
+	for _, st := range []processSettings{{EscalateAfter: ptr(0)}, {EscalateTo: []string{" "}}} {
+		a.refused("PATCH", fmt.Sprintf("/api/processes/%d", b.review.ID), map[string]any{"settings": st}, http.StatusBadRequest, "must be from 1 to")
+	}
 }
 
 // A message a replica claimed but didn't send before it stopped is sent by

@@ -140,6 +140,8 @@ A board the file gives no `notes` keeps those it has; `notes: []` leaves it none
   retries: 2
   remindAfter: 14400    # human: whoever decides it is reminded every this many seconds while it waits
   waitAtMost: 172800    # human: seconds it waits before it fails, which onFailure can handle
+  escalateAfter: 86400  # human: seconds it waits before the roles in escalateTo may decide it too, and are told
+  escalateTo: [Lead]    # human: the roles a review is handed on to, beside those who decide it
   quorum: 1             # how many of what it takes it waits for
   describeFlow: true    # agent: tell it the flow it works in, in OPL
   recording: true       # flow process: each time it runs is a run of its own
@@ -196,6 +198,8 @@ A process taking an object and yielding it too affects it: it hands the object i
   takes: [Patch, Reviewer]
   yields: [{object: Patch, states: [approved, changes requested]}]
   remindAfter: 14400    # reminds the reviewer every 4 hours while it waits
+  escalateAfter: 86400  # after a day, a Lead may decide it too, and is told so
+  escalateTo: [Lead]
   waitAtMost: 172800    # fails after 2 days, and Escalate takes over
   onFailure: [Escalate]
 ```

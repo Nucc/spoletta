@@ -47,12 +47,24 @@ func userRoles(ctx context.Context, db *sql.DB, id int64) ([]string, error) {
 	return roles, err
 }
 
-// Keeps the roles a version's human objects name, for visibleFlows: by
+// Keeps the roles a version's human objects name, and those its human
+// processes hand reviews on to (see notify.go), for visibleFlows: by
 // roleKey, once each.
 func saveVersionRoles(ctx context.Context, tx *sql.Tx, version int64, s snapshot) error {
-	seen := map[string]bool{}
+	var names []string
 	for _, o := range s.Objects {
-		if key := roleKey(o.Name); o.Human && key != "" && !seen[key] {
+		if o.Human {
+			names = append(names, o.Name)
+		}
+	}
+	for _, p := range s.Processes {
+		if p.Kind == kindHuman {
+			names = append(names, p.Settings.EscalateTo...)
+		}
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if key := roleKey(name); key != "" && !seen[key] {
 			seen[key] = true
 			if _, err := tx.ExecContext(ctx, "INSERT INTO version_roles (version_id, role) VALUES (?, ?)", version, key); err != nil {
 				return err

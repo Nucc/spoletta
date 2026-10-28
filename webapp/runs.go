@@ -131,6 +131,9 @@ type step struct {
 	DecidedBy string   `json:"decidedBy"`
 	HandledBy []string `json:"handledBy,omitempty"`
 	CanDecide bool     `json:"canDecide"`
+	// Whether a review was handed on to the roles its process escalates
+	// to, which handledBy then includes; see notify.go.
+	Escalated bool `json:"escalated,omitempty"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,
@@ -650,7 +653,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
-				status, output, error, outcome, instructions, `+userLabelColumn("decided_by")+`, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''), slot_wait_ms, try, started_at, finished_at
+				status, output, error, outcome, instructions, `+userLabelColumn("decided_by")+`, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''), slot_wait_ms, try, started_at, finished_at, escalated
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
 			serverError(w, err)
@@ -679,7 +682,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			var inputs []byte
 			var cr, commits []byte
 			if err := rows.Scan(&s.ID, &s.Process, &s.ProcessName, &s.Kind, &s.Model, &s.Thinking, &s.Prompt, &inputs, &cr,
-				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.DecidedBy, &s.ChildRun, &s.Branch, &commits, &s.Session, &s.SlotWaitMS, &s.Try, &s.StartedAt, &s.FinishedAt); err != nil {
+				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.DecidedBy, &s.ChildRun, &s.Branch, &commits, &s.Session, &s.SlotWaitMS, &s.Try, &s.StartedAt, &s.FinishedAt, &s.Escalated); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -730,7 +733,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 						return
 					}
 				}
-				detail.Steps[i].HandledBy = b.handlers(*s.Process)
+				detail.Steps[i].HandledBy = b.deciders(*s.Process, s.Escalated)
 			}
 			detail.Steps[i].CanDecide = decidesStep(requestUser(r), roles, access, s.Kind, detail.Steps[i].HandledBy)
 		}
@@ -833,7 +836,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		// A step whose process was deleted before ids were kept fills in nothing.
 		var process sql.NullInt64
-		err = db.QueryRowContext(r.Context(), "SELECT process_ref FROM run_steps WHERE id = ? AND run_id = ?", id, runID).Scan(&process)
+		var escalated bool
+		err = db.QueryRowContext(r.Context(), "SELECT process_ref, escalated FROM run_steps WHERE id = ? AND run_id = ?", id, runID).Scan(&process, &escalated)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "no review waiting with that id in this run", http.StatusConflict)
 			return
@@ -855,7 +859,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 				return
 			}
 		}
-		if msg, err := refuseDecider(r.Context(), db, r, b.handlers(process.Int64)); err != nil || msg != "" {
+		if msg, err := refuseDecider(r.Context(), db, r, b.deciders(process.Int64, escalated)); err != nil || msg != "" {
 			if err != nil {
 				serverError(w, err)
 			} else {

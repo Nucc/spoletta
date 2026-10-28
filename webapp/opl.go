@@ -348,6 +348,9 @@ func (o *oplWriter) processSentences(p process, indent string) {
 	if p.Kind == kindHuman && st.RemindAfter != nil {
 		o.line(indent, "%s reminds whoever decides it every %s.", name, spokenDuration(*st.RemindAfter))
 	}
+	if p.Kind == kindHuman && st.EscalateAfter != nil && len(st.EscalateTo) > 0 {
+		o.line(indent, "%s is handed on to %s after waiting %s.", name, list(st.EscalateTo, "and"), spokenDuration(*st.EscalateAfter))
+	}
 	if p.Kind == kindHuman && st.WaitAtMost != nil {
 		o.line(indent, "%s fails after waiting %s.", name, spokenDuration(*st.WaitAtMost))
 	}

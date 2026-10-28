@@ -317,13 +317,19 @@ Settings for agent, script and connector processes:
   no person deciding in between before someone is asked whether it goes on
   (section 4.4).
 
-Settings for human processes, both in seconds (1 to 31536000, a year):
+Settings for human processes, the times in seconds (1 to 31536000, a year):
 - `remindAfter`: those who may decide it are reminded every this long while
   it waits, until it is decided, stopped, or fails on its `waitAtMost`; never
   at or after that.
 - `waitAtMost`: once it has waited this long with nobody deciding, it fails
   as a step past its `timeout` does, so its `onFailure` handler takes over
   (section 4.6).
+- `escalateAfter` and `escalateTo` (up to 10 roles): once it has waited
+  `escalateAfter` with nobody deciding, it is handed on: the holders of the
+  roles `escalateTo` names may decide it too, and are told so, while those
+  who could decide it before still may. Never at or after its `waitAtMost`,
+  and only for a review a role decides (one no human object handles is
+  everyone's already).
 
 Settings for any process:
 - `quorum`: run once this many of the objects it takes without waiting for
@@ -690,7 +696,9 @@ Whoever may decide it finds it in their inbox, and is told it waits on them,
 by email and on Slack as they choose: the holders of the roles its human
 objects name, or for a review no human object handles, everyone who sees the
 flow; admins only when nobody else may. Name a role to say who is told.
-`remindAfter` reminds them every that long while it waits. `waitAtMost` fails
+`remindAfter` reminds them every that long while it waits. `escalateAfter`
+hands it on to the roles `escalateTo` names, who may decide it too from then
+and are told so, as a team lead takes over a review left lying. `waitAtMost` fails
 it once it has waited that long, so a review nobody decides doesn't hold the
 run for ever: the failure ends its branch, or goes to its `onFailure`
 handler, which takes what the review took and the failure, as any handler

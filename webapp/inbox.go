@@ -37,8 +37,10 @@ type inboxItem struct {
 	Waits string `json:"waits"`
 	// A loop step's question, or the human process's instructions.
 	Detail string `json:"detail"`
-	// The roles that decide it, none when anyone does.
+	// The roles that decide it, none when anyone does, and whether it was
+	// handed on to more, which they include; see notify.go.
 	HandledBy []string `json:"handledBy"`
+	Escalated bool     `json:"escalated"`
 	// Who started its run, when someone did.
 	StartedBy string    `json:"startedBy"`
 	Since     time.Time `json:"since"`
@@ -70,14 +72,14 @@ func inbox(ctx context.Context, db *sql.DB, u *user, flows ...int64) ([]inboxIte
 	var all []waiting
 	err := scanAll(ctx, db,
 		`SELECT s.id, s.run_id, r.flow_id, f.name, r.parent_run_id, r.version_id, s.process_ref, s.process_name, s.kind, s.prompt,
-			`+userLabelColumn("r.started_by")+`, s.started_at, s.expires_at, `+edit+`
+			`+userLabelColumn("r.started_by")+`, s.started_at, s.expires_at, s.escalated, `+edit+`
 		FROM run_steps s JOIN runs r ON r.id = s.run_id JOIN flows f ON f.id = r.flow_id
 		WHERE s.status = ? AND s.kind IN (?, ?) AND r.status = ? AND `+see+`
 		ORDER BY s.started_at DESC, s.id DESC LIMIT ?`, func(rows *sql.Rows) error {
 			var it waiting
 			// A loop step asks its question.
 			if err := rows.Scan(&it.Step, &it.Run, &it.Flow, &it.FlowName, &it.Parent, &it.version, &it.Process, &it.ProcessName, &it.kind, &it.Detail,
-				&it.StartedBy, &it.Since, &it.Expires, &it.editable); err != nil {
+				&it.StartedBy, &it.Since, &it.Expires, &it.Escalated, &it.editable); err != nil {
 				return err
 			}
 			all = append(all, it)
@@ -119,7 +121,7 @@ func inbox(ctx context.Context, db *sql.DB, u *user, flows ...int64) ([]inboxIte
 				process = *it.Process
 			}
 			// A review has its process's instructions.
-			it.HandledBy, it.Waits, it.Detail = b.handlers(process), reviewWaits(b, process), b.processes[process].Prompt
+			it.HandledBy, it.Waits, it.Detail = b.deciders(process, it.Escalated), reviewWaits(b, process), b.processes[process].Prompt
 			if it.HandledBy == nil {
 				it.HandledBy = []string{}
 			}

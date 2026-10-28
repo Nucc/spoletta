@@ -181,6 +181,21 @@ func TestBoardProblems(t *testing.T) {
 			level: problemWarning, rule: "role", process: 5, says: `role "Approver"`},
 		{name: "reminder at the time limit", change: func(s *snapshot, f *problemFacts) { s.Processes[4].Settings.RemindAfter = intPtr(86400) },
 			level: problemWarning, rule: "reminder", process: 5, says: "reminds every 1 day but fails after 1 day"},
+		{name: "handed on to no role", change: func(s *snapshot, f *problemFacts) { s.Processes[4].Settings.EscalateAfter = intPtr(7200) },
+			level: problemWarning, rule: "escalation", process: 5, says: "names no role to hand it to"},
+		{name: "handed on with no time", change: func(s *snapshot, f *problemFacts) { s.Processes[4].Settings.EscalateTo = []string{"Lead"} },
+			level: problemWarning, rule: "escalation", process: 5, says: "never handed on"},
+		{name: "handed on at the time limit", change: func(s *snapshot, f *problemFacts) {
+			s.Processes[4].Settings.EscalateAfter, s.Processes[4].Settings.EscalateTo = intPtr(86400), []string{"Lead"}
+			f.roles["lead"] = true
+		}, level: problemWarning, rule: "escalation", process: 5, says: "hands its review on after 1 day but fails after 1 day"},
+		{name: "handed on what anyone decides", change: func(s *snapshot, f *problemFacts) {
+			s.Processes[0].Settings.EscalateAfter, s.Processes[0].Settings.EscalateTo = intPtr(60), []string{"Lead"}
+			f.roles["lead"] = true
+		}, level: problemWarning, rule: "escalation", process: 1, says: "changes nothing"},
+		{name: "handed on to a role nobody holds", change: func(s *snapshot, f *problemFacts) {
+			s.Processes[4].Settings.EscalateAfter, s.Processes[4].Settings.EscalateTo = intPtr(7200), []string{"Lead"}
+		}, level: problemWarning, rule: "role", process: 5, says: `role "Lead", which "Approve" is handed on to`},
 		{name: "repository the flow lacks", change: func(s *snapshot, f *problemFacts) { s.Settings.Repositories = nil },
 			level: problemWarning, rule: "repository", process: 3, says: `repository "app"`},
 		{name: "skill deleted", change: func(s *snapshot, f *problemFacts) { s.Processes[2].Settings.Skills = []int64{80} },

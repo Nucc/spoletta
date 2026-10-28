@@ -134,6 +134,8 @@ type step struct {
 	// Whether a review was handed on to the roles its process escalates
 	// to, which handledBy then includes; see notify.go.
 	Escalated bool `json:"escalated,omitempty"`
+	// What people said of a review, oldest first; see comments.go.
+	Comments []reviewComment `json:"comments,omitempty"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,
@@ -715,6 +717,11 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		rows.Close()
+		comments, err := reviewComments(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		// Who decides a review is the run's board's to say.
 		var b *runBoard
 		access, err := flowAccess(r.Context(), db, requestUser(r), rn.Flow)
@@ -735,6 +742,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 				}
 				detail.Steps[i].HandledBy = b.deciders(*s.Process, s.Escalated)
 			}
+			detail.Steps[i].Comments = comments[s.ID]
 			detail.Steps[i].CanDecide = decidesStep(requestUser(r), roles, access, s.Kind, detail.Steps[i].HandledBy)
 		}
 

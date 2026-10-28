@@ -20,11 +20,13 @@ import {
   type Models,
   type ProcessKind,
   type ProcessSettings,
+  type ReviewComment,
   type RunInput,
   type ThinkingLevel,
   type LinkQuery,
 } from './api'
 import { Data } from './Data'
+import { formatTime } from './Runs'
 import { quantityWords, type Quantity } from './quantity'
 import { fieldsOf, holdsFile, shapeOf, type Field } from './structure'
 import { MCPServerPicker } from './MCPSettings'
@@ -99,6 +101,9 @@ export type Review = {
   // For a process going round a loop: what it asks, whether the process
   // goes on, instead of states to set; see loops.go.
   loop?: { question: string; onAnswer: (goOn: boolean) => Promise<boolean> }
+  // What people said of it, and saying something, for those who may decide
+  // it or edit the flow; see comments.go.
+  comments?: { list: ReviewComment[]; canComment: boolean; onComment: (text: string) => Promise<ReviewComment[]> }
 }
 
 // Edits one process; mount with key={id} so switching processes resets the form.
@@ -970,6 +975,7 @@ function DecisionForm({ review }: { review: Review }) {
           {!review.canDecide && (
             <small className="panel-note">Only {handlers} decides this. Ask an admin for the role to decide it yourself.</small>
           )}
+          {review.comments && <ReviewComments comments={review.comments} />}
           <div className="review-actions">
             {review.options.length === 0 && (
               <button disabled={!review.canDecide || (entering && !ready)} onClick={() => decide(null)}>
@@ -986,6 +992,65 @@ function DecisionForm({ review }: { review: Review }) {
         </div>
       </div>
     </section>
+  )
+}
+
+// What people said of a review, and a box to say something, sent with
+// Enter and Cmd or Ctrl; what is typed stays if it can't be sent.
+function ReviewComments({ comments }: { comments: NonNullable<Review['comments']> }) {
+  const [list, setList] = useState(comments.list)
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState('')
+  // The run's detail, read again, brings others' comments.
+  useEffect(() => setList((l) => (comments.list.length >= l.length ? comments.list : l)), [comments.list])
+  const send = async () => {
+    if (!text.trim() || sending) return
+    setSending(true)
+    setError('')
+    try {
+      setList(await comments.onComment(text.trim()))
+      setText('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSending(false)
+    }
+  }
+  if (list.length === 0 && !comments.canComment) return null
+  return (
+    <div className="review-comments" aria-label="Comments">
+      <span className="panel-note">Comments</span>
+      {list.map((c) => (
+        <div key={c.id} className="review-comment">
+          <span className="review-comment-head">
+            {c.author || 'Someone'} · {formatTime(c.at)}
+          </span>
+          <span className="review-comment-text">{c.text}</span>
+        </div>
+      ))}
+      {comments.canComment && (
+        <div className="review-comment-new">
+          <textarea
+            rows={2}
+            value={text}
+            aria-label="Comment"
+            placeholder="Say something to the others deciding it; nobody is told"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                void send()
+              }
+            }}
+          />
+          <button onClick={send} disabled={sending || !text.trim()}>
+            Comment
+          </button>
+        </div>
+      )}
+      {error && <small className="panel-warning">{error}</small>}
+    </div>
   )
 }
 

@@ -698,7 +698,11 @@ objects name, or for a review no human object handles, everyone who sees the
 flow; admins only when nobody else may. Name a role to say who is told.
 `remindAfter` reminds them every that long while it waits. `escalateAfter`
 hands it on to the roles `escalateTo` names, who may decide it too from then
-and are told so, as a team lead takes over a review left lying. `waitAtMost` fails
+and are told so, as a team lead takes over a review left lying. While it
+waits, those who may decide it, and those who may edit the flow, can comment
+on it under its form, to talk it over before one of them decides; the
+comments stay with the step, but nobody is told of them and no agent reads
+them, so what an agent should act on goes in the decision's instructions. `waitAtMost` fails
 it once it has waited that long, so a review nobody decides doesn't hold the
 run for ever: the failure ends its branch, or goes to its `onFailure`
 handler, which takes what the review took and the failure, as any handler

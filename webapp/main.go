@@ -188,6 +188,7 @@ func main() {
 	registerLogRoutes(mux, db)
 	registerRerunRoutes(mux, db, eng)
 	registerTrialRoutes(mux, db, eng)
+	registerCommentRoutes(mux, db)
 	registerAPIRoutes(mux, db, eng, auth != nil)
 	registerWebhookRoutes(mux, db, eng, auth != nil)
 	registerDataRoutes(mux, db)

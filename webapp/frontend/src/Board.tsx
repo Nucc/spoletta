@@ -136,6 +136,7 @@ import {
   deleteProcess,
   answerLoop,
   decideStep,
+  commentOnReview,
   deleteState,
   getRun,
   getEnd,
@@ -2956,6 +2957,14 @@ export default function Board({
       handledBy: step?.handledBy ?? [],
       canDecide: step?.canDecide ?? true,
       onDecide: (state, instructions, entries) => onDecide(n.id, state, instructions, entries),
+      comments:
+        step && shownRun
+          ? {
+              list: step.comments ?? [],
+              canComment: step.canDecide || !viewOnly,
+              onComment: (text) => commentOnReview(shownRun.id, step.id, text),
+            }
+          : undefined,
     }
   }
 

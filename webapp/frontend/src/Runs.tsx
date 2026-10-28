@@ -697,6 +697,12 @@ function Step({
             text={decisionText(s.outcome, objects[0]?.name, s.instructions)}
           />
         )}
+        {s.kind === 'human' && s.status !== 'waiting' && (s.comments ?? []).length > 0 && (
+          <Block
+            label="Comments"
+            text={(s.comments ?? []).map((c) => `${c.author || 'Someone'}, ${formatTime(c.at)}:\n${c.text}`).join('\n\n')}
+          />
+        )}
         {s.error && (
           <Block
             label={s.status === 'duplicate' ? 'Duplicate' : s.status === 'skipped' ? 'Skipped' : 'Error'}

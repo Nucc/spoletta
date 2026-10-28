@@ -774,6 +774,8 @@ type step struct {
 	HandledBy    []string `json:"handledBy"`
 	CanDecide    bool     `json:"canDecide"`
 	Escalated    bool     `json:"escalated"`
+	// What people said of a review.
+	Comments []reviewComment `json:"comments"`
 	// For a recording flow process: the run its board ran as.
 	ChildRun *int64 `json:"childRun"`
 	// The branch it worked on in its run's workspace, if it worked in one,

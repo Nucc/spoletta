@@ -1198,6 +1198,8 @@ export type RunStep = {
   handledBy?: string[]
   // Whether a review was handed on to more roles, which handledBy includes.
   escalated?: boolean
+  // What people said of a review, oldest first.
+  comments?: ReviewComment[]
   canDecide: boolean
   // For a recording flow process: the run its board ran as.
   childRun: number | null
@@ -1684,6 +1686,16 @@ export async function decideStep(
 ): Promise<void> {
   await request(`/api/runs/${run}/steps/${id}`, { method: 'PATCH', body: JSON.stringify(decision) })
   inboxChanged()
+}
+
+// What someone said of a review while it waited, empty author without
+// sign-in; see comments.go.
+export type ReviewComment = { id: number; author: string; text: string; at: string }
+
+// Comments on a review waiting, which those who may decide it, or edit its
+// flow, may; resolves to its comments.
+export function commentOnReview(run: number, step: number, text: string): Promise<ReviewComment[]> {
+  return request(`/api/runs/${run}/steps/${step}/comments`, { method: 'POST', body: JSON.stringify({ text }) })
 }
 
 // Answers a loop step: whether its process goes on round the loop, or stops,

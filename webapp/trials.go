@@ -46,7 +46,9 @@ import (
 // that reached it, giving what it took, or one holding what it takes,
 // giving that, such as a trial of the process before it; so each process
 // can be tried on what the one before it really generated, without running
-// what came before again.
+// what came before again. A process can also be tried on all its samples
+// at once, a trial each, to check a change of its prompt, model or script
+// against every one before publishing it.
 
 // The most samples a process keeps.
 const maxSamples = 50
@@ -522,6 +524,30 @@ func trialTargetFor(w http.ResponseWriter, r *http.Request, tx *sql.Tx, board *s
 	return t, true
 }
 
+// Makes a trial of the process the route is about, a run of its flow on the
+// board as it is, a draft or not, never the version the flow published (see
+// publish.go), marked as one of the process; or false once it answered.
+func newTrial(w http.ResponseWriter, r *http.Request, tx *sql.Tx, flow int64) (pendingRun, trialTarget, bool) {
+	nr, err := newRun(r.Context(), tx, flow, nil, requestUserID(r), false)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "process not found", http.StatusNotFound)
+		return nr, trialTarget{}, false
+	}
+	if err != nil {
+		serverError(w, err)
+		return nr, trialTarget{}, false
+	}
+	t, ok := trialTargetFor(w, r, tx, &nr.board)
+	if !ok {
+		return nr, t, false
+	}
+	if _, err := tx.ExecContext(r.Context(), "UPDATE runs SET trial_of = ?, trial_of_name = ? WHERE id = ?", t.process.ID, t.process.Name, nr.id); err != nil {
+		serverError(w, err)
+		return nr, t, false
+	}
+	return nr, t, true
+}
+
 // The flow a process is in, 0 without the process.
 func processFlow(ctx context.Context, db querier, id string) (int64, error) {
 	var flow int64
@@ -632,28 +658,13 @@ func registerTrialRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		defer tx.Rollback()
-		// A trial is of the board as it is, a draft or not, never the
-		// version the flow published; see publish.go.
-		nr, err := newRun(r.Context(), tx, flow, nil, requestUserID(r), false)
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "process not found", http.StatusNotFound)
-			return
-		}
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		t, ok := trialTargetFor(w, r, tx, &nr.board)
+		nr, t, ok := newTrial(w, r, tx, flow)
 		if !ok {
 			return
 		}
 		values, msg := t.values(body.Inputs)
 		if msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
-			return
-		}
-		if _, err := tx.ExecContext(r.Context(), "UPDATE runs SET trial_of = ?, trial_of_name = ? WHERE id = ?", t.process.ID, t.process.Name, nr.id); err != nil {
-			serverError(w, err)
 			return
 		}
 		if err := tx.Commit(); err != nil {
@@ -667,6 +678,82 @@ func registerTrialRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, rn)
+	})
+
+	// Tries the process on each of its samples at once, a trial each, so a
+	// change of its prompt, model or script can be checked against all of
+	// them: [{"sample": id, "name": "...", "run": {...}}], in the order the
+	// samples were saved.
+	mux.HandleFunc("POST /api/processes/{id}/trial/samples", func(w http.ResponseWriter, r *http.Request) {
+		flow, err := processFlow(r.Context(), db, r.PathValue("id"))
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if flow != 0 && refuseInStruct(w, r, db, flow) {
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		type started struct {
+			pending pendingRun
+			target  trialTarget
+			values  map[int64]value
+			sample  trialSample
+		}
+		nr, t, ok := newTrial(w, r, tx, flow)
+		if !ok {
+			return
+		}
+		samples, err := t.samples(r.Context(), tx)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if len(samples) == 0 {
+			http.Error(w, fmt.Sprintf("%s has no samples to try it on", strconv.Quote(t.process.Name)), http.StatusConflict)
+			return
+		}
+		var trials []started
+		for i, s := range samples {
+			// The first sample's trial is made; each other's is a run of
+			// the same version of the board.
+			if i > 0 {
+				if nr, t, ok = newTrial(w, r, tx, flow); !ok {
+					return
+				}
+			}
+			values, msg := t.values(s.Inputs)
+			if msg != "" {
+				http.Error(w, fmt.Sprintf("sample %s: %s", strconv.Quote(s.Name), msg), http.StatusBadRequest)
+				return
+			}
+			trials = append(trials, started{nr, t, values, s})
+		}
+		if err := tx.Commit(); err != nil {
+			serverError(w, err)
+			return
+		}
+		type tried struct {
+			Sample int64  `json:"sample"`
+			Name   string `json:"name"`
+			Run    run    `json:"run"`
+		}
+		out := []tried{}
+		for _, s := range trials {
+			eng.try(s.pending, flow, s.target.process.Parent, s.target.process.ID, s.values)
+			rn, err := getRun(r.Context(), db, s.pending.id)
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			out = append(out, tried{s.sample.ID, s.sample.Name, rn})
+		}
+		writeJSON(w, http.StatusCreated, out)
 	})
 
 	// Saves inputs to try the process on as a sample: {"name": "...",

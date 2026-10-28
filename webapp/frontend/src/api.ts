@@ -1451,6 +1451,15 @@ export function tryProcess(process: number, inputs: TrialValue[]): Promise<FlowR
   return request(`/api/processes/${process}/trial`, { method: 'POST', body: JSON.stringify({ inputs }) })
 }
 
+// A trial of a process on one of its samples.
+export type SampleTrial = { sample: number; name: string; run: FlowRun }
+
+// Tries the process on each of its samples at once, a trial each, in the
+// order the samples were saved.
+export function trySamples(process: number): Promise<SampleTrial[]> {
+  return request(`/api/processes/${process}/trial/samples`, { method: 'POST' })
+}
+
 // Saves inputs as the process's sample of that name, replacing one it has;
 // resolves to its samples.
 export function saveSample(process: number, name: string, inputs: TrialValue[]): Promise<TrialSample[]> {

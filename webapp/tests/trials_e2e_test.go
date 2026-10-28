@@ -282,6 +282,49 @@ func TestTrialStartsFromTheFlowsRuns(t *testing.T) {
 	}
 }
 
+// Trying a process on every sample starts a trial of it on each, in the
+// order they were saved; one without samples has nothing to try it on.
+func TestTrialOnEverySample(t *testing.T) {
+	a := newApp(t)
+	r := newRerunFlow(a)
+	path := fmt.Sprintf("/api/processes/%d/trial/samples", r.count.ID)
+	a.refused("POST", path, nil, http.StatusConflict, "has no samples")
+
+	saveSample(a, r.count.ID, "short", trialValue{Object: r.ticket.ID, Content: `{"data": "a"}`})
+	saveSample(a, r.count.ID, "long", trialValue{Object: r.ticket.ID, Content: `{"data": "a much longer ticket"}`})
+	var tried []struct {
+		Sample int64  `json:"sample"`
+		Name   string `json:"name"`
+		Run    run    `json:"run"`
+	}
+	a.call("POST", path, nil, http.StatusCreated, &tried)
+	if len(tried) != 2 || tried[0].Name != "short" || tried[1].Name != "long" {
+		t.Fatalf("tried %+v, want a trial on short, then long", tried)
+	}
+	var sizes []string
+	for _, s := range tried {
+		if s.Run.TrialOf == nil || *s.Run.TrialOf != r.count.ID {
+			t.Errorf("the run on %s is %+v, want a trial of Count", s.Name, s.Run)
+		}
+		d := a.finish(s.Run.ID)
+		if d.Status != runDone || len(d.Steps) != 1 {
+			t.Errorf("the trial on %s %s; steps %s", s.Name, d.Status, describeSteps(d))
+		}
+		sizes = append(sizes, strings.Join(contentsOf(d, "Size"), ","))
+	}
+	if !strings.Contains(sizes[0], `"data": 13`) || !strings.Contains(sizes[1], `"data": 32`) {
+		t.Errorf("sizes = %q, want each sample's ticket's length", sizes)
+	}
+	for _, p := range []string{"Draft", "Publish", "Label"} {
+		if n := len(a.worker.runsOf(p)); n != 0 {
+			t.Errorf("%s ran %d times in trials of Count", p, n)
+		}
+	}
+
+	review := a.newProcess(r.f.ID, map[string]any{"name": "Review", "kind": kindHuman})
+	a.refused("POST", fmt.Sprintf("/api/processes/%d/trial/samples", review.ID), nil, http.StatusConflict, "only an agent, script or connector")
+}
+
 func dataRunIDs(d flowData) []int64 {
 	var ids []int64
 	for _, r := range d.Rows {

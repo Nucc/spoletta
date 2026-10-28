@@ -1794,7 +1794,9 @@ starting from it and changing it, rather than writing it anew.
    flow's latest runs, trials too: what the process took there, or what the
    run held, so a flow can be tried a process at a time, each on what the
    trial of the one before it generated. Its inputs can be saved with it as
-   named samples, which a setup file holds as a process's `samples`.
+   named samples, which a setup file holds as a process's `samples`, and
+   *Try on all samples* tries it on each of them at once, a trial each, to
+   check a change of its prompt or model against all of them.
 
 ### 10.5 Changing a flow later
 

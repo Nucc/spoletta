@@ -3,15 +3,31 @@ import {
   changesSettled,
   deleteSample,
   getTrial,
+  getRun,
   getTrialRun,
   saveSample,
   tryProcess,
+  trySamples,
   type FlowRun,
+  type FlowRunDetail,
+  type SampleTrial,
   type TrialPast,
   type TrialPlan,
   type TrialValue,
 } from './api'
-import { formatTime, RUN_LABELS } from './Runs'
+import { formatTime, RUN_LABELS, STEP_LABELS } from './Runs'
+
+// How often the trials on every sample are asked how they go.
+const SAMPLE_TRIALS_POLL_MS = 2000
+
+// What a trial's step came to, in a line: what went wrong, or the start of
+// what it handed back.
+function trialOutcome(d: FlowRunDetail | undefined): string {
+  const s = d?.steps[d.steps.length - 1]
+  if (!s) return ''
+  const text = (s.error || s.output).trim().split('\n')[0]
+  return text.length > 160 ? `${text.slice(0, 160)}…` : text
+}
 
 // What the dialog gives an object the process takes: whether it is given
 // at all, in which state, holding what.
@@ -62,6 +78,31 @@ export default function TrialDialog({
   // Counts what was picked to start from, so a run's values fetched after
   // something else was picked are dropped.
   const picked = useRef(0)
+  // The trials on every sample once started, and how each goes, by run.
+  const [sampleTrials, setSampleTrials] = useState<SampleTrial[] | null>(null)
+  const [details, setDetails] = useState<Record<number, FlowRunDetail>>({})
+
+  useEffect(() => {
+    if (!sampleTrials) return
+    let stale = false
+    let timer = 0
+    const known: Record<number, FlowRunDetail> = {}
+    // Asks again of each trial still going, until none is; one that can't
+    // be read is asked again next time.
+    const poll = async () => {
+      const going = sampleTrials.filter((s) => (known[s.run.id]?.status ?? s.run.status) === 'running')
+      const read = await Promise.all(going.map((s) => getRun(s.run.id).catch(() => null)))
+      if (stale) return
+      for (const d of read) if (d) known[d.id] = d
+      setDetails({ ...known })
+      if (read.some((d) => !d || d.status === 'running')) timer = window.setTimeout(poll, SAMPLE_TRIALS_POLL_MS)
+    }
+    timer = window.setTimeout(poll, 0)
+    return () => {
+      stale = true
+      window.clearTimeout(timer)
+    }
+  }, [sampleTrials])
 
   useEffect(() => {
     const dialog = ref.current
@@ -78,7 +119,10 @@ export default function TrialDialog({
       Object.fromEntries(
         p.takes.map((o) => {
           const v = inputs?.find((i) => i.object === o.object)
-          return [o.object, v ? { given: true, state: v.state, content: v.content } : { given: !inputs, state: o.state, content: '' }]
+          return [
+            o.object,
+            v ? { given: true, state: v.state, content: v.content } : { given: !inputs, state: o.state, content: '' },
+          ]
         }),
       ),
     )
@@ -126,7 +170,8 @@ export default function TrialDialog({
       const v = values[o.object]
       return v?.given ? [{ object: o.object, state: v.state, content: v.content }] : []
     })
-  const set = (object: number, patch: Partial<Given>) => setValues((vs) => ({ ...vs, [object]: { ...vs[object], ...patch } }))
+  const set = (object: number, patch: Partial<Given>) =>
+    setValues((vs) => ({ ...vs, [object]: { ...vs[object], ...patch } }))
 
   const act = async (what: () => Promise<void>) => {
     if (busy) return
@@ -167,132 +212,197 @@ export default function TrialDialog({
       onStarted(await tryProcess(process, inputs()))
     })
 
+  const startAll = () =>
+    act(async () => {
+      await changesSettled()
+      setDetails({})
+      setSampleTrials(await trySamples(process))
+    })
+
   const processName = plan?.processName ?? 'the process'
   const sample = plan?.samples.find((s) => `sample-${s.id}` === source)
-  return (
-    <dialog
-      ref={ref}
-      className="review-dialog rerun-dialog trial-dialog"
-      aria-label="Try the process"
-      onClose={onClose}
-      // Escape closes the dialog, not the panel it opened from.
-      onKeyDown={(e) => e.stopPropagation()}
-    >
+  // The trials on every sample, shown in the dialog in place of the inputs.
+  const trialsView = sampleTrials && (
+    <>
       <header className="panel-header">
-        <h2>Try {plan?.processName ?? '…'}</h2>
+        <h2>{processName} on every sample</h2>
         <button className="panel-close" onClick={onClose} aria-label="Close">
           ×
         </button>
       </header>
       <div className="rerun-body">
         <p className="panel-note">
-          A trial of the flow on the board as it is, in which only {processName} runs, on what you give it below: nothing
-          before or after it runs, and nothing handles it failing.
+          A trial of {processName} on each of its samples, on the board as it is. Open one to see its step in full.
         </p>
-        <div className="trial-warning" role="note">
-          <strong>It really runs.</strong> Whatever it does outside the flow, it does: a message it posts is posted, a
-          comment is made, a branch it pushes is pushed.
-          {plan && plan.effects.length > 0 && (
-            <ul>
-              {plan.effects.map((e) => (
-                <li key={e}>{e}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <p className="panel-note">
-          What it generates stays in the trial: it isn't remembered as handled, carried to the next run, or written to
-          shared records, and the Data page leaves the trial out. Its spending counts as any run's.
-        </p>
-        {plan && (
-          <label className="panel-field">
-            <span>Start from</span>
-            <select value={source} disabled={busy} onChange={(e) => load(plan, e.target.value as Source)}>
-              {plan.samples.map((s) => (
-                <option key={s.id} value={`sample-${s.id}`}>
-                  Sample: {s.name}
-                </option>
-              ))}
-              {plan.past.length > 0 && (
-                <optgroup label="The flow's latest runs">
-                  {plan.past.map((r) => (
-                    <option key={r.run} value={`run-${r.run}`}>
-                      {pastLabel(r)}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              <option value="none">Nothing</option>
-            </select>
-          </label>
-        )}
-        {fetching && <p className="panel-note">Reading what the run gives it…</p>}
-        {plan && plan.takes.length === 0 && <p className="panel-note">It takes nothing.</p>}
-        {plan?.takes.map((o) => {
-          const v = values[o.object]
-          if (!v) return null
-          return (
-            <div key={o.object} className="panel-field trial-input">
-              <div className="trial-input-head">
-                <label className="panel-check">
-                  <input type="checkbox" checked={v.given} onChange={(e) => set(o.object, { given: e.target.checked })} />
-                  <span>{o.name}</span>
-                </label>
-                {v.given && o.states.length > 0 && (
-                  <select aria-label={`${o.name}'s state`} value={v.state} onChange={(e) => set(o.object, { state: e.target.value })}>
-                    <option value="">In no state</option>
-                    {o.states.map((st) => (
-                      <option key={st} value={st}>
-                        {st}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                {!v.given && <span className="panel-note">left out</span>}
-              </div>
-              {v.given && (
-                <textarea
-                  className="rerun-input"
-                  aria-label={o.name}
-                  rows={Math.min(12, Math.max(3, v.content.split('\n').length))}
-                  value={v.content}
-                  onChange={(e) => set(o.object, { content: e.target.value })}
-                />
-              )}
-            </div>
-          )
-        })}
-        {plan && (
-          <div className="trial-sample">
-            <input
-              type="text"
-              aria-label="Sample name"
-              placeholder="Name to save these inputs as a sample"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <button
-              onClick={save}
-              disabled={busy || fetching || name.trim() === ''}
-              title="Keep these inputs with the process, to try it on again"
-            >
-              {sample && sample.name === name.trim() ? 'Save sample' : 'Save as sample'}
-            </button>
-            {sample && (
-              <button onClick={remove} disabled={busy}>
-                Delete sample
-              </button>
-            )}
-          </div>
-        )}
-        {error && <p className="panel-warning">{error}</p>}
+        <ul className="sample-trials">
+          {sampleTrials.map((s) => {
+            const d = details[s.run.id]
+            const step = d?.steps[d.steps.length - 1]
+            const status = step ? STEP_LABELS[step.status] : RUN_LABELS[d?.status ?? s.run.status]
+            return (
+              <li key={s.run.id} className={`sample-trial ${step?.status ?? 'active'}`}>
+                <div className="sample-trial-head">
+                  <strong>{s.name}</strong>
+                  <span className="sample-trial-status">{status}</span>
+                  <button onClick={() => onStarted(d ?? s.run)}>Open trial #{s.run.id}</button>
+                </div>
+                {trialOutcome(d) && <div className="sample-trial-outcome">{trialOutcome(d)}</div>}
+              </li>
+            )
+          })}
+        </ul>
       </div>
       <div className="review-actions">
-        <button onClick={onClose}>Cancel</button>
-        <button onClick={start} disabled={!plan || busy || fetching}>
-          {busy ? 'Working…' : 'Try'}
-        </button>
+        <button onClick={() => setSampleTrials(null)}>Back to the inputs</button>
+        <button onClick={onClose}>Close</button>
       </div>
+    </>
+  )
+  return (
+    <dialog
+      ref={ref}
+      className="review-dialog rerun-dialog trial-dialog"
+      aria-label={sampleTrials ? 'Trials on every sample' : 'Try the process'}
+      onClose={onClose}
+      // Escape closes the dialog, not the panel it opened from.
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      {trialsView || (
+        <>
+          <header className="panel-header">
+            <h2>Try {plan?.processName ?? '…'}</h2>
+            <button className="panel-close" onClick={onClose} aria-label="Close">
+              ×
+            </button>
+          </header>
+          <div className="rerun-body">
+            <p className="panel-note">
+              A trial of the flow on the board as it is, in which only {processName} runs, on what you give it below:
+              nothing before or after it runs, and nothing handles it failing.
+            </p>
+            <div className="trial-warning" role="note">
+              <strong>It really runs.</strong> Whatever it does outside the flow, it does: a message it posts is posted,
+              a comment is made, a branch it pushes is pushed.
+              {plan && plan.effects.length > 0 && (
+                <ul>
+                  {plan.effects.map((e) => (
+                    <li key={e}>{e}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <p className="panel-note">
+              What it generates stays in the trial: it isn't remembered as handled, carried to the next run, or written
+              to shared records, and the Data page leaves the trial out. Its spending counts as any run's.
+            </p>
+            {plan && (
+              <label className="panel-field">
+                <span>Start from</span>
+                <select value={source} disabled={busy} onChange={(e) => load(plan, e.target.value as Source)}>
+                  {plan.samples.map((s) => (
+                    <option key={s.id} value={`sample-${s.id}`}>
+                      Sample: {s.name}
+                    </option>
+                  ))}
+                  {plan.past.length > 0 && (
+                    <optgroup label="The flow's latest runs">
+                      {plan.past.map((r) => (
+                        <option key={r.run} value={`run-${r.run}`}>
+                          {pastLabel(r)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <option value="none">Nothing</option>
+                </select>
+              </label>
+            )}
+            {fetching && <p className="panel-note">Reading what the run gives it…</p>}
+            {plan && plan.takes.length === 0 && <p className="panel-note">It takes nothing.</p>}
+            {plan?.takes.map((o) => {
+              const v = values[o.object]
+              if (!v) return null
+              return (
+                <div key={o.object} className="panel-field trial-input">
+                  <div className="trial-input-head">
+                    <label className="panel-check">
+                      <input
+                        type="checkbox"
+                        checked={v.given}
+                        onChange={(e) => set(o.object, { given: e.target.checked })}
+                      />
+                      <span>{o.name}</span>
+                    </label>
+                    {v.given && o.states.length > 0 && (
+                      <select
+                        aria-label={`${o.name}'s state`}
+                        value={v.state}
+                        onChange={(e) => set(o.object, { state: e.target.value })}
+                      >
+                        <option value="">In no state</option>
+                        {o.states.map((st) => (
+                          <option key={st} value={st}>
+                            {st}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {!v.given && <span className="panel-note">left out</span>}
+                  </div>
+                  {v.given && (
+                    <textarea
+                      className="rerun-input"
+                      aria-label={o.name}
+                      rows={Math.min(12, Math.max(3, v.content.split('\n').length))}
+                      value={v.content}
+                      onChange={(e) => set(o.object, { content: e.target.value })}
+                    />
+                  )}
+                </div>
+              )
+            })}
+            {plan && (
+              <div className="trial-sample">
+                <input
+                  type="text"
+                  aria-label="Sample name"
+                  placeholder="Name to save these inputs as a sample"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+                <button
+                  onClick={save}
+                  disabled={busy || fetching || name.trim() === ''}
+                  title="Keep these inputs with the process, to try it on again"
+                >
+                  {sample && sample.name === name.trim() ? 'Save sample' : 'Save as sample'}
+                </button>
+                {sample && (
+                  <button onClick={remove} disabled={busy}>
+                    Delete sample
+                  </button>
+                )}
+              </div>
+            )}
+            {error && <p className="panel-warning">{error}</p>}
+          </div>
+          <div className="review-actions">
+            <button onClick={onClose}>Cancel</button>
+            {plan && plan.samples.length > 1 && (
+              <button
+                onClick={startAll}
+                disabled={busy}
+                title="Try it on each of its samples at once, a trial each, to check a change against all of them"
+              >
+                Try on all {plan.samples.length} samples
+              </button>
+            )}
+            <button onClick={start} disabled={!plan || busy || fetching}>
+              {busy ? 'Working…' : 'Try'}
+            </button>
+          </div>
+        </>
+      )}
     </dialog>
   )
 }

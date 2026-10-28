@@ -9214,6 +9214,21 @@ select.flow-owner:disabled {
   font-size: 14px;
 }
 
+/* Why a panel's fields can't be changed, and fields that can't, greyed. */
+.panel-read-only {
+  margin: 0;
+  padding: 8px 10px;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.panel input[readonly],
+.panel textarea[readonly] {
+  color: #59636e;
+  background: #f6f8fa;
+}
+
 /* A human process's reminder, time limit and handing on, two by two. */
 .panel-durations {
   display: grid;

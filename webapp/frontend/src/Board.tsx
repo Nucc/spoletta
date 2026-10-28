@@ -3976,6 +3976,15 @@ export default function Board({
             commands={commands}
             credentials={credentials}
             readOnly={readOnly}
+            readOnlyWhy={
+              viewOnly
+                ? 'You only decide this flow’s reviews, so its settings are shown but not changed here.'
+                : reviewing && openRun
+                  ? `These are version ${shownVersion}’s settings, which run #${openRun.id} keeps to. Go back to the board to change the process for the runs after it.`
+                  : reviewing
+                    ? `These are version ${shownVersion}’s settings. Go back to the board to change the process.`
+                    : undefined
+            }
             run={{ status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
             // The form shows in one place at a time.
             review={reviewNode?.id === panelNode.id ? undefined : reviewOf(panelNode)}

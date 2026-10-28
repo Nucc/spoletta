@@ -117,6 +117,7 @@ export default function ProcessPanel({
   commands,
   credentials,
   readOnly = false,
+  readOnlyWhy,
   run,
   review,
   onChange,
@@ -150,8 +151,10 @@ export default function ProcessPanel({
   // The credentials its agent or script may call services with, those its
   // flow may use, or null while they load.
   credentials: CredentialChoice[] | null
-  // Shows the process without letting it change, such as as a past run's version has it.
+  // Shows the process without letting it change, such as as a past run's version has it,
+  // and says why, and how to change it, if it can be.
   readOnly?: boolean
+  readOnlyWhy?: string
   // How this process did in the latest flow run, if it has run.
   run?: { status?: RunStatus; output?: string; error?: string }
   review?: Review
@@ -264,6 +267,7 @@ export default function ProcessPanel({
           ×
         </button>
       </header>
+      {readOnly && readOnlyWhy && <p className="panel-note panel-read-only">{readOnlyWhy}</p>}
       {!readOnly && (
         <Hint id={`panel-process-${kind}`} className="panel-hint">
           {KIND_HELP[kind]}

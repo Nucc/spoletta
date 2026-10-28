@@ -975,7 +975,6 @@ function DecisionForm({ review }: { review: Review }) {
           {!review.canDecide && (
             <small className="panel-note">Only {handlers} decides this. Ask an admin for the role to decide it yourself.</small>
           )}
-          {review.comments && <ReviewComments comments={review.comments} />}
           <div className="review-actions">
             {review.options.length === 0 && (
               <button disabled={!review.canDecide || (entering && !ready)} onClick={() => decide(null)}>
@@ -989,6 +988,7 @@ function DecisionForm({ review }: { review: Review }) {
               </button>
             ))}
           </div>
+          {review.comments && <ReviewComments comments={review.comments} />}
         </div>
       </div>
     </section>
@@ -1044,9 +1044,11 @@ function ReviewComments({ comments }: { comments: NonNullable<Review['comments']
               }
             }}
           />
-          <button onClick={send} disabled={sending || !text.trim()}>
-            Comment
-          </button>
+          <div className="review-actions">
+            <button onClick={send} disabled={sending || !text.trim()}>
+              Comment
+            </button>
+          </div>
         </div>
       )}
       {error && <small className="panel-warning">{error}</small>}

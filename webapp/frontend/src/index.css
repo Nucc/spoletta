@@ -1606,7 +1606,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 12px;
@@ -1641,11 +1640,15 @@ body {
   max-height: none;
 }
 
-/* What people said of a review while it waits, and saying something. */
+/* What people said of a review while it waits, and saying something,
+   apart from the decision above it. */
 .review-comments {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid #d8dee4;
 }
 
 .review-comment {
@@ -1670,13 +1673,11 @@ body {
 
 .review-comment-new {
   display: flex;
+  flex-direction: column;
   gap: 6px;
-  align-items: flex-end;
 }
 
 .review-comment-new textarea {
-  flex: 1;
-  min-width: 0;
   padding: 6px 8px;
   font: inherit;
   font-size: 13px;
@@ -4412,6 +4413,11 @@ button.toolbar-link {
   border: none;
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(31, 35, 40, 0.3);
+}
+
+/* In the dialog the review fills it, scrolling; in a panel it is as tall as it needs. */
+.review-dialog .review {
+  flex: 1;
 }
 
 .review-dialog[open] {
@@ -9210,11 +9216,11 @@ select.flow-owner:disabled {
 
 /* A human process's reminder, time limit and handing on, two by two. */
 .panel-durations {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .panel-durations .panel-field {
-  flex: 1 1 40%;
   min-width: 0;
 }
 

@@ -1377,10 +1377,12 @@ export default function Board({
 
   // A flow process opens its board, a subflow process the flow it runs;
   // other nodes their settings, or, while a run is shown, what they did and
-  // held in it, their settings staying behind their Settings button. An
-  // object unfolds from its menu or button; a person has nothing in a run.
+  // held in it, their settings staying behind their Settings button, but a
+  // process waiting for a person what it waits for. An object unfolds from
+  // its menu or button; a person has nothing in a run.
   const onNodeDoubleClick: NodeMouseHandler<FlowNode> = (_, node) => {
     if (node.type === 'process' && zoomable(node.id)) zoomIn(node.id)
+    else if (node.type === 'process' && node.data.review) setReviewId(node.id)
     else if (isDraft(node.id) || node.type === 'start' || node.type === 'end' || node.type === 'note') return
     else if (shownRun && (node.type === 'process' || (node.type === 'object' && !node.data.human))) showInRun(node.id, node.data.name)
     else setPanelId(node.id)
@@ -4132,6 +4134,11 @@ export default function Board({
             onRerun={setRerunning}
             onTryAgain={viewOnly ? undefined : setTrying}
             onAsk={viewOnly || runDetail.flow !== flowId ? undefined : askAbout}
+            onOpenReview={(process) =>
+              nodes.some((n) => n.type === 'process' && n.id === String(process) && n.data.review)
+                ? () => setReviewId(String(process))
+                : undefined
+            }
             onChanged={() => setRunReload((n) => n + 1)}
             onClose={() => setRunId(null)}
           />

@@ -320,6 +320,7 @@ export function RunPanel({
   onRerun,
   onTryAgain,
   onAsk,
+  onOpenReview,
   onChanged,
   onClose,
 }: {
@@ -347,6 +348,10 @@ export function RunPanel({
   // naming it, which has the assistant told it; absent for those who may
   // not ask, and for a run of another flow.
   onAsk?: (question: string) => void
+  // What opens the review a waiting step of the process asks for in the
+  // middle of the screen again, once it was closed; none when the board
+  // doesn't show the process.
+  onOpenReview?: (process: number) => (() => void) | undefined
   // A follow-up started or was stopped, so the run is loaded again.
   onChanged: () => void
   onClose: () => void
@@ -488,6 +493,11 @@ export function RunPanel({
                 onAsk={
                   onAsk && s.status === 'error' ? () => onAsk(`Why did ${s.processName} fail in run #${run.id}?`) : undefined
                 }
+                onOpenReview={
+                  s.status === 'waiting' && (s.kind === 'human' || s.kind === 'loop') && s.process !== null
+                    ? onOpenReview?.(s.process)
+                    : undefined
+                }
                 busy={busy}
                 onChanged={onChanged}
               />
@@ -570,6 +580,7 @@ function Step({
   onOpenRun,
   onRerun,
   onAsk,
+  onOpenReview,
   busy,
   onChanged,
 }: {
@@ -584,6 +595,8 @@ function Step({
   onRerun?: () => void
   // For a failed step: asks the flow's assistant why it failed.
   onAsk?: () => void
+  // For a step waiting for a person: opens what it asks in the middle of the screen.
+  onOpenReview?: () => void
   busy: boolean
   onChanged: () => void
 }) {
@@ -709,6 +722,11 @@ function Step({
             text={s.error}
             failed={s.status !== 'duplicate' && s.status !== 'skipped'}
           />
+        )}
+        {onOpenReview && (
+          <button className="step-rerun" onClick={onOpenReview} title="Open what it waits for in the middle of the screen">
+            {s.kind === 'loop' ? 'Answer it' : 'Open the review'}
+          </button>
         )}
         {onAsk && (
           <button className="step-rerun" onClick={onAsk} title="Ask the flow's assistant why this step failed, with the run told it">

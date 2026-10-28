@@ -490,8 +490,8 @@ function cardStatus(f: Flow, kind: FlowKind) {
   )
 }
 
-// Whether the flow is failing, by its last run or its runs this week, and
-// how many of its runs are going on.
+// Whether the flow is failing, by its last run or its runs this week, how
+// many of its steps wait on the person, and how many of its runs are going on.
 function Health({ f }: { f: Flow }) {
   const h = f.health
   if (!h) return null
@@ -506,6 +506,11 @@ function Health({ f }: { f: Flow }) {
           title={`Of its ${h.runs} runs in the last 7 days, ${h.failed} failed${lastFailed ? ', and its last run did' : ''}.`}
         >
           {[lastFailed && 'Last run failed', h.failed > 0 && `${share}% failed this week`].filter(Boolean).join(' · ')}
+        </span>
+      )}
+      {h.waiting > 0 && (
+        <span className="flow-health waiting" title="Reviews, inputs and loop questions in its runs that you may decide, which the Inbox lists">
+          {h.waiting} waiting on you
         </span>
       )}
       {h.running > 0 && (

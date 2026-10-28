@@ -8629,6 +8629,13 @@ select.flow-owner:disabled {
   border-color: #b6e3ff;
 }
 
+/* As the inbox's count in the tab bar. */
+.flow-health.waiting {
+  color: #953800;
+  background: #fff1e5;
+  border-color: #ffd8b5;
+}
+
 /* The Activity page: what goes on across the flows. */
 .activity {
   width: 100%;

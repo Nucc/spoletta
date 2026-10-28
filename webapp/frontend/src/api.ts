@@ -316,8 +316,9 @@ export type Flow = {
 }
 
 // The runs of a flow of its own that started in the last 7 days, how many
-// of those failed, and how many are going on now.
-export type FlowHealth = { runs: number; failed: number; running: number }
+// of those failed, and how many are going on now; and how many of its steps
+// wait on whoever asked, as their inbox lists them.
+export type FlowHealth = { runs: number; failed: number; running: number; waiting: number }
 
 // Gives the flow these tags, in place of those it had; they come back
 // trimmed, each once whatever its case, in order.

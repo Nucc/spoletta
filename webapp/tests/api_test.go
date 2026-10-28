@@ -234,11 +234,13 @@ type flow struct {
 }
 
 // The runs of a flow of its own that started in the last week, how many of
-// those failed, and how many are going on now.
+// those failed, and how many are going on now; and how many of its steps
+// wait on whoever asked.
 type flowHealth struct {
 	Runs    int `json:"runs"`
 	Failed  int `json:"failed"`
 	Running int `json:"running"`
+	Waiting int `json:"waiting"`
 }
 
 type flowSettings struct {

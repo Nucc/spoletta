@@ -45,11 +45,13 @@ type flow struct {
 }
 
 // How a flow's runs of its own go: how many started in the last healthFor
-// and how many of those failed, and how many are going on now.
+// and how many of those failed, and how many are going on now; and how many
+// of its steps wait on whoever asked, as their inbox lists them (inbox.go).
 type flowHealth struct {
 	Runs    int `json:"runs"`
 	Failed  int `json:"failed"`
 	Running int `json:"running"`
+	Waiting int `json:"waiting"`
 }
 
 const healthFor = 7 * 24 * time.Hour
@@ -109,6 +111,10 @@ func describeFlows(ctx context.Context, db *sql.DB, r *http.Request, fs []flow) 
 	if err != nil {
 		return err
 	}
+	waiting, err := waitingOn(ctx, db, requestUser(r), ids)
+	if err != nil {
+		return err
+	}
 	for i := range fs {
 		f := &fs[i]
 		f.Tags, f.Favourite = tags[f.ID], starred[f.ID]
@@ -120,6 +126,7 @@ func describeFlows(ctx context.Context, db *sql.DB, r *http.Request, fs []flow) 
 			if f.Health == nil {
 				f.Health = &flowHealth{}
 			}
+			f.Health.Waiting = waiting[f.ID]
 		}
 	}
 	return nil

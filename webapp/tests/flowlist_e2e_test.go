@@ -107,11 +107,12 @@ func TestFlowListTagsFavouritesAndHealth(t *testing.T) {
 	if h := listed(a, f.ID).Health; h == nil || *h != (flowHealth{Runs: 3, Failed: 1}) {
 		t.Errorf("the flow's health = %+v, want 3 runs this week, 1 failed", h)
 	}
+	// Without sign-in everyone decides every review.
 	b := humanNewReviewBoard(a)
 	rn := a.startRun(b.flow.ID)
 	a.waitStep(rn.ID, "Review", stepWaiting)
-	if h := listed(a, b.flow.ID).Health; h == nil || *h != (flowHealth{Runs: 1, Running: 1}) {
-		t.Errorf("the review's health = %+v, want one run going on", h)
+	if h := listed(a, b.flow.ID).Health; h == nil || *h != (flowHealth{Runs: 1, Running: 1, Waiting: 1}) {
+		t.Errorf("the review's health = %+v, want one run going on, waiting on whoever asked", h)
 	}
 	a.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
 
@@ -128,6 +129,41 @@ func TestFlowListTagsFavouritesAndHealth(t *testing.T) {
 	var left int
 	if err := db.QueryRow("SELECT (SELECT COUNT(*) FROM flow_tags WHERE flow_id = ?) + (SELECT COUNT(*) FROM favourite_flows WHERE flow_id = ?)", s.ID, s.ID).Scan(&left); err != nil || left != 0 {
 		t.Errorf("the deleted struct left %d tags and favourites (%v)", left, err)
+	}
+}
+
+// The list counts the steps in each flow's runs waiting on whoever asks, as
+// their inbox lists them: the reviews their roles decide, not those of
+// another role, and a loop question only for those who may edit the flow.
+func TestFlowListCountsWhatWaitsOnEachPerson(t *testing.T) {
+	a, p := usersApp(t)
+	usersSignIn(a, p, usersAda)
+	b := humanNewReviewBoard(a)
+	usersShare(a, b.flow.ID)
+	bob, carl := usersNewPerson("Bob"), usersNewPerson("Carl")
+	usersAdd(a, bob.email, "Editor")
+	usersAdd(a, carl.email, "Finance")
+	loops, _ := loopsFailing(a, 1, handsIn(data("reworked")))
+
+	for range 2 {
+		a.waitStep(a.startRun(b.flow.ID).ID, "Review", stepWaiting)
+	}
+	loopRun := a.startRun(loops.ID)
+	a.waitRun(loopRun.ID, "it to ask", func(d runDetail) bool { return len(loopsAsked(d, "Fix")) > 0 })
+	if h := listed(a, b.flow.ID).Health; h == nil || h.Waiting != 2 || h.Running != 2 {
+		t.Errorf("Ada's count of the reviews = %+v, want 2 waiting on her as an admin, 2 running", h)
+	}
+	if h := listed(a, loops.ID).Health; h == nil || h.Waiting != 1 {
+		t.Errorf("Ada's count of her loop question = %+v, want 1", h)
+	}
+
+	usersSignIn(a, p, bob)
+	if h := listed(a, b.flow.ID).Health; h == nil || h.Waiting != 2 {
+		t.Errorf("Bob, an editor, counts %+v, want 2 waiting on him", h)
+	}
+	usersSignIn(a, p, carl)
+	if h := listed(a, b.flow.ID).Health; h == nil || h.Waiting != 0 || h.Running != 2 {
+		t.Errorf("Carl, in finance, counts %+v, want none waiting on him of the 2 running", h)
 	}
 }
 

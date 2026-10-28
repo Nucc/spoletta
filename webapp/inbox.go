@@ -46,33 +46,43 @@ type inboxItem struct {
 	Expires *time.Time `json:"expires"`
 }
 
-// The steps waiting on the user, nil for nobody signed in, newest first.
-// Who decides a review, and what it asks, are its run's board's to say.
-func inbox(ctx context.Context, db *sql.DB, u *user) ([]inboxItem, error) {
-	see, args := visibleFlows(u)
+// The steps waiting on the user, nil for nobody signed in, newest first, in
+// the flows given, or in every flow without any. Who decides a review, and
+// what it asks, are its run's board's to say.
+func inbox(ctx context.Context, db *sql.DB, u *user, flows ...int64) ([]inboxItem, error) {
+	// Whether the user may change each flow is read along, as flowAccess
+	// would say it of a flow they see, so no flow takes a query of its own.
+	edit, args := editableFlows(u)
+	see, seeArgs := visibleFlows(u)
+	args = append(append(args, stepWaiting, kindHuman, kindLoop, runRunning), seeArgs...)
+	if len(flows) > 0 {
+		see += " AND r.flow_id IN " + placeholders(len(flows))
+		args = append(args, int64Args(flows)...)
+	}
 	type waiting struct {
 		inboxItem
 		kind string
 		// The run's version, which runs share; nil for a run from before
 		// versions were recorded.
-		version *int64
+		version  *int64
+		editable bool
 	}
 	var all []waiting
 	err := scanAll(ctx, db,
 		`SELECT s.id, s.run_id, r.flow_id, f.name, r.parent_run_id, r.version_id, s.process_ref, s.process_name, s.kind, s.prompt,
-			`+userLabelColumn("r.started_by")+`, s.started_at, s.expires_at
+			`+userLabelColumn("r.started_by")+`, s.started_at, s.expires_at, `+edit+`
 		FROM run_steps s JOIN runs r ON r.id = s.run_id JOIN flows f ON f.id = r.flow_id
 		WHERE s.status = ? AND s.kind IN (?, ?) AND r.status = ? AND `+see+`
 		ORDER BY s.started_at DESC, s.id DESC LIMIT ?`, func(rows *sql.Rows) error {
 			var it waiting
 			// A loop step asks its question.
 			if err := rows.Scan(&it.Step, &it.Run, &it.Flow, &it.FlowName, &it.Parent, &it.version, &it.Process, &it.ProcessName, &it.kind, &it.Detail,
-				&it.StartedBy, &it.Since, &it.Expires); err != nil {
+				&it.StartedBy, &it.Since, &it.Expires, &it.editable); err != nil {
 				return err
 			}
 			all = append(all, it)
 			return nil
-		}, append(append([]any{stepWaiting, kindHuman, kindLoop, runRunning}, args...), maxInbox)...)
+		}, append(args, maxInbox)...)
 	if err != nil {
 		return nil, err
 	}
@@ -82,18 +92,14 @@ func inbox(ctx context.Context, db *sql.DB, u *user) ([]inboxItem, error) {
 			return nil, err
 		}
 	}
-	access := map[int64]string{}
 	// The boards of the runs, by version, or by the run, negated, for one
 	// without a version.
 	boards := map[int64]*runBoard{}
 	items := []inboxItem{}
 	for _, it := range all {
-		a, ok := access[it.Flow]
-		if !ok {
-			if a, err = flowAccess(ctx, db, u, it.Flow); err != nil {
-				return nil, err
-			}
-			access[it.Flow] = a
+		a := accessReview
+		if it.editable {
+			a = accessEdit
 		}
 		it.HandledBy, it.Waits = []string{}, waitsLoop
 		if it.kind == kindHuman {
@@ -123,6 +129,20 @@ func inbox(ctx context.Context, db *sql.DB, u *user) ([]inboxItem, error) {
 		}
 	}
 	return items, nil
+}
+
+// How many steps wait on the user in each of the flows, by id, as their
+// inbox lists them; a flow none waits on in isn't there.
+func waitingOn(ctx context.Context, db *sql.DB, u *user, flows []int64) (map[int64]int, error) {
+	waiting := map[int64]int{}
+	if len(flows) == 0 {
+		return waiting, nil
+	}
+	items, err := inbox(ctx, db, u, flows...)
+	for _, it := range items {
+		waiting[it.Flow]++
+	}
+	return waiting, err
 }
 
 // What a person is told of, and how; and whether the webapp can tell them

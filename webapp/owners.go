@@ -89,13 +89,16 @@ func editableFlows(u *user) (string, []any) {
 }
 
 // The condition on rows of table t, owned as flows are, that only the ones
-// the user may change meet: everyone's, theirs and their teams'.
+// the user may change meet: everyone's, theirs and their teams'. It is
+// never NULL, so it can be read as a column too (flowAccess, inbox.go):
+// a row owned by a team has no owner_user_id to compare, and one owned by
+// a person no owner_team_id.
 func ownedBy(t string, u *user) (string, []any) {
 	if u == nil || u.Admin {
 		return "TRUE", nil
 	}
-	return "((" + t + ".owner_user_id IS NULL AND " + t + ".owner_team_id IS NULL) OR " + t + `.owner_user_id = ?
-		OR ` + t + ".owner_team_id IN (SELECT team_id FROM team_members WHERE user_id = ?))", []any{u.ID, u.ID}
+	return "((" + t + ".owner_user_id IS NULL AND " + t + ".owner_team_id IS NULL) OR " + t + `.owner_user_id <=> ?
+		OR EXISTS (SELECT 1 FROM team_members tm WHERE tm.user_id = ? AND tm.team_id = ` + t + ".owner_team_id))", []any{u.ID, u.ID}
 }
 
 // The condition on flows f that only the ones out of the trash meet; see

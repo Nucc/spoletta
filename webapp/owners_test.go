@@ -45,7 +45,7 @@ func TestFlowConditions(t *testing.T) {
 	if !reflect.DeepEqual(editArgs, []any{int64(42), int64(42)}) || strings.Count(edit, "?") != len(editArgs) {
 		t.Errorf("editableFlows = %q, %v", edit, editArgs)
 	}
-	for _, part := range []string{"f.owner_user_id IS NULL AND f.owner_team_id IS NULL", "f.owner_user_id = ?", "team_members"} {
+	for _, part := range []string{"f.owner_user_id IS NULL AND f.owner_team_id IS NULL", "f.owner_user_id <=> ?", "team_members"} {
 		if !strings.Contains(edit, part) {
 			t.Errorf("editableFlows lacks %q: %q", part, edit)
 		}

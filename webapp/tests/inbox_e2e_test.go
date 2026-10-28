@@ -584,6 +584,34 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 	}
 }
 
+// Someone in a team who doesn't see a flow keeps nobody from being told of
+// its reviews, nor from seeing it in their inbox: who may change a flow
+// owned by a person, asked of someone in a team, is no, never unknown.
+func TestNotifyPastPeopleInTeams(t *testing.T) {
+	p := newFakeProvider(t)
+	smtp := newInboxSMTP(t)
+	a := inboxApp(t, p, "", smtp.env()...)
+	usersSignIn(a, p, usersAda)
+	bob, carl := usersNewPerson("Bob"), usersNewPerson("Carl")
+	usersAdd(a, bob.email, "Editor")
+	carlRow := usersAdd(a, carl.email)
+	a.call("POST", "/api/teams", map[string]any{"name": fmt.Sprint("Elsewhere ", time.Now().UnixNano()), "members": []int64{carlRow.ID}}, http.StatusCreated, nil)
+	b := humanNewReviewBoard(a)
+
+	rn := a.startRun(b.flow.ID)
+	review := a.waitStep(rn.ID, "Review", stepWaiting)
+	inboxEventually(t, "Bob being told", func() bool {
+		return slices.ContainsFunc(smtp.to(bob.email), func(m inboxMail) bool { return strings.Contains(m.subject, fmt.Sprintf("in run %d of", rn.ID)) })
+	})
+	if got := inboxOf(inboxAs(a, p, bob), b.flow.ID); len(got) != 1 || got[0].Step != review.ID {
+		t.Errorf("Bob's inbox: %+v", got)
+	}
+	if got := inboxOf(inboxAs(a, p, carl), b.flow.ID); len(got) != 0 {
+		t.Errorf("Carl's inbox: %+v", got)
+	}
+	a.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
+}
+
 // A message a replica claimed but didn't send before it stopped is sent by
 // another; one sent isn't sent again.
 func TestNotifySendsWhatAStoppedReplicaClaimed(t *testing.T) {

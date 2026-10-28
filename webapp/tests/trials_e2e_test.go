@@ -37,18 +37,23 @@ type trialSample struct {
 	Inputs []trialValue `json:"inputs"`
 }
 
+// A run trying a process may start from.
+type trialPast struct {
+	Run     int64  `json:"run"`
+	Trial   bool   `json:"trial"`
+	TrialOf string `json:"trialOf"`
+	Status  string `json:"status"`
+	Reached bool   `json:"reached"`
+}
+
 type trialPlan struct {
 	Process     int64         `json:"process"`
 	ProcessName string        `json:"processName"`
 	Kind        string        `json:"kind"`
 	Takes       []trialObject `json:"takes"`
 	Samples     []trialSample `json:"samples"`
-	Last        *struct {
-		Run    int64        `json:"run"`
-		Trial  bool         `json:"trial"`
-		Inputs []trialValue `json:"inputs"`
-	} `json:"last"`
-	Effects []string `json:"effects"`
+	Past        []trialPast   `json:"past"`
+	Effects     []string      `json:"effects"`
 }
 
 func trialPlanOf(a *app, p int64) trialPlan {
@@ -56,6 +61,27 @@ func trialPlanOf(a *app, p int64) trialPlan {
 	var plan trialPlan
 	a.call("GET", fmt.Sprintf("/api/processes/%d/trial", p), nil, http.StatusOK, &plan)
 	return plan
+}
+
+// What the run gives the process to try it on.
+func trialRunValues(a *app, p, run int64) []trialValue {
+	a.t.Helper()
+	var values []trialValue
+	a.call("GET", fmt.Sprintf("/api/processes/%d/trial/runs/%d", p, run), nil, http.StatusOK, &values)
+	return values
+}
+
+// The runs a plan offers, as run:reached, or run:held, the latest first.
+func describePast(past []trialPast) string {
+	var out []string
+	for _, p := range past {
+		how := "held"
+		if p.Reached {
+			how = "reached"
+		}
+		out = append(out, fmt.Sprintf("%d:%s", p.Run, how))
+	}
+	return strings.Join(out, " ")
 }
 
 func tryProcess(a *app, p int64, inputs ...trialValue) run {
@@ -102,7 +128,7 @@ func TestTrialRunsOnlyTheProcess(t *testing.T) {
 
 	plan := trialPlanOf(a, r.count.ID)
 	if plan.Process != r.count.ID || plan.ProcessName != "Count" || plan.Kind != kindScript || len(plan.Takes) != 1 ||
-		plan.Takes[0].Object != r.ticket.ID || plan.Takes[0].Name != "Ticket" || plan.Last != nil || len(plan.Samples) != 0 {
+		plan.Takes[0].Object != r.ticket.ID || plan.Takes[0].Name != "Ticket" || len(plan.Past) != 0 || len(plan.Samples) != 0 {
 		t.Fatalf("plan = %+v, want Count taking the ticket, never run, without samples", plan)
 	}
 	if !slices.ContainsFunc(plan.Effects, func(e string) bool { return strings.Contains(e, "script runs") }) {
@@ -147,10 +173,13 @@ func TestTrialRunsOnlyTheProcess(t *testing.T) {
 	a.refused("GET", fmt.Sprintf("/api/runs/%d/steps/%d/rerun", d.ID, cs.ID), nil, http.StatusConflict, "is a trial of Count")
 	a.refused("POST", fmt.Sprintf("/api/runs/%d/steps/%d/rerun", d.ID, cs.ID), map[string]any{}, http.StatusConflict, "is a trial of Count")
 
-	// The plan starts from what the trial took now.
+	// The plan may start from what the trial took now.
 	plan = trialPlanOf(a, r.count.ID)
-	if plan.Last == nil || plan.Last.Run != rn.ID || !plan.Last.Trial || len(plan.Last.Inputs) != 1 || plan.Last.Inputs[0].Content != ticket {
-		t.Errorf("last = %+v, want the trial's ticket", plan.Last)
+	if len(plan.Past) != 1 || plan.Past[0].Run != rn.ID || !plan.Past[0].Trial || plan.Past[0].TrialOf != "Count" || !plan.Past[0].Reached {
+		t.Errorf("past = %+v, want the trial, which reached Count", plan.Past)
+	}
+	if v := trialRunValues(a, r.count.ID, rn.ID); len(v) != 1 || v[0].Object != r.ticket.ID || v[0].Content != ticket {
+		t.Errorf("the trial gives %+v, want the ticket it took", v)
 	}
 
 	// Without a ticket the script fails, and nothing handles it.
@@ -186,6 +215,70 @@ func TestTrialRunsOnlyTheProcess(t *testing.T) {
 	}
 	if dd := a.searchData(r.f.ID, "status:failed", ""); len(dd.Rows) != 0 {
 		t.Errorf("status:failed matches %v, want none: the failed trial stays out", dataRunIDs(dd))
+	}
+}
+
+// Trying a process may start from the flow's latest runs: a trial of the
+// process before it, giving what that generated and what it was given, so
+// each process is tried on what the one before it really generated; and a
+// run that reached it, giving what it took there. A run of another flow is
+// neither offered nor read.
+func TestTrialStartsFromTheFlowsRuns(t *testing.T) {
+	a := newApp(t)
+	r := newRerunFlow(a)
+
+	drafted := a.finish(tryProcess(a, r.draft.ID).ID)
+	ticket := contentsOf(drafted, "Ticket")
+	if len(ticket) != 1 {
+		t.Fatalf("the trial of Draft held tickets %q, want one", ticket)
+	}
+	if got := describePast(trialPlanOf(a, r.count.ID).Past); got != fmt.Sprintf("%d:held", drafted.ID) {
+		t.Errorf("Count may start from %s, want the trial of Draft", got)
+	}
+	values := trialRunValues(a, r.count.ID, drafted.ID)
+	if len(values) != 1 || values[0].Object != r.ticket.ID || values[0].Content != ticket[0] {
+		t.Fatalf("the trial of Draft gives Count %+v, want its ticket", values)
+	}
+
+	counted := a.finish(tryProcess(a, r.count.ID, values...).ID)
+	size := contentsOf(counted, "Size")
+	if counted.Status != runDone || len(size) != 1 {
+		t.Fatalf("the trial of Count %s, holding sizes %q", counted.Status, size)
+	}
+	plan := trialPlanOf(a, r.publish.ID)
+	if got := describePast(plan.Past); got != fmt.Sprintf("%d:held %d:held", counted.ID, drafted.ID) {
+		t.Errorf("Publish may start from %s, want the trials of Count and Draft", got)
+	}
+	if plan.Past[0].TrialOf != "Count" || !plan.Past[0].Trial {
+		t.Errorf("the latest run offered is %+v, want the trial of Count", plan.Past[0])
+	}
+	// The ticket Count was given, and the size it generated.
+	given := map[int64]string{}
+	for _, v := range trialRunValues(a, r.publish.ID, counted.ID) {
+		given[v.Object] = v.Content
+	}
+	if len(given) != 2 || given[r.ticket.ID] != ticket[0] || given[r.size.ID] != size[0] {
+		t.Errorf("the trial of Count gives Publish %q, want the ticket %q and the size %q", given, ticket[0], size[0])
+	}
+
+	real := a.finish(a.startRun(r.f.ID).ID)
+	plan = trialPlanOf(a, r.publish.ID)
+	if len(plan.Past) != 3 || plan.Past[0].Run != real.ID || !plan.Past[0].Reached || plan.Past[0].Trial {
+		t.Errorf("Publish may start from %s, want run %d first, which reached it", describePast(plan.Past), real.ID)
+	}
+	ps := onlyStep(t, real, "Publish")
+	for _, v := range trialRunValues(a, r.publish.ID, real.ID) {
+		if i := slices.IndexFunc(ps.Inputs, func(in runInput) bool { return in.Content == v.Content }); i < 0 {
+			t.Errorf("run %d gives Publish %q, which it didn't take there: %+v", real.ID, v.Content, ps.Inputs)
+		}
+	}
+
+	other, _ := buildsFlow(a, "Other", func(int) bool { return false })
+	elsewhere := a.finish(a.startRun(other.ID).ID)
+	a.refused("GET", fmt.Sprintf("/api/processes/%d/trial/runs/%d", r.publish.ID, elsewhere.ID), nil, http.StatusNotFound, "no such run")
+	a.refused("GET", fmt.Sprintf("/api/processes/%d/trial/runs/999999999", r.publish.ID), nil, http.StatusNotFound, "no such run")
+	if got := describePast(trialPlanOf(a, r.publish.ID).Past); strings.Contains(got, fmt.Sprint(elsewhere.ID)+":") {
+		t.Errorf("Publish may start from %s, which has run %d of another flow", got, elsewhere.ID)
 	}
 }
 

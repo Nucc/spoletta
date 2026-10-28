@@ -1409,21 +1409,40 @@ export type TrialValue = { object: number; state: string; content: string }
 // Inputs saved with a process to try it on, under a name of their own.
 export type TrialSample = { id: number; name: string; inputs: TrialValue[] }
 
-// What trying a process takes, the samples it may start from, what it took
-// the last time a run reached it, a trial or not, and what it does outside
-// the flow, which it does in a trial too.
+// A run of the flow, a trial or not, trying a process may start from: one
+// that reached it, or else holds an object it takes, such as a trial of
+// the process before it.
+export type TrialPast = {
+  run: number
+  trial: boolean
+  // The process a trial tried.
+  trialOf: string
+  status: FlowRunStatus
+  startedAt: string
+  reached: boolean
+}
+
+// What trying a process takes, the samples it may start from, the latest
+// runs it may start from, and what it does outside the flow, which it does
+// in a trial too.
 export type TrialPlan = {
   process: number
   processName: string
   kind: ProcessKind
   takes: TrialObject[]
   samples: TrialSample[]
-  last: { run: number; trial: boolean; inputs: TrialValue[] } | null
+  past: TrialPast[]
   effects: string[]
 }
 
 export function getTrial(process: number): Promise<TrialPlan> {
   return request(`/api/processes/${process}/trial`)
+}
+
+// What a run of the flow gives the objects the process takes: what it took
+// there, or else what the run held of each last.
+export function getTrialRun(process: number, run: number): Promise<TrialValue[]> {
+  return request(`/api/processes/${process}/trial/runs/${run}`)
 }
 
 // Tries the process alone, as a trial on the board as it is, giving it the

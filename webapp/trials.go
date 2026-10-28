@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -41,10 +42,21 @@ import (
 // links do, so they are part of the board: versions and history keep them,
 // pasting copies them along with the objects they give, and setup files
 // have them. Trying a process starts from its first sample, or else from
-// what it took the last time a run reached it, a trial or not.
+// the latest of the flow's runs, trials or not, it can start from: one
+// that reached it, giving what it took, or one holding what it takes,
+// giving that, such as a trial of the process before it; so each process
+// can be tried on what the one before it really generated, without running
+// what came before again.
 
 // The most samples a process keeps.
 const maxSamples = 50
+
+// The most runs trying a process offers to start from, and how many of the
+// flow's latest runs it looks through for them.
+const (
+	maxTrialPast = 20
+	trialPastOf  = 500
+)
 
 // What a sample gives an object the process takes: what it holds, and the
 // state it is in, 0 for none.
@@ -110,21 +122,28 @@ type trialSample struct {
 	Inputs []trialValue `json:"inputs"`
 }
 
-// What the process took the last time a run reached it, and that run.
-type trialLast struct {
-	Run    int64        `json:"run"`
-	Trial  bool         `json:"trial"`
-	Inputs []trialValue `json:"inputs"`
+// A run of the flow trying the process may start from: one that reached
+// it, or else holds an object it takes; and how it went.
+type trialPast struct {
+	Run   int64 `json:"run"`
+	Trial bool  `json:"trial"`
+	// The process a trial tried, by name.
+	TrialOf   string    `json:"trialOf"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"startedAt"`
+	Reached   bool      `json:"reached"`
 }
 
-// What trying a process takes, and what it may start from.
+// What trying a process takes, and what it may start from: its samples,
+// and the latest runs it may start from, the latest first, whose values
+// are read one run at a time.
 type trialPlan struct {
 	Process     int64         `json:"process"`
 	ProcessName string        `json:"processName"`
 	Kind        string        `json:"kind"`
 	Takes       []trialObject `json:"takes"`
 	Samples     []trialSample `json:"samples"`
-	Last        *trialLast    `json:"last"`
+	Past        []trialPast   `json:"past"`
 	// What it does outside the flow, which it does in a trial too.
 	Effects []string `json:"effects"`
 }
@@ -231,40 +250,123 @@ func (t trialTarget) samples(ctx context.Context, db *sql.Tx) ([]trialSample, er
 	return samples, err
 }
 
-// What the process took the last time a run reached it, as the objects it
-// takes now; nil if no run did. What it took that it no longer takes, such
-// as a failure it handled or records it queried, is left out.
-func (t trialTarget) last(ctx context.Context, db *sql.Tx) (*trialLast, error) {
-	var l trialLast
-	var inputs []byte
-	err := db.QueryRowContext(ctx,
-		`SELECT s.run_id, r.trial_of IS NOT NULL, s.inputs FROM run_steps s JOIN runs r ON r.id = s.run_id
-		WHERE s.process_id = ? AND s.kind <> ? AND JSON_LENGTH(s.inputs) > 0 ORDER BY s.id DESC LIMIT 1`,
-		t.process.ID, kindLoop).Scan(&l.Run, &l.Trial, &inputs)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+// A step of run s that took something, as it took it: neither one a
+// re-run copied, which another run's step took first, nor a question of a
+// loop's; its arguments are tookArgs'. One that reached the process is
+// also of it, with the process's id after them.
+const (
+	tookStep    = "s.kind NOT IN (?, ?) AND JSON_LENGTH(s.inputs) > 0"
+	reachedStep = tookStep + " AND s.process_id = ?"
+)
+
+func tookArgs() []any { return []any{kindCopied, kindLoop} }
+
+func (t trialTarget) reachedArgs() []any { return append(tookArgs(), t.process.ID) }
+
+// The latest runs of the flow trying the process may start from, the latest
+// first, among the flow's latest trialPastOf: those that reached it, and
+// those holding an object it takes, as a step generated it or as one took
+// it, given it by a person trying it.
+func (t trialTarget) past(ctx context.Context, db rowsQuerier) ([]trialPast, error) {
+	reached := "EXISTS (SELECT 1 FROM run_steps s WHERE s.run_id = r.id AND " + reachedStep + ")"
+	held, heldArgs := "FALSE", []any{}
+	if len(t.takes) > 0 {
+		var objects []any
+		var names []string
+		for _, o := range t.takes {
+			objects = append(objects, o.Object)
+			names = append(names, "JSON_CONTAINS(s.inputs, JSON_OBJECT('name', ?))")
+		}
+		held = "EXISTS (SELECT 1 FROM run_objects ro WHERE ro.run_id = r.id AND ro.object_id IN " + placeholders(len(objects)) + ")" +
+			" OR EXISTS (SELECT 1 FROM run_steps s WHERE s.run_id = r.id AND " + tookStep + " AND (" + strings.Join(names, " OR ") + "))"
+		heldArgs = append(append(objects, tookArgs()...), t.takenNames()...)
 	}
+	past := []trialPast{}
+	args := append(append(append(append(t.reachedArgs(), t.flow, trialPastOf), t.reachedArgs()...), heldArgs...), maxTrialPast)
+	err := scanAll(ctx, db, `SELECT r.id, r.trial_of IS NOT NULL, r.trial_of_name, r.status, r.started_at, `+reached+`
+		FROM (SELECT id, trial_of, trial_of_name, status, started_at FROM runs WHERE flow_id = ? ORDER BY id DESC LIMIT ?) r
+		WHERE `+reached+` OR `+held+` ORDER BY r.id DESC LIMIT ?`, func(rows *sql.Rows) error {
+		var p trialPast
+		err := rows.Scan(&p.Run, &p.Trial, &p.TrialOf, &p.Status, &p.StartedAt, &p.Reached)
+		past = append(past, p)
+		return err
+	}, args...)
+	return past, err
+}
+
+// The names of the objects the process takes, as steps' inputs name them.
+func (t trialTarget) takenNames() []any {
+	names := make([]any, len(t.takes))
+	for i, o := range t.takes {
+		names[i] = o.Name
+	}
+	return names
+}
+
+// What the run gives the objects the process takes now: what the process
+// took the last time the run reached it; or else what the run held of each
+// last, as a step generated it, such as the process before it, or else as
+// a step took it, given it by a person trying it. What it took that it no
+// longer takes, such as a failure it handled or records it queried, is
+// left out, and so is a state the object no longer has.
+func (t trialTarget) runValues(ctx context.Context, db querier, run int64) ([]trialValue, error) {
+	values := map[int64]trialValue{}
+	// Gives each object the process takes, and isn't given yet, what the
+	// run's latest step on cond took of it; false without such a step.
+	took := func(cond string, args ...any) (bool, error) {
+		var inputs []byte
+		err := db.QueryRowContext(ctx, "SELECT s.inputs FROM run_steps s WHERE s.run_id = ? AND "+cond+" ORDER BY s.id DESC LIMIT 1",
+			append([]any{run}, args...)...).Scan(&inputs)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		var in []runInput
+		if err := json.Unmarshal(inputs, &in); err != nil {
+			return false, err
+		}
+		for _, o := range t.takes {
+			i := slices.IndexFunc(in, func(in runInput) bool { return in.Name == o.Name })
+			if _, given := values[o.Object]; i >= 0 && !given {
+				values[o.Object] = trialValue{Object: o.Object, State: in[i].State, Content: in[i].Content}
+			}
+		}
+		return true, nil
+	}
+	reached, err := took(reachedStep, t.reachedArgs()...)
 	if err != nil {
 		return nil, err
 	}
-	var took []runInput
-	if err := json.Unmarshal(inputs, &took); err != nil {
-		return nil, err
-	}
-	l.Inputs = []trialValue{}
 	for _, o := range t.takes {
-		for _, in := range took {
-			if in.Name == o.Name {
-				state := ""
-				if t.states[o.Object][in.State] != 0 {
-					state = in.State
-				}
-				l.Inputs = append(l.Inputs, trialValue{Object: o.Object, State: state, Content: in.Content})
-				break
-			}
+		if reached {
+			break
+		}
+		// What a step generated comes before what one was given.
+		v := trialValue{Object: o.Object}
+		err := db.QueryRowContext(ctx, "SELECT state, content FROM run_objects WHERE run_id = ? AND object_id = ? ORDER BY id DESC LIMIT 1", run, o.Object).
+			Scan(&v.State, &v.Content)
+		switch {
+		case err == nil:
+			values[o.Object] = v
+		case errors.Is(err, sql.ErrNoRows):
+			_, err = took(tookStep+" AND JSON_CONTAINS(s.inputs, JSON_OBJECT('name', ?))", append(tookArgs(), o.Name)...)
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
-	return &l, nil
+	out := []trialValue{}
+	for _, o := range t.takes {
+		if v, ok := values[o.Object]; ok {
+			if t.states[o.Object][v.State] == 0 {
+				v.State = ""
+			}
+			out = append(out, v)
+		}
+	}
+	return out, nil
 }
 
 // What the process does outside the flow, as a person trying it should
@@ -442,8 +544,8 @@ func sampleNameProblem(name string) string {
 }
 
 func registerTrialRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
-	// What trying the process takes, its samples, what it took the last time
-	// a run reached it, and what it does outside the flow.
+	// What trying the process takes, its samples, the runs it may start
+	// from, and what it does outside the flow.
 	mux.HandleFunc("GET /api/processes/{id}/trial", func(w http.ResponseWriter, r *http.Request) {
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
 		if err != nil {
@@ -457,7 +559,7 @@ func registerTrialRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		plan := trialPlan{Process: t.process.ID, ProcessName: t.process.Name, Kind: t.process.Kind, Takes: t.takes}
 		if plan.Samples, err = t.samples(r.Context(), tx); err == nil {
-			if plan.Last, err = t.last(r.Context(), tx); err == nil {
+			if plan.Past, err = t.past(r.Context(), tx); err == nil {
 				plan.Effects, err = t.effects(r.Context(), tx)
 			}
 		}
@@ -466,6 +568,43 @@ func registerTrialRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		writeJSON(w, http.StatusOK, plan)
+	})
+
+	// What a run of the process's flow gives the objects it takes, to try it
+	// on: what it took there, or what the run held. The guard sees only the
+	// process, so the run is checked to be of its flow here.
+	mux.HandleFunc("GET /api/processes/{id}/trial/runs/{run}", func(w http.ResponseWriter, r *http.Request) {
+		run, err := strconv.ParseInt(r.PathValue("run"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid run", http.StatusBadRequest)
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		t, ok := trialTargetFor(w, r, tx, nil)
+		if !ok {
+			return
+		}
+		var flow int64
+		err = tx.QueryRowContext(r.Context(), "SELECT flow_id FROM runs WHERE id = ?", run).Scan(&flow)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && flow != t.flow) {
+			http.Error(w, "no such run of the process's flow", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		values, err := t.runValues(r.Context(), tx, run)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, values)
 	})
 
 	// Tries the process, as a trial on the board as it is: {"inputs":

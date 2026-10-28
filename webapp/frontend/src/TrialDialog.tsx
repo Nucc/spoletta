@@ -3,26 +3,43 @@ import {
   changesSettled,
   deleteSample,
   getTrial,
+  getTrialRun,
   saveSample,
   tryProcess,
   type FlowRun,
+  type TrialPast,
   type TrialPlan,
   type TrialValue,
 } from './api'
+import { formatTime, RUN_LABELS } from './Runs'
 
 // What the dialog gives an object the process takes: whether it is given
 // at all, in which state, holding what.
 type Given = { given: boolean; state: string; content: string }
 
-// Where the inputs shown came from: a sample, the last run that reached the
-// process, or nothing.
-type Source = `sample-${number}` | 'last' | 'none'
+// Where the inputs shown came from: a sample, a run of the flow, or nothing.
+type Source = `sample-${number}` | `run-${number}` | 'none'
+
+// Where a plan starts from: its first sample, else the latest run it may
+// start from, else nothing.
+const firstSource = (p: TrialPlan): Source =>
+  p.samples.length > 0 ? `sample-${p.samples[0].id}` : p.past.length > 0 ? `run-${p.past[0].run}` : 'none'
+
+// What a run gives the process, as the dialog offers it: what the process
+// took there, or what the run held, such as a trial of the process before
+// it generated; and when it started, and how it ended if not well.
+function pastLabel(r: TrialPast): string {
+  const which = r.trial ? `trial #${r.run} of ${r.trialOf}` : `run #${r.run}`
+  const ended = r.status === 'done' || r.status === 'running' ? '' : ` · ${RUN_LABELS[r.status].toLowerCase()}`
+  return `${r.reached ? `What it took in ${which}` : `What ${which} held`} · ${formatTime(r.startedAt)}${ended}`
+}
 
 // Tries one process on its own, in the middle of the screen: what it takes,
-// each to change before it runs, starting from one of its samples or what it
-// took the last time a run reached it; its samples, to pick, save and
-// delete; and plainly, that it really runs, with what it does outside the
-// flow. Trying it starts a trial, a run in which only it runs; see trials.go.
+// each to change before it runs, starting from one of its samples or from
+// one of the flow's latest runs, what it took there or what the run held;
+// its samples, to pick, save and delete; and plainly, that it really runs,
+// with what it does outside the flow. Trying it starts a trial, a run in
+// which only it runs; see trials.go.
 export default function TrialDialog({
   process,
   onStarted,
@@ -39,7 +56,12 @@ export default function TrialDialog({
   // The name the inputs are saved under, the sample's they came from.
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
+  // Whether what a run gives is being fetched, which the dialog then shows.
+  const [fetching, setFetching] = useState(false)
   const [error, setError] = useState('')
+  // Counts what was picked to start from, so a run's values fetched after
+  // something else was picked are dropped.
+  const picked = useRef(0)
 
   useEffect(() => {
     const dialog = ref.current
@@ -48,14 +70,10 @@ export default function TrialDialog({
     return () => dialog.close()
   }, [])
 
-  // Shows what source gives each object the process takes; one it gives
+  // Shows what inputs give each object the process takes; one they give
   // nothing of is left out, but with nothing to start from, each is given
   // empty in the state its link takes it in.
-  const load = (p: TrialPlan, from: Source) => {
-    const sample = p.samples.find((s) => `sample-${s.id}` === from)
-    const inputs = sample?.inputs ?? (from === 'last' ? p.last?.inputs : undefined)
-    setSource(from)
-    setName(sample?.name ?? '')
+  const show = (p: TrialPlan, inputs: TrialValue[] | undefined) =>
     setValues(
       Object.fromEntries(
         p.takes.map((o) => {
@@ -64,6 +82,29 @@ export default function TrialDialog({
         }),
       ),
     )
+
+  // Starts from a sample, a run, whose values are fetched, or nothing.
+  const load = async (p: TrialPlan, from: Source) => {
+    const pick = ++picked.current
+    const sample = p.samples.find((s) => `sample-${s.id}` === from)
+    const past = p.past.find((r) => `run-${r.run}` === from)
+    setSource(from)
+    setName(sample?.name ?? '')
+    setError('')
+    if (!past) {
+      setFetching(false)
+      show(p, sample?.inputs)
+      return
+    }
+    setFetching(true)
+    try {
+      const inputs = await getTrialRun(p.process, past.run)
+      if (pick === picked.current) show(p, inputs)
+    } catch (err) {
+      if (pick === picked.current) setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (pick === picked.current) setFetching(false)
+    }
   }
 
   useEffect(() => {
@@ -72,7 +113,7 @@ export default function TrialDialog({
       .then((p) => {
         if (stale) return
         setPlan(p)
-        load(p, p.samples.length > 0 ? `sample-${p.samples[0].id}` : p.last ? 'last' : 'none')
+        load(p, firstSource(p))
       })
       .catch((err) => !stale && setError(err instanceof Error ? err.message : String(err)))
     return () => {
@@ -116,7 +157,7 @@ export default function TrialDialog({
       await deleteSample(process, sample.id)
       const next = { ...plan, samples: plan.samples.filter((s) => s.id !== sample.id) }
       setPlan(next)
-      load(next, next.last ? 'last' : 'none')
+      load(next, next.past.length > 0 ? `run-${next.past[0].run}` : 'none')
     })
 
   // Edits to the process still being saved go first, so it runs as shown.
@@ -172,15 +213,20 @@ export default function TrialDialog({
                   Sample: {s.name}
                 </option>
               ))}
-              {plan.last && (
-                <option value="last">
-                  What it took in {plan.last.trial ? 'trial' : 'run'} #{plan.last.run}
-                </option>
+              {plan.past.length > 0 && (
+                <optgroup label="The flow's latest runs">
+                  {plan.past.map((r) => (
+                    <option key={r.run} value={`run-${r.run}`}>
+                      {pastLabel(r)}
+                    </option>
+                  ))}
+                </optgroup>
               )}
               <option value="none">Nothing</option>
             </select>
           </label>
         )}
+        {fetching && <p className="panel-note">Reading what the run gives it…</p>}
         {plan && plan.takes.length === 0 && <p className="panel-note">It takes nothing.</p>}
         {plan?.takes.map((o) => {
           const v = values[o.object]
@@ -225,7 +271,11 @@ export default function TrialDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-            <button onClick={save} disabled={busy || name.trim() === ''} title="Keep these inputs with the process, to try it on again">
+            <button
+              onClick={save}
+              disabled={busy || fetching || name.trim() === ''}
+              title="Keep these inputs with the process, to try it on again"
+            >
               {sample && sample.name === name.trim() ? 'Save sample' : 'Save as sample'}
             </button>
             {sample && (
@@ -239,7 +289,7 @@ export default function TrialDialog({
       </div>
       <div className="review-actions">
         <button onClick={onClose}>Cancel</button>
-        <button onClick={start} disabled={!plan || busy}>
+        <button onClick={start} disabled={!plan || busy || fetching}>
           {busy ? 'Working…' : 'Try'}
         </button>
       </div>

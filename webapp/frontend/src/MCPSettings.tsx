@@ -14,6 +14,7 @@ import {
   type MCPTool,
 } from './api'
 import { useConfirm } from './Confirm'
+import TabLink from './TabLink'
 
 // What pi takes as a server name; it names the tools mcp__<name>__<tool>.
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -311,7 +312,11 @@ export function MCPServerPicker({
   const missing = servers ? selected.filter((id) => !servers.some((s) => s.id === id)) : []
   return (
     <fieldset className="panel-field mcp-picker">
-      <legend>MCP servers</legend>
+      <legend>
+        <TabLink hash="#/settings/mcp" title="Set up and connect MCP servers in Settings, in a new tab">
+          MCP servers
+        </TabLink>
+      </legend>
       {servers?.length === 0 && (
         <p className="panel-note">
           None set up.{' '}

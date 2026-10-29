@@ -17,6 +17,7 @@ import { useMe } from './Account'
 import { PlusIcon } from './icons'
 import { OwnerPicker } from './Owner'
 import { useConfirm } from './Confirm'
+import TabLink from './TabLink'
 
 // Skills and commands, written for agents in the settings: a skill an agent
 // process picks, a command its prompt names as /name. Each is its maker's
@@ -282,12 +283,12 @@ export function SkillPicker({
   const missing = skills ? selected.filter((id) => !skills.some((s) => s.id === id)) : []
   return (
     <fieldset className="panel-field mcp-picker">
-      <legend>Skills</legend>
-      {skills?.length === 0 && (
-        <p className="panel-note">
-          None this flow may use. <a href="#/settings/skills">Write skills</a>
-        </p>
-      )}
+      <legend>
+        <TabLink hash="#/settings/skills" title="Write and change skills in Settings, in a new tab">
+          Skills
+        </TabLink>
+      </legend>
+      {skills?.length === 0 && <p className="panel-note">None this flow may use.</p>}
       {skills?.map((s) => (
         <div key={s.id} className="mcp-pick" title={s.description}>
           <label className="panel-check">

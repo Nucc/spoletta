@@ -376,14 +376,14 @@ export function RepositoryPicker({
   const missing = selected?.filter((n) => !repositories.some((r) => r.name === n)) ?? []
   return (
     <fieldset className="panel-field mcp-picker">
-      <legend>Repositories</legend>
+      {/* The flow's repositories are in its settings, on this board, so they open here rather than in a new tab. */}
+      <legend>
+        <button type="button" className="heading-link" title="Add and change the flow's repositories in its settings" onClick={onOpenSettings}>
+          Repositories
+        </button>
+      </legend>
       {repositories.length === 0 ? (
-        <p className="panel-note">
-          The flow has none.{' '}
-          <button className="link-button" onClick={onOpenSettings}>
-            Add repositories
-          </button>
-        </p>
+        <p className="panel-note">The flow has none.</p>
       ) : (
         <>
           <label className="panel-check">

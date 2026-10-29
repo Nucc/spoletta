@@ -12,7 +12,8 @@ import {
   type CredentialFields,
   type Team,
 } from './api'
-import { useMe } from './Account'
+import { configures, useMe } from './Account'
+import TabLink from './TabLink'
 import { PlusIcon } from './icons'
 import { useConfirm } from './Confirm'
 
@@ -348,10 +349,22 @@ export function CredentialPicker({
 }) {
   // Picked ones since removed, or no longer the flow's to use, stay listed so they can be dropped.
   const missing = credentials ? selected.filter((id) => !credentials.some((c) => c.id === id)) : []
+  // Only admins reach the settings' Credentials tab.
+  const admin = configures(useMe())
   return (
     <fieldset className="panel-field mcp-picker">
-      <legend>Credentials</legend>
-      {credentials?.length === 0 && <p className="panel-note">None this flow may use; admins add them in Settings, under Credentials.</p>}
+      <legend>
+        {admin ? (
+          <TabLink hash="#/settings/credentials" title="Add and change credentials in Settings, in a new tab">
+            Credentials
+          </TabLink>
+        ) : (
+          'Credentials'
+        )}
+      </legend>
+      {credentials?.length === 0 && (
+        <p className="panel-note">{admin ? 'None this flow may use.' : 'None this flow may use; admins add them in Settings, under Credentials.'}</p>
+      )}
       {credentials?.map((c) => (
         <div key={c.id} className="mcp-pick" title={c.description || c.baseUrl}>
           <label className="panel-check">

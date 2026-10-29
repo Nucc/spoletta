@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { listDirectory, type ConnectorOperation, type ConnectorSettings, type DirectoryEntry, type MCPServer } from './api'
+import TabLink from './TabLink'
 
 // What a connector process carries out: a connector, among those installed,
 // one of its operations, and the operation's arguments, in which
@@ -50,7 +51,7 @@ export function ConnectorFields({
     return (
       <p className="panel-note">
         No connector is installed. An admin installs one, such as GitHub, in{' '}
-        <a href="#/settings/connectors">Settings, under Connectors</a>.
+        <TabLink hash="#/settings/connectors">Settings, under Connectors</TabLink>.
       </p>
     )
   }

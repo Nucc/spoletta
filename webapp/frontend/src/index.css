@@ -9506,3 +9506,21 @@ select.flow-owner:disabled {
     padding: 0 10px;
   }
 }
+
+/* A picker's heading links to where what it picks from is set up: it
+   reads as a heading, underlined as the pointer comes over it. */
+.mcp-picker > legend .tab-link,
+.mcp-picker > legend .heading-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.mcp-picker > legend .tab-link:hover,
+.mcp-picker > legend .heading-link:hover {
+  text-decoration: underline;
+}

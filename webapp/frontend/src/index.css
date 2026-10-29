@@ -4048,6 +4048,12 @@ body {
   background: #fff;
   border: 1px solid #8c959f;
   border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+}
+
+.object-persistent:hover {
+  background: #dafbe1;
 }
 
 .object-node.refined .object-persistent {

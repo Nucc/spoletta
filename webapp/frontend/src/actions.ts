@@ -19,6 +19,8 @@ export type BoardActions = {
   stopProcess: (id: string) => void
   // Opens the dialog re-running the run shown from the process.
   rerunProcess: (id: string) => void
+  // Opens the records a persistent or shared object's runs stored.
+  openRecords: (id: string) => void
   remove: (id: string) => void
   // Adds what comes next below a node nothing leads on from.
   append: (id: string) => void

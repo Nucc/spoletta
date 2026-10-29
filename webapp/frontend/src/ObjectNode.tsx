@@ -69,7 +69,7 @@ export const stateSourceHandle = (state: number) => `state-out-${state}`
 // shows, unfolded, linked to it. An object made of others has a thick
 // border, as OPM marks a refined thing. A persistent or shared object, which
 // keeps a store of records, has a database badge centered on its top right
-// corner.
+// corner, which opens its records.
 export default function ObjectNode({ id, data, selected, width }: NodeProps<ObjectNodeType>) {
   const actions = useBoardActions()
   const structs = useContext(StructFlowsContext)
@@ -88,12 +88,18 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
     >
       <WidthResizer id={id} minWidth={140} />
       {(data.persistent || data.shared) && (
-        <span
-          className="object-persistent"
-          title={data.shared ? 'Shared: every flow using it reads and writes one store of records' : 'Persistent: runs store what they generate it with'}
+        <button
+          className="object-persistent nodrag"
+          title={
+            data.shared
+              ? 'Shared: every flow using it reads and writes one store of records. Click to show them'
+              : 'Persistent: runs store what they generate it with. Click to show what they stored'
+          }
+          aria-label={data.shared ? 'Show its records' : 'Show what runs stored'}
+          onClick={() => actions.openRecords(id)}
         >
           <DatabaseIcon />
-        </span>
+        </button>
       )}
       <Handle type="target" position={Position.Top} />
       <Handle type="source" position={Position.Bottom} />

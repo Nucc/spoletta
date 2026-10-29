@@ -1357,6 +1357,18 @@ export default function Board({
     return o !== undefined && o.owner === null && o.parent === null
   }
   isStructRootRef.current = isStructRoot
+
+  // Where an object's database badge leads, as its panel's links do: a shared
+  // struct's records, from its own board or a copy of its object, or what this
+  // flow's runs stored of a persistent one.
+  const openRecords = (id: string) => {
+    if (!isObject(id)) return
+    const o = contents?.objects.find((x) => x.id === objectIdOf(id))
+    if (!o) return
+    const from = o.shared ? (isStructRoot(id) ? flowId : moduleOf(o.id)?.id) : o.persistent ? flowId : undefined
+    if (from === undefined) return
+    window.location.hash = o.shared ? `#/flows/${from}/records` : `#/flows/${from}/data?q=${encodeURIComponent('status:done')}`
+  }
   // On a shared struct's board, its object, whose records the sidebar lists.
   const sharedRoot = structBoard
     ? nodes.find((n): n is ObjectNodeType => n.type === 'object' && isStructRoot(n.id) && Boolean(n.data.shared))
@@ -2387,8 +2399,8 @@ export default function Board({
 
   // Nodes and edges reach the board through a context whose functions stay
   // the same, so they don't all re-render whenever the board does.
-  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, resizeNote, setNoteText, setNoteColour, pointNote, discardNote })
-  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, resizeNote, setNoteText, setNoteColour, pointNote, discardNote }
+  const latest = useRef({ commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, openRecords, resizeNote, setNoteText, setNoteColour, pointNote, discardNote })
+  latest.current = { commitName, cancelName, remove, append, insert, addState, renameObjectState, removeState, setDecisionStates, setRole, setCondition, setQuantity, setRoute, resize, zoomIn, stopProcess, rerunProcess, openRecords, resizeNote, setNoteText, setNoteColour, pointNote, discardNote }
   const actions = useMemo<BoardActions>(
     () => ({
       commitName: (id, name) => latest.current.commitName(id, name),
@@ -2397,6 +2409,7 @@ export default function Board({
       zoomIn: (id) => latest.current.zoomIn(id),
       stopProcess: (id) => latest.current.stopProcess(id),
       rerunProcess: (id) => latest.current.rerunProcess(id),
+      openRecords: (id) => latest.current.openRecords(id),
       remove: (id) => latest.current.remove(id),
       append: (id) => latest.current.append(id),
       insert: (edgeId) => latest.current.insert(edgeId),

@@ -224,6 +224,10 @@ type FlowEdge = Edge<LinkEdgeData & { kind?: StructureKind }>
 const nodeTypes = { process: ProcessNode, object: ObjectNode, start: StartNode, end: EndNode, note: NoteNode }
 const edgeTypes = { link: LinkEdge, structure: StructureEdge, note: NoteEdge }
 
+// The panel open on a flow's board, as its history entry keeps it: the
+// node's id, on the board and unfolded object it is on.
+type KeptPanel = { flow: number; board: BoardId; unfolded: number | null; id: string }
+
 // The column on the right of the board that holds the open panel.
 const PANEL_COLUMN = { storageKey: 'panel-width', min: 320, max: 1600, initial: 420, edge: 'left' } as const
 
@@ -2555,6 +2559,37 @@ export default function Board({
     const want = runId === null ? `#/flows/${flowId}` : `#/flows/${flowId}/runs/${runId}`
     if (window.location.hash !== want) window.history.replaceState(window.history.state, '', want)
   }, [runId, flowId])
+
+  // The history entry keeps the process or object whose panel is open, and
+  // the board it is on, so going back to the board, as from the settings a
+  // panel's heading opened in another tab, opens the panel again.
+  const [askedPanel, setAskedPanel] = useState(() => {
+    const kept = (window.history.state as { panel?: KeptPanel } | null)?.panel
+    return kept?.flow === flowId ? kept : null
+  })
+  useEffect(() => {
+    if (askedPanel === null) return
+    if (boardId !== askedPanel.board) setBoardId(askedPanel.board)
+    if (unfolded !== askedPanel.unfolded) setUnfolded(askedPanel.unfolded)
+  }, [askedPanel])
+  useEffect(() => {
+    if (askedPanel === null || shownBoard !== askedPanel.board || shownUnfolded !== askedPanel.unfolded) return
+    if (nodes.length === 0) return
+    // One deleted since opens nothing.
+    if (!nodes.some((n) => n.id === askedPanel.id)) {
+      setAskedPanel(null)
+      return
+    }
+    // The board stays where it was looked at, as the run's panel coming back leaves it.
+    panelComingBack.current = savedView !== null
+    setPanelId(askedPanel.id)
+    setAskedPanel(null)
+  }, [askedPanel, nodes, shownBoard, shownUnfolded])
+  useEffect(() => {
+    if (askedPanel !== null) return
+    const panel: KeptPanel | null = panelId === null ? null : { flow: flowId, board: boardId, unfolded, id: panelId }
+    window.history.replaceState({ ...(window.history.state ?? {}), panel }, '', window.location.href)
+  }, [askedPanel, panelId, flowId, boardId, unfolded])
 
   // The selected processes, and the objects among the selection, move into a
   // new flow process, which is then named.

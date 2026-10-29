@@ -499,6 +499,8 @@ type repository struct {
 	Base string `json:"base"`
 	// What the worker gets for a re-run: the commit its branch starts from.
 	Start string `json:"start,omitempty"`
+	// Paths its checkouts leave out.
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 // A run is one execution of the flow from the start node. The engine walks

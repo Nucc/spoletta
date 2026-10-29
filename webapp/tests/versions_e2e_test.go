@@ -418,6 +418,9 @@ func TestFlowSettings(t *testing.T) {
 		{map[string]any{"repositories": []map[string]any{{"url": "https://github.com/acme/api", "name": "a b"}}}, "isn't a valid repository name"},
 		{map[string]any{"repositories": []map[string]any{{"url": "https://github.com/acme/api"}, {"url": "https://gitlab.com/acme/api.git"}}}, `two repositories are named "api"`},
 		{map[string]any{"repositories": []map[string]any{{"url": "https://github.com/acme/api", "base": "bad..base"}}}, "isn't a valid branch name"},
+		{map[string]any{"repositories": []map[string]any{{"url": "https://github.com/acme/api", "exclude": []string{"../etc"}}}}, `api: "../etc" isn't a path to leave out`},
+		{map[string]any{"repositories": []map[string]any{{"url": "https://github.com/acme/api", "exclude": []string{"vendor/*.gem"}}}}, "isn't a path to leave out"},
+		{map[string]any{"repositories": []map[string]any{{"url": "https://github.com/acme/api", "exclude": []string{".git"}}}}, "isn't a path to leave out"},
 		{map[string]any{"branchPrefix": "bad..prefix"}, "branch prefix isn't a valid branch name"},
 		{map[string]any{"branchPrefix": "x.lock"}, "branch prefix isn't a valid branch name"},
 	} {
@@ -429,9 +432,12 @@ func TestFlowSettings(t *testing.T) {
 
 	var got flow
 	a.call("PATCH", path, map[string]any{"settings": map[string]any{
-		"repositories": []map[string]any{{"url": " https://github.com/acme/api.git ", "base": " main "}, {"url": "https://github.com/acme/web/", "name": "site"}},
+		"repositories": []map[string]any{
+			{"url": " https://github.com/acme/api.git ", "base": " main ", "exclude": []string{" /vendor/cache/ ", "vendor/cache", "", "docs/big.pdf"}},
+			{"url": "https://github.com/acme/web/", "name": "site"},
+		},
 	}}, http.StatusOK, &got)
-	want := []repository{{Name: "api", URL: "https://github.com/acme/api.git", Base: "main"}, {Name: "site", URL: "https://github.com/acme/web/"}}
+	want := []repository{{Name: "api", URL: "https://github.com/acme/api.git", Base: "main", Exclude: []string{"vendor/cache", "docs/big.pdf"}}, {Name: "site", URL: "https://github.com/acme/web/"}}
 	if !reflect.DeepEqual(got.Settings.Repositories, want) || got.Settings.BranchPrefix != "" || got.Name != "Bump Deps!" {
 		t.Errorf("settings = %+v, want repositories %+v", got.Settings, want)
 	}
@@ -451,6 +457,10 @@ func TestFlowSettings(t *testing.T) {
 	}
 	if s := onlyStep(t, rn, "Bump"); s.Branch != runs[0].Workspace.Branch {
 		t.Errorf("the step's branch = %q", s.Branch)
+	}
+	// The agent is told what its checkout leaves out, lest it think them deleted.
+	if !strings.Contains(runs[0].Prompt, "Left out of the checkout, though still in the branch: vendor/cache, docs/big.pdf.") {
+		t.Errorf("the prompt doesn't name what the checkout leaves out:\n%s", runs[0].Prompt)
 	}
 
 	a.call("PATCH", path, map[string]any{"settings": map[string]any{"repositories": want, "branchPrefix": " /team/bots/ "}}, http.StatusOK, &got)

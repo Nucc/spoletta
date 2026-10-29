@@ -352,6 +352,9 @@ export type Repository = {
   url: string
   // The branch runs' branches start from; empty for the default branch.
   base: string
+  // Paths in it its checkouts leave out, such as a cache of gems: not
+  // fetched nor there, yet kept in the branch as they are.
+  exclude?: string[]
 }
 
 export type FlowSettings = {

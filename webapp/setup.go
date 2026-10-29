@@ -82,6 +82,8 @@ type setupRepository struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
 	Base string `yaml:"base,omitempty"`
+	// Paths its checkouts leave out.
+	Exclude []string `yaml:"exclude,omitempty"`
 }
 
 type setupSchedule struct {

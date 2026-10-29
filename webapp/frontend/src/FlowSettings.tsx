@@ -24,6 +24,50 @@ export function githubURL(v: string): string {
 // org/repository of a GitHub URL, or undefined for another host.
 const githubPath = (url: string) => /^https:\/\/github\.com\/([^/]+\/[^/]+?)(\.git)?$/.exec(url)?.[1]
 
+// The paths to leave out as written, separated by commas or spaces; the
+// server tidies and checks them.
+const excludeList = (v: string) => v.split(/[\s,]+/).filter((p) => p !== '')
+
+const excludeNote =
+  "Directories or files of the repository steps' checkouts leave out, such as vendor/cache: they aren't fetched, so a big one costs nothing, but stay in the branch as they are. Steps that need them can't use them."
+
+// The paths a repository's checkouts leave out, saved as one leaves the field.
+function RepoExclude({
+  repo,
+  readOnly,
+  saving,
+  onSave,
+}: {
+  repo: Repository
+  readOnly: boolean
+  saving: boolean
+  onSave: (exclude: string[]) => void
+}) {
+  const saved = (repo.exclude ?? []).join(', ')
+  const [value, setValue] = useState(saved)
+  useEffect(() => setValue(saved), [saved])
+  const commit = () => {
+    if (excludeList(value).join(', ') !== saved) onSave(excludeList(value))
+  }
+  if (readOnly) {
+    return saved === '' ? null : <span className="repo-item-url">Leaves out {saved}</span>
+  }
+  return (
+    <label className="panel-field">
+      <span>Leave out</span>
+      <input
+        value={value}
+        placeholder="Optional. Such as vendor/cache"
+        spellCheck={false}
+        disabled={saving}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && commit()}
+      />
+    </label>
+  )
+}
+
 // The flow's settings: the repositories its agents and scripts work on, how
 // its runs' branches are named, and how other systems start it, over the
 // API and with webhooks. Each run checks the repositories out on
@@ -64,6 +108,7 @@ export function FlowSettingsPanel({
   // org/repository on GitHub, the whole URL otherwise.
   const [where, setWhere] = useState('')
   const [base, setBase] = useState('')
+  const [exclude, setExclude] = useState('')
   const [prefix, setPrefix] = useState(settings.branchPrefix)
   const [spend, setSpend] = useState(settings.runSpendLimit ? String(settings.runSpendLimit) : '')
   const [saving, setSaving] = useState(false)
@@ -97,10 +142,11 @@ export function FlowSettingsPanel({
   }
 
   const add = async () => {
-    const repo: Repository = { name, url, base: base.trim() }
+    const repo: Repository = { name, url, base: base.trim(), exclude: excludeList(exclude) }
     if (await save({ ...settings, repositories: [...settings.repositories, repo] })) {
       setWhere('')
       setBase('')
+      setExclude('')
     }
   }
 
@@ -162,6 +208,17 @@ export function FlowSettingsPanel({
               <span className="repo-item-url" title={r.url}>
                 {githubPath(r.url) ?? r.url}
               </span>
+              <RepoExclude
+                repo={r}
+                readOnly={readOnly}
+                saving={saving}
+                onSave={(exclude) =>
+                  save({
+                    ...settings,
+                    repositories: settings.repositories.map((x) => (x.name === r.name ? { ...x, exclude } : x)),
+                  })
+                }
+              />
               {!readOnly && (
                 <div className="mcp-item-actions">
                   <button
@@ -246,6 +303,16 @@ export function FlowSettingsPanel({
               spellCheck={false}
               onChange={(e) => setBase(e.target.value)}
             />
+          </label>
+          <label className="panel-field">
+            <span>Leave out</span>
+            <input
+              value={exclude}
+              placeholder="Optional. Such as vendor/cache"
+              spellCheck={false}
+              onChange={(e) => setExclude(e.target.value)}
+            />
+            <small className="panel-note">{excludeNote}</small>
           </label>
           <button className="panel-button" type="submit" disabled={!urlOk || !name || taken || saving}>
             Add

@@ -914,6 +914,9 @@ func diffSettings(a, b *flowSettings) []diffField {
 			if r.Base != "" {
 				line += " " + r.Base
 			}
+			if len(r.Exclude) > 0 {
+				line += " leaving out " + strings.Join(r.Exclude, ", ")
+			}
 			lines = append(lines, line)
 		}
 		return strings.Join(lines, "\n")

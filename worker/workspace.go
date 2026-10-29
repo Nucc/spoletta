@@ -67,6 +67,9 @@ type repository struct {
 	// Runs' branches live in the shared repository, so it is there as long as
 	// that run's branch is.
 	Start string `json:"start,omitempty"`
+	// Paths in the repository its checkouts leave out, such as a directory
+	// of big files nothing a step does needs; see sparse.
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 // Where workspaces live, a volume of their own.
@@ -416,8 +419,22 @@ func checkout(ctx context.Context, l *stepLogger, dir, branch string, r reposito
 	} else {
 		l.infof("%s: checking out the branch %s", r.Name, branch)
 	}
-	if err := gitLogged(ctx, l, r.Name, "", "clone", "--progress", "--depth=1", "--no-tags", "--single-branch", "--branch", branch, "--", "file://"+repo, tmp); err != nil {
+	args := []string{"clone", "--progress", "--depth=1", "--no-tags", "--single-branch", "--branch", branch}
+	if len(r.Exclude) > 0 {
+		if err := validExcludes(r.Exclude); err != nil {
+			return false, err
+		}
+		l.infof("%s: leaving out %s", r.Name, strings.Join(r.Exclude, ", "))
+		// The shared repository serves filtered clones only when asked to.
+		args = append(args, "--filter=blob:none", "--no-checkout", "--upload-pack=git -c uploadpack.allowFilter=true upload-pack")
+	}
+	if err := gitLogged(ctx, l, r.Name, "", append(args, "--", "file://"+repo, tmp)...); err != nil {
 		return false, err
+	}
+	if len(r.Exclude) > 0 {
+		if err := sparse(ctx, tmp, branch, r.Exclude); err != nil {
+			return false, err
+		}
 	}
 	if err := gitOK(ctx, tmp, "remote", "set-url", "origin", r.URL); err != nil {
 		return false, err
@@ -430,6 +447,67 @@ func checkout(ctx context.Context, l *stepLogger, dir, branch string, r reposito
 	}
 	l.infof("%s: ready in %s", r.Name, time.Since(started).Round(100*time.Millisecond))
 	return exists, nil
+}
+
+// A path a checkout may leave out: plain names, as the webapp checks them,
+// so that none reads as a pattern, and none leaving the repository or
+// naming git's own directory.
+var excludeSegment = regexp.MustCompile(`^[A-Za-z0-9._@+-]+$`)
+
+func validExcludes(paths []string) error {
+	for _, p := range paths {
+		ok := p != "" && !strings.HasPrefix(p, "-")
+		for _, s := range strings.Split(p, "/") {
+			ok = ok && excludeSegment.MatchString(s) && s != "." && s != ".." && !strings.EqualFold(s, ".git")
+		}
+		if !ok {
+			return fmt.Errorf("%q isn't a path a checkout can leave out", p)
+		}
+	}
+	return nil
+}
+
+// Checks the branch out of a clone made without its files, but for the
+// paths left out: a sparse checkout, which fetches from the shared
+// repository only the files it holds, so a directory of big files costs
+// nothing. Git keeps the rest in the index as they are in the branch, so a
+// step's commit leaves them be. The paths are ignored as well, so that what
+// a step writes in one is left out like an ignored file, rather than failing
+// its commit, which can't add it.
+func sparse(ctx context.Context, dir, branch string, exclude []string) error {
+	patterns, ignored := []string{"/*"}, []string{}
+	for _, p := range exclude {
+		patterns = append(patterns, "!/"+p)
+		ignored = append(ignored, "/"+p)
+	}
+	info := filepath.Join(dir, ".git", "info")
+	if err := os.MkdirAll(info, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(info, "sparse-checkout"), []byte(strings.Join(patterns, "\n")+"\n"), 0o644); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(info, "exclude"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString("\n" + strings.Join(ignored, "\n") + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	for _, args := range [][]string{
+		{"config", "core.sparseCheckout", "true"},
+		{"config", "core.sparseCheckoutCone", "false"},
+		{"checkout", "--quiet", branch},
+	} {
+		if err := gitOK(ctx, dir, args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Where the repository behind url is shared from.

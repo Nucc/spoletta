@@ -416,6 +416,20 @@ of the run works on the same branch and picks up where the one before left
 off. After an agent step ends, a person can send it follow-up messages
 ("push it", "rename that function") in the same session and checkout.
 
+A repository's `exclude` lists paths in it, directories or files, that its
+checkouts leave out, such as a committed cache of gems: they aren't fetched
+into a step's checkout, so a big one costs nothing, but stay in the branch as
+they are, and what a step writes under one is left out as an ignored file is.
+It holds for every process of the flow; one whose steps need the paths can't
+use them. Plain paths only, no wildcards:
+
+```yaml
+repositories:
+  - name: shop
+    url: https://github.com/acme/shop.git
+    exclude: [vendor/cache, docs/assets]
+```
+
 ### 3.8 Procedures, subflows and structs
 
 - A **procedure** is a flow under `procedures:`. Other flows run it with a

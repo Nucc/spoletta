@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,10 @@ type repository struct {
 	URL string `json:"url"`
 	// The branch runs' branches start from; empty for the default branch.
 	Base string `json:"base"`
+	// Paths in it, directories or files, its checkouts leave out, such as a
+	// cache of gems: not fetched into a step's checkout, nor there, yet kept
+	// in the branch as they are. See sparse in worker/workspace.go.
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 // Stored as JSON; flows from before settings have none.
@@ -118,7 +123,41 @@ func (s *flowSettings) check() string {
 		if r.Base != "" && !validBranch(r.Base) {
 			return fmt.Sprintf("%q isn't a valid branch name", r.Base)
 		}
+		if msg := checkExclude(r); msg != "" {
+			return msg
+		}
 	}
+	return ""
+}
+
+// The most paths a repository's checkouts may leave out.
+const maxExcludes = 50
+
+var excludeSegment = regexp.MustCompile(`^[A-Za-z0-9._@+-]+$`)
+
+// Tidies the paths the repository's checkouts leave out, written with or
+// without slashes around them, each once, and says what is wrong with them:
+// plain paths in the repository, never patterns, as the worker checks too.
+func checkExclude(r *repository) string {
+	var paths []string
+	for _, p := range r.Exclude {
+		p = strings.Trim(strings.TrimSpace(p), "/")
+		if p == "" || slices.Contains(paths, p) {
+			continue
+		}
+		ok := !strings.HasPrefix(p, "-")
+		for _, s := range strings.Split(p, "/") {
+			ok = ok && excludeSegment.MatchString(s) && s != "." && s != ".." && !strings.EqualFold(s, ".git")
+		}
+		if !ok {
+			return fmt.Sprintf("%s: %q isn't a path to leave out: letters, digits, ., -, _, @ and + between slashes, no wildcards", r.Name, p)
+		}
+		paths = append(paths, p)
+	}
+	if len(paths) > maxExcludes {
+		return fmt.Sprintf("%s: at most %d paths can be left out", r.Name, maxExcludes)
+	}
+	r.Exclude = paths
 	return ""
 }
 
@@ -212,6 +251,9 @@ func withWorkspace(prompt string, ws *workspaceSpec) string {
 			base = "commit " + r.Start[:min(len(r.Start), 12)] + ", where the run this one re-runs had got to"
 		}
 		fmt.Fprintf(&b, "- %s/: %s, branched from %s\n", r.Name, r.URL, base)
+		if len(r.Exclude) > 0 {
+			fmt.Fprintf(&b, "  Left out of the checkout, though still in the branch: %s. They aren't deleted, so don't restore or commit them.\n", strings.Join(r.Exclude, ", "))
+		}
 	}
 	b.WriteString("The checkouts hold only the latest commit of the branch they started from, with what this run committed on top: " +
 		"older history and tags aren't there, so don't look for them.\n")

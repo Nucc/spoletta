@@ -10,8 +10,8 @@ package main
 // worker writes the providers into the step's agent directory's models.json,
 // over the host's entries for the same providers; a custom one has its URL,
 // API and models, which get what pi's catalog knows of a model of the same
-// ID (how much it takes in and gives out, whether it thinks, whether it
-// sees images). Every provider the webapp reaches for the step, these and
+// ID (how much it takes in and gives out, whether it thinks and what each
+// thinking level is called, whether it sees images). Every provider the webapp reaches for the step, these and
 // the host's (see host_providers.go), points at the webapp's proxy, with
 // the step's token as its key; the proxy swaps it for the real one. pi
 // takes a provider-level baseUrl over its own for one it knows, and reads a
@@ -119,6 +119,11 @@ type catalogModel struct {
 	Input         []string `json:"input"`
 	ContextWindow int64    `json:"contextWindow"`
 	MaxTokens     int64    `json:"maxTokens"`
+	// What pi sends for each thinking level, as the model names them, or
+	// null where it has none, such as "none" for off: without it pi sends
+	// nothing for off, and a model that thinks unless told not to goes on
+	// thinking, which some refuse beside tools.
+	ThinkingLevelMap map[string]*string `json:"thinkingLevelMap,omitempty"`
 	// What it costs, in dollars a million tokens, as pi's catalog says.
 	Cost *modelCost `json:"cost,omitempty"`
 }
@@ -328,6 +333,9 @@ func providersModels(host []byte, providers []modelProvider, known map[string]ca
 					}
 					if k.Cost != nil {
 						m["cost"] = k.Cost
+					}
+					if len(k.ThinkingLevelMap) > 0 {
+						m["thinkingLevelMap"] = k.ThinkingLevelMap
 					}
 				}
 				models = append(models, m)

@@ -19,7 +19,7 @@ func TestReadCatalog(t *testing.T) {
 		"image:painter": {"id": "painter"}
 	}}`), 0o644)
 	os.WriteFile(filepath.Join(dir, "amazon-bedrock.json"), []byte(`{"bedrock-converse-stream": {
-		"chat:global.anthropic.claude-b": {"id": "global.anthropic.claude-b", "name": "Claude B (global)", "reasoning": true}
+		"chat:global.anthropic.claude-b": {"id": "global.anthropic.claude-b", "name": "Claude B (global)", "reasoning": true, "thinkingLevelMap": {"off": "none", "minimal": null}}
 	}}`), 0o644)
 	c, err := readCatalog(dir)
 	if err != nil {
@@ -42,6 +42,9 @@ func TestReadCatalog(t *testing.T) {
 	if m := c.byID["global.anthropic.claude-b"]; !m.Reasoning || c.byID["claude-b"].ContextWindow != 1000000 {
 		t.Errorf("by ID = %+v", c.byID)
 	}
+	if m := c.byID["global.anthropic.claude-b"].ThinkingLevelMap; len(m) != 2 || *m["off"] != "none" || m["minimal"] != nil {
+		t.Errorf("thinking levels = %v", m)
+	}
 	if p := c.Prices["anthropic"]["claude-a"]; p != (modelCost{3, 15, 0.3, 3.75}) || len(c.Prices["anthropic"]) != 1 {
 		t.Errorf("prices = %+v", c.Prices)
 	}
@@ -57,7 +60,9 @@ func TestProvidersModels(t *testing.T) {
 		"fireworks": {"apiKey": "${OPENAI_API_KEY}", "baseUrl": "https://gw/fireworks/v1"},
 		"local": {"apiKey": "sk-literal", "baseUrl": "http://localhost:11434/v1"}
 	}}`)
-	known := map[string]catalogModel{"global.anthropic.claude-b": {ID: "global.anthropic.claude-b", Name: "Claude B", Reasoning: true, Input: []string{"text", "image"}, ContextWindow: 1000000, MaxTokens: 128000}}
+	none := "none"
+	known := map[string]catalogModel{"global.anthropic.claude-b": {ID: "global.anthropic.claude-b", Name: "Claude B", Reasoning: true, Input: []string{"text", "image"}, ContextWindow: 1000000, MaxTokens: 128000,
+		ThinkingLevelMap: map[string]*string{"off": &none, "minimal": nil}}}
 	llm := &llmAccess{URL: "http://webapp:8080/llm/", Token: "step-token-0123456789", Providers: []string{"openai", "fireworks", "company-gateway", "anthropic"}}
 	out, err := providersModels(host, []modelProvider{
 		{ID: "openai", Env: "OPENAI_API_KEY", Models: []string{"gpt-5"}},
@@ -92,7 +97,8 @@ func TestProvidersModels(t *testing.T) {
 		t.Errorf("company-gateway = %v", gw)
 	}
 	models := gw["models"].([]any)
-	if m := models[0].(map[string]any); m["reasoning"] != true || m["contextWindow"] != float64(1000000) || m["maxTokens"] != float64(128000) || m["api"] != nil {
+	if m := models[0].(map[string]any); m["reasoning"] != true || m["contextWindow"] != float64(1000000) || m["maxTokens"] != float64(128000) || m["api"] != nil ||
+		m["thinkingLevelMap"] == nil || m["thinkingLevelMap"].(map[string]any)["off"] != "none" {
 		t.Errorf("a known model = %v", m)
 	}
 	if m := models[1].(map[string]any); len(m) != 1 || m["id"] != "unknown-model" {

@@ -734,8 +734,24 @@ function durationText(seconds: number): string {
   return parts.join(' ') || '0s'
 }
 
-// A setting holding a duration in seconds, written as parseDuration takes
-// it, none when empty.
+// The durations a setting offers to pick, in seconds, and what each is called.
+const DURATION_CHOICES: [number, string][] = [
+  [15 * 60, '15 minutes'],
+  [30 * 60, '30 minutes'],
+  [60 * 60, '1 hour'],
+  [4 * 3600, '4 hours'],
+  [8 * 3600, '8 hours'],
+  [86400, '1 day'],
+  [2 * 86400, '2 days'],
+  [7 * 86400, '1 week'],
+]
+
+// How a duration of one's own is written.
+const DURATION_HELP = 'Days, hours, minutes and seconds, such as 90m, 4h or 1d 12h: d for days, h hours, m minutes, s seconds.'
+
+// A setting holding a duration in seconds, none for never: one of the
+// usual ones picked, or Other to write one's own as parseDuration takes it,
+// which, emptied, gives way to the picker again.
 function DurationSetting({
   label,
   title,
@@ -749,8 +765,11 @@ function DurationSetting({
   readOnly: boolean
   onChange: (seconds: number | undefined) => void
 }) {
+  const offered = (v: number | undefined) => v === undefined || DURATION_CHOICES.some(([s]) => s === v)
+  const [own, setOwn] = useState(!offered(value))
   const [text, setText] = useState(value === undefined ? '' : durationText(value))
   useEffect(() => {
+    if (!offered(value)) setOwn(true)
     setText((t) =>
       parseDuration(t) === (value ?? null) || (t.trim() === '' && value === undefined)
         ? t
@@ -760,24 +779,64 @@ function DurationSetting({
     )
   }, [value])
   const seconds = parseDuration(text)
-  const invalid = text.trim() !== '' && (seconds === null || seconds < 1 || seconds > MAX_WAIT)
+  const invalid = own && text.trim() !== '' && (seconds === null || seconds < 1 || seconds > MAX_WAIT)
   return (
-    <label className="panel-field" title={title}>
-      <span>{label}</span>
-      <input
-        type="text"
-        value={text}
-        placeholder="Never"
-        readOnly={readOnly}
-        aria-invalid={invalid || undefined}
+    <div className="panel-field duration-setting">
+      <span title={title}>
+        {label}{' '}
+        <span className="panel-help" title={`${title}. ${DURATION_HELP}`} aria-label={`${title}. ${DURATION_HELP}`}>
+          ?
+        </span>
+      </span>
+      <select
+        aria-label={label}
+        title={title}
+        value={own ? 'own' : String(value ?? '')}
+        disabled={readOnly}
         onChange={(e) => {
-          setText(e.target.value)
-          if (e.target.value.trim() === '') return onChange(undefined)
-          const n = parseDuration(e.target.value)
-          if (n !== null && n >= 1 && n <= MAX_WAIT) onChange(n)
+          if (e.target.value === 'own') {
+            setOwn(true)
+            return
+          }
+          setOwn(false)
+          onChange(e.target.value === '' ? undefined : Number(e.target.value))
         }}
-      />
-    </label>
+      >
+        <option value="">Never</option>
+        {DURATION_CHOICES.map(([s, name]) => (
+          <option key={s} value={s}>
+            {name}
+          </option>
+        ))}
+        <option value="own">Other…</option>
+      </select>
+      {own && (
+        <>
+          <input
+            type="text"
+            aria-label={`${label}, written out`}
+            value={text}
+            placeholder="Such as 90m, 4h or 1d 12h"
+            readOnly={readOnly}
+            autoFocus={!readOnly && value === undefined}
+            aria-invalid={invalid || undefined}
+            onChange={(e) => {
+              setText(e.target.value)
+              if (e.target.value.trim() === '') return onChange(undefined)
+              const n = parseDuration(e.target.value)
+              if (n !== null && n >= 1 && n <= MAX_WAIT) onChange(n)
+            }}
+            onBlur={() => {
+              // Emptied, it is never again, picked from the list.
+              if (text.trim() === '') setOwn(false)
+            }}
+          />
+          <small className={invalid ? 'panel-warning' : 'panel-note'}>
+            {invalid ? `Not a duration from 1 second to a year. ${DURATION_HELP}` : DURATION_HELP}
+          </small>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -808,11 +867,16 @@ function RolesSetting({
   }, [value])
   return (
     <label className="panel-field" title={title}>
-      <span>{label}</span>
+      <span>
+        {label}{' '}
+        <span className="panel-help" title={`${title}. Roles separated by commas.`} aria-hidden="true">
+          ?
+        </span>
+      </span>
       <input
         type="text"
         value={text}
-        placeholder="Nobody"
+        placeholder="Nobody, or roles such as Lead, Finance"
         readOnly={readOnly}
         onChange={(e) => {
           setText(e.target.value)

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { listFlows, listRuns, runOrigin, type Flow, type FlowRun } from './api'
+import { listFlows, listRuns, listTaskBoards, runOrigin, type Flow, type FlowRun, type TaskBoard } from './api'
 import { configures, useMe } from './Account'
 import { formatTime, ORIGIN_LABELS, RUN_LABELS } from './Runs'
 import { tabsFor } from './Settings'
@@ -8,12 +8,13 @@ import { picked, rank, shortcutOf, type ShortcutId } from './shortcuts'
 import { PROCEDURE_WORDS, STRUCT_WORDS } from './words'
 
 // The command palette, Cmd-K or Ctrl-K anywhere: type to go to a flow,
-// procedure or struct, one of the open flow's latest runs, a page or a tab
-// of the settings, or, on a board, to do what its toolbar, sidebar and
-// panels do. What it lists is ranked by how well its title matches what is
-// typed (fuzzy in shortcuts.ts), and what was picked lately comes first.
-// A page opens in a tab of its own, or in the tab already showing it. It
-// reads the flows and runs as it opens, from the routes their pages use.
+// procedure, struct or task board, one of the open flow's latest runs, a
+// page or a tab of the settings, or, on a board, to do what its toolbar,
+// sidebar and panels do. What it lists is ranked by how well its title
+// matches what is typed (fuzzy in shortcuts.ts), and what was picked lately
+// comes first. A page opens in a tab of its own, or in the tab already
+// showing it. It reads the flows, task boards and runs as it opens, from
+// the routes their pages use.
 
 export type PaletteItem = {
   // Kept to put what was picked lately first, so the same for the same thing.
@@ -80,7 +81,20 @@ function saveRecent(recent: string[]) {
 const RUNS_LISTED = 20
 
 // The groups in the order they are listed in with nothing typed.
-const GROUPS = ['Board', 'Views', 'Run', 'Add to the board', 'Runs', 'Pages', 'Flows', PROCEDURE_WORDS.many, STRUCT_WORDS.many, 'Settings']
+const GROUPS = [
+  'Board',
+  'Task board',
+  'Views',
+  'Run',
+  'Add to the board',
+  'Runs',
+  'Pages',
+  'Task boards',
+  'Flows',
+  PROCEDURE_WORDS.many,
+  STRUCT_WORDS.many,
+  'Settings',
+]
 
 // The flow the page in the address is about, if any.
 const flowInHash = () => {
@@ -117,6 +131,7 @@ export default function CommandPalette({
   const [active, setActive] = useState(0)
   const [flows, setFlows] = useState<Flow[] | null>(null)
   const [runs, setRuns] = useState<FlowRun[]>([])
+  const [boards, setBoards] = useState<TaskBoard[]>([])
   const [recent, setRecent] = useState(loadRecent)
   // The choices an item listed, such as the run to compare with, in place
   // of everything else until Backspace goes back.
@@ -134,6 +149,7 @@ export default function CommandPalette({
 
   useEffect(() => {
     listFlows().then(setFlows, () => setFlows([]))
+    listTaskBoards().then(setBoards, () => setBoards([]))
     if (flow !== null) listRuns(flow, undefined, undefined, RUNS_LISTED).then(setRuns, () => setRuns([]))
   }, [flow])
 
@@ -150,8 +166,8 @@ export default function CommandPalette({
         id: 'page:flows',
         title: 'Flows',
         group: 'Pages',
-        hint: 'Every flow, procedure and struct',
-        words: 'home list procedures structs',
+        hint: 'Every task board, flow, procedure and struct',
+        words: 'home list procedures structs task boards',
         hash: '#/',
       },
       {
@@ -202,6 +218,16 @@ export default function CommandPalette({
     }
     for (const t of me ? tabsFor(me) : []) {
       all.push({ id: `settings:${t.id}`, title: t.label, group: 'Settings', words: 'settings', hash: `#/settings/${t.id}` })
+    }
+    for (const b of boards) {
+      all.push({
+        id: `taskboard:${b.id}`,
+        title: b.name,
+        group: 'Task boards',
+        hint: b.columns.map((c) => c.name).join(' · ') || undefined,
+        words: `task board kanban ${b.columns.map((c) => `${c.name} ${c.structName}`).join(' ')}`,
+        hash: `#/taskboards/${b.id}`,
+      })
     }
     // Favourites first, as the flow list puts them.
     const ordered = [...(flows ?? [])].sort((a, b) => Number(b.favourite) - Number(a.favourite))

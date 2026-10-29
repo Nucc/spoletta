@@ -131,6 +131,7 @@ func main() {
 	registerStructRoutes(mux, db)
 	registerSharedRoutes(mux, db)
 	registerRecordEditRoutes(mux, db)
+	registerTaskBoardRoutes(mux, db)
 	registerObjectRoutes(mux, db)
 	registerQueryRoutes(mux, db)
 	registerStateRoutes(mux, db)

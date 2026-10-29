@@ -41,6 +41,7 @@ export function RecordDialog({
   fields,
   states,
   record,
+  state: initialState = '',
   onSave,
   onDelete,
   onClose,
@@ -51,6 +52,8 @@ export function RecordDialog({
   states: string[]
   // The record corrected, or none for a new one.
   record: SharedRecord | null
+  // The state a new one starts in, such as the one a task board's column holds.
+  state?: string
   onSave: (content: Record<string, unknown>, state: string) => Promise<void>
   onDelete?: () => Promise<void>
   onClose: () => void
@@ -58,7 +61,7 @@ export function RecordDialog({
   const ref = useRef<HTMLDialogElement>(null)
   // Taken once, so the records asked for again meanwhile don't undo what is typed.
   const [draft, setDraft] = useState(() => draftOf(fields, record))
-  const [state, setState] = useState(record?.state ?? '')
+  const [state, setState] = useState(record?.state ?? initialState)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [confirm, confirmDialog] = useConfirm()

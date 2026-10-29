@@ -2,18 +2,23 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEv
 import {
   createFlow,
   createFromTemplate,
+  createTaskBoard,
+  deleteTaskBoard,
   exportSetup,
   importSetup,
   listFlows,
+  listTaskBoards,
   listTeams,
   restoreFlow,
   setFavourite,
   setFlowOwner,
   setFlowTags,
+  setTaskBoardOwner,
   trashFlow,
   type Flow,
   type FlowTemplate,
   type Me,
+  type TaskBoard,
   type Team,
 } from './api'
 import {
@@ -27,6 +32,7 @@ import {
   StarIcon,
   SubflowIcon,
   TagIcon,
+  TaskBoardIcon,
   TrashIcon,
   UploadIcon,
 } from './icons'
@@ -38,22 +44,25 @@ import { useConfirm } from './Confirm'
 import { useUndoNotice } from './UndoNotice'
 import { PROCEDURE_WORDS, STRUCT_WORDS } from './words'
 
-// The main page: the flows that run, each a job of its own, such as fixing
-// exceptions or bumping dependencies, and apart from them the procedures,
-// the flows made to be reused inside others, and the structs, the objects
-// they use. Opening one shows its board. With sign-in, only those one sees
-// are listed: one's own, one's teams', everyone's, and those whose reviews
-// one decides; they can be narrowed to whose they are, to those whose name
-// or tags hold what is typed in the search, and to a tag. One's favourites,
-// starred, come first in each section, and each flow says how its runs went
-// this week. What is searched and the tag picked are in the address,
-// #/?q=<words>&tag=<tag>. A flow can start from a template, offered in
-// place while there is no flow at all. Deleting one moves it to the trash,
-// which can be undone, so it asks nothing first unless runs going on in it
-// would stop.
+// The main page: the task boards, laying out shared structs' records in
+// columns (TaskBoard.tsx); the flows that run, each a job of its own, such
+// as fixing exceptions or bumping dependencies, and apart from them the
+// procedures, the flows made to be reused inside others, and the structs,
+// the objects they use. Opening a flow shows its board. With sign-in, only
+// those one sees are listed: one's own, one's teams', everyone's, and those
+// whose reviews one decides; they can be narrowed to whose they are, to
+// those whose name or tags hold what is typed in the search, and to a tag,
+// which task boards don't have. One's favourites, starred, come first in
+// each section, and each flow says how its runs went this week. What is
+// searched and the tag picked are in the address, #/?q=<words>&tag=<tag>.
+// A flow can start from a template, offered in place while there is no
+// flow at all. Deleting one moves it to the trash, which can be undone, so
+// it asks nothing first unless runs going on in it would stop; deleting a
+// task board can't be undone, so it asks.
 export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const me = useMe()
   const [all, setFlows] = useState<Flow[] | null>(null)
+  const [allBoards, setBoards] = useState<TaskBoard[] | null>(null)
   const [whose, setWhose] = useState('')
   const [query, setQuery] = useState(() => hashParam('q'))
   const [tag, setTag] = useState(() => hashParam('tag'))
@@ -72,6 +81,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
       .filter((f) => (!whose || whoseKey(f) === whose) && matches(f, query) && (!tag || f.tags.some((t) => sameTag(t, tag))))
       // Favourites first, each part in the order the server gives, by name.
       .sort((a, b) => Number(b.favourite) - Number(a.favourite))
+  const boards = allBoards && allBoards.filter((b) => (!whose || whoseKey(b) === whose) && matches(b, query) && !tag)
   const tags = all ? allTags(all) : []
 
   // The search and the tag go in the address, in place, keeping the tab's entry.
@@ -85,11 +95,13 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
   const refresh = useCallback(() => listFlows().then(setFlows).catch(report), [report])
+  const refreshBoards = useCallback(() => listTaskBoards().then(setBoards).catch(report), [report])
 
   useEffect(() => {
     document.title = 'Flows'
     refresh()
-  }, [refresh])
+    refreshBoards()
+  }, [refresh, refreshBoards])
 
   useEffect(() => {
     if (me?.user) listTeams().then(setTeams, report)
@@ -184,6 +196,26 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
       report(err)
     }
   }
+
+  // A new task board, belonging to whoever new flows do, opened to add its columns.
+  const onCreateBoard = async (name: string) => {
+    const b = await createTaskBoard(name, newOwner())
+    window.location.hash = `#/taskboards/${b.id}`
+  }
+
+  const onDeleteBoard = async (b: TaskBoard) => {
+    const yes = await confirm({
+      title: `Delete ${b.name}?`,
+      message: <p>Its columns go with it; the records they hold stay as they are. This can't be undone.</p>,
+      confirm: 'Delete',
+    })
+    if (!yes) return
+    setError(null)
+    deleteTaskBoard(b.id).then(refreshBoards, report)
+  }
+
+  const onBoardOwner = (b: TaskBoard, owner: Parameters<typeof setTaskBoardOwner>[1]) =>
+    setTaskBoardOwner(b.id, owner).then(refreshBoards, report)
 
   // Saves the setup as a file.
   const onExport = async () => {
@@ -308,14 +340,14 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
             <label>
               Show
               <select value={whose} onChange={(e) => setWhose(e.target.value)}>
-                {whoseChoices(all, me).map(([key, label]) => (
+                {whoseChoices([...all, ...(allBoards ?? [])], me).map(([key, label]) => (
                   <option key={key} value={key}>
                     {label}
                   </option>
                 ))}
               </select>
             </label>
-            <label title="Who sees the flows, procedures and structs you make, and may change them">
+            <label title="Who sees the task boards, flows, procedures and structs you make, and may change them">
               New ones belong to
               <select value={newOwnerKey} onChange={(e) => pickNewOwner(e.target.value)}>
                 {myTeams.map((t) => (
@@ -329,6 +361,16 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
             </label>
           </div>
         )}
+        <TaskBoardSection
+          boards={boards}
+          me={me}
+          teams={teams}
+          narrowed={narrowed}
+          onCreate={onCreateBoard}
+          onOwner={onBoardOwner}
+          onDelete={onDeleteBoard}
+          onError={report}
+        />
         <FlowSection
           title="Flows"
           note="The jobs that run, each doing one thing end to end."
@@ -398,13 +440,16 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   )
 }
 
+// What is owned as a flow is, and listed here: a flow, or a task board.
+type Owned = Pick<Flow, 'access' | 'owner'>
+
 // What flows are narrowed to by whose they are: an owner's key, or
 // "review" for those one only decides the reviews of.
-const whoseKey = (f: Flow) =>
+const whoseKey = (f: Owned) =>
   f.access === 'review' ? 'review' : f.owner.kind === 'global' ? 'global' : `${f.owner.kind}:${f.owner.id}`
 
 // The choices of whose flows to show, the owners of those listed.
-function whoseChoices(flows: Flow[], me: Me): [string, string][] {
+function whoseChoices(flows: Owned[], me: Me): [string, string][] {
   const choices = new Map<string, string>([['', 'Every flow I see']])
   const mine = `user:${me.user?.id}`
   if (flows.some((f) => whoseKey(f) === mine)) choices.set(mine, 'Mine')
@@ -428,12 +473,12 @@ const hashParam = (key: string) => new URLSearchParams(window.location.hash.spli
 const sameTag = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
 // Whether every word searched for is in the flow's name or one of its tags.
-const matches = (f: Flow, query: string) =>
+const matches = (f: { name: string; tags?: string[] }, query: string) =>
   query
     .toLowerCase()
     .split(/\s+/)
     .filter(Boolean)
-    .every((w) => f.name.toLowerCase().includes(w) || f.tags.some((t) => t.toLowerCase().includes(w)))
+    .every((w) => f.name.toLowerCase().includes(w) || f.tags?.some((t) => t.toLowerCase().includes(w)))
 
 // Every tag of the flows, each once, spelled as it is first, by name.
 function allTags(flows: Flow[]): string[] {
@@ -733,6 +778,98 @@ function FlowSection({
                   <TrashIcon />
                 </button>
               )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+// The task boards, each naming its columns, to open, give to someone else
+// or delete; and a new one named.
+function TaskBoardSection({
+  boards,
+  me,
+  teams,
+  narrowed,
+  onCreate,
+  onOwner,
+  onDelete,
+  onError,
+}: {
+  boards: TaskBoard[] | null
+  me: Me | null
+  teams: Team[]
+  narrowed: boolean
+  onCreate: (name: string) => Promise<void>
+  onOwner: (b: TaskBoard, owner: Parameters<typeof setTaskBoardOwner>[1]) => void
+  onDelete: (b: TaskBoard) => void
+  onError: (err: unknown) => void
+}) {
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    setBusy(true)
+    try {
+      await onCreate(name.trim())
+    } catch (err) {
+      onError(err)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="flow-section task-boards" aria-label="Task boards">
+      <h2>
+        <TaskBoardIcon /> Task boards
+      </h2>
+      <p className="flows-note">
+        Shared structs' records in columns, each a query of them, such as tickets by state, moving on as flows and people move them.
+      </p>
+      <form className="flow-new" onSubmit={submit}>
+        <input
+          aria-label="Name a new task board, such as Sprint"
+          placeholder="Name a new task board, such as Sprint"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button type="submit" disabled={busy || !name.trim()}>
+          <PlusIcon /> New task board
+        </button>
+      </form>
+      {boards === null ? (
+        <p className="flows-note">Loading…</p>
+      ) : boards.length === 0 ? (
+        <p className="flows-note">
+          {narrowed
+            ? 'None of the task boards match.'
+            : 'No task boards yet. A task board shows the records of shared structs in columns, such as Jira tickets still new beside pull requests in review.'}
+        </p>
+      ) : (
+        <ul className="flow-list">
+          {boards.map((b) => (
+            <li key={b.id}>
+              <div className="flow-card-body">
+                <a className="flow-card" href={`#/taskboards/${b.id}`}>
+                  <span className="flow-card-name">{b.name}</span>
+                  <span className="flow-card-run">
+                    {b.columns.length === 0 ? 'No columns yet' : b.columns.map((c) => c.name).join(' · ')}
+                  </span>
+                </a>
+              </div>
+              {me?.user && <OwnerPicker flow={b} me={me} teams={teams} compact onChange={(o) => onOwner(b, o)} />}
+              <button
+                className="icon-button flow-delete"
+                onClick={() => onDelete(b)}
+                aria-label={`Delete ${b.name}`}
+                title="Delete the task board"
+              >
+                <TrashIcon />
+              </button>
             </li>
           ))}
         </ul>

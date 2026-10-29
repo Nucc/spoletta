@@ -264,8 +264,9 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		writeJSON(w, http.StatusOK, t)
 	})
 
-	// A team that owns flows, skills or commands stays until they are given
-	// to someone else, so removing it doesn't take them from its members.
+	// A team that owns flows, skills, commands or task boards stays until
+	// they are given to someone else, so removing it doesn't take them from
+	// its members.
 	mux.HandleFunc("DELETE /api/teams/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if refuseNonTeamManager(w, r) {
 			return
@@ -295,6 +296,14 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		}
 		if owned > 0 {
 			http.Error(w, fmt.Sprintf("the team owns %d skills or commands; give them to someone else first", owned), http.StatusConflict)
+			return
+		}
+		if err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM task_boards WHERE owner_team_id = ?", id).Scan(&owned); err != nil {
+			serverError(w, err)
+			return
+		}
+		if owned > 0 {
+			http.Error(w, fmt.Sprintf("the team owns %d task boards; give them to someone else first", owned), http.StatusConflict)
 			return
 		}
 		if _, err := db.ExecContext(r.Context(), "DELETE FROM teams WHERE id = ?", id); err != nil {

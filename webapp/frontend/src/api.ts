@@ -233,7 +233,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/webhooks', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials']
+const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/webhooks', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials', '/api/taskboards']
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<(url: string) => void>()
@@ -588,6 +588,103 @@ export function updateSharedRecord(struct: number, record: number, edit: RecordE
 // Deletes the records, one or many at once.
 export function deleteSharedRecords(struct: number, ids: number[]): Promise<{ deleted: number }> {
   return request(`/api/structs/${struct}/records/delete`, { method: 'POST', body: JSON.stringify({ ids }) })
+}
+
+// A task board: shared structs' records in columns, each column a struct
+// and a query of its records as the Records page searches them, owned as a
+// flow is; see taskboards.go.
+export type TaskBoard = {
+  id: number
+  name: string
+  owner: FlowOwner
+  // Those who see it change it.
+  access: 'edit'
+  columns: TaskColumn[]
+  updatedAt: string
+}
+
+// Why a column shows no records: its struct was deleted for good, is in the
+// trash, isn't one whoever asks sees, or keeps no records.
+export type TaskColumnProblem = 'gone' | 'trash' | 'hidden' | 'unshared'
+
+export type TaskColumn = {
+  name: string
+  // Null once deleted for good.
+  struct: number | null
+  // Empty for one whoever asks doesn't see.
+  structName: string
+  query: string
+  // A facet's key to sort by, with a - before it for the other way; empty
+  // for the latest written first.
+  sort: string
+  // What its cards show; null for its key, the first other field, its
+  // state and when it was last written.
+  card: TaskCard | null
+  problem?: TaskColumnProblem
+  // Its records, on the board's own page.
+  cards?: TaskCards
+}
+
+// The records a column's query matches, the first 200 of them, with what
+// its cards and correcting one need of its struct.
+export type TaskCards = {
+  fields: string[]
+  states: string[]
+  // The struct's first unique attribute, which names a record.
+  key: string
+  records: SharedRecord[]
+  // How many records the query matched, and whether the struct has more
+  // than a search reads.
+  matched: number
+  truncated: boolean
+}
+
+// What a column's cards show of each record: the fields picked, in order,
+// the key heading the card and the first other field read as its title;
+// and whether its state, when it was last written, and the run that last
+// moved it on show.
+export type TaskCard = { fields: string[]; state: boolean; updated: boolean; run: boolean }
+
+// What is saved of a column.
+export type TaskColumnEdit = { name: string; struct: number | null; query: string; sort: string; card: TaskCard | null }
+
+// A shared struct a column can hold the records of, with the fields they
+// have, in the board's order, and the one naming them.
+export type TaskStruct = { id: number; name: string; fields: string[]; key: string }
+
+// The task boards whoever asks sees, by name, without their records.
+export function listTaskBoards(): Promise<TaskBoard[]> {
+  return request('/api/taskboards')
+}
+
+// The board with each column's records.
+export function getTaskBoard(id: number): Promise<TaskBoard> {
+  return request(`/api/taskboards/${id}`)
+}
+
+// Without an owner, it is its maker's team's when they are in one only, else theirs.
+export function createTaskBoard(name: string, owner?: { kind: 'global' } | { kind: 'team' | 'user'; id: number }): Promise<TaskBoard> {
+  return request('/api/taskboards', { method: 'POST', body: JSON.stringify({ name, owner }) })
+}
+
+// Saves the board's name and all its columns, in order, and answers with
+// their records.
+export function saveTaskBoard(id: number, board: { name: string; columns: TaskColumnEdit[] }): Promise<TaskBoard> {
+  return request(`/api/taskboards/${id}`, { method: 'PUT', body: JSON.stringify(board) })
+}
+
+export function deleteTaskBoard(id: number): Promise<void> {
+  return request(`/api/taskboards/${id}`, { method: 'DELETE' })
+}
+
+// Gives the board to someone, a team, or everyone.
+export function setTaskBoardOwner(id: number, owner: { kind: 'global' } | { kind: 'team' | 'user'; id: number }): Promise<TaskBoard> {
+  return request(`/api/taskboards/${id}/owner`, { method: 'PUT', body: JSON.stringify(owner) })
+}
+
+// The shared structs whoever asks sees, to pick a column's from.
+export function listTaskStructs(): Promise<TaskStruct[]> {
+  return request('/api/taskboards/structs')
 }
 
 // A flow a person may start on a struct's records: one whose queries read

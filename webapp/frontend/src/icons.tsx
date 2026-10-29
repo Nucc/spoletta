@@ -371,6 +371,14 @@ export const TableIcon = () => (
   </Icon>
 )
 
+// Columns of cards, for a task board.
+export const TaskBoardIcon = () => (
+  <Icon>
+    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+    <path d="M6 2.5v11M10 2.5v11M3 5h1.5M7.5 5h1M7.5 7.5h1M11.5 5h1.5" />
+  </Icon>
+)
+
 // A tray, for the inbox of what waits on the person.
 export const InboxIcon = () => (
   <Icon>

@@ -483,6 +483,15 @@ repositories:
     alone, whatever its state and rule select. So a flow implementing "the
     open Jira ticket" its query gives it implements the one picked; write
     its query for the scheduled case, and it serves both.
+  - A **task board** (`#/taskboards/<id>`, listed on the main page) lays
+    shared structs' records out in columns, each a struct and a query in
+    the Records page's search, such as Jira tickets `state:new` beside pull
+    requests `state:in_review`, each picking what its cards show of a
+    record: its fields, its state, when it was last written and the run
+    that last moved it on. As a flow or a person moves a record into
+    another state it shows in that state's column, so states a flow queries
+    read as its queue there. Task boards aren't in versions or the setup
+    file.
 - Deleting a flow, procedure or struct moves it to the **trash**, from
   where those who may change it restore it, for 30 days by default. While
   it is there it runs nothing and exports nowhere: a subflow process running

@@ -14,6 +14,7 @@ import Schedules from './Schedules'
 import Settings, { type SettingsTab } from './Settings'
 import { ShortcutSheet, useShortcuts } from './Keyboard'
 import TabBar from './TabBar'
+import TaskBoard from './TaskBoard'
 import Trash from './Trash'
 import { TabContext, useTabs } from './tabs'
 
@@ -23,18 +24,19 @@ import { TabContext, useTabs } from './tabs'
 // #/flows/<id>/compare/<run>/<run> for two of its runs side by side,
 // #/flows/<id>/data for what its runs held, #/flows/<id>/records for a
 // shared struct's records, both with ?q=<search>&sort=<key> for what they
-// show, #/audit for the audit log, with them too, #/schedules for the
-// schedules, #/inbox for what waits on the person, #/settings/<tab> for the
-// settings, #/activity for what goes on across the flows, with ?days=<n>
-// for its period, #/trash for the flows deleted, anything else for the
-// list of flows. #/people, where the people were before the settings, is
-// their tab now. The address is the open tab's; each tab keeps its own
-// (tabs.ts).
+// show, #/taskboards/<id> for a task board, #/audit for the audit log,
+// with them too, #/schedules for the schedules, #/inbox for what waits on
+// the person, #/settings/<tab> for the settings, #/activity for what goes
+// on across the flows, with ?days=<n> for its period, #/trash for the
+// flows deleted, anything else for the list of flows. #/people, where the
+// people were before the settings, is their tab now. The address is the
+// open tab's; each tab keeps its own (tabs.ts).
 type Page =
   | { flow: number; run: number | null; step: number | null }
   | { compare: number; a: number; b: number }
   | { data: number }
   | { records: number }
+  | { taskBoard: number }
   | { settings: SettingsTab | null }
   | 'schedules'
   | 'audit'
@@ -60,6 +62,8 @@ const pageInHash = (): Page => {
   if (d) return { data: Number(d[1]) }
   const r = /^#\/flows\/(\d+)\/records(?:\?.*)?$/.exec(window.location.hash)
   if (r) return { records: Number(r[1]) }
+  const t = /^#\/taskboards\/(\d+)$/.exec(window.location.hash)
+  if (t) return { taskBoard: Number(t[1]) }
   const m = /^#\/flows\/(\d+)(?:\/runs\/(\d+)(?:\/steps\/(\d+))?)?$/.exec(window.location.hash)
   return m ? { flow: Number(m[1]), run: m[2] ? Number(m[2]) : null, step: m[3] ? Number(m[3]) : null } : null
 }
@@ -140,6 +144,7 @@ function Page() {
   if ('compare' in page) return <RunCompare key={`${page.a}-${page.b}`} flow={page.compare} a={page.a} b={page.b} />
   if ('data' in page) return <FlowData key={page.data} id={page.data} />
   if ('records' in page) return <Records key={page.records} id={page.records} />
+  if ('taskBoard' in page) return <TaskBoard key={page.taskBoard} id={page.taskBoard} />
   // A new board for each flow, so nothing of one shows on another.
   return <FlowPage key={page.flow} id={page.flow} run={page.run} step={page.step} />
 }

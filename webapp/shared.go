@@ -392,6 +392,101 @@ type sharedRecords struct {
 // How many records the struct's records list, the latest written first.
 const maxListedRecords = 1000
 
+// A shared struct's records ready to be searched: the fields and states its
+// object has, in the board's order, the latest records it stores, at most
+// searchedRows of them, and what each can be searched by. One is read for
+// as many searches of the struct as need it, such as a task board's
+// columns (taskboards.go).
+type recordTable struct {
+	fields, states []string
+	records        []sharedRecord
+	table          *searchTable
+	// More records are stored than these.
+	truncated bool
+}
+
+// The fields the records of the struct whose object is root have, in the
+// board's order: its attributes, then the objects it is made of.
+func recordFields(ctx context.Context, db rowsQuerier, root int64) ([]string, error) {
+	fields := []string{}
+	err := scanAll(ctx, db, `SELECT name FROM (
+			SELECT name, 0 AS kind, id FROM object_attributes WHERE object_id = ?
+			UNION ALL SELECT name, 1, id FROM objects WHERE owner_id = ?
+		) f ORDER BY kind, id`,
+		func(rows *sql.Rows) error {
+			var name string
+			err := rows.Scan(&name)
+			fields = append(fields, name)
+			return err
+		}, root, root)
+	return fields, err
+}
+
+// The records of the struct whose object is root, to search.
+func readRecordTable(ctx context.Context, db *sql.DB, root int64) (*recordTable, error) {
+	rt := &recordTable{states: []string{}, table: newSearchTable()}
+	err := scanAll(ctx, db, "SELECT name FROM object_states WHERE object_id = ? ORDER BY id",
+		func(rows *sql.Rows) error {
+			var name string
+			err := rows.Scan(&name)
+			rt.states = append(rt.states, name)
+			return err
+		}, root)
+	if err != nil {
+		return nil, err
+	}
+	if rt.fields, err = recordFields(ctx, db, root); err != nil {
+		return nil, err
+	}
+	t := rt.table
+	idFacet := t.facet("id", facet{Key: "id", Label: "Record", Group: "Record", Hidden: true})
+	state := t.facet("state", facet{Key: "state", Label: "State", Group: "Record"})
+	updated := t.facet("updated", facet{Key: "updated", Label: "Updated", Group: "Record", Date: true, Hidden: true})
+	runFacet := t.facet("run", facet{Key: "run", Label: "Run", Group: "Record"})
+	field := func(f string) int {
+		return t.facet("."+f, facet{Key: "@" + slug(f), Label: f, Group: "Fields", Kind: "field", Field: f})
+	}
+	for _, f := range rt.fields {
+		field(f)
+	}
+	err = scanAll(ctx, db, "SELECT "+sharedRecordColumns+" WHERE sr.object_id = ? ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?",
+		func(rows *sql.Rows) error {
+			rec, content, err := sharedRecordFrom(rows)
+			if err != nil {
+				return err
+			}
+			rt.records = append(rt.records, rec)
+			if len(rt.records) > searchedRows {
+				return nil
+			}
+			row := t.row()
+			row[idFacet] = []string{strconv.FormatInt(rec.ID, 10)}
+			row[state] = scalars(rec.State)
+			row[updated] = []string{rec.Updated.UTC().Format(time.RFC3339)}
+			if rec.Run != nil {
+				row[runFacet] = []string{strconv.FormatInt(*rec.Run, 10)}
+			}
+			if fields, ok := contentValue(content).(map[string]any); ok {
+				names := make([]string, 0, len(fields))
+				for f := range fields {
+					names = append(names, f)
+				}
+				sort.Strings(names)
+				for _, f := range names {
+					row[field(f)] = scalars(fields[f])
+				}
+			}
+			return nil
+		}, root, searchedRows+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(rt.records) > searchedRows {
+		rt.records, rt.truncated = rt.records[:searchedRows], true
+	}
+	return rt, nil
+}
+
 func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/structs/{id}/records", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -405,90 +500,20 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		out := sharedRecords{Fields: []string{}, States: []string{}, Records: []sharedRecord{}, Facets: []facet{}}
-		err = scanAll(ctx, db, "SELECT name FROM object_states WHERE object_id = ? ORDER BY id",
-			func(rows *sql.Rows) error {
-				var name string
-				err := rows.Scan(&name)
-				out.States = append(out.States, name)
-				return err
-			}, root)
+		rt, err := readRecordTable(ctx, db, root)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		err = scanAll(ctx, db, `SELECT name FROM (
-				SELECT name, 0 AS kind, id FROM object_attributes WHERE object_id = ?
-				UNION ALL SELECT name, 1, id FROM objects WHERE owner_id = ?
-			) f ORDER BY kind, id`,
-			func(rows *sql.Rows) error {
-				var name string
-				if err := rows.Scan(&name); err != nil {
-					return err
-				}
-				out.Fields = append(out.Fields, name)
-				return nil
-			}, root, root)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		t := newSearchTable()
-		idFacet := t.facet("id", facet{Key: "id", Label: "Record", Group: "Record", Hidden: true})
-		state := t.facet("state", facet{Key: "state", Label: "State", Group: "Record"})
-		updated := t.facet("updated", facet{Key: "updated", Label: "Updated", Group: "Record", Date: true, Hidden: true})
-		runFacet := t.facet("run", facet{Key: "run", Label: "Run", Group: "Record"})
-		field := func(f string) int {
-			return t.facet("."+f, facet{Key: "@" + slug(f), Label: f, Group: "Fields", Kind: "field", Field: f})
-		}
-		for _, f := range out.Fields {
-			field(f)
-		}
-		var records []sharedRecord
-		err = scanAll(ctx, db, "SELECT "+sharedRecordColumns+" WHERE sr.object_id = ? ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?",
-			func(rows *sql.Rows) error {
-				rec, content, err := sharedRecordFrom(rows)
-				if err != nil {
-					return err
-				}
-				records = append(records, rec)
-				if len(records) > searchedRows {
-					return nil
-				}
-				row := t.row()
-				row[idFacet] = []string{strconv.FormatInt(rec.ID, 10)}
-				row[state] = scalars(rec.State)
-				row[updated] = []string{rec.Updated.UTC().Format(time.RFC3339)}
-				if rec.Run != nil {
-					row[runFacet] = []string{strconv.FormatInt(*rec.Run, 10)}
-				}
-				if fields, ok := contentValue(content).(map[string]any); ok {
-					names := make([]string, 0, len(fields))
-					for f := range fields {
-						names = append(names, f)
-					}
-					sort.Strings(names)
-					for _, f := range names {
-						row[field(f)] = scalars(fields[f])
-					}
-				}
-				return nil
-			}, root, searchedRows+1)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		if len(records) > searchedRows {
-			records, out.Truncated = records[:searchedRows], true
-		}
-		s := t.search()
+		out := sharedRecords{Fields: rt.fields, States: rt.states, Records: []sharedRecord{}, Truncated: rt.truncated}
+		s := rt.table.search()
 		q := parseSearch(r.URL.Query().Get("q"))
 		key, desc := sortParam(r.URL.Query().Get("sort"))
 		matched := s.run(q, key, desc)
 		s.count(q, matched)
-		out.Facets, out.Matched, out.Searched = t.list(), len(matched), len(records)
+		out.Facets, out.Matched, out.Searched = rt.table.list(), len(matched), len(rt.records)
 		for _, i := range matched[:min(len(matched), maxListedRecords)] {
-			out.Records = append(out.Records, records[i])
+			out.Records = append(out.Records, rt.records[i])
 		}
 		out.More = len(matched) > maxListedRecords
 		writeJSON(w, http.StatusOK, out)

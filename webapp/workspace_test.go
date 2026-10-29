@@ -198,7 +198,7 @@ func TestWithWorkspace(t *testing.T) {
 		"- docs/: https://h/docs, branched from main\n",
 		"- web/: https://h/web, branched from commit 0123456789ab, where the run this one re-runs had got to\n",
 		"- cli/: https://h/cli, branched from commit abc, where",
-		"Don't switch branches, and don't push.\n",
+		"Don't switch branches. Push only if your instructions ask you to.\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("withWorkspace = %q, want it to hold %q", got, want)

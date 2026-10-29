@@ -258,10 +258,13 @@ func withWorkspace(prompt string, ws *workspaceSpec) string {
 	b.WriteString("The checkouts hold only the latest commit of the branch they started from, with what this run committed on top: " +
 		"older history and tags aren't there, so don't look for them.\n")
 	// pi loads context files from the working directory up, which the checkouts are below.
+	// Only the run's branch is brought back once the step is over, so work
+	// on another would be lost; a push is the process's to ask for, as a
+	// flow's last step pushing what the run made and opening its pull request.
 	b.WriteString("Before working in a repository, read its AGENTS.md or CLAUDE.md if it has one, else its README, for how to work in it. " +
 		"Other processes of this run work on the same branch, before and after you, so what they committed is there. " +
 		"Commit your changes to this branch as you go; whatever you leave uncommitted is committed for you once you are done. " +
-		"Don't switch branches, and don't push.\n")
+		"Don't switch branches. Push only if your instructions ask you to.\n")
 	return b.String()
 }
 

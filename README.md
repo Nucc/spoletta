@@ -143,6 +143,23 @@ was told what was wrong, and its second was taken.*
 the critic failing, the editor's decision (hatched while it waited for a
 person), then Publish.*
 
+### One place to look
+
+Home lists every flow, task board, procedure and struct you see. Each flow
+shows its latest runs as a strip, failures standing tallest in red, a click
+on one opening that run, and chips count the flows failing, running or
+waiting on you, each narrowing the list to them. Search finds anything by
+name or tag: `/` goes there, Enter opens the first found. A side menu
+narrows to a kind, a tag or an owner, and stays beside Activity, which
+charts runs, failures, spending and how long reviews take across every
+flow.
+
+Task boards lay shared structs' records out in columns, each a struct and a
+query of its records, such as Jira tickets `state:new` beside pull requests
+`state:in_review`. As a flow or a person moves a record into another state it
+moves to that column, so the states a flow works through read as its queue,
+and a card opens its record to correct it or starts a flow on it.
+
 ### People where they count
 
 A review goes to the people whose role it names ("Finance handles Approve

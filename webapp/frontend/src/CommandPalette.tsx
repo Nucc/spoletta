@@ -164,10 +164,10 @@ export default function CommandPalette({
     all.push(
       {
         id: 'page:flows',
-        title: 'Flows',
+        title: 'Home',
         group: 'Pages',
-        hint: 'Every task board, flow, procedure and struct',
-        words: 'home list procedures structs task boards',
+        hint: 'Every flow, task board, procedure and struct',
+        words: 'flows list procedures structs task boards',
         hash: '#/',
       },
       {

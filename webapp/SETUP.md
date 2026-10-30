@@ -6,7 +6,7 @@ It leaves out what runs produce: runs, versions and which of them a flow publish
 
 ## Exporting and importing
 
-On the main page, **Export** downloads `spoletta-setup.yaml`, and **Import** reads a file back in. The API does the same:
+On the home page, the **⋯** menu beside **New** has **Export the setup**, which downloads `spoletta-setup.yaml`, and **Import a setup file**, which reads one back in. The API does the same:
 
 ```sh
 curl -o spoletta-setup.yaml http://localhost:8080/api/setup
@@ -83,7 +83,7 @@ Flows and procedures have the same shape:
 
 ```yaml
 - name: Fix exceptions
-  tags: [nightly, billing]      # what the flow list finds it by and narrows to
+  tags: [nightly, billing]      # what the home page finds it by and narrows to
   repositories:                 # what agents and scripts check out
     - name: app
       url: https://github.com/example/app
@@ -277,7 +277,7 @@ Use the board's Tidy button afterwards for a better layout.
 
 ## Templates
 
-The flows people start from on the flow list (*New from template*) are setup files kept in the webapp, `webapp/templates/*.yaml`, read in their names' order (a number first orders them, and isn't part of the template's id). Each holds a `title`, a one-line `description` and, under `setup`, a setup file of one flow alone: no MCP servers, skills, commands, structs or procedures, nor repositories of the flow's own, since importing those would make over what the app has of the same name. Its processes name the repositories they work on, and its connector processes name their connector by the connector's name (`server: slack`), which becomes the first installed one of it, or none while none is. What it needs is worked out from that, with its people's roles. A template is imported as a new flow, named apart from every flow the app has, with its schedules turned off.
+The flows people start from on the home page (*Flow from a template*, under **New**) are setup files kept in the webapp, `webapp/templates/*.yaml`, read in their names' order (a number first orders them, and isn't part of the template's id). Each holds a `title`, a one-line `description` and, under `setup`, a setup file of one flow alone: no MCP servers, skills, commands, structs or procedures, nor repositories of the flow's own, since importing those would make over what the app has of the same name. Its processes name the repositories they work on, and its connector processes name their connector by the connector's name (`server: slack`), which becomes the first installed one of it, or none while none is. What it needs is worked out from that, with its people's roles. A template is imported as a new flow, named apart from every flow the app has, with its schedules turned off.
 
 ## Writing a setup with an LLM
 

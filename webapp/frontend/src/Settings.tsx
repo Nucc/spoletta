@@ -62,7 +62,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
 
   useEffect(() => {
-    document.title = 'Settings · Flows'
+    document.title = 'Settings · Spoletta'
   }, [])
 
   const tabs = me ? tabsFor(me) : []
@@ -72,8 +72,8 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
     <div className="flows-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

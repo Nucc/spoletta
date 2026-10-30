@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import { Keys } from './Keyboard'
 import type { ShortcutId } from './shortcuts'
 import { ChevronDownIcon, PlayIcon } from './icons'
@@ -40,6 +50,8 @@ export type ToolbarItem = {
   disabled?: string
   // The view showing now, which picking again closes.
   current?: boolean
+  // Deleting something, shown in red.
+  danger?: boolean
   onSelect: () => void
 }
 
@@ -62,6 +74,7 @@ export function ToolbarMenu({
   active = false,
   align = 'right',
   sections,
+  buttonRef,
   children,
 }: {
   label: ReactNode
@@ -72,11 +85,14 @@ export function ToolbarMenu({
   active?: boolean
   align?: 'left' | 'right'
   sections: ToolbarSection[]
+  // The button, for a shortcut to open the menu by clicking it.
+  buttonRef?: RefObject<HTMLButtonElement | null>
   children?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const anchor = useRef<HTMLSpanElement>(null)
-  const button = useRef<HTMLButtonElement>(null)
+  const ownButton = useRef<HTMLButtonElement>(null)
+  const button = buttonRef ?? ownButton
   const list = useRef<HTMLDivElement>(null)
 
   // The menu opens under its button, moved along to stay in the window
@@ -158,7 +174,7 @@ export function ToolbarMenu({
                 <button
                   key={item.id}
                   role="menuitem"
-                  className={item.current ? 'current' : undefined}
+                  className={[item.current && 'current', item.danger && 'danger'].filter(Boolean).join(' ') || undefined}
                   aria-current={item.current || undefined}
                   disabled={item.disabled !== undefined}
                   title={item.disabled ?? item.hint}

@@ -81,6 +81,14 @@ check('a note’s Escape', shortcutOf(press('Escape'), ['noteDone'], true, false
 check('a note’s Cmd-Enter', shortcutOf(press('Enter', { metaKey: true }), ['noteDone'], true, false), 'noteDone')
 check('a note’s Enter is a new line', shortcutOf(press('Enter'), ['noteDone'], true, false), null)
 
+// The home page's.
+const list = SHORTCUTS.filter((s) => s.scope === 'list').map((s) => s.id)
+check('/ finds', shortcutOf(press('/'), list, false, false), 'search')
+check('/ typed with Shift', shortcutOf(press('/', { shiftKey: true, code: 'Digit7' }), list, false, false), 'search')
+check('/ while typing is a slash', shortcutOf(press('/'), list, false, true), null)
+check('N makes something', shortcutOf(press('n'), list, false, false), 'newItem')
+check('Cmd-N is the browser’s on the list too', shortcutOf(press('n', { metaKey: true }), list, true, false), null)
+
 // The registry: each shortcut once, and none the window answers sharing a
 // key with another, on a Mac or not.
 check('each shortcut listed once', new Set(all).size, all.length)

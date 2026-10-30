@@ -379,6 +379,23 @@ export const TaskBoardIcon = () => (
   </Icon>
 )
 
+// Four tiles, for everything on the list of flows.
+export const GridIcon = () => (
+  <Icon>
+    <rect x="2" y="2" width="5" height="5" rx="1" />
+    <rect x="9" y="2" width="5" height="5" rx="1" />
+    <rect x="2" y="9" width="5" height="5" rx="1" />
+    <rect x="9" y="9" width="5" height="5" rx="1" />
+  </Icon>
+)
+
+// Three dots, for a menu of what else can be done.
+export const MoreIcon = () => (
+  <Icon>
+    <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth="2.5" />
+  </Icon>
+)
+
 // A tray, for the inbox of what waits on the person.
 export const InboxIcon = () => (
   <Icon>

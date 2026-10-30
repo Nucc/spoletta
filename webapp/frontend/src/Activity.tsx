@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { getActivity, webhookLabel, type Activity as ActivityData, type ActivityRun, type FlowActivity, type ReviewTimes } from './api'
 import { ActivityIcon, FlowBuilderIcon } from './icons'
 import { formatTime } from './Runs'
+import { HomeFrame } from './FlowList'
 
 // What goes on across every flow one sees: the runs going on now and those
 // that failed lately, and over the last 7, 30 or 90 days, the runs a day and
@@ -47,7 +48,7 @@ export default function Activity() {
   }, [days])
 
   useEffect(() => {
-    document.title = 'Activity · Flows'
+    document.title = 'Activity · Spoletta'
   }, [])
 
   useEffect(() => {
@@ -64,11 +65,11 @@ export default function Activity() {
   }
 
   return (
-    <div className="flows-page">
+    <div className="flows-page home">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /
@@ -81,64 +82,66 @@ export default function Activity() {
           {error} (click to dismiss)
         </div>
       )}
-      <main className="activity">
-        <div className="activity-filters">
-          <div className="activity-period" role="group" aria-label="Period">
-            {PERIODS.map((n) => (
-              <button key={n} className={n === days ? 'active' : ''} aria-pressed={n === days} onClick={() => pick(n)}>
-                {n} days
-              </button>
-            ))}
+      <HomeFrame at="activity">
+        <main className="activity">
+          <div className="activity-filters">
+            <div className="activity-period" role="group" aria-label="Period">
+              {PERIODS.map((n) => (
+                <button key={n} className={n === days ? 'active' : ''} aria-pressed={n === days} onClick={() => pick(n)}>
+                  {n} days
+                </button>
+              ))}
+            </div>
+            {data && (
+              <span className="flows-note">
+                Days in {data.zone === 'UTC' ? 'UTC' : `your time zone, ${data.zone}`}, from {formatDay(data.days[0])} to today.
+              </span>
+            )}
           </div>
-          {data && (
-            <span className="flows-note">
-              Days in {data.zone === 'UTC' ? 'UTC' : `your time zone, ${data.zone}`}, from {formatDay(data.days[0])} to today.
-            </span>
+          {data === null ? (
+            <p className="flows-note">{loading ? 'Loading…' : 'Nothing to show.'}</p>
+          ) : (
+            <div className={loading ? 'activity-body loading' : 'activity-body'}>
+              <Now data={data} />
+              <Totals data={data} />
+              <section className="activity-card" aria-label="Runs a day">
+                <h2>Runs a day</h2>
+                <DayBars
+                  days={data.days}
+                  series={[
+                    { label: 'Failed', color: FAILED, values: data.total.failed },
+                    { label: 'Didn’t fail', color: RAN, values: data.total.runs.map((n, i) => n - data.total.failed[i]) },
+                  ]}
+                  format={(n) => String(n)}
+                  readout={(i) => runsText(data.total.runs[i], data.total.failed[i])}
+                />
+              </section>
+              <section className="activity-card" aria-label="Spent on models a day">
+                <h2>Spent on models a day</h2>
+                <DayBars
+                  days={data.days}
+                  series={[{ label: 'Spent', color: SPENT, values: data.total.cost }]}
+                  format={formatDollars}
+                  readout={(i) => `${formatDollars(data.total.cost[i])} spent by the runs started that day`}
+                />
+                {data.total.unpriced > 0 && <p className="flows-note">{unpricedNote(data.total.unpriced)}</p>}
+              </section>
+              <Flows data={data} />
+              <Processes data={data} />
+              <Reviews data={data} />
+              <p className="flows-note activity-footnote">
+                A run here is a run of a whole flow, or of a procedure on its own, whoever or whatever started it; a re-run is a
+                run of its own. The runs of a flow process’s board, a subflow or an item run inside one and count toward it:
+                what they spend, and when they fail it, its failing. A run failed if it ended failed; one interrupted, by the
+                app stopping, or terminated, by a duplicate, didn’t. What a run spent includes its follow-ups, and counts on the
+                day it started. Steps count in the flow they ran in, a retry each, so a procedure’s process failing in another
+                flow counts toward the procedure. A trial of one process alone isn’t counted as a run, nor its step, but what it
+                spent counts toward its flow’s spending: it cost that money. Only the flows you see count.
+              </p>
+            </div>
           )}
-        </div>
-        {data === null ? (
-          <p className="flows-note">{loading ? 'Loading…' : 'Nothing to show.'}</p>
-        ) : (
-          <div className={loading ? 'activity-body loading' : 'activity-body'}>
-            <Now data={data} />
-            <Totals data={data} />
-            <section className="activity-card" aria-label="Runs a day">
-              <h2>Runs a day</h2>
-              <DayBars
-                days={data.days}
-                series={[
-                  { label: 'Failed', color: FAILED, values: data.total.failed },
-                  { label: 'Didn’t fail', color: RAN, values: data.total.runs.map((n, i) => n - data.total.failed[i]) },
-                ]}
-                format={(n) => String(n)}
-                readout={(i) => runsText(data.total.runs[i], data.total.failed[i])}
-              />
-            </section>
-            <section className="activity-card" aria-label="Spent on models a day">
-              <h2>Spent on models a day</h2>
-              <DayBars
-                days={data.days}
-                series={[{ label: 'Spent', color: SPENT, values: data.total.cost }]}
-                format={formatDollars}
-                readout={(i) => `${formatDollars(data.total.cost[i])} spent by the runs started that day`}
-              />
-              {data.total.unpriced > 0 && <p className="flows-note">{unpricedNote(data.total.unpriced)}</p>}
-            </section>
-            <Flows data={data} />
-            <Processes data={data} />
-            <Reviews data={data} />
-            <p className="flows-note activity-footnote">
-              A run here is a run of a whole flow, or of a procedure on its own, whoever or whatever started it; a re-run is a
-              run of its own. The runs of a flow process’s board, a subflow or an item run inside one and count toward it:
-              what they spend, and when they fail it, its failing. A run failed if it ended failed; one interrupted, by the
-              app stopping, or terminated, by a duplicate, didn’t. What a run spent includes its follow-ups, and counts on the
-              day it started. Steps count in the flow they ran in, a retry each, so a procedure’s process failing in another
-              flow counts toward the procedure. A trial of one process alone isn’t counted as a run, nor its step, but what it
-              spent counts toward its flow’s spending: it cost that money. Only the flows you see count.
-            </p>
-          </div>
-        )}
-      </main>
+        </main>
+      </HomeFrame>
     </div>
   )
 }
@@ -250,9 +253,11 @@ function Tile({ label, value, note }: { label: string; value: string; note?: str
 
 type Series = { label: string; color: string; values: number[] }
 
-// Geometry of a day chart, in its own units; the SVG scales to its width.
+// Geometry of a day chart, in pixels: it is drawn at the width it has, so
+// its labels keep their size however wide the page is, starting at W until
+// it is measured.
 const W = 720
-const H = 160
+const H = 200
 const PAD = { top: 8, right: 8, bottom: 22, left: 44 }
 const GAP = 2
 
@@ -270,9 +275,18 @@ function DayBars({
   readout: (day: number) => string
 }) {
   const [at, setAt] = useState<number | null>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(W)
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    const observer = new ResizeObserver(([e]) => setWidth(Math.max(PAD.left + PAD.right + 100, Math.round(e.contentRect.width))))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
   const totals = days.map((_, i) => series.reduce((s, x) => s + x.values[i], 0))
   const top = niceMax(Math.max(0, ...totals))
-  const innerW = W - PAD.left - PAD.right
+  const innerW = width - PAD.left - PAD.right
   const innerH = H - PAD.top - PAD.bottom
   const band = innerW / days.length
   const barW = Math.max(1, Math.min(24, band * 0.7))
@@ -281,7 +295,7 @@ function DayBars({
   const labelled = labelledDays(days.length)
 
   return (
-    <div className="day-bars">
+    <div className="day-bars" ref={box}>
       <p className="day-bars-readout" aria-live="polite">
         {at === null ? (
           <span className="flows-note">Point at a day to see it.</span>
@@ -291,10 +305,10 @@ function DayBars({
           </>
         )}
       </p>
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={series.map((s) => s.label).join(' and ') + ' a day'} onMouseLeave={() => setAt(null)}>
+      <svg viewBox={`0 0 ${width} ${H}`} role="img" aria-label={series.map((s) => s.label).join(' and ') + ' a day'} onMouseLeave={() => setAt(null)}>
         {ticks.map((t) => (
           <g key={t}>
-            <line className="day-bars-grid" x1={PAD.left} x2={W - PAD.right} y1={y(t)} y2={y(t)} />
+            <line className="day-bars-grid" x1={PAD.left} x2={width - PAD.right} y1={y(t)} y2={y(t)} />
             <text className="day-bars-tick" x={PAD.left - 6} y={y(t)} dy="0.32em" textAnchor="end">
               {format(t)}
             </text>
@@ -338,7 +352,7 @@ function DayBars({
             </g>
           )
         })}
-        <line className="day-bars-axis" x1={PAD.left} x2={W - PAD.right} y1={y(0)} y2={y(0)} />
+        <line className="day-bars-axis" x1={PAD.left} x2={width - PAD.right} y1={y(0)} y2={y(0)} />
       </svg>
       {series.length > 1 && (
         <div className="day-bars-legend">

@@ -45,16 +45,30 @@ type flow struct {
 }
 
 // How a flow's runs of its own go: how many started in the last healthFor
-// and how many of those failed, and how many are going on now; and how many
-// of its steps wait on whoever asked, as their inbox lists them (inbox.go).
+// and how many of those failed, and how many are going on now; how many of
+// its steps wait on whoever asked, as their inbox lists them (inbox.go);
+// and its latest runs, oldest first, which the flow list draws as a strip.
 type flowHealth struct {
-	Runs    int `json:"runs"`
-	Failed  int `json:"failed"`
-	Running int `json:"running"`
-	Waiting int `json:"waiting"`
+	Runs    int       `json:"runs"`
+	Failed  int       `json:"failed"`
+	Running int       `json:"running"`
+	Waiting int       `json:"waiting"`
+	Latest  []runMark `json:"latest"`
+}
+
+// One of a flow's latest runs, as the flow list's strip shows it: how it
+// went, or whether it waits for a person, and when it started.
+type runMark struct {
+	ID        int64     `json:"id"`
+	Status    string    `json:"status"`
+	Waiting   bool      `json:"waiting"`
+	StartedAt time.Time `json:"startedAt"`
 }
 
 const healthFor = 7 * 24 * time.Hour
+
+// How many of a flow's latest runs its health holds.
+const latestRuns = 20
 
 // The health of each of the flows that ran, by id.
 func flowHealths(ctx context.Context, db rowsQuerier, ids []int64) (map[int64]*flowHealth, error) {
@@ -89,6 +103,21 @@ func flowHealths(ctx context.Context, db rowsQuerier, ids []int64) (map[int64]*f
 		of(id).Running = n
 		return err
 	}, append([]any{runRunning}, int64Args(ids)...)...)
+	if err != nil {
+		return nil, err
+	}
+	// Each flow's latest runs, the newest few through its runs by id, not a
+	// count over all of them.
+	err = scanAll(ctx, db, `SELECT f.id, l.id, l.status, l.waiting, l.started_at FROM flows f JOIN LATERAL (
+			SELECT id, status, status = '`+runRunning+`' AND `+runWaiting+` AS waiting, started_at FROM runs
+			WHERE runs.flow_id = f.id AND parent_run_id IS NULL AND trial_of IS NULL ORDER BY id DESC LIMIT `+strconv.Itoa(latestRuns)+`
+		) l ON TRUE WHERE f.id IN `+in+` ORDER BY f.id, l.id`, func(rows *sql.Rows) error {
+		var id int64
+		var m runMark
+		err := rows.Scan(&id, &m.ID, &m.Status, &m.Waiting, &m.StartedAt)
+		of(id).Latest = append(of(id).Latest, m)
+		return err
+	}, int64Args(ids)...)
 	return health, err
 }
 
@@ -125,6 +154,9 @@ func describeFlows(ctx context.Context, db *sql.DB, r *http.Request, fs []flow) 
 			f.Health = health[f.ID]
 			if f.Health == nil {
 				f.Health = &flowHealth{}
+			}
+			if f.Health.Latest == nil {
+				f.Health.Latest = []runMark{}
 			}
 			f.Health.Waiting = waiting[f.ID]
 		}

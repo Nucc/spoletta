@@ -93,7 +93,7 @@ export function EmptyBoardGuide({ inner }: { inner: boolean }) {
           to the processes taking it. Right-click a node for more.
         </li>
       </ol>
-      {!inner && <p>Or start from a template on the flow list, or ask the assistant at the bottom right to draw it for you.</p>}
+      {!inner && <p>Or start from a template, under New on the home page, or ask the assistant at the bottom right to draw it for you.</p>}
     </Hint>
   )
 }

@@ -3,6 +3,7 @@ import { deleteForGood, listTrash, restoreFlow, type TrashedFlow } from './api'
 import { FlowBuilderIcon, ObjectIcon, SubflowIcon, TrashIcon } from './icons'
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
+import { HomeFrame } from './FlowList'
 
 // The trash (#/trash): the flows, procedures and structs deleted that one
 // may change, the latest first, each saying when it went and by whom, and
@@ -14,13 +15,15 @@ export default function Trash() {
   const [items, setItems] = useState<TrashedFlow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [restored, setRestored] = useState<{ id: number; name: string } | null>(null)
+  // How many were restored, so the rail counts them.
+  const [restores, setRestores] = useState(0)
   const [confirm, confirmDialog] = useConfirm()
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
   const refresh = useCallback(() => listTrash().then(setItems).catch(report), [report])
 
   useEffect(() => {
-    document.title = 'Trash'
+    document.title = 'Trash · Spoletta'
     refresh()
   }, [refresh])
 
@@ -30,6 +33,7 @@ export default function Trash() {
     try {
       const f = await restoreFlow(t.id, name)
       setRestored({ id: f.id, name: f.name })
+      setRestores((n) => n + 1)
       await refresh()
     } catch (err) {
       report(err)
@@ -67,11 +71,11 @@ export default function Trash() {
   }
 
   return (
-    <div className="flows-page">
+    <div className="flows-page home">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /
@@ -89,29 +93,31 @@ export default function Trash() {
           Restored <a href={`#/flows/${restored.id}`}>{restored.name}</a>.
         </div>
       )}
-      <main className="flows">
-        <section className="flow-section" aria-label="Trash">
-          <h2>
-            <TrashIcon /> Trash
-          </h2>
-          <p className="flows-note">
-            The flows, procedures and structs deleted, which you may restore or delete for good; each goes for good on its
-            own after a while. While here, none runs: their schedules wait, the API and webhooks don't find them, and the flows running
-            a procedure here fail to; the flows using a struct here have its copies as their own.
-          </p>
-          {items === null ? (
-            <p className="flows-note">Loading…</p>
-          ) : items.length === 0 ? (
-            <p className="flows-note">The trash is empty.</p>
-          ) : (
-            <ul className="flow-list trash-list">
-              {items.map((t) => (
-                <TrashRow key={t.id} item={t} onRestore={(name) => onRestore(t, name)} onDelete={() => onDelete(t)} />
-              ))}
-            </ul>
-          )}
-        </section>
-      </main>
+      <HomeFrame at="trash" changed={restores}>
+        <main className="flows">
+          <section className="flow-section" aria-label="Trash">
+            <h2>
+              <TrashIcon /> Trash
+            </h2>
+            <p className="flows-note">
+              The flows, procedures and structs deleted, which you may restore or delete for good; each goes for good on its
+              own after a while. While here, none runs: their schedules wait, the API and webhooks don't find them, and the flows running
+              a procedure here fail to; the flows using a struct here have its copies as their own.
+            </p>
+            {items === null ? (
+              <p className="flows-note">Loading…</p>
+            ) : items.length === 0 ? (
+              <p className="flows-note">The trash is empty.</p>
+            ) : (
+              <ul className="flow-list trash-list">
+                {items.map((t) => (
+                  <TrashRow key={t.id} item={t} onRestore={(name) => onRestore(t, name)} onDelete={() => onDelete(t)} />
+                ))}
+              </ul>
+            )}
+          </section>
+        </main>
+      </HomeFrame>
       {confirmDialog}
     </div>
   )

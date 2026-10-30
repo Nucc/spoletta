@@ -608,32 +608,55 @@ body {
   color: #656d76;
 }
 
-.toolbar .toolbar-menu-list button {
+/* Its items, in a toolbar or in a row of a list, as the main page's. */
+.toolbar .toolbar-menu-list button,
+.toolbar-menu-list button {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   width: 100%;
   padding: 7px 8px;
+  font: inherit;
+  font-size: 14px;
+  color: #1f2328;
   text-align: left;
   white-space: normal;
   border: none;
   border-radius: 6px;
   background: none;
+  cursor: pointer;
 }
 
 .toolbar .toolbar-menu-list button:hover:not(:disabled),
-.toolbar .toolbar-menu-list button:focus-visible {
+.toolbar .toolbar-menu-list button:focus-visible,
+.toolbar-menu-list button:hover:not(:disabled),
+.toolbar-menu-list button:focus-visible {
   background: #f3f4f6;
   outline: none;
 }
 
-.toolbar .toolbar-menu-list button.current {
+.toolbar .toolbar-menu-list button.current,
+.toolbar-menu-list button.current {
   background: #ddf4ff;
 }
 
 .toolbar .toolbar-menu-list button:disabled .toolbar-menu-title,
-.toolbar .toolbar-menu-list button:disabled .toolbar-menu-icon {
+.toolbar .toolbar-menu-list button:disabled .toolbar-menu-icon,
+.toolbar-menu-list button:disabled .toolbar-menu-title,
+.toolbar-menu-list button:disabled .toolbar-menu-icon {
   opacity: 0.45;
+}
+
+.toolbar-menu-list button.danger .toolbar-menu-title,
+.toolbar-menu-list button.danger .toolbar-menu-icon {
+  color: #cf222e;
+}
+
+.toolbar .toolbar-menu-list button.danger:hover:not(:disabled),
+.toolbar .toolbar-menu-list button.danger:focus-visible,
+.toolbar-menu-list button.danger:hover:not(:disabled),
+.toolbar-menu-list button.danger:focus-visible {
+  background: #ffebe9;
 }
 
 .toolbar-menu-icon {
@@ -3779,16 +3802,6 @@ body {
   cursor: default;
 }
 
-.flow-new .flow-new-template {
-  color: #1f2328;
-  background: #fff;
-  border-color: #d0d7de;
-}
-
-.flow-new .flow-new-template:hover {
-  background: #f6f8fa;
-}
-
 /* Templates to start a flow from; see Templates.tsx. */
 .template-list {
   display: grid;
@@ -5716,23 +5729,6 @@ select.flow-owner:disabled {
   border-color: #f2e08c;
 }
 
-.flows-whose {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  color: #656d76;
-  font-size: 14px;
-}
-
-.flows-whose select {
-  padding: 4px 8px;
-  font: inherit;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  background: #fff;
-}
-
 /* A person's admin and team manager boxes, and removing them. */
 .person-flags {
   display: flex;
@@ -5770,16 +5766,6 @@ select.flow-owner:disabled {
 
 .settings-mcp .mcp-list {
   margin: 12px 0 20px;
-}
-
-.flows-whose label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.flows-whose label + label {
-  margin-left: auto;
 }
 
 .key-env {
@@ -8557,118 +8543,710 @@ select.flow-owner:disabled {
   height: 11px;
 }
 
-/* The flow list's search and tag filter, above the sections. */
-.flows-filters {
+/* The main page (FlowList.tsx): the search and New along the top, a rail
+   at the side picking what to show, and a block of each kind, a row each,
+   the rail staying in place as the list scrolls. */
+.flows-page.home {
+  height: 100%;
+  min-height: 0;
+  background: #f6f8fa;
+}
+
+.home-bar h1 {
+  width: 200px;
+}
+
+/* The pages beside the rail have a bar as tall as the list's, with its
+   search and buttons, so the rail stays put going between them. */
+.flows-page.home > .toolbar {
+  min-height: 55px;
+}
+
+.home-search {
+  flex: 1 1 320px;
+  max-width: 640px;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
+  height: 34px;
+  padding: 0 6px 0 10px;
   color: #656d76;
-  font-size: 14px;
-}
-
-.flows-filters label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.flows-search {
-  flex: 1;
-  min-width: 0;
-  padding: 0 10px;
+  background: #f6f8fa;
   border: 1px solid #d0d7de;
   border-radius: 8px;
-  background: #fff;
 }
 
-.flows-search:focus-within {
+.home-search:focus-within {
+  background: #fff;
   border-color: #54aeff;
   box-shadow: 0 0 0 3px rgba(84, 174, 255, 0.25);
 }
 
-.flows-search input {
+.home-search input {
   flex: 1;
   min-width: 0;
-  padding: 7px 0;
+  height: 100%;
   font: inherit;
+  font-size: 14px;
+  color: #1f2328;
+  background: none;
   border: none;
   outline: none;
-  background: none;
 }
 
-.flows-filters select {
-  max-width: 200px;
+.home-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.home-bar .home-more .toolbar-menu-button {
   padding: 6px 8px;
-  font: inherit;
-  border: 1px solid #d0d7de;
-  border-radius: 8px;
-  background: #fff;
 }
 
-/* A favourite's star, before its name, and the card beside it with the
-   flow's tags under its name. */
-.flow-list li .flow-star {
-  margin-left: 8px;
-  color: #8c959f;
+.home-bar .home-new .toolbar-menu-button {
+  font-weight: 600;
+  color: #fff;
+  background: #1f883d;
+  border-color: #1a7f37;
 }
 
-.flow-list li .flow-star.starred {
+.home-bar .home-new .toolbar-menu-button:hover,
+.home-bar .home-new .toolbar-menu-button.open {
+  background: #1a7f37;
+}
+
+.home-new .toolbar-menu-list {
+  width: 330px;
+}
+
+/* Each kind's icon in its colour, on the rail, the blocks and the New menu. */
+.kind-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.kind-icon.flow {
+  color: #0969da;
+}
+
+/* Not .board, which is the flow's board page. */
+.kind-icon.taskboard {
+  color: #1a7f37;
+}
+
+.kind-icon.module {
+  color: #8250df;
+}
+
+.kind-icon.struct {
+  color: #bc4c00;
+}
+
+.kind-icon.starred {
   color: #bf8700;
 }
 
-.flow-card-body {
-  position: relative;
+.home-layout {
   flex: 1;
-  min-width: 0;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+}
+
+.home-rail {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  flex: 0 0 232px;
+  max-height: 100%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  padding: 20px 12px 24px 16px;
 }
 
-.flow-list li .flow-star + .flow-card-body .flow-card {
-  padding-left: 8px;
+.home-rail hr {
+  width: calc(100% - 20px);
+  margin: 10px;
+  border: none;
+  border-top: 1px solid #d8dee4;
 }
 
-.flow-tags {
+.home-rail h2 {
+  margin: 14px 10px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #656d76;
+}
+
+.home-rail-item {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 14px;
+  color: #1f2328;
+  text-align: left;
+  text-decoration: none;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.home-rail-item > svg {
+  flex-shrink: 0;
+  color: #656d76;
+}
+
+.home-rail-item:hover {
+  background: #eaeef2;
+}
+
+.home-rail-item.on {
+  font-weight: 600;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #d0d7de, 0 1px 2px rgba(31, 35, 40, 0.06);
+}
+
+.home-rail-item:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: -2px;
+}
+
+.home-rail-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-rail-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: #656d76;
+  font-variant-numeric: tabular-nums;
+}
+
+.home-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 1368px;
+  padding: 20px 24px 64px 8px;
+}
+
+/* A page the rail links to (HomeFrame) takes the list's place, so the rail
+   stays put going between them, and starts beside it as the list does. */
+.home-page {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 1368px;
+}
+
+.home-page > main {
+  max-width: none;
+  margin: 0;
+  padding: 20px 24px 64px 8px;
+}
+
+/* Its cards and charts take the list's width; its prose keeps to a line
+   one can read. */
+.home-page .flow-section > .flows-note,
+.home-page .activity-footnote {
+  max-width: 760px;
+}
+
+.home-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  margin-top: -6px;
-  padding: 0 16px 12px 8px;
+  gap: 10px 12px;
+  min-height: 32px;
+  margin-bottom: 14px;
 }
 
-/* Without tags, adding one shows at the card's end as it is pointed at. */
-.flow-tags.empty {
-  position: absolute;
-  top: 50%;
-  right: 4px;
+.home-head h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   margin: 0;
-  padding: 0;
-  transform: translateY(-50%);
+  font-size: 20px;
+  font-weight: 600;
 }
 
-.flow-tag-add {
+.home-count {
+  font-weight: 400;
+  color: #656d76;
+  font-variant-numeric: tabular-nums;
+}
+
+/* What needs a look, each narrowing the list to it, and what else it is
+   narrowed to, each taken away by a click. */
+.home-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.home-chip,
+.home-token {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 1px 8px;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
   font: inherit;
+  font-size: 13px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.home-chip:hover,
+.home-token:hover {
+  border-color: #8c959f;
+}
+
+.home-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.home-chip.waiting .home-chip-dot {
+  background: #bc4c00;
+}
+
+.home-chip.failing .home-chip-dot {
+  background: #cf222e;
+}
+
+.home-chip.running .home-chip-dot {
+  background: #bf8700;
+}
+
+.home-chip.on {
+  font-weight: 600;
+}
+
+/* As the inbox's count in the tab bar. */
+.home-chip.waiting.on {
+  color: #953800;
+  background: #fff1e5;
+  border-color: #ffb77c;
+}
+
+.home-chip.failing.on {
+  color: #a40e26;
+  background: #ffebe9;
+  border-color: #ff8182;
+}
+
+.home-chip.running.on {
+  color: #7d4e00;
+  background: #fff8c5;
+  border-color: #d4a72c;
+}
+
+.home-token {
+  background: #eaeef2;
+  border-color: #eaeef2;
+}
+
+.home-sort {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 13px;
+  color: #656d76;
+}
+
+.home-sort select {
+  height: 28px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 13px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.home-templates {
+  margin-bottom: 24px;
+}
+
+.home-templates h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.home-templates .flows-note {
+  margin: 0 0 12px;
+}
+
+.home-block {
+  margin-bottom: 16px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 12px;
+}
+
+.home-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 6px 14px;
+}
+
+.home-block-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.home-block-head .home-count {
+  font-size: 13px;
+}
+
+.home-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin-left: auto;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 13px;
+  color: #0969da;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.home-add:hover {
+  color: #0550ae;
+  background: #ddf4ff;
+}
+
+/* A row: star, name, latest runs, last run, whose it is with sign-in, and
+   its menu, the columns' names over them. */
+.home-columns,
+.home-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 200px 170px 32px;
+  align-items: center;
+  column-gap: 12px;
+  padding: 0 8px 0 6px;
+}
+
+.home-columns.owned,
+.home-rows.owned .home-row {
+  grid-template-columns: 28px minmax(0, 1fr) 200px 170px 150px 32px;
+}
+
+.home-columns {
+  height: 26px;
   font-size: 12px;
   color: #656d76;
+  border-bottom: 1px solid #eaeef2;
+}
+
+.home-rows {
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+}
+
+.home-row {
+  min-height: 44px;
+  border-top: 1px solid #f0f2f4;
+}
+
+.home-row:first-child {
+  border-top: none;
+}
+
+.home-row:hover,
+.home-row:focus-within {
+  background: #f6f8fa;
+}
+
+.home-star {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #8c959f;
   background: none;
-  border: 1px dashed #d0d7de;
-  border-radius: 999px;
+  border: none;
+  border-radius: 6px;
   cursor: pointer;
   opacity: 0;
 }
 
-.flow-list li:hover .flow-tag-add,
-.flow-tag-add:focus-visible {
+.home-row:hover .home-star,
+.home-star:focus-visible,
+.home-star.starred {
   opacity: 1;
 }
 
+.home-star:hover,
+.home-star.starred {
+  color: #bf8700;
+}
+
+.home-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.home-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: #1f2328;
+  text-decoration: none;
+}
+
+.home-link:hover {
+  color: #0969da;
+  text-decoration: underline;
+}
+
+.home-link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
+/* What the search found in a name. */
+.home mark {
+  color: inherit;
+  background: #fff8c5;
+  border-radius: 2px;
+  box-shadow: inset 0 -2px 0 #d4a72c;
+}
+
+.home-waiting {
+  flex-shrink: 0;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  color: #953800;
+  text-decoration: none;
+  white-space: nowrap;
+  background: #fff1e5;
+  border: 1px solid #ffd8b5;
+  border-radius: 999px;
+}
+
+.home-waiting:hover {
+  color: #953800;
+  border-color: #bc4c00;
+}
+
+.home-quiet {
+  color: #656d76;
+  white-space: nowrap;
+}
+
+.home-name .home-quiet {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.home-detail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+/* A flow's latest runs, a tick each, oldest first: a failure stands
+   tallest, so it shows by its height as well as its colour. */
+.run-strip {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+}
+
+.run-tick {
+  width: 4px;
+  border-radius: 1px;
+}
+
+.run-tick.none {
+  height: 3px;
+  background: #d8dee4;
+}
+
+.run-tick.done {
+  height: 8px;
+  background: #2da44e;
+}
+
+.run-tick.failed {
+  height: 18px;
+  background: #cf222e;
+}
+
+.run-tick.running {
+  height: 13px;
+  background: #bf8700;
+  animation: process-pulse 1s ease-in-out infinite;
+}
+
+.run-tick.waiting {
+  height: 13px;
+  background: #bc4c00;
+}
+
+.run-tick.stopped {
+  height: 8px;
+  background: #8c959f;
+}
+
+a.run-tick:hover {
+  outline: 2px solid #0969da;
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-tick.running {
+    animation: none;
+  }
+}
+
+.home-failed {
+  font-size: 12px;
+  font-weight: 600;
+  color: #9a6700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.home-failed.failing {
+  color: #cf222e;
+}
+
+.home-board-columns {
+  gap: 6px;
+  overflow: hidden;
+}
+
+.home-board-column {
+  flex-shrink: 0;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 20px;
+  color: #57606a;
+  white-space: nowrap;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.home-when {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.home-when > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot.never {
+  border: 1.5px solid #8c959f;
+}
+
+.home-owner {
+  min-width: 0;
+}
+
+/* Whose it is reads as a word until the row is pointed at. */
+.home-owner .flow-owner {
+  max-width: 100%;
+  color: #656d76;
+  background: none;
+  border-color: transparent;
+}
+
+.home-row:hover .home-owner select.flow-owner:not(:disabled) {
+  background-color: #fff;
+  border-color: #d0d7de;
+}
+
+.home-row .home-more .toolbar-menu-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #656d76;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.home-row:hover .home-more .toolbar-menu-button,
+.home-row .home-more .toolbar-menu-button:focus-visible,
+.home-row .home-more .toolbar-menu-button.open {
+  opacity: 1;
+}
+
+.home-row .home-more .toolbar-menu-button:hover,
+.home-row .home-more .toolbar-menu-button.open {
+  color: #1f2328;
+  background: #eaeef2;
+}
+
+.home-row .home-more .toolbar-menu-list {
+  width: 260px;
+}
+
+/* A flow's tags, after its name. */
+.flow-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .flow-tag {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   font-size: 12px;
@@ -8694,10 +9272,20 @@ select.flow-owner:disabled {
   color: #0969da;
 }
 
+/* Taking a tag away shows as the tag is pointed at or tabbed to; folded
+   away rather than hidden, so the keyboard still reaches it. */
 .flow-tag-remove {
+  max-width: 0;
+  overflow: hidden;
+  padding: 1px 0;
+  color: #8c959f;
+}
+
+.flow-tag:hover .flow-tag-remove,
+.flow-tag:focus-within .flow-tag-remove {
+  max-width: 24px;
   margin-left: -6px;
   padding: 1px 7px 1px 3px;
-  color: #8c959f;
 }
 
 .flow-tag-remove:hover {
@@ -8714,39 +9302,139 @@ select.flow-owner:disabled {
   outline: none;
 }
 
-/* How a flow's runs go: failing, now and then, and going on now. */
-.flow-health {
-  padding: 0 8px;
-  font-size: 12px;
-  line-height: 18px;
-  border: 1px solid;
-  border-radius: 999px;
-  white-space: nowrap;
+.home-empty {
+  padding: 48px 24px;
+  text-align: center;
+  background: #fff;
+  border: 1px dashed #d0d7de;
+  border-radius: 12px;
 }
 
-.flow-health.failing {
-  color: #a40e26;
-  background: #ffebe9;
-  border-color: #ffcecb;
+.home-empty h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
 }
 
-.flow-health.flaky {
-  color: #7d4e00;
-  background: #fff8c5;
-  border-color: #f2e08c;
+.home-empty p {
+  max-width: 460px;
+  margin: 0 auto 16px;
+  font-size: 14px;
+  color: #656d76;
 }
 
-.flow-health.running {
-  color: #0550ae;
-  background: #ddf4ff;
-  border-color: #b6e3ff;
+.home-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
 }
 
-/* As the inbox's count in the tab bar. */
-.flow-health.waiting {
-  color: #953800;
-  background: #fff1e5;
-  border-color: #ffd8b5;
+.home-empty-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 14px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.home-empty-actions button:hover {
+  background: #f6f8fa;
+}
+
+.home-empty-actions button.primary,
+.new-dialog .confirm-actions button.primary {
+  font-weight: 600;
+  color: #fff;
+  background: #1f883d;
+  border-color: #1a7f37;
+}
+
+.home-empty-actions button.primary:hover,
+.new-dialog .confirm-actions button.primary:hover:not(:disabled) {
+  background: #1a7f37;
+}
+
+.new-dialog .confirm-actions button.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Naming something new before it is made. */
+.new-dialog {
+  width: min(460px, calc(100vw - 32px));
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(31, 35, 40, 0.3);
+}
+
+.new-dialog::backdrop {
+  background: rgba(31, 35, 40, 0.4);
+}
+
+.new-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+}
+
+.new-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+}
+
+.new-dialog .flows-note {
+  margin: -6px 0 0;
+  font-size: 13px;
+}
+
+.new-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.new-dialog input,
+.new-dialog select {
+  height: 34px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+}
+
+.new-dialog input:focus,
+.new-dialog select:focus {
+  outline: none;
+  border-color: #54aeff;
+  box-shadow: 0 0 0 3px rgba(84, 174, 255, 0.25);
+}
+
+.new-dialog-error {
+  margin: 0;
+  font-size: 13px;
+  color: #cf222e;
+}
+
+.new-dialog .confirm-actions {
+  margin-top: 2px;
 }
 
 /* The Activity page: what goes on across the flows. */
@@ -9581,6 +10269,19 @@ select.flow-owner:disabled {
   overflow-x: auto;
 }
 
+/* Beside the rail (HomeFrame) a task board still keeps to the window's
+   height, its columns scrolling on their own, and starts where the list
+   does. */
+.task-board-page .home-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.home-page > .task-board,
+.home-page > .task-board-note {
+  padding: 20px 24px 16px 8px;
+}
+
 .task-column {
   flex: 0 0 280px;
   max-height: 100%;
@@ -9864,4 +10565,55 @@ select.flow-owner:disabled {
     flex-basis: calc(100vw - 48px);
     scroll-snap-align: center;
   }
+}
+
+/* Every dropdown draws its own arrow, inside its right padding: the
+   browser's sits against the border whatever padding it has. Last in the
+   file, and as specific as the most specific select rule above, so their
+   padding and background shorthands don't undo it; sized in em, so a small
+   select gets a small arrow. */
+:root {
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23656d76' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 6L8 10.5 12.5 6'/%3E%3C/svg%3E");
+  --select-arrow-disabled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23afb8c1' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 6L8 10.5 12.5 6'/%3E%3C/svg%3E");
+}
+
+/* Without the browser's own look, a select no rule above gives a border
+   would be a bare box; this one, of no weight, gives it the app's, and
+   gives way to any rule that says otherwise. */
+:where(select:not([multiple]):not([size])) {
+  padding: 3px 8px;
+  color: #1f2328;
+  background-color: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+select:not([multiple]):not([size]) {
+  appearance: none;
+  padding-right: 1.9em;
+  background-image: var(--select-arrow);
+  background-repeat: no-repeat;
+  background-position: right 0.6em center;
+  background-size: 0.8em;
+}
+
+select:not([multiple]):not([size]):disabled {
+  background-image: var(--select-arrow-disabled);
+}
+
+/* Whose it is, when the person may not change it, is a label, not a
+   dropdown. */
+select.flow-owner:not([multiple]):not([size]):disabled {
+  padding-right: 8px;
+  background-image: none;
+}
+
+/* On the home page's rows it reads as a word, its arrow showing only while
+   the row is pointed at or has the focus. */
+.home-owner select.flow-owner:not([multiple]):not([size]) {
+  background-image: none;
+}
+
+.home-row:is(:hover, :focus-within) .home-owner select.flow-owner:not([multiple]):not([size]):not(:disabled) {
+  background-image: var(--select-arrow);
 }

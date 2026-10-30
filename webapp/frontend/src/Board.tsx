@@ -3696,8 +3696,8 @@ export default function Board({
     <div className="board">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

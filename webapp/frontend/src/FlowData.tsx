@@ -80,7 +80,7 @@ export default function FlowDataPage({ id }: { id: number }) {
   }, [running, refresh])
 
   useEffect(() => {
-    if (flow) document.title = `Data · ${flow.name} · Flows`
+    if (flow) document.title = `Data · ${flow.name} · Spoletta`
   }, [flow])
 
   const groups = useMemo(() => (data ? columnsOf(data) : []), [data])
@@ -111,8 +111,8 @@ export default function FlowDataPage({ id }: { id: number }) {
     <div className="flows-page data-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

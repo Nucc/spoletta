@@ -483,7 +483,7 @@ repositories:
     alone, whatever its state and rule select. So a flow implementing "the
     open Jira ticket" its query gives it implements the one picked; write
     its query for the scheduled case, and it serves both.
-  - A **task board** (`#/taskboards/<id>`, listed on the main page) lays
+  - A **task board** (`#/taskboards/<id>`, listed on the home page) lays
     shared structs' records out in columns, each a struct and a query in
     the Records page's search, such as Jira tickets `state:new` beside pull
     requests `state:in_review`, each picking what its cards show of a
@@ -515,7 +515,7 @@ on instead.
 ### 3.10 Tags
 
 `tags: [nightly, billing]` gives a flow, procedure or struct (on its
-object) the words the flow list finds it by and narrows to. They change
+object) the words the home page finds it by and narrows to. They change
 nothing in how it runs. Each is at most 64 characters, a flow has at most
 20, and two differing only in case are one.
 
@@ -1043,9 +1043,10 @@ Conventions that matter when writing one:
   keeps a board's notes as they are, so a file changing processes never
   loses them.
 
-Import: `POST /api/setup` with the YAML (or JSON) as the body, or the Import
-button on the flow list page. It replies with the flows it created and those
-it made over. Export: `GET /api/setup`, or the Export button.
+Import: `POST /api/setup` with the YAML (or JSON) as the body, or Import a
+setup file in the home page's ⋯ menu, beside New. It replies with the flows
+it created and those it made over. Export: `GET /api/setup`, or Export the
+setup in the same menu.
 
 ---
 
@@ -1786,11 +1787,11 @@ missing sentences.
 
 ### 10.3 Write the setup file
 
-The flow list's templates (*New from template*) are ready flows of the
-kinds in section 8: triage, a write-and-critique loop, a fix approved by
-its risk, a digest posted to Slack, a flow per item of a list and a form
-a person fills in. When one is close to what the user wants, suggest
-starting from it and changing it, rather than writing it anew.
+The home page's templates (*Flow from a template*, under New) are ready
+flows of the kinds in section 8: triage, a write-and-critique loop, a fix
+approved by its risk, a digest posted to Slack, a flow per item of a list
+and a form a person fills in. When one is close to what the user wants,
+suggest starting from it and changing it, rather than writing it anew.
 
 - Start with `spoletta: 1`. Include only the flows you create or change (the
   import leaves others alone), plus any structs, procedures and MCP servers

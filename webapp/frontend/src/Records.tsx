@@ -138,7 +138,7 @@ export default function RecordsPage({ id }: { id: number }) {
   }, [id])
 
   useEffect(() => {
-    if (flow) document.title = `Records · ${flow.name} · Flows`
+    if (flow) document.title = `Records · ${flow.name} · Spoletta`
   }, [flow])
 
   const fields = useMemo(() => (records ? fieldsOf(records) : []), [records])
@@ -216,8 +216,8 @@ export default function RecordsPage({ id }: { id: number }) {
     <div className="flows-page data-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

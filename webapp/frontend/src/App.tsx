@@ -160,7 +160,7 @@ function FlowPage({ id, run, step }: { id: number; run: number | null; step: num
   }, [id])
 
   useEffect(() => {
-    if (flow) document.title = `${flow.name} · Flows`
+    if (flow) document.title = `${flow.name} · Spoletta`
   }, [flow])
 
   const onUpdate = useCallback(

@@ -2,7 +2,7 @@ import { InboxIcon } from './icons'
 import type { Tab } from './tabs'
 
 // The tabs along the top of the page, the open one joined to the page below,
-// with a plus to open another on the list of flows, and at the end the
+// with a plus to open another on the home page, and at the end the
 // inbox, with how many steps wait on the person. A tab on a run says which.
 export default function TabBar({
   tabs,
@@ -56,7 +56,7 @@ export default function TabBar({
           )
         })}
       </div>
-      <button className="tab-add" onClick={onAdd} aria-label="New tab" title="Open another tab on the list of flows">
+      <button className="tab-add" onClick={onAdd} aria-label="New tab" title="Open another tab on the home page">
         +
       </button>
       <button

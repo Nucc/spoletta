@@ -35,7 +35,7 @@ export default function Inbox() {
   )
 
   useEffect(() => {
-    document.title = 'Inbox · Flows'
+    document.title = 'Inbox · Spoletta'
     refresh()
     const t = window.setInterval(refresh, INBOX_REFRESH_MS)
     const onVisible = () => document.visibilityState === 'visible' && refresh()
@@ -52,8 +52,8 @@ export default function Inbox() {
     <div className="flows-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

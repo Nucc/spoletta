@@ -30,6 +30,8 @@ export type ShortcutId =
   | 'palettePick'
   | 'paletteBack'
   | 'paletteClose'
+  | 'search'
+  | 'newItem'
 
 // A key and the modifiers held with it. Mod is Cmd on a Mac and Ctrl
 // elsewhere. A key is the character typed, or a named key such as Enter; a
@@ -38,10 +40,11 @@ export type ShortcutId =
 export type Combo = { key?: string; code?: string; mod?: boolean; shift?: boolean; alt?: boolean }
 
 // Where a shortcut works, as the sheet groups them.
-export type Scope = 'anywhere' | 'board' | 'find' | 'note' | 'palette'
+export type Scope = 'anywhere' | 'list' | 'board' | 'find' | 'note' | 'palette'
 
 export const SCOPES: { id: Scope; title: string }[] = [
   { id: 'anywhere', title: 'Anywhere' },
+  { id: 'list', title: 'On the home page' },
   { id: 'board', title: 'On a board' },
   { id: 'find', title: 'Finding on a board' },
   { id: 'note', title: 'Writing a note' },
@@ -66,6 +69,13 @@ export const SHORTCUTS: Shortcut[] = [
     everywhere: true,
   },
   { id: 'sheet', scope: 'anywhere', label: 'Show these shortcuts', combos: [{ key: '?' }] },
+  {
+    id: 'search',
+    scope: 'list',
+    label: 'Find a flow, task board, procedure or struct by name or tag; Enter opens the first found',
+    combos: [{ key: '/' }],
+  },
+  { id: 'newItem', scope: 'list', label: 'Make a flow, task board, procedure or struct', combos: [{ key: 'n' }] },
   {
     id: 'find',
     scope: 'board',

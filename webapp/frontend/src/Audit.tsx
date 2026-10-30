@@ -40,7 +40,7 @@ export default function AuditLogPage() {
   const ast = useMemo(() => parseQuery(query).ast, [query])
 
   useEffect(() => {
-    document.title = 'Audit log · Flows'
+    document.title = 'Audit log · Spoletta'
   }, [])
 
   const header = (key: string, label: string, newestFirst = false) => (
@@ -55,8 +55,8 @@ export default function AuditLogPage() {
     <div className="flows-page data-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

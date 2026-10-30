@@ -42,7 +42,7 @@ export default function RunCompare({ flow, a: aId, b: bId }: { flow: number; a: 
   }, [going, load])
 
   useEffect(() => {
-    document.title = `Run #${aId} and #${bId}${flowInfo ? ` · ${flowInfo.name}` : ''} · Flows`
+    document.title = `Run #${aId} and #${bId}${flowInfo ? ` · ${flowInfo.name}` : ''} · Spoletta`
   }, [aId, bId, flowInfo])
 
   const [a, b] = runs ?? [null, null]
@@ -51,8 +51,8 @@ export default function RunCompare({ flow, a: aId, b: bId }: { flow: number; a: 
     <div className="flows-page compare-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

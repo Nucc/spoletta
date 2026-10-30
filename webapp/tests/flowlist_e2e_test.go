@@ -132,6 +132,67 @@ func TestFlowListTagsFavouritesAndHealth(t *testing.T) {
 	}
 }
 
+// One of a flow's latest runs, as the flow list's strip shows it.
+type runMark struct {
+	ID      int64  `json:"id"`
+	Status  string `json:"status"`
+	Waiting bool   `json:"waiting"`
+}
+
+// A flow on the list with its latest runs, which flowHealth leaves out to
+// stay comparable.
+type latestOnList struct {
+	ID     int64 `json:"id"`
+	Health *struct {
+		Latest []runMark `json:"latest"`
+	} `json:"health"`
+}
+
+// The flow's latest runs, as the flow list has them.
+func listedLatest(a *app, id int64) []runMark {
+	a.t.Helper()
+	var fs []latestOnList
+	a.call("GET", "/api/flows", nil, http.StatusOK, &fs)
+	i := slices.IndexFunc(fs, func(f latestOnList) bool { return f.ID == id })
+	if i < 0 || fs[i].Health == nil {
+		a.t.Fatalf("flow %d isn't listed with its health", id)
+	}
+	return fs[i].Health.Latest
+}
+
+// The list holds each flow's latest twenty runs of its own, oldest first:
+// how each went, a run waiting for a person told apart, and no trial
+// among them.
+func TestFlowListLatestRuns(t *testing.T) {
+	a := newApp(t)
+	f, build := buildsFlow(a, "Strip", func(n int) bool { return n == 2 })
+	if l := listedLatest(a, f.ID); l == nil || len(l) != 0 {
+		t.Errorf("before any run, the latest runs are %+v, want none", l)
+	}
+	var want []runMark
+	for i := range 21 {
+		d := a.finish(a.startRun(f.ID).ID)
+		if i > 0 {
+			want = append(want, runMark{ID: d.ID, Status: d.Status})
+		}
+	}
+	a.finish(tryProcess(a, build.ID).ID)
+	if l := listedLatest(a, f.ID); !slices.Equal(l, want) || want[0].Status != runFailed {
+		t.Errorf("the latest runs are %+v, want %+v, the oldest failed", l, want)
+	}
+
+	b := humanNewReviewBoard(a)
+	rn := a.startRun(b.flow.ID)
+	a.waitStep(rn.ID, "Review", stepWaiting)
+	if l := listedLatest(a, b.flow.ID); !slices.Equal(l, []runMark{{ID: rn.ID, Status: runRunning, Waiting: true}}) {
+		t.Errorf("the review's latest runs are %+v, want its run waiting for a person", l)
+	}
+	a.call("PATCH", fmt.Sprintf("/api/runs/%d", rn.ID), map[string]any{"status": runInterrupted}, http.StatusOK, nil)
+	if l := listedLatest(a, b.flow.ID); !slices.Equal(l, []runMark{{ID: rn.ID, Status: runInterrupted}}) {
+		t.Errorf("interrupted, the review's latest runs are %+v", l)
+	}
+}
+
 // The list counts the steps in each flow's runs waiting on whoever asks, as
 // their inbox lists them: the reviews their roles decide, not those of
 // another role, and a loop question only for those who may edit the flow.

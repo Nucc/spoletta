@@ -25,6 +25,7 @@ import { formatTime } from './Runs'
 import { QueryBar } from './Search'
 import { useConfirm } from './Confirm'
 import { usePaletteSource } from './CommandPalette'
+import { HomeFrame } from './FlowList'
 
 // How often the board's records are asked for again, as flows and people
 // move them on.
@@ -88,7 +89,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
   }, [load])
 
   useEffect(() => {
-    if (board) document.title = `${board.name} · Task board · Flows`
+    if (board) document.title = `${board.name} · Task board · Spoletta`
   }, [board])
 
   usePaletteSource(() => ({
@@ -142,11 +143,11 @@ export default function TaskBoardPage({ id }: { id: number }) {
   const struct = column?.struct ?? null
 
   return (
-    <div className="flows-page data-page task-board-page">
+    <div className="flows-page data-page task-board-page home">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every board and flow">
-            <FlowBuilderIcon /> Boards
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /
@@ -190,32 +191,34 @@ export default function TaskBoardPage({ id }: { id: number }) {
           {error ?? actionError}
         </div>
       )}
-      {board === null ? (
-        !error && <p className="flows-note task-board-note">Loading…</p>
-      ) : board.columns.length === 0 ? (
-        <div className="task-board-empty">
-          <TaskBoardIcon />
-          <p>
-            No columns yet. Each column holds the records of a shared struct that a query matches, such as the Jira tickets in state new, as
-            the struct's Records page searches them; as flows and people move a record on, it moves from column to column.
-          </p>
-          <button onClick={() => setEditing('new')}>
-            <PlusIcon /> Add a column
-          </button>
-        </div>
-      ) : (
-        <main className="task-board">
-          {board.columns.map((c, i) => (
-            <Column
-              key={i}
-              column={c}
-              onEdit={() => setEditing(i)}
-              onOpen={(record) => setOpened({ column: i, record })}
-              onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
-            />
-          ))}
-        </main>
-      )}
+      <HomeFrame at="taskboard">
+        {board === null ? (
+          !error && <p className="flows-note task-board-note">Loading…</p>
+        ) : board.columns.length === 0 ? (
+          <div className="task-board-empty">
+            <TaskBoardIcon />
+            <p>
+              No columns yet. Each column holds the records of a shared struct that a query matches, such as the Jira tickets in state new,
+              as the struct's Records page searches them; as flows and people move a record on, it moves from column to column.
+            </p>
+            <button onClick={() => setEditing('new')}>
+              <PlusIcon /> Add a column
+            </button>
+          </div>
+        ) : (
+          <main className="task-board">
+            {board.columns.map((c, i) => (
+              <Column
+                key={i}
+                column={c}
+                onEdit={() => setEditing(i)}
+                onOpen={(record) => setOpened({ column: i, record })}
+                onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
+              />
+            ))}
+          </main>
+        )}
+      </HomeFrame>
       {editing !== null && board && (
         <ColumnDialog
           column={editing === 'new' ? null : board.columns[editing]}

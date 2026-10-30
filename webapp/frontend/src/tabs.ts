@@ -61,7 +61,7 @@ const stamp = (tab: number) => window.history.replaceState({ ...(window.history.
 
 // Pages name themselves in the document's title, which the tab shows
 // without the app's name.
-const titleOf = (title: string) => title.replace(/ · Flows$/, '')
+const titleOf = (title: string) => title.replace(/ · Spoletta$/, '')
 
 // A new tab's id, unlike any a history entry may still carry.
 const newId = (tabs: Tab[]) => Math.max(Date.now(), ...tabs.map((t) => t.id + 1))
@@ -165,14 +165,17 @@ export function useTabs() {
     }
   })
 
-  // The open tab takes the title its page gives the document.
+  // The open tab takes the title its page gives the document, the first
+  // page's too, which names itself before this runs.
   useEffect(() => {
-    const observer = new MutationObserver(() => {
+    const take = () => {
       const s = current.current
       const title = titleOf(document.title)
       if (s.tabs.find((t) => t.id === s.active)?.title === title) return
       set({ tabs: s.tabs.map((t) => (t.id === s.active ? { ...t, title } : t)), active: s.active })
-    })
+    }
+    take()
+    const observer = new MutationObserver(take)
     observer.observe(document.head, { subtree: true, childList: true, characterData: true })
     return () => observer.disconnect()
   }, [])

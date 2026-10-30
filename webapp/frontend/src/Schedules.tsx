@@ -13,6 +13,7 @@ import {
 import { ClockIcon, FlowBuilderIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
 import { useConfirm } from './Confirm'
+import { HomeFrame } from './FlowList'
 
 // The common times, offered before writing a cron expression by hand.
 const PRESETS: { cron: string; label: string }[] = [
@@ -55,7 +56,7 @@ export default function Schedules() {
   const refresh = useCallback(() => listSchedules().then(setSchedules).catch(report), [report])
 
   useEffect(() => {
-    document.title = 'Schedules · Flows'
+    document.title = 'Schedules · Spoletta'
     listFlows().then(setFlows).catch(report)
     refresh()
     const t = window.setInterval(refresh, REFRESH_MS)
@@ -91,11 +92,11 @@ export default function Schedules() {
   }
 
   return (
-    <div className="flows-page">
+    <div className="flows-page home">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="All flows">
-            <FlowBuilderIcon /> Flows
+          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
+            <FlowBuilderIcon /> Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /
@@ -108,64 +109,66 @@ export default function Schedules() {
           {error} (click to dismiss)
         </div>
       )}
-      <main className="flows">
-        <section className="flow-section" aria-label="Schedules">
-          <h2>
-            <ClockIcon /> Schedules
-          </h2>
-          <p className="flows-note">
-            Each runs a flow on its own whenever its time comes round: the version the flow published, or its board as it
-            is while it publishes none, so publish a flow to go on editing it without a schedule running a half-made board.
-            While its last run is still going, such as one waiting on a person, the times that come round are skipped.
-          </p>
-          {runnable && (
-            <ScheduleForm
-              flows={runnable}
-              initial={{ flow: runnable[0]?.id ?? 0, cron: PRESETS[0].cron, timezone: localZone() }}
-              submitLabel={
-                <>
-                  <PlusIcon /> New schedule
-                </>
-              }
-              onSubmit={onCreate}
-              onError={report}
-            />
-          )}
-          {schedules === null ? (
-            <p className="flows-note">Loading…</p>
-          ) : schedules.length === 0 ? (
-            <p className="flows-note">No schedules yet. Pick a flow and when it should run above.</p>
-          ) : (
-            <ul className="flow-list schedule-list">
-              {schedules.map((s) =>
-                editing === s.id && runnable ? (
-                  <li key={s.id} className="schedule-editing">
-                    <ScheduleForm
-                      flows={runnable}
-                      initial={s}
-                      submitLabel="Save"
-                      onSubmit={async (fields) => {
-                        await onUpdate(s.id, fields)
-                        setEditing(null)
-                      }}
-                      onCancel={() => setEditing(null)}
-                      onError={report}
+      <HomeFrame at="schedules">
+        <main className="flows">
+          <section className="flow-section" aria-label="Schedules">
+            <h2>
+              <ClockIcon /> Schedules
+            </h2>
+            <p className="flows-note">
+              Each runs a flow on its own whenever its time comes round: the version the flow published, or its board as it
+              is while it publishes none, so publish a flow to go on editing it without a schedule running a half-made board.
+              While its last run is still going, such as one waiting on a person, the times that come round are skipped.
+            </p>
+            {runnable && (
+              <ScheduleForm
+                flows={runnable}
+                initial={{ flow: runnable[0]?.id ?? 0, cron: PRESETS[0].cron, timezone: localZone() }}
+                submitLabel={
+                  <>
+                    <PlusIcon /> New schedule
+                  </>
+                }
+                onSubmit={onCreate}
+                onError={report}
+              />
+            )}
+            {schedules === null ? (
+              <p className="flows-note">Loading…</p>
+            ) : schedules.length === 0 ? (
+              <p className="flows-note">No schedules yet. Pick a flow and when it should run above.</p>
+            ) : (
+              <ul className="flow-list schedule-list">
+                {schedules.map((s) =>
+                  editing === s.id && runnable ? (
+                    <li key={s.id} className="schedule-editing">
+                      <ScheduleForm
+                        flows={runnable}
+                        initial={s}
+                        submitLabel="Save"
+                        onSubmit={async (fields) => {
+                          await onUpdate(s.id, fields)
+                          setEditing(null)
+                        }}
+                        onCancel={() => setEditing(null)}
+                        onError={report}
+                      />
+                    </li>
+                  ) : (
+                    <ScheduleRow
+                      key={s.id}
+                      schedule={s}
+                      onToggle={() => onUpdate(s.id, { enabled: !s.enabled }).catch(report)}
+                      onEdit={() => setEditing(s.id)}
+                      onDelete={() => onDelete(s)}
                     />
-                  </li>
-                ) : (
-                  <ScheduleRow
-                    key={s.id}
-                    schedule={s}
-                    onToggle={() => onUpdate(s.id, { enabled: !s.enabled }).catch(report)}
-                    onEdit={() => setEditing(s.id)}
-                    onDelete={() => onDelete(s)}
-                  />
-                ),
-              )}
-            </ul>
-          )}
-        </section>
-      </main>
+                  ),
+                )}
+              </ul>
+            )}
+          </section>
+        </main>
+      </HomeFrame>
       {confirmDialog}
     </div>
   )

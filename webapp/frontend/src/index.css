@@ -10341,7 +10341,7 @@ a.run-tick:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 
 .task-column-head h2 {
@@ -10367,50 +10367,6 @@ a.run-tick:hover {
 .task-column-of {
   font-size: 12px;
   font-weight: 400;
-}
-
-/* Where its records come from and what moves them on, kept quiet under
-   its name. */
-.task-column-about {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-bottom: 10px;
-}
-
-.task-column-query {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-size: 12px;
-  color: #656d76;
-}
-
-.task-column-query a {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #57606a;
-  text-decoration: none;
-}
-
-.task-column-query a:hover {
-  color: #0969da;
-  text-decoration: underline;
-}
-
-.task-column-query code {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-size: 11px;
-  color: #57606a;
-  background: #eaeef2;
-  border-radius: 4px;
 }
 
 .task-column-lane {
@@ -10770,70 +10726,7 @@ a.run-tick:hover {
   border-bottom: 1px solid rgba(212, 167, 44, 0.4);
 }
 
-/* The flow moving a column's records on, under its query. */
-.task-column-flow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-size: 12px;
-  color: #8c959f;
-}
-
-.task-column-flow svg {
-  width: 10px;
-  height: 10px;
-  color: #1a7f37;
-}
-
-.task-column-flow a {
-  color: #57606a;
-  text-decoration: none;
-}
-
-.task-column-flow a:hover {
-  color: #0969da;
-  text-decoration: underline;
-}
-
-/* Where no flow takes a column's state, so its records rest. */
-.task-column-rest {
-  margin: 0;
-  font-size: 12px;
-  color: #8c959f;
-}
-
-.task-column-going {
-  padding: 0 7px;
-  line-height: 18px;
-  border-radius: 9px;
-  background: #dafbe1;
-  color: #1a7f37;
-  font-weight: 600;
-}
-
-/* The records the board skips as stuck, to try again at once. */
-.task-column-stuck {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 2px 0 0;
-  padding: 3px 3px 3px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #bc4c00;
-  background: #fff1e5;
-  border-radius: 7px;
-}
-
-.task-column-stuck svg {
-  width: 12px;
-  height: 12px;
-}
-
-.task-column-stuck button,
+/* Trying a stuck card's record again. */
 .task-card-retry {
   padding: 1px 8px;
   font: inherit;
@@ -10845,7 +10738,6 @@ a.run-tick:hover {
   cursor: pointer;
 }
 
-.task-column-stuck button:hover,
 .task-card-retry:hover {
   background: #fff8f2;
 }

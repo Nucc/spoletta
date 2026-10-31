@@ -32,7 +32,6 @@ import {
   PencilIcon,
   PlayIcon,
   PlusIcon,
-  TableIcon,
   TaskBoardIcon,
 } from './icons'
 import { timeAgo } from './home'
@@ -297,7 +296,6 @@ export default function TaskBoardPage({ id }: { id: number }) {
                   key={i}
                   column={c}
                   card={c.cards ? cardOf(board, c, c.cards) : null}
-                  runner={board.playing && board.playedBy ? board.playedBy : ''}
                   onEdit={() => setEditing(i)}
                   onOpen={(record) => setOpened({ column: i, record })}
                   onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
@@ -313,6 +311,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
           column={editing === 'new' ? null : board.columns[editing]}
           places={board.columns.length + (editing === 'new' ? 1 : 0)}
           place={editing === 'new' ? board.columns.length : editing}
+          runner={board.playing && board.playedBy ? board.playedBy : ''}
           onSave={async (edit, at) => {
             await save(board.name, placed(edit, at))
             setEditing(null)
@@ -477,16 +476,6 @@ function FlowOptions({ flows, state, kept }: { flows: RecordFlow[]; state: strin
   )
 }
 
-// Where the column's records show on the Records page, searched and sorted
-// as the column does.
-function recordsHash(c: TaskColumn): string {
-  const params = new URLSearchParams()
-  if (c.query) params.set('q', c.query)
-  if (c.sort) params.set('sort', c.sort)
-  const q = params.toString().replace(/\+/g, '%20')
-  return `#/flows/${c.struct}/records${q ? '?' + q : ''}`
-}
-
 // Why a column shows no records, and what would show them again.
 function problemOf(c: TaskColumn) {
   switch (c.problem) {
@@ -533,96 +522,6 @@ function flowProblemOf(c: TaskColumn, runner: string) {
   return null
 }
 
-// What playing the board does in a column: nothing, if its records rest;
-// else the flow it gives its records to, the one it names or the one taking
-// each state it holds, by naming it or by querying any state, how many of
-// them it works on at once and how many have runs going; the states it
-// starts nothing on, as several flows take them, or none; why the flow it
-// names wouldn't start, if it wouldn't; and the records it skips as stuck,
-// to try again at once.
-function ColumnFlow({ column: c, runner, onRetry }: { column: TaskColumn; runner: string; onRetry: (records: number[]) => void }) {
-  if (c.maxRuns === 0) return <p className="task-column-rest">Records rest here; the board starts no flow on them.</p>
-  const work = workOf(c)
-  const going = work.running + work.waiting
-  const stuck = work.stuck
-  const named = c.flow !== null
-  const states = c.byState ?? []
-  const one = states.filter((s) => s.flows.length === 1)
-  const several = states.filter((s) => s.flows.length > 1)
-  const none = states.filter((s) => s.flows.length === 0)
-  return (
-    <>
-      {(named || one.length > 0) && (
-        <p className="task-column-flow">
-          <PlayIcon />
-          {named ? (
-            c.flowName ? (
-              <a href={`#/flows/${c.flow}`} title="Open the flow this column gives its records to, whatever their state">
-                {c.flowName}
-              </a>
-            ) : (
-              <span>A flow you don’t see</span>
-            )
-          ) : (
-            one.map((s, i) => (
-              <span key={s.state}>
-                {i > 0 && ', '}
-                {states.length > 1 && `${s.state}: `}
-                <a
-                  href={`#/flows/${s.flows[0].id}`}
-                  title={
-                    s.any
-                      ? `Open the flow taking records in ${s.state}: it queries them in any state, and no flow takes ${s.state} by name`
-                      : `Open the flow taking records in ${s.state}, which the board gives them to`
-                  }
-                >
-                  {s.flows[0].name || 'A flow you don’t see'}
-                </a>
-                {s.any && ' (any state)'}
-              </span>
-            ))
-          )}
-          {c.maxRuns !== null && <span title="How many of its records the board works on at once at most">· {c.maxRuns} at once</span>}
-          {going > 0 && (
-            <span className="task-column-going" title="Records here with a run going">
-              {going} going
-            </span>
-          )}
-        </p>
-      )}
-      {several.map((s) => (
-        <p key={s.state} className="task-column-problem">
-          {listOf(s.flows.map((f) => f.name || 'a flow you don’t see'))} {s.flows.length === 2 ? 'both' : 'all'}{' '}
-          {s.any ? `query any state, and no flow takes ${s.state} by name` : `take ${s.state}`}, so the board starts none of them here;
-          change the column to pick the one, or to let its records rest.
-        </p>
-      ))}
-      {!named && none.length > 0 && <p className="task-column-rest">No flow takes {listOf(none.map((s) => s.state))}, so records rest here.</p>}
-      {c.flowProblem && <p className="task-column-problem">{flowProblemOf(c, runner)}</p>}
-      {stuck.length > 0 && (
-        <p className="task-column-stuck">
-          <AlertIcon />
-          {stuck.length} stuck
-          <button onClick={() => onRetry(stuck)} title="Start the flow on them again, from the board's next turn">
-            Try {stuck.length === 1 ? 'it' : 'them'} again
-          </button>
-        </p>
-      )}
-    </>
-  )
-}
-
-// The work on a column's records: how many have a run going, running or
-// waiting for a person, and those the board skips as stuck, by id.
-function workOf(c: TaskColumn): { running: number; waiting: number; stuck: number[] } {
-  const runs = Object.entries(c.cards?.runs ?? {}).flatMap(([id, r]) => (r ? [{ id: Number(id), status: r.status }] : []))
-  return {
-    running: runs.filter((r) => r.status === 'running').length,
-    waiting: runs.filter((r) => r.status === 'waiting').length,
-    stuck: runs.filter((r) => r.status === 'stuck').map((r) => r.id),
-  }
-}
-
 // How the board's work goes, over its columns, as some may be scrolled out
 // of sight: its records running, waiting for a person and stuck, each
 // counted once though two columns hold it.
@@ -643,10 +542,11 @@ function BoardWork({ columns }: { columns: TaskColumn[] }) {
   )
 }
 
+// A column: its name, how many records it holds and their cards; which
+// struct, query and flow it has is in its dialog.
 function Column({
   column: c,
   card,
-  runner,
   onEdit,
   onOpen,
   onRun,
@@ -655,9 +555,6 @@ function Column({
   column: TaskColumn
   // What the board's cards of its struct show, while it shows its records.
   card: TaskCard | null
-  // Whose the board's runs are while it plays, by name; empty when it
-  // doesn't, or nobody signs in.
-  runner: string
   onEdit: () => void
   // Opens a record of it, or a new one for none.
   onOpen: (record: SharedRecord | null) => void
@@ -697,19 +594,6 @@ function Column({
           <PencilIcon />
         </button>
       </header>
-      <div className="task-column-about">
-        <p className="task-column-query">
-          {c.struct !== null && !c.problem ? (
-            <a href={recordsHash(c)} title="Open these records in a table, on the struct's Records page">
-              <TableIcon /> {c.structName}
-            </a>
-          ) : (
-            c.structName && <span>{c.structName}</span>
-          )}
-          {c.query && <code title={c.query}>{c.query}</code>}
-        </p>
-        {!c.problem && <ColumnFlow column={c} runner={runner} onRetry={onRetry} />}
-      </div>
       <div className="task-column-lane">
         {cards ? (
           <>
@@ -1094,11 +978,13 @@ function sortsOf(facets: SearchFacet[], sort: string): [string, string][] {
 // column whose query names a state is named after it unless named
 // otherwise. Its records go to
 // the flow taking each one's state, which the dialog says, unless it names
-// a flow to give them all to, or lets them rest.
+// a flow to give them all to, or lets them rest; one it names that won't
+// start, it says why.
 function ColumnDialog({
   column,
   places,
   place,
+  runner,
   onSave,
   onRemove,
   onClose,
@@ -1108,6 +994,9 @@ function ColumnDialog({
   // How many places there are, the new one's counted, and the column's.
   places: number
   place: number
+  // Whose the board's runs are while it plays, by name; empty when it
+  // doesn't, or nobody signs in.
+  runner: string
   onSave: (edit: TaskColumnEdit, place: number) => Promise<void>
   onRemove?: () => Promise<void>
   onClose: () => void
@@ -1307,7 +1196,11 @@ function ColumnDialog({
                 </select>
               </label>
             )}
-            <span className="panel-note">{flowNote}</span>
+            {column?.flowProblem && flow === column.flow && struct === column.struct ? (
+              <p className="panel-warning">{flowProblemOf(column, runner)}</p>
+            ) : (
+              <span className="panel-note">{flowNote}</span>
+            )}
           </div>
         )}
         {places > 1 && (

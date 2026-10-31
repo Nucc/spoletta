@@ -9172,6 +9172,16 @@ a.run-tick:hover {
   border-radius: 6px;
 }
 
+/* A task board playing, beside its name. */
+.home-board-playing {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #1a7f37;
+}
+
 .home-when {
   min-width: 0;
   overflow: hidden;
@@ -10546,6 +10556,245 @@ a.run-tick:hover {
 .task-card-pick-note {
   font-size: 11px;
   color: #656d76;
+}
+
+/* Play, or Pause while it plays, how many of the board's runs go at once,
+   and while it plays, how many are going, at the toolbar's end. */
+.task-board-play {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-board-playing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+  color: #1a7f37;
+}
+
+.task-board-playing-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1a7f37;
+  animation: task-board-going 1.6s ease-in-out infinite;
+}
+
+@keyframes task-board-going {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-board-playing-dot {
+    animation: none;
+  }
+}
+
+.task-board-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+  color: #656d76;
+}
+
+.toolbar .task-board-start,
+.toolbar .task-board-pause {
+  height: 34px;
+  padding: 0 14px;
+  font-weight: 600;
+}
+
+.toolbar .task-board-start {
+  border-color: #1a7f37;
+  background: #1a7f37;
+  color: #fff;
+}
+
+.toolbar .task-board-start:hover:not(:disabled) {
+  background: #116329;
+}
+
+.toolbar .task-board-start:disabled {
+  border-color: #d8dee4;
+  background: #d8dee4;
+  color: #8c959f;
+}
+
+/* Why a board stopped playing by itself, until Play is pressed again. */
+.task-board-stopped {
+  padding: 8px 16px;
+  font-size: 13px;
+  color: #7d4e00;
+  background: #fff8c5;
+  border-bottom: 1px solid rgba(212, 167, 44, 0.4);
+}
+
+/* The flow moving a column's records on, under its query. */
+.task-column-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: #656d76;
+}
+
+.task-column-flow svg {
+  width: 10px;
+  height: 10px;
+  color: #1a7f37;
+}
+
+.task-column-flow a {
+  color: #0969da;
+  text-decoration: none;
+}
+
+.task-column-flow a:hover {
+  text-decoration: underline;
+}
+
+/* Where no flow takes a column's state, so its records rest. */
+.task-column-rest {
+  margin: 0;
+  font-size: 12px;
+  color: #656d76;
+}
+
+.task-column-going {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.task-column-stuck {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  color: #9a6700;
+}
+
+/* The run going on a card's record, or why the board skips it as stuck. */
+.task-card-work {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -4px;
+  padding: 0 10px 8px;
+  font-size: 11px;
+  color: #656d76;
+}
+
+.task-card-work a {
+  color: #0969da;
+  text-decoration: none;
+}
+
+.task-card-work a:hover {
+  text-decoration: underline;
+}
+
+.task-card-work .link-button {
+  font-size: 11px;
+}
+
+.task-card-work-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border-radius: 8px;
+}
+
+.task-card-work.running .task-card-work-status {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.task-card-work.waiting .task-card-work-status {
+  background: #fbefff;
+  color: #8250df;
+}
+
+/* A run going on the record, pulsing as the board's Playing does. */
+.task-card-work-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: task-board-going 1.6s ease-in-out infinite;
+}
+
+.task-card-work-what {
+  color: #1f2328;
+  font-weight: 500;
+}
+
+.task-card:has(.task-card-work.running) {
+  border-color: rgba(26, 127, 55, 0.55);
+  box-shadow: inset 3px 0 0 #1a7f37;
+}
+
+.task-card:has(.task-card-work.waiting) {
+  border-color: rgba(130, 80, 223, 0.5);
+  box-shadow: inset 3px 0 0 #8250df;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-card-work-dot {
+    animation: none;
+  }
+}
+
+.task-card-work.stuck .task-card-work-status {
+  background: #fff8c5;
+  color: #9a6700;
+  cursor: help;
+}
+
+.task-card:has(.task-card-work.stuck) {
+  border-color: rgba(212, 167, 44, 0.6);
+}
+
+/* The flow moving a column's records on, and its limit, as one group. */
+.task-column-moving {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* A struct's states, each with the flow moving it on, to lay out as columns. */
+.task-states {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-state {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.task-state select {
+  min-width: 0;
 }
 
 /* On a phone a column takes the width, and they snap into place as they

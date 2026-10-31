@@ -65,6 +65,9 @@ type recordFlow struct {
 	ID      int64  `json:"id"`
 	Name    string `json:"name"`
 	queries []linkQuery
+	// The states its queries take records in, in their order, "" for a
+	// query taking any, so a task board's column of a state can offer it.
+	States []string `json:"states"`
 	// Why its queries wouldn't select each record asked about, by record
 	// id, for those they wouldn't.
 	Off map[string]string `json:"off"`
@@ -135,9 +138,16 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 		if err != nil {
 			return nil, err
 		}
-		if access == accessEdit {
-			may = append(may, f)
+		if access != accessEdit {
+			continue
 		}
+		f.States = []string{}
+		for _, q := range f.queries {
+			if !slices.Contains(f.States, q.State) {
+				f.States = append(f.States, q.State)
+			}
+		}
+		may = append(may, f)
 	}
 	return may, nil
 }

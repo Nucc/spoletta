@@ -742,7 +742,7 @@ const KIND_INFO: Record<Kind, { title: string; one: string; gloss?: string; note
   board: {
     title: 'Task boards',
     one: 'task board',
-    note: "Shared structs' records in columns, each a query of them, such as tickets by state, moving on as flows and people move them.",
+    note: "Shared structs' records in columns, each a query of them, such as tickets by state, moving on as flows and people move them; played, the flow taking each record's state moves it on.",
     hint: 'Shared records in columns, such as tickets by state',
     example: 'Sprint',
     icon: (
@@ -1022,8 +1022,8 @@ function FlowRow({
   )
 }
 
-// A task board on the list: its name, its columns, when it last changed,
-// whose it is, and a menu of the rest; it has no star.
+// A task board on the list: its name, whether it plays, its columns, when
+// it last changed, whose it is, and a menu of the rest; it has no star.
 function BoardRow({
   b,
   query,
@@ -1049,6 +1049,14 @@ function BoardRow({
         <a className="home-link" href={hash}>
           <Name name={b.name} query={query} />
         </a>
+        {b.playing && (
+          <span
+            className="home-board-playing"
+            title={`It gives each record to the flow taking its state${b.playedBy ? `, its runs ${b.playedBy}'s` : ''}`}
+          >
+            <span className="task-board-playing-dot" aria-hidden /> Playing
+          </span>
+        )}
       </div>
       <div className="home-detail home-board-columns">
         {b.columns.length === 0 ? (

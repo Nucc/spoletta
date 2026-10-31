@@ -160,6 +160,20 @@ query of its records, such as Jira tickets `state:new` beside pull requests
 moves to that column, so the states a flow works through read as its queue,
 and a card opens its record to correct it or starts a flow on it.
 
+A task board can drive records through their whole lifecycle too, a flow
+over flows. Lay its columns out from a struct's states, one for each, and
+press Play: while it plays, every record no flow is working on goes to the
+flow taking records in its state, such as triage for new exceptions and
+implementing for filed tickets, a run per record and as many at once as you
+allow, the rightmost columns first. Each column says which flow takes its
+state: the one naming it, else one taking records in any state. Where none
+does, or the column lets them rest, as a column of done ones should,
+records rest, and where several do, you pick one for the column. A card
+whose record is being run says so, with the flow, the step it is at and for
+how long. A record whose run fails, or ends leaving it where it was, is
+marked stuck on its card, with why, rather than started again for ever, and
+tried again with a click.
+
 ### People where they count
 
 A review goes to the people whose role it names ("Finance handles Approve

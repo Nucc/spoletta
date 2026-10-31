@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -137,6 +138,15 @@ func logRunStarted(db *sql.DB, id int64) {
 	}
 	if rn.Record != nil {
 		msg += fmt.Sprintf(", on record %d", *rn.Record)
+		// Started by a task board playing; see taskboard_play.go.
+		var board string
+		err := db.QueryRowContext(ctx, "SELECT b.name FROM task_board_runs t JOIN task_boards b ON b.id = t.board_id WHERE t.run_id = ?", id).Scan(&board)
+		switch {
+		case err == nil:
+			msg += fmt.Sprintf(", as the task board %q plays", board)
+		case !errors.Is(err, sql.ErrNoRows):
+			log.Printf("log the start of run %d: %v", id, err)
+		}
 	}
 	if rn.RerunOf != nil {
 		msg += fmt.Sprintf("; a re-run of run %d from %s", *rn.RerunOf, rn.RerunFromName)

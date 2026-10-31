@@ -166,6 +166,13 @@ export const PlayIcon = () => (
   </svg>
 )
 
+// A task board pausing, as Play plays it.
+export const PauseIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path d="M4 2.5h2.75v11H4zM9.25 2.5H12v11H9.25z" fill="currentColor" />
+  </svg>
+)
+
 export const GearIcon = () => (
   <Icon>
     <circle cx="8" cy="8" r="2" />

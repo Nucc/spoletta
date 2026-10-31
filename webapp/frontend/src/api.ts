@@ -605,11 +605,27 @@ export type TaskBoard = {
   access: 'edit'
   columns: TaskColumn[]
   updatedAt: string
+  // Whether it plays, starting its columns' flows on their records, and
+  // who pressed Play, whose runs they are, empty without sign-in; see
+  // taskboard_play.go.
+  playing: boolean
+  playedBy: string
+  // How many of its runs go at once at most.
+  maxRuns: number
+  // Why it stopped playing by itself, if it did since Play was last pressed.
+  stopped: string
+  // How many of the runs it started are going, on its own page.
+  running: number
 }
 
 // Why a column shows no records: its struct was deleted for good, is in the
 // trash, isn't one whoever asks sees, or keeps no records.
 export type TaskColumnProblem = 'gone' | 'trash' | 'hidden' | 'unshared'
+
+// Why the board playing wouldn't start a column's flow: it was deleted, is
+// in the trash, isn't seen or may not be run by whoever the runs would be
+// for, or doesn't query the column's struct.
+export type TaskFlowProblem = 'gone' | 'trash' | 'hidden' | 'denied' | 'unqueried'
 
 export type TaskColumn = {
   name: string
@@ -624,7 +640,22 @@ export type TaskColumn = {
   // What its cards show; null for its key, the first other field, its
   // state and when it was last written.
   card: TaskCard | null
+  // The flow it gives its records to while the board plays, whatever their
+  // state; null for the flow taking each one's state. Its name is empty for
+  // one whoever asks doesn't see.
+  flow: number | null
+  flowName: string
+  // While it names no flow and doesn't rest, on the board's own page: the
+  // flows taking each state it names or its records are in, of which the
+  // board playing picks the one, and whether they take it by querying any
+  // state, as none names it.
+  byState?: { state: string; flows: { id: number; name: string }[]; any?: boolean }[]
+  // How many of its records the board works on at once at most; null for
+  // as many as the board's own limit lets it, 0 for none, its records
+  // resting.
+  maxRuns: number | null
   problem?: TaskColumnProblem
+  flowProblem?: TaskFlowProblem
   // Its records, on the board's own page.
   cards?: TaskCards
 }
@@ -641,6 +672,26 @@ export type TaskCards = {
   // than a search reads.
   matched: number
   truncated: boolean
+  // The run going on each record shown that has one, and why each the
+  // board skips is stuck, by record id.
+  runs: Record<string, CardRun | undefined>
+}
+
+// A record's run as its card shows it: one going on it, running or waiting
+// for a person, or the board's last, which left it stuck: it failed, was
+// interrupted or terminated, ended done leaving the record where it was
+// (unmoved), or the record went round the board's flows too often without
+// a person (rounds). Of one going, when it started, and if its flow is one
+// the board shows, its name and the processes whose steps are going or
+// waiting.
+export type CardRun = {
+  run: number
+  flow: number
+  status: 'running' | 'waiting' | 'stuck'
+  why?: 'failed' | 'interrupted' | 'terminated' | 'unmoved' | 'rounds'
+  started?: string
+  flowName?: string
+  steps?: string[]
 }
 
 // What a column's cards show of each record: the fields picked, in order,
@@ -650,11 +701,19 @@ export type TaskCards = {
 export type TaskCard = { fields: string[]; state: boolean; updated: boolean; run: boolean }
 
 // What is saved of a column.
-export type TaskColumnEdit = { name: string; struct: number | null; query: string; sort: string; card: TaskCard | null }
+export type TaskColumnEdit = {
+  name: string
+  struct: number | null
+  query: string
+  sort: string
+  card: TaskCard | null
+  flow: number | null
+  maxRuns: number | null
+}
 
 // A shared struct a column can hold the records of, with the fields they
-// have, in the board's order, and the one naming them.
-export type TaskStruct = { id: number; name: string; fields: string[]; key: string }
+// have, in the board's order, the one naming them, and its states in order.
+export type TaskStruct = { id: number; name: string; fields: string[]; key: string; states: string[] }
 
 // The task boards whoever asks sees, by name, without their records.
 export function listTaskBoards(): Promise<TaskBoard[]> {
@@ -671,10 +730,27 @@ export function createTaskBoard(name: string, owner?: { kind: 'global' } | { kin
   return request('/api/taskboards', { method: 'POST', body: JSON.stringify({ name, owner }) })
 }
 
-// Saves the board's name and all its columns, in order, and answers with
-// their records.
-export function saveTaskBoard(id: number, board: { name: string; columns: TaskColumnEdit[] }): Promise<TaskBoard> {
+// Saves the board's name, how many of its runs go at once (left out to keep
+// it) and all its columns, in order, and answers with their records.
+export function saveTaskBoard(id: number, board: { name: string; maxRuns?: number; columns: TaskColumnEdit[] }): Promise<TaskBoard> {
   return request(`/api/taskboards/${id}`, { method: 'PUT', body: JSON.stringify(board) })
+}
+
+// Plays the board, its runs whoever asks's, from at once: each record no
+// run is going on goes to the flow taking its state.
+export function playTaskBoard(id: number): Promise<TaskBoard> {
+  return request(`/api/taskboards/${id}/play`, { method: 'POST' })
+}
+
+// Stops the board starting runs; those going go on.
+export function pauseTaskBoard(id: number): Promise<TaskBoard> {
+  return request(`/api/taskboards/${id}/pause`, { method: 'POST' })
+}
+
+// Frees the records the board skips as stuck, to start their column's flow
+// on them again.
+export function retryTaskBoardRecords(id: number, records: number[]): Promise<TaskBoard> {
+  return request(`/api/taskboards/${id}/retry`, { method: 'POST', body: JSON.stringify({ records }) })
 }
 
 export function deleteTaskBoard(id: number): Promise<void> {
@@ -692,9 +768,9 @@ export function listTaskStructs(): Promise<TaskStruct[]> {
 }
 
 // A flow a person may start on a struct's records: one whose queries read
-// them, and why its queries wouldn't select each record asked about, by id,
-// for those they wouldn't.
-export type RecordFlow = { id: number; name: string; off: Record<string, string> }
+// them, the states they take them in ('' for any), and why its queries
+// wouldn't select each record asked about, by id, for those they wouldn't.
+export type RecordFlow = { id: number; name: string; states: string[]; off: Record<string, string> }
 
 // A run going on a record: one started on it, or the one that last moved it
 // on, still running.

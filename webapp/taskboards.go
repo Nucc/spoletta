@@ -20,6 +20,11 @@ package main
 // keep such a column's struct, but picks only shared structs they see. Task
 // boards are people's, as owners are, so they stay out of versions and the
 // setup file.
+//
+// A board playing gives each record to the flow taking its state, or the
+// flow its column names (taskboard_play.go); whoever saves a board keeps a
+// column's flow, but picks only one querying its struct that they may run,
+// as a person starting it on records from the Records page would.
 
 import (
 	"context"
@@ -44,6 +49,18 @@ type taskBoard struct {
 	Access    string       `json:"access"`
 	Columns   []taskColumn `json:"columns"`
 	UpdatedAt time.Time    `json:"updatedAt"`
+	// Whether it plays, starting its columns' flows on their records, and
+	// who pressed Play, whose runs they are, by name, empty without sign-in;
+	// see taskboard_play.go.
+	Playing  bool   `json:"playing"`
+	PlayedBy string `json:"playedBy"`
+	playedBy sql.NullInt64
+	// How many of its runs go at once at most.
+	MaxRuns int `json:"maxRuns"`
+	// Why it stopped playing by itself, if it did since Play was last pressed.
+	Stopped string `json:"stopped"`
+	// How many of the runs it started are going, on its own page.
+	Running int `json:"running"`
 }
 
 // A column of a task board: the struct whose records it holds, null once
@@ -60,9 +77,27 @@ type taskColumn struct {
 	// told: its key, the first other field, its state and when it was last
 	// written.
 	Card *taskCard `json:"card"`
+	// The flow it gives its records to while the board plays, whatever
+	// their state, null for the flow taking each one's state, or once
+	// deleted for good; and its name, empty for one whoever asks doesn't
+	// see.
+	Flow     *int64 `json:"flow"`
+	FlowName string `json:"flowName"`
+	// While it names no flow and doesn't rest, on the board's own page: the
+	// flows taking each state it names or its records shown are in, as the
+	// board playing picks one; see taskboard_play.go.
+	ByState []stateFlows `json:"byState,omitempty"`
+	// How many of its records the board works on at once at most; null for
+	// as many as the board's own limit lets it, 0 for none, its records
+	// resting.
+	MaxRuns *int `json:"maxRuns"`
 	// Why it shows no records, if it doesn't: its struct is gone, in the
 	// trash, not seen by whoever asks, or not a shared struct.
 	Problem string `json:"problem,omitempty"`
+	// Why the board playing wouldn't start its flow, on the board's own
+	// page: the flow is in the trash, not seen or not run by whoever the
+	// runs would be for, or doesn't query its struct (columnFlowProblem).
+	FlowProblem string `json:"flowProblem,omitempty"`
 	// Its records, on the board's own page.
 	Cards *taskCards `json:"cards,omitempty"`
 }
@@ -85,7 +120,7 @@ const maxCardFields = 50
 // before it in extra.
 func scanColumn(rows *sql.Rows, c *taskColumn, extra ...any) error {
 	var card sql.NullString
-	if err := rows.Scan(append(extra, &c.Name, &c.Struct, &c.Query, &c.Sort, &card)...); err != nil {
+	if err := rows.Scan(append(extra, &c.Name, &c.Struct, &c.Query, &c.Sort, &card, &c.Flow, &c.MaxRuns)...); err != nil {
 		return err
 	}
 	if card.Valid {
@@ -96,7 +131,7 @@ func scanColumn(rows *sql.Rows, c *taskColumn, extra ...any) error {
 }
 
 // The columns scanColumn reads, after those before them.
-const columnColumns = "name, struct_id, query, sort, card"
+const columnColumns = "name, struct_id, query, sort, card, flow_id, max_runs"
 
 // What a column shows problem says.
 const (
@@ -118,6 +153,9 @@ type taskCards struct {
 	// more are stored than a search reads.
 	Matched   int  `json:"matched"`
 	Truncated bool `json:"truncated"`
+	// The run going on each record shown that has one, and why each the
+	// board's play skips is stuck, by record id; see taskboard_play.go.
+	Runs map[string]cardRun `json:"runs"`
 }
 
 // How many cards a column shows at most; the Records page shows the rest.
@@ -132,13 +170,13 @@ const (
 )
 
 // The columns of a task board b, for scanTaskBoard.
-var taskBoardColumns = "b.id, b.name, b.updated_at, " + ownerColumnsOf("b")
+var taskBoardColumns = "b.id, b.name, b.updated_at, " + ownerColumnsOf("b") + ", b.playing, b.played_by, " + userLabelColumn("b.played_by") + ", b.max_runs, b.stopped"
 
 func scanTaskBoard(rows interface{ Scan(...any) error }) (taskBoard, error) {
 	b := taskBoard{Access: accessEdit, Columns: []taskColumn{}}
 	var user, team sql.NullInt64
 	var owner string
-	err := rows.Scan(&b.ID, &b.Name, &b.UpdatedAt, &user, &team, &owner)
+	err := rows.Scan(&b.ID, &b.Name, &b.UpdatedAt, &user, &team, &owner, &b.Playing, &b.playedBy, &b.PlayedBy, &b.MaxRuns, &b.Stopped)
 	b.Owner = scanOwner(user, team, owner)
 	return b, err
 }
@@ -227,21 +265,53 @@ func taskStructs(ctx context.Context, db *sql.DB, u *user, ids []int64) (map[int
 	return out, nil
 }
 
-// Names each column's struct and says why its records don't show to the
-// user, if they don't.
+// Names each column's struct and flow and says why its records don't show
+// to the user, if they don't. A flow is named only to those who see it, or
+// who may restore it from the trash.
 func describeColumns(ctx context.Context, db *sql.DB, u *user, columns []taskColumn) (map[int64]taskStruct, error) {
-	var ids []int64
+	var ids, flows []int64
 	for _, c := range columns {
 		if c.Struct != nil {
 			ids = append(ids, *c.Struct)
+		}
+		if c.Flow != nil {
+			flows = append(flows, *c.Flow)
 		}
 	}
 	structs, err := taskStructs(ctx, db, u, ids)
 	if err != nil {
 		return nil, err
 	}
+	names := map[int64]string{}
+	if len(flows) > 0 {
+		edit, editArgs := editableFlows(u)
+		see, seeArgs := visibleFlows(u)
+		args := append(append([]any{}, editArgs...), seeArgs...)
+		for _, id := range flows {
+			args = append(args, id)
+		}
+		err := scanAll(ctx, db, "SELECT f.id, f.name, f.deleted_at IS NOT NULL, "+edit+", "+see+" FROM flows f WHERE f.id IN (?"+strings.Repeat(", ?", len(flows)-1)+")",
+			func(rows *sql.Rows) error {
+				var id int64
+				var name string
+				var trashed, editable, visible bool
+				if err := rows.Scan(&id, &name, &trashed, &editable, &visible); err != nil {
+					return err
+				}
+				if visible || trashed && editable {
+					names[id] = name
+				}
+				return nil
+			}, args...)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for i := range columns {
 		c := &columns[i]
+		if c.Flow != nil {
+			c.FlowName = names[*c.Flow]
+		}
 		if c.Struct == nil {
 			c.Problem = columnGone
 			continue
@@ -279,7 +349,7 @@ func fillCards(ctx context.Context, db *sql.DB, columns []taskColumn, structs ma
 		key, desc := sortParam(c.Sort)
 		matched := rt.table.search().run(parseSearch(c.Query), key, desc)
 		cards := &taskCards{Fields: rt.fields, States: rt.states, Key: keys[root], Records: []sharedRecord{},
-			Matched: len(matched), Truncated: rt.truncated}
+			Matched: len(matched), Truncated: rt.truncated, Runs: map[string]cardRun{}}
 		for _, i := range matched[:min(len(matched), maxColumnCards)] {
 			cards.Records = append(cards.Records, rt.records[i])
 		}
@@ -288,15 +358,19 @@ func fillCards(ctx context.Context, db *sql.DB, columns []taskColumn, structs ma
 	return nil
 }
 
-// What a person saves of a board: its name and all its columns, in order.
+// What a person saves of a board: its name, how many of its runs go at once
+// at most, 0 to keep what it has, and all its columns, in order.
 type taskBoardEdit struct {
 	Name    string `json:"name"`
+	MaxRuns int    `json:"maxRuns"`
 	Columns []struct {
-		Name   string    `json:"name"`
-		Struct *int64    `json:"struct"`
-		Query  string    `json:"query"`
-		Sort   string    `json:"sort"`
-		Card   *taskCard `json:"card"`
+		Name    string    `json:"name"`
+		Struct  *int64    `json:"struct"`
+		Query   string    `json:"query"`
+		Sort    string    `json:"sort"`
+		Card    *taskCard `json:"card"`
+		Flow    *int64    `json:"flow"`
+		MaxRuns *int      `json:"maxRuns"`
 	} `json:"columns"`
 }
 
@@ -311,6 +385,8 @@ func (e *taskBoardEdit) check() string {
 		return fmt.Sprintf("a name is at most %d characters", maxTaskName)
 	case len(e.Columns) > maxTaskColumns:
 		return fmt.Sprintf("a task board has at most %d columns", maxTaskColumns)
+	case e.MaxRuns < 0 || e.MaxRuns > maxBoardRuns:
+		return fmt.Sprintf("a task board runs from 1 to %d flows at once", maxBoardRuns)
 	}
 	for i := range e.Columns {
 		c := &e.Columns[i]
@@ -324,6 +400,10 @@ func (e *taskBoardEdit) check() string {
 			return fmt.Sprintf("the query of %s is at most %d characters", c.Name, maxTaskQuery)
 		case len(c.Sort) > maxTaskName:
 			return fmt.Sprintf("the sort of %s is at most %d characters", c.Name, maxTaskName)
+		case c.MaxRuns != nil && (*c.MaxRuns < 0 || *c.MaxRuns > maxBoardRuns):
+			return fmt.Sprintf("%s works on from 0 to %d records at once", c.Name, maxBoardRuns)
+		case c.MaxRuns != nil && *c.MaxRuns == 0 && c.Flow != nil:
+			return fmt.Sprintf("the records of %s rest, so it names no flow", c.Name)
 		}
 		if c.Card == nil {
 			continue
@@ -346,37 +426,48 @@ func (e *taskBoardEdit) check() string {
 	return ""
 }
 
-func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
-	notFound := func(w http.ResponseWriter) { http.Error(w, "task board not found", http.StatusNotFound) }
-	get := func(w http.ResponseWriter, r *http.Request) (taskBoard, bool) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return taskBoard{}, false
-		}
-		b, err := visibleTaskBoard(r.Context(), db, requestUser(r), id)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			notFound(w)
-			return b, false
-		case err != nil:
-			serverError(w, err)
-			return b, false
-		}
-		return b, true
+// The task board the path's id names, if whoever asks sees it; false once
+// it has answered.
+func taskBoardOf(w http.ResponseWriter, r *http.Request, db *sql.DB) (taskBoard, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return taskBoard{}, false
 	}
-	// The board as whoever asks sees it, its columns described, and with
-	// cards, each column's records.
+	b, err := visibleTaskBoard(r.Context(), db, requestUser(r), id)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		http.Error(w, "task board not found", http.StatusNotFound)
+		return b, false
+	case err != nil:
+		serverError(w, err)
+		return b, false
+	}
+	return b, true
+}
+
+// Answers with the board as whoever asks sees it, its columns described,
+// and with cards, each column's records and what its play does with them.
+func answerTaskBoard(w http.ResponseWriter, r *http.Request, db *sql.DB, status int, b taskBoard, cards bool) {
+	ctx, u := r.Context(), requestUser(r)
+	structs, err := describeColumns(ctx, db, u, b.Columns)
+	if err == nil && cards {
+		err = fillCards(ctx, db, b.Columns, structs)
+	}
+	if err == nil && cards {
+		err = fillPlay(ctx, db, u, &b, structs)
+	}
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, status, b)
+}
+
+func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
+	get := func(w http.ResponseWriter, r *http.Request) (taskBoard, bool) { return taskBoardOf(w, r, db) }
 	answer := func(w http.ResponseWriter, r *http.Request, status int, b taskBoard, cards bool) {
-		structs, err := describeColumns(r.Context(), db, requestUser(r), b.Columns)
-		if err == nil && cards {
-			err = fillCards(r.Context(), db, b.Columns, structs)
-		}
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		writeJSON(w, status, b)
+		answerTaskBoard(w, r, db, status, b, cards)
 	}
 
 	// The boards whoever asks sees, by name, their columns described but
@@ -438,7 +529,8 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 
 	// The shared structs whoever asks sees, by name, to pick a column's
 	// from, each with the fields its records have, in the board's order, and
-	// the one naming them, to pick what its cards show.
+	// the one naming them, to pick what its cards show, and its states in
+	// order, to lay out a column for each.
 	mux.HandleFunc("GET /api/taskboards/structs", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		cond, args := visibleFlows(requestUser(r))
@@ -447,6 +539,7 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			Name   string   `json:"name"`
 			Fields []string `json:"fields"`
 			Key    string   `json:"key"`
+			States []string `json:"states"`
 			root   int64
 		}
 		out := []option{}
@@ -465,6 +558,15 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 			if out[i].Fields, err = recordFields(ctx, db, out[i].root); err == nil {
 				out[i].Key, err = recordKey(ctx, db, out[i].root)
+			}
+			out[i].States = []string{}
+			if err == nil {
+				err = scanAll(ctx, db, "SELECT name FROM object_states WHERE object_id = ? ORDER BY id", func(rows *sql.Rows) error {
+					var name string
+					err := rows.Scan(&name)
+					out[i].States = append(out[i].States, name)
+					return err
+				}, out[i].root)
 			}
 		}
 		if err != nil {
@@ -528,12 +630,13 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 	})
 
-	// Saves the board's name and all its columns, in place of those it had:
-	// {"name", "columns": [{"name", "struct", "query", "sort"}]}. A column
-	// may keep a struct the board has that whoever saves doesn't see, or
-	// that no longer keeps records, and none once it was deleted for good,
-	// so the board can still be saved around it; only a struct new to the
-	// board has to be a shared one they see.
+	// Saves the board's name, its limit and all its columns, in place of
+	// those it had: {"name", "maxRuns", "columns": [{"name", "struct",
+	// "query", "sort", "card", "flow", "maxRuns"}]}. A column may keep a
+	// struct the board has that whoever saves doesn't see, or that no longer
+	// keeps records, and none once it was deleted for good, so the board can
+	// still be saved around it; only a struct new to the board has to be a
+	// shared one they see. Its flow is kept likewise.
 	mux.HandleFunc("PUT /api/taskboards/{id}", func(w http.ResponseWriter, r *http.Request) {
 		b, ok := get(w, r)
 		if !ok {
@@ -590,13 +693,46 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 			return
 		}
+		// A flow new to the board queries its column's struct and is one
+		// whoever saves may start on its records; one the board has stays,
+		// as a struct does, saying on the board if it no longer would.
+		keptFlows := map[int64]bool{}
+		for _, c := range b.Columns {
+			if c.Flow != nil {
+				keptFlows[*c.Flow] = true
+			}
+		}
+		offered := map[int64][]*recordFlow{}
+		for _, c := range e.Columns {
+			if c.Flow == nil || keptFlows[*c.Flow] {
+				continue
+			}
+			if c.Struct == nil || structs[*c.Struct].problem != "" {
+				http.Error(w, fmt.Sprintf("%s shows no records, so no flow can be picked to move them on", c.Name), http.StatusBadRequest)
+				return
+			}
+			root := structs[*c.Struct].root
+			fs, ok := offered[root]
+			if !ok {
+				if fs, err = recordFlows(ctx, db, requestUser(r), root); err != nil {
+					serverError(w, err)
+					return
+				}
+				offered[root] = fs
+			}
+			if !slices.ContainsFunc(fs, func(f *recordFlow) bool { return f.ID == *c.Flow }) {
+				http.Error(w, fmt.Sprintf("the flow picked for %s doesn't query its records, or isn't one you may run", c.Name), http.StatusBadRequest)
+				return
+			}
+		}
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, "UPDATE task_boards SET name = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?", e.Name, b.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE task_boards SET name = ?, max_runs = IF(? = 0, max_runs, ?), updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
+			e.Name, e.MaxRuns, e.MaxRuns, b.ID); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -612,10 +748,10 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 					return
 				}
 			}
-			_, err := tx.ExecContext(ctx, "INSERT INTO task_board_columns (board_id, position, name, struct_id, query, sort, card) VALUES (?, ?, ?, ?, ?, ?, ?)",
-				b.ID, i, c.Name, c.Struct, c.Query, c.Sort, card)
+			_, err := tx.ExecContext(ctx, "INSERT INTO task_board_columns (board_id, position, name, struct_id, query, sort, card, flow_id, max_runs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				b.ID, i, c.Name, c.Struct, c.Query, c.Sort, card, c.Flow, c.MaxRuns)
 			if mysqlErrorIs(err, mysqlErrForeignKey) {
-				http.Error(w, fmt.Sprintf("the struct %s holds the records of isn't there", c.Name), http.StatusBadRequest)
+				http.Error(w, fmt.Sprintf("the struct %s holds the records of, or its flow, isn't there", c.Name), http.StatusBadRequest)
 				return
 			}
 			if err != nil {

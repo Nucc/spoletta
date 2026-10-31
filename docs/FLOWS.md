@@ -492,6 +492,39 @@ repositories:
     another state it shows in that state's column, so states a flow queries
     read as its queue there. Task boards aren't in versions or the setup
     file.
+  - A task board can **play**: while it plays, every record its columns
+    hold that no run is going on goes to the flow taking records in its
+    state, the one flow (of those whoever pressed Play may start on the
+    struct's records) with a query naming that state whose rule holds of
+    the record, or, when no flow names the state, the one querying the
+    struct in any state, and that flow runs on it, a run per record as
+    **Run…** starts one, on the version the flow published if any, else its
+    board as it is (so publish a flow a board plays), for whoever pressed
+    Play, at most as many at once as the board allows (and a column, if it
+    says), the rightmost columns first. A record in a state no flow takes
+    rests in its column; one in a state several flows take waits until its
+    column names the one it goes to, as a column may, giving every record
+    it holds to that flow whatever its state. A column can also let its
+    records rest (**None: its records rest here**), as a column of done
+    records should when a flow queries any state, or that flow would take
+    them too; laid out from a struct's states, the last state's column
+    rests at first. So a lifecycle such as exception `new` → ticket filed →
+    pull request opened → merged is one flow per step, each taking the
+    state its step starts from, with a column per state. A flow meant for a
+    step queries its struct in the step's state, once, and has an output
+    link leaving the record in the next state: a run that ends done with the
+    record still in the state it took it in leaves it **stuck**, as does one
+    that fails or is stopped, and the board skips a stuck record until a
+    person tries it again or corrects it. A record started from the same
+    state five times with no person in between is stuck too, so two flows
+    handing a record back and forth stop. If the step makes a record of
+    another struct (an exception filing a ticket), it still moves the one it
+    took on, such as to `ticketed`. A state waiting on the world outside,
+    such as a pull request in review until someone merges it, is one no
+    flow takes: its records rest until a webhook's or a schedule's run moves
+    them on, as a flow checking and leaving them be would leave them stuck.
+    And don't also schedule a flow a board plays to query the same state, as
+    its runs may take the records the board's are working on.
 - Deleting a flow, procedure or struct moves it to the **trash**, from
   where those who may change it restore it, for 30 days by default. While
   it is there it runs nothing and exports nowhere: a subflow process running

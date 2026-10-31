@@ -7,9 +7,11 @@ package main
 // its cards sort, so it holds the records that query matches as the Records
 // page would list them, and whatever moves a record on, a run or a person
 // correcting it, moves it from column to column. A record two columns'
-// queries match shows in both. Each column picks what its cards show of a
-// record (taskCard). Cards aren't ranked or dragged: a record's state is
-// changed as on the Records page (records.go).
+// queries match shows in both. The board picks what its cards show of the
+// records of each struct its columns hold (taskCard), the field heading
+// them as their ID and the one it links to, such as a Jira ticket's
+// address. Cards aren't ranked or dragged: a record's state is changed as
+// on the Records page (records.go).
 //
 // Each is owned as a flow is (see owners.go): its maker's, a team's or
 // everyone's; those it belongs to see it and change it, and admins
@@ -61,6 +63,10 @@ type taskBoard struct {
 	Stopped string `json:"stopped"`
 	// How many of the runs it started are going, on its own page.
 	Running int `json:"running"`
+	// What its cards of each struct its columns hold show, by the struct's
+	// id; a struct left out shows what they show unless told: its key, the
+	// first other field, its state and when it was last written.
+	Cards map[int64]taskCard `json:"cards"`
 }
 
 // A column of a task board: the struct whose records it holds, null once
@@ -73,10 +79,6 @@ type taskColumn struct {
 	StructName string `json:"structName"`
 	Query      string `json:"query"`
 	Sort       string `json:"sort"`
-	// What its cards show of each record; null for what they show unless
-	// told: its key, the first other field, its state and when it was last
-	// written.
-	Card *taskCard `json:"card"`
 	// The flow it gives its records to while the board plays, whatever
 	// their state, null for the flow taking each one's state, or once
 	// deleted for good; and its name, empty for one whoever asks doesn't
@@ -102,11 +104,15 @@ type taskColumn struct {
 	Cards *taskCards `json:"cards,omitempty"`
 }
 
-// What a column's cards show of each record: the fields picked, in order,
-// the key heading the card and the first other field read as its title;
-// and whether its state, when it was last written, and the run that last
-// moved it on show. A field the struct no longer has shows nothing.
+// What a board's cards of a struct show of each record: the field heading
+// each as its ID, the struct's first unique attribute unless told, and the
+// one holding the address its ID links to, if any, such as the URL of a
+// Jira ticket; the other fields picked, in order, the first read as its
+// title; and whether its state, when it was last written, and the run that
+// last moved it on show. A field the struct no longer has shows nothing.
 type taskCard struct {
+	Key     string   `json:"key,omitempty"`
+	URL     string   `json:"url,omitempty"`
 	Fields  []string `json:"fields"`
 	State   bool     `json:"state"`
 	Updated bool     `json:"updated"`
@@ -116,22 +122,13 @@ type taskCard struct {
 // How many fields a card shows at most.
 const maxCardFields = 50
 
-// Reads a column as stored, with what its cards show, after the columns
-// before it in extra.
+// Reads a column as stored, after the columns before it in extra.
 func scanColumn(rows *sql.Rows, c *taskColumn, extra ...any) error {
-	var card sql.NullString
-	if err := rows.Scan(append(extra, &c.Name, &c.Struct, &c.Query, &c.Sort, &card, &c.Flow, &c.MaxRuns)...); err != nil {
-		return err
-	}
-	if card.Valid {
-		c.Card = &taskCard{}
-		return json.Unmarshal([]byte(card.String), c.Card)
-	}
-	return nil
+	return rows.Scan(append(extra, &c.Name, &c.Struct, &c.Query, &c.Sort, &c.Flow, &c.MaxRuns)...)
 }
 
 // The columns scanColumn reads, after those before them.
-const columnColumns = "name, struct_id, query, sort, card, flow_id, max_runs"
+const columnColumns = "name, struct_id, query, sort, flow_id, max_runs"
 
 // What a column shows problem says.
 const (
@@ -170,14 +167,18 @@ const (
 )
 
 // The columns of a task board b, for scanTaskBoard.
-var taskBoardColumns = "b.id, b.name, b.updated_at, " + ownerColumnsOf("b") + ", b.playing, b.played_by, " + userLabelColumn("b.played_by") + ", b.max_runs, b.stopped"
+var taskBoardColumns = "b.id, b.name, b.updated_at, " + ownerColumnsOf("b") + ", b.playing, b.played_by, " + userLabelColumn("b.played_by") + ", b.max_runs, b.stopped, b.cards"
 
 func scanTaskBoard(rows interface{ Scan(...any) error }) (taskBoard, error) {
-	b := taskBoard{Access: accessEdit, Columns: []taskColumn{}}
+	b := taskBoard{Access: accessEdit, Columns: []taskColumn{}, Cards: map[int64]taskCard{}}
 	var user, team sql.NullInt64
 	var owner string
-	err := rows.Scan(&b.ID, &b.Name, &b.UpdatedAt, &user, &team, &owner, &b.Playing, &b.playedBy, &b.PlayedBy, &b.MaxRuns, &b.Stopped)
+	var cards sql.NullString
+	err := rows.Scan(&b.ID, &b.Name, &b.UpdatedAt, &user, &team, &owner, &b.Playing, &b.playedBy, &b.PlayedBy, &b.MaxRuns, &b.Stopped, &cards)
 	b.Owner = scanOwner(user, team, owner)
+	if err == nil && cards.Valid {
+		err = json.Unmarshal([]byte(cards.String), &b.Cards)
+	}
 	return b, err
 }
 
@@ -359,19 +360,20 @@ func fillCards(ctx context.Context, db *sql.DB, columns []taskColumn, structs ma
 }
 
 // What a person saves of a board: its name, how many of its runs go at once
-// at most, 0 to keep what it has, and all its columns, in order.
+// at most, 0 to keep what it has, all its columns, in order, and what its
+// cards of each struct show, null to keep what they show.
 type taskBoardEdit struct {
 	Name    string `json:"name"`
 	MaxRuns int    `json:"maxRuns"`
 	Columns []struct {
-		Name    string    `json:"name"`
-		Struct  *int64    `json:"struct"`
-		Query   string    `json:"query"`
-		Sort    string    `json:"sort"`
-		Card    *taskCard `json:"card"`
-		Flow    *int64    `json:"flow"`
-		MaxRuns *int      `json:"maxRuns"`
+		Name    string `json:"name"`
+		Struct  *int64 `json:"struct"`
+		Query   string `json:"query"`
+		Sort    string `json:"sort"`
+		Flow    *int64 `json:"flow"`
+		MaxRuns *int   `json:"maxRuns"`
 	} `json:"columns"`
+	Cards map[int64]taskCard `json:"cards"`
 }
 
 // Trims what a person saves of a board and says what is wrong with it, if
@@ -405,23 +407,26 @@ func (e *taskBoardEdit) check() string {
 		case c.MaxRuns != nil && *c.MaxRuns == 0 && c.Flow != nil:
 			return fmt.Sprintf("the records of %s rest, so it names no flow", c.Name)
 		}
-		if c.Card == nil {
-			continue
+	}
+	for s, card := range e.Cards {
+		if len(card.Fields) > maxCardFields {
+			return fmt.Sprintf("cards show at most %d fields", maxCardFields)
 		}
-		if len(c.Card.Fields) > maxCardFields {
-			return fmt.Sprintf("the cards of %s show at most %d fields", c.Name, maxCardFields)
+		if utf8.RuneCountInString(card.Key) > maxTaskName || utf8.RuneCountInString(card.URL) > maxTaskName {
+			return fmt.Sprintf("cards show fields named by up to %d characters", maxTaskName)
 		}
 		// Each field once, in the order picked.
 		fields := []string{}
-		for _, f := range c.Card.Fields {
+		for _, f := range card.Fields {
 			if f == "" || utf8.RuneCountInString(f) > maxTaskName {
-				return fmt.Sprintf("the cards of %s show fields named by up to %d characters", c.Name, maxTaskName)
+				return fmt.Sprintf("cards show fields named by up to %d characters", maxTaskName)
 			}
 			if !slices.Contains(fields, f) {
 				fields = append(fields, f)
 			}
 		}
-		c.Card.Fields = fields
+		card.Fields = fields
+		e.Cards[s] = card
 	}
 	return ""
 }
@@ -631,8 +636,11 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	// Saves the board's name, its limit and all its columns, in place of
-	// those it had: {"name", "maxRuns", "columns": [{"name", "struct",
-	// "query", "sort", "card", "flow", "maxRuns"}]}. A column may keep a
+	// those it had, and what its cards of each struct show, by the struct's
+	// id: {"name", "maxRuns", "columns": [{"name", "struct", "query",
+	// "sort", "flow", "maxRuns"}], "cards": {"<struct>": {"key", "url",
+	// "fields", "state", "updated", "run"}}}, without cards keeping what they
+	// show. Cards of a struct no column holds any more go. A column may keep a
 	// struct the board has that whoever saves doesn't see, or that no longer
 	// keeps records, and none once it was deleted for good, so the board can
 	// still be saved around it; only a struct new to the board has to be a
@@ -725,14 +733,34 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		cards := e.Cards
+		if cards == nil {
+			cards = b.Cards
+		}
+		held := map[int64]taskCard{}
+		for _, c := range e.Columns {
+			if c.Struct == nil {
+				continue
+			}
+			if card, ok := cards[*c.Struct]; ok {
+				held[*c.Struct] = card
+			}
+		}
+		var told []byte
+		if len(held) > 0 {
+			if told, err = json.Marshal(held); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, "UPDATE task_boards SET name = ?, max_runs = IF(? = 0, max_runs, ?), updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
-			e.Name, e.MaxRuns, e.MaxRuns, b.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE task_boards SET name = ?, max_runs = IF(? = 0, max_runs, ?), cards = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
+			e.Name, e.MaxRuns, e.MaxRuns, told, b.ID); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -741,15 +769,8 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		for i, c := range e.Columns {
-			var card []byte
-			if c.Card != nil {
-				if card, err = json.Marshal(c.Card); err != nil {
-					serverError(w, err)
-					return
-				}
-			}
-			_, err := tx.ExecContext(ctx, "INSERT INTO task_board_columns (board_id, position, name, struct_id, query, sort, card, flow_id, max_runs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-				b.ID, i, c.Name, c.Struct, c.Query, c.Sort, card, c.Flow, c.MaxRuns)
+			_, err := tx.ExecContext(ctx, "INSERT INTO task_board_columns (board_id, position, name, struct_id, query, sort, flow_id, max_runs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				b.ID, i, c.Name, c.Struct, c.Query, c.Sort, c.Flow, c.MaxRuns)
 			if mysqlErrorIs(err, mysqlErrForeignKey) {
 				http.Error(w, fmt.Sprintf("the struct %s holds the records of, or its flow, isn't there", c.Name), http.StatusBadRequest)
 				return

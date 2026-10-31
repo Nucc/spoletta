@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,6 +22,17 @@ type taskBoard struct {
 		ID   int64  `json:"id"`
 	} `json:"owner"`
 	Columns []taskColumn `json:"columns"`
+	// What its cards of each struct show, by the struct's id.
+	Cards map[string]taskCardShown `json:"cards"`
+}
+
+type taskCardShown struct {
+	Key     string   `json:"key"`
+	URL     string   `json:"url"`
+	Fields  []string `json:"fields"`
+	State   bool     `json:"state"`
+	Updated bool     `json:"updated"`
+	Run     bool     `json:"run"`
 }
 
 type taskColumn struct {
@@ -29,14 +41,8 @@ type taskColumn struct {
 	StructName string `json:"structName"`
 	Query      string `json:"query"`
 	Sort       string `json:"sort"`
-	Card       *struct {
-		Fields  []string `json:"fields"`
-		State   bool     `json:"state"`
-		Updated bool     `json:"updated"`
-		Run     bool     `json:"run"`
-	} `json:"card"`
-	Problem string `json:"problem"`
-	Cards   *struct {
+	Problem    string `json:"problem"`
+	Cards      *struct {
 		Key     string         `json:"key"`
 		States  []string       `json:"states"`
 		Records []sharedRecord `json:"records"`
@@ -117,7 +123,7 @@ func taskBoardIn(bs []taskBoard, id int64) (taskBoard, bool) {
 func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 	a := newApp(t)
 	n := time.Now().UnixNano()
-	ticket := taskStruct(a, fmt.Sprint("Ticket", n), nil, "key", []string{"summary"}, "new", "review", "done")
+	ticket := taskStruct(a, fmt.Sprint("Ticket", n), nil, "key", []string{"summary", "url"}, "new", "review", "done")
 	pr := taskStruct(a, fmt.Sprint("Pull request", n), nil, "number", []string{"title"}, "open", "in_review")
 	var plain structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": fmt.Sprint("Note", n), "struct": true}, http.StatusCreated, &plain)
@@ -137,12 +143,13 @@ func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 
 	path := fmt.Sprintf("/api/taskboards/%d", b.ID)
 	columns := []map[string]any{
-		{"name": "To do", "struct": ticket.ID, "query": "state:new", "sort": "-@key",
-			"card": map[string]any{"fields": []string{"summary", "key", "summary"}, "updated": true, "run": true}},
+		{"name": "To do", "struct": ticket.ID, "query": "state:new", "sort": "-@key"},
 		{"name": "Review", "struct": pr.ID, "query": "state:in_review"},
 		{"name": "Crashes", "struct": ticket.ID, "query": "crash", "sort": "@key"},
 	}
-	b = taskBoardCall(a, "PUT", path, map[string]any{"name": "Sprint 1", "columns": columns}, http.StatusOK)
+	ticketCard := map[string]any{"key": "summary", "url": "url", "fields": []string{"key", "summary", "key"}, "updated": true, "run": true}
+	cards := map[string]any{fmt.Sprint(ticket.ID): ticketCard}
+	b = taskBoardCall(a, "PUT", path, map[string]any{"name": "Sprint 1", "columns": columns, "cards": cards}, http.StatusOK)
 	if b.Name != "Sprint 1" || len(b.Columns) != 3 {
 		t.Fatalf("saved %+v", b)
 	}
@@ -159,13 +166,19 @@ func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 	if got := taskCards(t, crashes, "key"); !slices.Equal(got, []string{"T-1", "T-3"}) {
 		t.Errorf("crashes holds %v", got)
 	}
-	// What a column's cards show is kept as picked, each field once; a
-	// column told nothing shows what cards show unless told.
-	if c := todo.Card; c == nil || !slices.Equal(c.Fields, []string{"summary", "key"}) || c.State || !c.Updated || !c.Run {
-		t.Errorf("to do's cards show %+v", c)
+	// What the board's cards of a struct show is kept as picked, the field
+	// heading them as the ID and the one it links to, each other field once;
+	// a struct told nothing shows what cards show unless told.
+	shown := func(b taskBoard, s int64) (taskCardShown, bool) {
+		c, ok := b.Cards[fmt.Sprint(s)]
+		return c, ok
 	}
-	if review.Card != nil {
-		t.Errorf("review's cards show %+v, told nothing", review.Card)
+	if c, ok := shown(b, ticket.ID); !ok || c.Key != "summary" || c.URL != "url" || !slices.Equal(c.Fields, []string{"key", "summary"}) ||
+		c.State || !c.Updated || !c.Run {
+		t.Errorf("the tickets' cards show %+v", c)
+	}
+	if c, ok := shown(b, pr.ID); ok {
+		t.Errorf("the pull requests' cards show %+v, told nothing", c)
 	}
 
 	bad := func(c map[string]any, msg string) {
@@ -176,7 +189,15 @@ func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 	bad(map[string]any{"name": "Lost", "struct": 1 << 40}, "isn't there")
 	bad(map[string]any{"name": "Nothing"}, "pick the struct")
 	bad(map[string]any{"name": " ", "struct": ticket.ID}, "needs a name")
-	bad(map[string]any{"name": "Blank", "struct": ticket.ID, "card": map[string]any{"fields": []string{""}}}, "fields named by")
+	badCards := func(card map[string]any, msg string) {
+		t.Helper()
+		a.refused("PUT", path, map[string]any{"name": "Sprint 1", "columns": columns, "cards": map[string]any{fmt.Sprint(ticket.ID): card}},
+			http.StatusBadRequest, msg)
+	}
+	badCards(map[string]any{"fields": []string{""}}, "fields named by")
+	long := strings.Repeat("x", 256)
+	badCards(map[string]any{"key": long, "fields": []string{}}, "fields named by")
+	badCards(map[string]any{"url": long, "fields": []string{}}, "fields named by")
 	a.refused("PUT", path, map[string]any{"name": "", "columns": columns}, http.StatusBadRequest, "needs a name")
 
 	// A record moved on by hand leaves the column for another.
@@ -189,8 +210,8 @@ func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 
 	// The list names each column's struct, without its records.
 	listed, ok := taskBoardIn(taskBoards(a), b.ID)
-	if !ok || len(listed.Columns) != 3 || listed.Columns[1].StructName != pr.Name || listed.Columns[1].Cards != nil ||
-		listed.Columns[0].Card == nil {
+	if _, told := shown(listed, ticket.ID); !ok || len(listed.Columns) != 3 || listed.Columns[1].StructName != pr.Name ||
+		listed.Columns[1].Cards != nil || !told {
 		t.Errorf("listed %+v", listed)
 	}
 	// The structs to pick from, with their fields to pick what cards show.
@@ -207,7 +228,8 @@ func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 		}
 		return nil
 	}
-	if s := of(ticket.ID); s == nil || !slices.Equal(s.Fields, []string{"key", "summary"}) || s.Key != "key" || of(pr.ID) == nil || of(plain.ID) != nil {
+	if s := of(ticket.ID); s == nil || !slices.Equal(s.Fields, []string{"key", "summary", "url"}) || s.Key != "key" || of(pr.ID) == nil ||
+		of(plain.ID) != nil {
 		t.Errorf("the structs to pick from are %+v", structs)
 	}
 
@@ -218,7 +240,11 @@ func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 	if c := b.Columns[1]; c.Problem != "trash" || c.Cards != nil || c.StructName != pr.Name {
 		t.Errorf("review in the trash is %+v", c)
 	}
-	a.call("PUT", path, map[string]any{"name": "Sprint 1", "columns": columns}, http.StatusOK, nil)
+	// Saved without saying what its cards show, the board keeps it.
+	b = taskBoardCall(a, "PUT", path, map[string]any{"name": "Sprint 1", "columns": columns}, http.StatusOK)
+	if c, ok := shown(b, ticket.ID); !ok || c.URL != "url" {
+		t.Errorf("saved without cards, the tickets' cards show %+v", c)
+	}
 	var other taskBoard
 	a.call("POST", "/api/taskboards", map[string]any{"name": "Other"}, http.StatusCreated, &other)
 	otherPath := fmt.Sprintf("/api/taskboards/%d", other.ID)
@@ -237,11 +263,16 @@ func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 	// no struct anew.
 	var kept []map[string]any
 	for _, c := range b.Columns {
-		kept = append(kept, map[string]any{"name": c.Name, "struct": c.Struct, "query": c.Query, "sort": c.Sort, "card": c.Card})
+		kept = append(kept, map[string]any{"name": c.Name, "struct": c.Struct, "query": c.Query, "sort": c.Sort})
 	}
 	b = taskBoardCall(a, "PUT", path, map[string]any{"name": "Sprint 2", "columns": kept}, http.StatusOK)
-	if c := b.Columns[1]; b.Name != "Sprint 2" || c.Struct != nil || c.Problem != "gone" || b.Columns[0].Card == nil {
+	if _, told := shown(b, ticket.ID); b.Name != "Sprint 2" || b.Columns[1].Struct != nil || b.Columns[1].Problem != "gone" || !told {
 		t.Errorf("renamed beside a column deleted for good: %q with %+v", b.Name, b.Columns)
+	}
+	// Once no column holds a struct's records, what its cards showed goes.
+	b = taskBoardCall(a, "PUT", path, map[string]any{"name": "Sprint 2", "columns": kept[1:2]}, http.StatusOK)
+	if len(b.Cards) != 0 {
+		t.Errorf("with no ticket columns left, the board's cards show %+v", b.Cards)
 	}
 	a.refused("PUT", otherPath, map[string]any{"name": "Other", "columns": []any{map[string]any{"name": "Nothing"}}}, http.StatusBadRequest, "pick the struct")
 

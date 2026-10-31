@@ -158,7 +158,9 @@ Task boards lay shared structs' records out in columns, each a struct and a
 query of its records, such as Jira tickets `state:new` beside pull requests
 `state:in_review`. As a flow or a person moves a record into another state it
 moves to that column, so the states a flow works through read as its queue,
-and a card opens its record to correct it or starts a flow on it.
+and a card opens its record to correct it or starts a flow on it. The
+board's settings pick what its cards show, their ID linking to the
+record's own page, such as the ticket in Jira.
 
 A task board can drive records through their whole lifecycle too, a flow
 over flows. Lay its columns out from a struct's states, one for each, and

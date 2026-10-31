@@ -10242,16 +10242,6 @@ a.run-tick:hover {
   min-width: 0;
 }
 
-.task-board-rename input {
-  min-width: 220px;
-  padding: 2px 8px;
-  font: inherit;
-  border: 1px solid #54aeff;
-  border-radius: 6px;
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(84, 174, 255, 0.25);
-}
-
 .task-board-note {
   padding: 16px;
 }
@@ -10273,8 +10263,8 @@ a.run-tick:hover {
   flex: 1;
   min-height: 0;
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: stretch;
+  gap: 16px;
   padding: 16px;
   overflow-x: auto;
 }
@@ -10289,25 +10279,69 @@ a.run-tick:hover {
 
 .home-page > .task-board,
 .home-page > .task-board-note {
-  padding: 20px 24px 16px 8px;
+  padding: 16px 24px 16px 8px;
 }
 
+/* How the board's work goes, over its columns: records running, waiting
+   for a person and stuck, each by a dot in its colour. */
+.task-board-work {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 18px 24px 0 8px;
+  font-size: 12px;
+  color: #656d76;
+}
+
+.task-board-work span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-board-work .running,
+.task-board-work .waiting,
+.task-board-work .stuck {
+  font-weight: 600;
+}
+
+.task-board-work .running::before,
+.task-board-work .waiting::before,
+.task-board-work .stuck::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.task-board-work .running {
+  color: #1a7f37;
+}
+
+.task-board-work .waiting {
+  color: #8250df;
+}
+
+.task-board-work .stuck {
+  color: #bc4c00;
+}
+
+/* A column: its name, how many records it holds and what moves them on;
+   then its cards, in a lane of their own that takes the board's height. */
 .task-column {
-  flex: 0 0 280px;
-  max-height: 100%;
+  flex: 0 0 288px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  background: #f6f8fa;
-  border: 1px solid #d8dee4;
-  border-radius: 10px;
 }
 
 .task-column-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
 .task-column-head h2 {
@@ -10317,17 +10351,31 @@ a.run-tick:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: #1f2328;
 }
 
 .task-column-count {
-  padding: 0 8px;
-  border-radius: 10px;
-  background: #eaeef2;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #656d76;
+}
+
+.task-column-of {
   font-size: 12px;
-  color: #57606a;
+  font-weight: 400;
+}
+
+/* Where its records come from and what moves them on, kept quiet under
+   its name. */
+.task-column-about {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
 }
 
 .task-column-query {
@@ -10344,11 +10392,12 @@ a.run-tick:hover {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #0969da;
+  color: #57606a;
   text-decoration: none;
 }
 
 .task-column-query a:hover {
+  color: #0969da;
   text-decoration: underline;
 }
 
@@ -10359,28 +10408,46 @@ a.run-tick:hover {
   white-space: nowrap;
   padding: 1px 6px;
   font-size: 11px;
-  background: #fff;
-  border: 1px solid #d8dee4;
+  color: #57606a;
+  background: #eaeef2;
   border-radius: 4px;
 }
 
-.task-cards {
+.task-column-lane {
+  flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 0;
-  padding: 2px;
+  gap: 8px;
+  padding: 8px;
+  background: #eceff3;
+  border-radius: 12px;
+}
+
+.task-cards {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Room for a running card's glow, which scrolling would cut off. */
+  margin: -6px;
+  padding: 6px;
   overflow-y: auto;
   list-style: none;
 }
 
+/* A card: the record's key, its title and fields, then what else it shows;
+   the run going on it, or why the board skips it, in a band at its foot,
+   with an edge in the same colour. */
 .task-card {
   position: relative;
   flex-shrink: 0;
+  overflow: hidden;
   background: #fff;
   border: 1px solid #d8dee4;
-  border-radius: 8px;
+  border-radius: 10px;
+  box-shadow: 0 1px 0 rgba(31, 35, 40, 0.04);
 }
 
 .task-card:hover {
@@ -10390,11 +10457,10 @@ a.run-tick:hover {
 .task-card-open {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   width: 100%;
-  padding: 8px 34px 8px 10px;
+  padding: 10px 36px 8px 12px;
   border: none;
-  border-radius: 8px;
   background: none;
   color: inherit;
   font: inherit;
@@ -10402,11 +10468,43 @@ a.run-tick:hover {
   cursor: pointer;
 }
 
+.task-card-open:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: -2px;
+  border-radius: 10px;
+}
+
 .task-card-key {
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  color: #57606a;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #656d76;
+}
+
+/* An ID linked to the record's own page, outside the button opening the
+   record, where the button's first line would be. */
+.task-card-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: calc(100% - 48px);
+  margin: 10px 36px 0 12px;
+  color: #0969da;
+  text-decoration: none;
+}
+
+.task-card-link:hover {
+  text-decoration: underline;
+}
+
+.task-card-link svg {
+  flex-shrink: 0;
+}
+
+.task-card-link + .task-card-open {
+  padding-top: 3px;
 }
 
 .task-card-summary {
@@ -10415,7 +10513,9 @@ a.run-tick:hover {
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
-  font-size: 13px;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.35;
   color: #1f2328;
 }
 
@@ -10439,27 +10539,29 @@ a.run-tick:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-top: -4px;
-  padding: 0 10px 8px;
-  font-size: 11px;
+  gap: 4px 8px;
+  padding: 0 12px 10px;
+  font-size: 11.5px;
   color: #656d76;
 }
 
 .task-card-meta a {
-  color: #0969da;
+  color: #656d76;
   text-decoration: none;
 }
 
 .task-card-meta a:hover {
+  color: #0969da;
   text-decoration: underline;
 }
 
 .task-card-state {
-  padding: 0 6px;
-  border-radius: 8px;
-  background: #ddf4ff;
-  color: #0969da;
+  padding: 0 7px;
+  line-height: 18px;
+  border: 1px solid #d8dee4;
+  border-radius: 9px;
+  background: #f6f8fa;
+  color: #57606a;
 }
 
 .task-card-run {
@@ -10481,7 +10583,15 @@ a.run-tick:hover {
 }
 
 .task-column-empty {
-  margin: 2px;
+  margin: 0;
+  padding: 20px 8px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #8c959f;
+}
+
+.task-column-note {
+  margin: 0 4px;
   font-size: 12px;
   color: #656d76;
 }
@@ -10496,12 +10606,27 @@ a.run-tick:hover {
   border-radius: 6px;
 }
 
+/* At the lane's foot, quiet until it is pointed at. */
 .task-column-add {
-  align-self: flex-start;
-  display: inline-flex;
+  flex-shrink: 0;
+  display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: #656d76;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-column-add:hover {
+  background: #e1e6eb;
+  color: #1f2328;
 }
 
 .task-column-form {
@@ -10551,6 +10676,14 @@ a.run-tick:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 16px;
+}
+
+/* The field heading the cards as their ID, and the one it links to, side
+   by side. */
+.task-card-ids {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .task-card-pick-note {
@@ -10645,7 +10778,7 @@ a.run-tick:hover {
   gap: 6px;
   margin: 0;
   font-size: 12px;
-  color: #656d76;
+  color: #8c959f;
 }
 
 .task-column-flow svg {
@@ -10655,11 +10788,12 @@ a.run-tick:hover {
 }
 
 .task-column-flow a {
-  color: #0969da;
+  color: #57606a;
   text-decoration: none;
 }
 
 .task-column-flow a:hover {
+  color: #0969da;
   text-decoration: underline;
 }
 
@@ -10667,72 +10801,94 @@ a.run-tick:hover {
 .task-column-rest {
   margin: 0;
   font-size: 12px;
-  color: #656d76;
+  color: #8c959f;
 }
 
 .task-column-going {
-  padding: 0 6px;
-  border-radius: 8px;
+  padding: 0 7px;
+  line-height: 18px;
+  border-radius: 9px;
   background: #dafbe1;
   color: #1a7f37;
+  font-weight: 600;
 }
 
+/* The records the board skips as stuck, to try again at once. */
 .task-column-stuck {
-  display: flex;
+  align-self: flex-start;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin: 0;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 3px 3px 3px 8px;
   font-size: 12px;
-  color: #9a6700;
+  font-weight: 600;
+  color: #bc4c00;
+  background: #fff1e5;
+  border-radius: 7px;
 }
 
-/* The run going on a card's record, or why the board skips it as stuck. */
+.task-column-stuck svg {
+  width: 12px;
+  height: 12px;
+}
+
+.task-column-stuck button,
+.task-card-retry {
+  padding: 1px 8px;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: #fff;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.task-column-stuck button:hover,
+.task-card-retry:hover {
+  background: #fff8f2;
+}
+
+/* The run going on a card's record, or why the board skips it as stuck,
+   as a band across the card's foot. */
 .task-card-work {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-top: -4px;
-  padding: 0 10px 8px;
-  font-size: 11px;
+  gap: 4px 8px;
+  padding: 7px 12px;
+  font-size: 11.5px;
   color: #656d76;
+  border-top: 1px solid #eaeef2;
 }
 
 .task-card-work a {
-  color: #0969da;
+  color: #656d76;
   text-decoration: none;
 }
 
 .task-card-work a:hover {
+  color: #0969da;
   text-decoration: underline;
-}
-
-.task-card-work .link-button {
-  font-size: 11px;
 }
 
 .task-card-work-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 0 6px;
-  border-radius: 8px;
+  font-weight: 600;
 }
 
-.task-card-work.running .task-card-work-status {
-  background: #dafbe1;
-  color: #1a7f37;
-}
-
-.task-card-work.waiting .task-card-work-status {
-  background: #fbefff;
-  color: #8250df;
+.task-card-work-status svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* A run going on the record, pulsing as the board's Playing does. */
 .task-card-work-dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: currentColor;
   animation: task-board-going 1.6s ease-in-out infinite;
@@ -10743,30 +10899,84 @@ a.run-tick:hover {
   font-weight: 500;
 }
 
-.task-card:has(.task-card-work.running) {
-  border-color: rgba(26, 127, 55, 0.55);
-  box-shadow: inset 3px 0 0 #1a7f37;
+.task-card.running .task-card-work > a,
+.task-card.waiting .task-card-work > a {
+  margin-left: auto;
 }
 
-.task-card:has(.task-card-work.waiting) {
-  border-color: rgba(130, 80, 223, 0.5);
-  box-shadow: inset 3px 0 0 #8250df;
+/* Running as a process running on a flow's board does, its yellow edge
+   pulsing. */
+.task-card.running {
+  border-color: #bf8700;
+  animation: process-pulse 1s ease-in-out infinite;
+}
+
+.task-card.running .task-card-work {
+  background: #fff8c5;
+  border-top-color: #f5e0a0;
+}
+
+.task-card.running .task-card-work-status {
+  color: #9a6700;
+}
+
+.task-card.running .task-card-work-dot {
+  background: #bf8700;
+}
+
+.task-card.waiting {
+  border-color: #8250df;
+}
+
+.task-card.waiting .task-card-work {
+  background: #faf6ff;
+  border-top-color: #eadcfc;
+}
+
+.task-card.waiting .task-card-work-status {
+  color: #8250df;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .task-card-work-dot {
     animation: none;
   }
+
+  .task-card.running {
+    animation: none;
+    box-shadow: 0 0 0 3px rgba(191, 135, 0, 0.25);
+  }
 }
 
-.task-card-work.stuck .task-card-work-status {
-  background: #fff8c5;
-  color: #9a6700;
+/* Stuck as its run went wrong, in red; as it ended well but left the
+   record where it was, or went round too often, in orange. */
+.task-card.stuck {
+  border-color: #bc4c00;
+}
+
+.task-card.stuck .task-card-work {
+  color: #bc4c00;
+  background: #fff6ef;
+  border-top-color: #ffdcc2;
+}
+
+.task-card.stuck.broke {
+  border-color: #cf222e;
+}
+
+.task-card.stuck.broke .task-card-work {
+  color: #cf222e;
+  background: #fff5f5;
+  border-top-color: #ffd5d2;
+}
+
+.task-card.stuck .task-card-work-status {
   cursor: help;
 }
 
-.task-card:has(.task-card-work.stuck) {
-  border-color: rgba(212, 167, 44, 0.6);
+.task-card-retry {
+  margin-left: auto;
+  font-size: 11.5px;
 }
 
 /* The flow moving a column's records on, and its limit, as one group. */

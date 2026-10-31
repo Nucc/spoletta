@@ -23,7 +23,19 @@ import {
   type TaskStruct,
 } from './api'
 import { type Json } from './Data'
-import { FlowBuilderIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, TableIcon, TaskBoardIcon } from './icons'
+import {
+  AlertIcon,
+  ExternalIcon,
+  FlowBuilderIcon,
+  GearIcon,
+  PauseIcon,
+  PencilIcon,
+  PlayIcon,
+  PlusIcon,
+  TableIcon,
+  TaskBoardIcon,
+} from './icons'
+import { timeAgo } from './home'
 import { indexFacets, parse, quote, selection, type Facets } from './query'
 import { RecordDialog } from './RecordDialog'
 import { RecordRunDialog } from './RecordRunDialog'
@@ -47,32 +59,42 @@ const editOf = (c: TaskColumn): TaskColumnEdit => ({
   struct: c.struct,
   query: c.query,
   sort: c.sort,
-  card: c.card,
   flow: c.flow,
   maxRuns: c.maxRuns,
 })
 
-// What a column's cards show unless told: the record's key, the struct's
-// first other field as the title, its state and when it was last written.
+// What a board's cards of a struct show unless told: the record's key as
+// its ID, the struct's first other field as the title, its state and when
+// it was last written.
 const defaultCard = (fields: string[], key: string): TaskCard => ({
-  fields: [key, ...fields.filter((f) => f !== key).slice(0, 1)].filter((f) => f !== ''),
+  fields: fields.filter((f) => f !== key).slice(0, 1),
   state: true,
   updated: true,
   run: false,
 })
 
+// What the board's cards of a column's struct show.
+const cardOf = (board: TaskBoard, c: TaskColumn, cards: TaskCards): TaskCard =>
+  (c.struct !== null && board.cards[c.struct]) || defaultCard(cards.fields, cards.key)
+
+// A field's value as the address a card's ID links to: only a web page's,
+// so a value such as javascript: stays text.
+const linkOf = (v: string | null): string | null => (v !== null && /^https?:\/\//i.test(v.trim()) ? v.trim() : null)
+
 // A task board's page, #/taskboards/<id>: a column for each of its queries
 // of a shared struct's records, as the Records page searches them, each
-// record a card showing what the column picks of it: its key heading it,
-// a field as its title and others under it, its state, when it was last
-// written and the run that last moved it on. The records are asked for again
-// every so often, and as the page is shown again, so cards go from column
-// to column as flows and people move them on. A card opens its record, to
-// correct it as on the Records page, or starts a flow on it. A column adds
-// a record, in the state its query names if it names one, opens its records
-// on the Records page, and is changed or taken off the board; the board is
-// renamed in place, and columns are laid out from a struct's states, one
-// for each.
+// record a card showing what the board picks of its struct's records: a
+// field as its ID, linked to the address another holds if told, such as
+// the ticket's page in Jira, a field as its title and others under it, its
+// state, when it was last written and the run that last moved it on. The
+// records are asked for again every so often, and as the page is shown
+// again, so cards go from column to column as flows and people move them
+// on. A card opens its record, to correct it as on the Records page, or
+// starts a flow on it. A column adds a record, in the state its query names
+// if it names one, opens its records on the Records page, and is changed or
+// taken off the board; the board's settings rename it and pick what its
+// cards show, and columns are laid out from a struct's states, one for
+// each.
 //
 // Play keeps giving each record no run is going on to the flow taking its
 // state, a run per record, as many at once as the board allows, or to the
@@ -81,7 +103,8 @@ const defaultCard = (fields: string[], key: string): TaskCard => ({
 // none starts. A card shows the run going on its record, its flow, the
 // steps going and for how long, asked for every couple of seconds while
 // the board plays or runs go, or that the board skips it as stuck and why,
-// to try again.
+// to try again. Over the columns, how many records of the whole board run,
+// wait or are stuck.
 export default function TaskBoardPage({ id }: { id: number }) {
   const [board, setBoard] = useState<TaskBoard | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -92,7 +115,8 @@ export default function TaskBoardPage({ id }: { id: number }) {
   const [opened, setOpened] = useState<{ column: number; record: SharedRecord | null } | null>(null)
   // The record a flow is being started on.
   const [running, setRunning] = useState<{ struct: number; name: string; record: number } | null>(null)
-  const [renaming, setRenaming] = useState<string | null>(null)
+  // Whether the board's settings are open.
+  const [setting, setSetting] = useState(false)
   // Whether columns are being laid out from a struct's states.
   const [laying, setLaying] = useState(false)
   // Only the answer to the latest ask shows, so a slow one doesn't undo a save.
@@ -157,6 +181,14 @@ export default function TaskBoardPage({ id }: { id: number }) {
             words: 'task board columns states lifecycle',
             run: () => setLaying(true),
           },
+          {
+            id: 'taskboard:settings',
+            title: 'Task board settings',
+            group: 'Task board',
+            hint: `Rename ${board.name}, and pick what its cards show`,
+            words: 'task board settings rename name cards fields id url link',
+            run: () => setSetting(true),
+          },
           board.playing
             ? {
                 id: 'taskboard:pause',
@@ -178,32 +210,16 @@ export default function TaskBoardPage({ id }: { id: number }) {
       : [],
   }))
 
-  // Saves the board's name and columns, which come back with their records.
+  // Saves the board's name and columns, which come back with their records;
+  // what its cards show stays.
   const save = (name: string, columns: TaskColumnEdit[]) => change(() => saveTaskBoard(id, { name, columns }))
 
-  // Renames it once, on Enter or leaving the name, but not after Escape:
-  // what is typed is kept in a ref too, as leaving the name follows either.
-  const typed = useRef<string | null>(null)
-  const typeName = (name: string | null) => {
-    typed.current = name
-    setRenaming(name)
-  }
-  const rename = () => {
-    const name = typed.current?.trim()
-    typeName(null)
-    if (!board || !name || name === board.name) return
-    setActionError(null)
-    save(name, board.columns.map(editOf)).catch((err) => setActionError(message(err)))
-  }
-
-  // The columns with the one changed, or a new one, in the place picked,
-  // and with everywhere, the board's other columns of its struct showing
-  // on their cards what it shows.
-  const placed = (edit: TaskColumnEdit, at: number, everywhere: boolean): TaskColumnEdit[] => {
+  // The columns with the one changed, or a new one, in the place picked.
+  const placed = (edit: TaskColumnEdit, at: number): TaskColumnEdit[] => {
     const columns = board!.columns.map(editOf)
     if (editing !== 'new' && editing !== null) columns.splice(editing, 1)
     columns.splice(at, 0, edit)
-    return everywhere ? columns.map((c) => (c.struct === edit.struct ? { ...c, card: edit.card } : c)) : columns
+    return columns
   }
 
   const column = opened !== null ? board?.columns[opened.column] : undefined
@@ -219,32 +235,12 @@ export default function TaskBoardPage({ id }: { id: number }) {
           <span className="crumb-separator" aria-hidden>
             /
           </span>
-          {renaming !== null ? (
-            <form
-              className="task-board-rename"
-              onSubmit={(e) => {
-                e.preventDefault()
-                rename()
-              }}
-            >
-              <input
-                autoFocus
-                aria-label="The task board's name"
-                maxLength={255}
-                value={renaming}
-                onChange={(e) => typeName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Escape' && typeName(null)}
-                onBlur={rename}
-              />
-            </form>
-          ) : (
-            <span className="task-board-name">
-              <TaskBoardIcon /> {board?.name ?? '…'}
-            </span>
-          )}
+          <span className="task-board-name">
+            <TaskBoardIcon /> {board?.name ?? '…'}
+          </span>
         </h1>
-        <button onClick={() => board && typeName(board.name)} disabled={!board || renaming !== null} title="Rename the task board">
-          Rename
+        <button onClick={() => setSetting(true)} disabled={!board} title="Rename the task board, and pick what its cards show">
+          <GearIcon /> Settings
         </button>
         <button onClick={() => setEditing('new')} disabled={!board} title="Add a column of a shared struct's records">
           <PlusIcon /> Add column
@@ -293,30 +289,32 @@ export default function TaskBoardPage({ id }: { id: number }) {
             </button>
           </div>
         ) : (
-          <main className="task-board">
-            {board.columns.map((c, i) => (
-              <Column
-                key={i}
-                column={c}
-                runner={board.playing && board.playedBy ? board.playedBy : ''}
-                onEdit={() => setEditing(i)}
-                onOpen={(record) => setOpened({ column: i, record })}
-                onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
-                onRetry={retry}
-              />
-            ))}
-          </main>
+          <>
+            <BoardWork columns={board.columns} />
+            <main className="task-board">
+              {board.columns.map((c, i) => (
+                <Column
+                  key={i}
+                  column={c}
+                  card={c.cards ? cardOf(board, c, c.cards) : null}
+                  runner={board.playing && board.playedBy ? board.playedBy : ''}
+                  onEdit={() => setEditing(i)}
+                  onOpen={(record) => setOpened({ column: i, record })}
+                  onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
+                  onRetry={retry}
+                />
+              ))}
+            </main>
+          </>
         )}
       </HomeFrame>
       {editing !== null && board && (
         <ColumnDialog
           column={editing === 'new' ? null : board.columns[editing]}
-          cardFor={(s) => board.columns.find((c) => c.struct === s && c.card !== null)?.card ?? null}
-          others={(s) => board.columns.filter((c, i) => c.struct === s && i !== editing).length}
           places={board.columns.length + (editing === 'new' ? 1 : 0)}
           place={editing === 'new' ? board.columns.length : editing}
-          onSave={async (edit, at, everywhere) => {
-            await save(board.name, placed(edit, at, everywhere))
+          onSave={async (edit, at) => {
+            await save(board.name, placed(edit, at))
             setEditing(null)
           }}
           onRemove={
@@ -333,12 +331,21 @@ export default function TaskBoardPage({ id }: { id: number }) {
       {laying && board && (
         <StatesDialog
           columns={board.columns}
-          cardFor={(s) => board.columns.find((c) => c.struct === s && c.card !== null)?.card ?? null}
           onAdd={async (added) => {
             await save(board.name, [...board.columns.map(editOf), ...added])
             setLaying(false)
           }}
           onClose={() => setLaying(false)}
+        />
+      )}
+      {setting && board && (
+        <BoardSettings
+          board={board}
+          onSave={async (name, cards) => {
+            await change(() => saveTaskBoard(id, { name, columns: board.columns.map(editOf), cards }))
+            setSetting(false)
+          }}
+          onClose={() => setSetting(false)}
         />
       )}
       {opened !== null && column?.cards && struct !== null && (
@@ -535,9 +542,9 @@ function flowProblemOf(c: TaskColumn, runner: string) {
 // to try again at once.
 function ColumnFlow({ column: c, runner, onRetry }: { column: TaskColumn; runner: string; onRetry: (records: number[]) => void }) {
   if (c.maxRuns === 0) return <p className="task-column-rest">Records rest here; the board starts no flow on them.</p>
-  const runs = Object.entries(c.cards?.runs ?? {})
-  const going = runs.filter(([, r]) => r && r.status !== 'stuck').length
-  const stuck = runs.filter(([, r]) => r?.status === 'stuck').map(([id]) => Number(id))
+  const work = workOf(c)
+  const going = work.running + work.waiting
+  const stuck = work.stuck
   const named = c.flow !== null
   const states = c.byState ?? []
   const one = states.filter((s) => s.flows.length === 1)
@@ -594,8 +601,9 @@ function ColumnFlow({ column: c, runner, onRetry }: { column: TaskColumn; runner
       {c.flowProblem && <p className="task-column-problem">{flowProblemOf(c, runner)}</p>}
       {stuck.length > 0 && (
         <p className="task-column-stuck">
+          <AlertIcon />
           {stuck.length} stuck
-          <button className="link-button" onClick={() => onRetry(stuck)} title="Start the flow on them again, from the board's next turn">
+          <button onClick={() => onRetry(stuck)} title="Start the flow on them again, from the board's next turn">
             Try {stuck.length === 1 ? 'it' : 'them'} again
           </button>
         </p>
@@ -604,8 +612,40 @@ function ColumnFlow({ column: c, runner, onRetry }: { column: TaskColumn; runner
   )
 }
 
+// The work on a column's records: how many have a run going, running or
+// waiting for a person, and those the board skips as stuck, by id.
+function workOf(c: TaskColumn): { running: number; waiting: number; stuck: number[] } {
+  const runs = Object.entries(c.cards?.runs ?? {}).flatMap(([id, r]) => (r ? [{ id: Number(id), status: r.status }] : []))
+  return {
+    running: runs.filter((r) => r.status === 'running').length,
+    waiting: runs.filter((r) => r.status === 'waiting').length,
+    stuck: runs.filter((r) => r.status === 'stuck').map((r) => r.id),
+  }
+}
+
+// How the board's work goes, over its columns, as some may be scrolled out
+// of sight: its records running, waiting for a person and stuck, each
+// counted once though two columns hold it.
+function BoardWork({ columns }: { columns: TaskColumn[] }) {
+  const status = new Map<string, CardRun['status']>()
+  for (const c of columns) for (const [id, r] of Object.entries(c.cards?.runs ?? {})) if (r) status.set(`${c.struct}:${id}`, r.status)
+  const all = [...status.values()]
+  const running = all.filter((s) => s === 'running').length
+  const waiting = all.filter((s) => s === 'waiting').length
+  const stuck = all.filter((s) => s === 'stuck').length
+  return (
+    <p className="task-board-work">
+      {running > 0 && <span className="running">{running} running</span>}
+      {waiting > 0 && <span className="waiting">{waiting} waiting for a person</span>}
+      {stuck > 0 && <span className="stuck">{stuck} stuck</span>}
+      {running + waiting + stuck === 0 && <span>Nothing running</span>}
+    </p>
+  )
+}
+
 function Column({
   column: c,
+  card,
   runner,
   onEdit,
   onOpen,
@@ -613,6 +653,8 @@ function Column({
   onRetry,
 }: {
   column: TaskColumn
+  // What the board's cards of its struct show, while it shows its records.
+  card: TaskCard | null
   // Whose the board's runs are while it plays, by name; empty when it
   // doesn't, or nobody signs in.
   runner: string
@@ -637,7 +679,13 @@ function Column({
                 : 'The records its query matches'
             }
           >
-            {shown < cards.matched ? `${shown} of ${cards.matched}` : cards.matched}
+            {shown < cards.matched ? (
+              <>
+                {shown} <span className="task-column-of">of {cards.matched}</span>
+              </>
+            ) : (
+              cards.matched
+            )}
           </span>
         )}
         <button
@@ -649,47 +697,51 @@ function Column({
           <PencilIcon />
         </button>
       </header>
-      <p className="task-column-query">
-        {c.struct !== null && !c.problem ? (
-          <a href={recordsHash(c)} title="Open these records in a table, on the struct's Records page">
-            <TableIcon /> {c.structName}
-          </a>
-        ) : (
-          c.structName && <span>{c.structName}</span>
-        )}
-        {c.query && <code title={c.query}>{c.query}</code>}
-      </p>
-      {!c.problem && <ColumnFlow column={c} runner={runner} onRetry={onRetry} />}
-      {cards ? (
-        <>
-          {cards.records.length === 0 ? (
-            <p className="task-column-empty">No records match.</p>
+      <div className="task-column-about">
+        <p className="task-column-query">
+          {c.struct !== null && !c.problem ? (
+            <a href={recordsHash(c)} title="Open these records in a table, on the struct's Records page">
+              <TableIcon /> {c.structName}
+            </a>
           ) : (
-            <ol className="task-cards">
-              {cards.records.map((r) => (
-                <Card
-                  key={r.id}
-                  record={r}
-                  cards={cards}
-                  card={c.card ?? defaultCard(cards.fields, cards.key)}
-                  run={cards.runs[r.id]}
-                  onOpen={() => onOpen(r)}
-                  onRun={() => onRun(r.id)}
-                  onRetry={() => onRetry([r.id])}
-                />
-              ))}
-            </ol>
+            c.structName && <span>{c.structName}</span>
           )}
-          {cards.truncated && (
-            <p className="task-column-empty">Of the latest records written only, as there are more than a search reads.</p>
-          )}
-          <button className="link-button task-column-add" onClick={() => onOpen(null)} title="Add a record by hand">
-            <PlusIcon size={10} /> Add a record
-          </button>
-        </>
-      ) : (
-        <p className="task-column-problem">{problemOf(c)}</p>
-      )}
+          {c.query && <code title={c.query}>{c.query}</code>}
+        </p>
+        {!c.problem && <ColumnFlow column={c} runner={runner} onRetry={onRetry} />}
+      </div>
+      <div className="task-column-lane">
+        {cards ? (
+          <>
+            {cards.records.length === 0 ? (
+              <p className="task-column-empty">No records match.</p>
+            ) : (
+              <ol className="task-cards">
+                {cards.records.map((r) => (
+                  <Card
+                    key={r.id}
+                    record={r}
+                    cards={cards}
+                    card={card ?? defaultCard(cards.fields, cards.key)}
+                    run={cards.runs[r.id]}
+                    onOpen={() => onOpen(r)}
+                    onRun={() => onRun(r.id)}
+                    onRetry={() => onRetry([r.id])}
+                  />
+                ))}
+              </ol>
+            )}
+            {cards.truncated && (
+              <p className="task-column-note">Of the latest records written only, as there are more than a search reads.</p>
+            )}
+            <button className="task-column-add" onClick={() => onOpen(null)} title="Add a record by hand">
+              <PlusIcon size={12} /> Add a record
+            </button>
+          </>
+        ) : (
+          <p className="task-column-problem">{problemOf(c)}</p>
+        )}
+      </div>
     </section>
   )
 }
@@ -743,22 +795,30 @@ function CardWork({ run, onRetry }: { run: CardRun; onRetry: () => void }) {
   return (
     <div className="task-card-work stuck">
       <span className="task-card-work-status" title={full}>
+        <AlertIcon />
         Stuck: {short}
       </span>
       {link}
-      <button className="link-button" onClick={onRetry} title="Start its column's flow on it again, from the board's next turn">
+      <button className="task-card-retry" onClick={onRetry} title="Start its column's flow on it again, from the board's next turn">
         Try again
       </button>
     </div>
   )
 }
 
-// A record as a card, showing what its column picks: its key heading it,
-// the first other field picked as its title and the rest under it, each
-// named, those it has no value for left out; then its state, when it was
-// last written, and the run that last moved it on, linked to it; and the
-// run going on it, or why the board skips it as stuck. A card with nothing
-// else to show is named by its key.
+// Whether a stuck record's run went wrong, failing or cut short, or ended
+// well but left it where it was, or went round too often: the first wants
+// what failed fixed, the others the flow or the record looked at.
+const brokeOf = (run: CardRun) => run.why === undefined || run.why === 'failed' || run.why === 'interrupted' || run.why === 'terminated'
+
+// A record as a card, showing what the board picks of its struct's: the
+// field picked as its ID heading it, else its key, linked to the address
+// the field picked for it holds, which opens in a tab of its own, or else
+// opening the record with the rest; the first other field picked as its
+// title and the rest under it, each named, those it has no value for left
+// out; then its state, when it was last written, and the run that last
+// moved it on, linked to it; and the run going on it, or why the board
+// skips it as stuck.
 function Card({
   record,
   cards,
@@ -778,14 +838,22 @@ function Card({
 }) {
   const content = isFields(record.content as Json) ? (record.content as { [key: string]: Json }) : {}
   const key = keyOf(record, cards)
-  const keyShown = cards.key !== '' && card.fields.includes(cards.key)
-  const [title, ...rest] = card.fields.filter((f) => f !== cards.key).map((f) => [f, shownOf(content[f])] as const)
-  const heading = title?.[1] ?? (keyShown ? null : key)
+  const idField = card.key || cards.key
+  const id = textOf(content[idField]) ?? key
+  const href = card.url ? linkOf(textOf(content[card.url])) : null
+  const [title, ...rest] = card.fields.filter((f) => f !== idField).map((f) => [f, shownOf(content[f])] as const)
+  const heading = title?.[1] ?? null
   const run = card.run && record.run !== null
+  const look = !work ? '' : work.status !== 'stuck' ? ` ${work.status}` : brokeOf(work) ? ' stuck broke' : ' stuck'
   return (
-    <li className="task-card">
+    <li className={`task-card${look}`}>
+      {href && (
+        <a className="task-card-key task-card-link" href={href} target="_blank" rel="noopener noreferrer" title={`Open ${href}`}>
+          {id} <ExternalIcon size={11} />
+        </a>
+      )}
       <button className="task-card-open" onClick={onOpen} title="Show the record, to correct it">
-        {keyShown && <span className="task-card-key">{key}</span>}
+        {!href && <span className="task-card-key">{id}</span>}
         {heading && <span className="task-card-summary">{heading}</span>}
         {rest.map(
           ([f, v]) =>
@@ -799,7 +867,11 @@ function Card({
       {(card.state || card.updated || run) && (
         <div className="task-card-meta">
           {card.state && <span className="task-card-state">{record.state || 'no state'}</span>}
-          {card.updated && <time dateTime={record.updated}>{formatTime(record.updated)}</time>}
+          {card.updated && (
+            <time dateTime={record.updated} title={`Last written ${formatTime(record.updated)}`}>
+              {timeAgo(record.updated, Date.now())}
+            </time>
+          )}
           {card.updated && record.edited && (
             <span title={`Corrected by hand${record.editedBy ? ` by ${record.editedBy}` : ''} since a run last moved it on`}>edited</span>
           )}
@@ -814,39 +886,83 @@ function Card({
         </div>
       )}
       {work && <CardWork run={work} onRetry={onRetry} />}
-      <button className="icon-button task-card-run" aria-label={`Run a flow on ${key}`} title="Run a flow on this record" onClick={onRun}>
+      <button className="icon-button task-card-run" aria-label={`Run a flow on ${id}`} title="Run a flow on this record" onClick={onRun}>
         <PlayIcon />
       </button>
     </li>
   )
 }
 
-// What a column's cards can show of a record besides its fields.
-const RECORD_INFO: [keyof Omit<TaskCard, 'fields'>, string][] = [
+// What a board's cards can show of a record besides its fields.
+const RECORD_INFO: [keyof Omit<TaskCard, 'fields' | 'key' | 'url'>, string][] = [
   ['state', 'Its state'],
   ['updated', 'When it was last written'],
   ['run', 'The run that last moved it on'],
 ]
 
-// The checklist of what a column's cards show: the struct's fields, in the
-// board's order, then any picked it no longer has, and the record's state,
-// when it was last written and its run.
-function CardPicker({ card, struct, onChange }: { card: TaskCard; struct: TaskStruct; onChange: (card: TaskCard) => void }) {
+// What a board's cards of a struct show: the field heading each as its ID,
+// the struct's key unless another is picked, and the field holding the
+// address the ID links to, if any; then a checklist of the other fields,
+// in the board's order, then any picked it no longer has, and the record's
+// state, when it was last written and its run.
+function CardSettings({
+  card,
+  struct,
+  legend,
+  onChange,
+}: {
+  card: TaskCard
+  struct: TaskStruct
+  legend: string
+  onChange: (card: TaskCard) => void
+}) {
+  const idField = card.key || struct.key
   const fields = [...struct.fields, ...card.fields.filter((f) => !struct.fields.includes(f))]
   const toggle = (field: string) =>
     onChange({ ...card, fields: fields.filter((f) => (f === field ? !card.fields.includes(f) : card.fields.includes(f))) })
+  // A field the struct no longer has, still picked, stays offered as it is.
+  const offered = (picked: string | undefined) => (picked && !struct.fields.includes(picked) ? [...struct.fields, picked] : struct.fields)
   return (
     <fieldset className="task-card-picker">
-      <legend>On its cards</legend>
+      <legend>{legend}</legend>
+      <div className="task-card-ids">
+        <label className="panel-field">
+          ID, at the top left
+          <select value={idField} onChange={(e) => onChange({ ...card, key: e.target.value === struct.key ? undefined : e.target.value })}>
+            {offered(card.key).map((f) => (
+              <option key={f} value={f}>
+                {f}
+                {f === struct.key ? ' (its key)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="panel-field">
+          The ID links to
+          <select value={card.url ?? ''} onChange={(e) => onChange({ ...card, url: e.target.value || undefined })}>
+            <option value="">Nothing: it opens the record</option>
+            {offered(card.url).map((f) => (
+              <option key={f} value={f}>
+                The address in {f}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <span className="panel-note">
+        Pick the field holding the record’s own page, such as the ticket’s URL in Jira, and its ID opens it in a new tab. Only web addresses
+        (http or https) become links.
+      </span>
       <div className="task-card-picks">
-        {fields.map((f) => (
-          <label key={f} className="panel-check">
-            <input type="checkbox" checked={card.fields.includes(f)} onChange={() => toggle(f)} />
-            {f}
-            {f === struct.key && <span className="task-card-pick-note">its key</span>}
-            {!struct.fields.includes(f) && <span className="task-card-pick-note">no longer the struct’s</span>}
-          </label>
-        ))}
+        {fields
+          .filter((f) => f !== idField)
+          .map((f) => (
+            <label key={f} className="panel-check">
+              <input type="checkbox" checked={card.fields.includes(f)} onChange={() => toggle(f)} />
+              {f}
+              {!struct.fields.includes(f) && <span className="task-card-pick-note">no longer the struct’s</span>}
+            </label>
+          ))}
       </div>
       <div className="task-card-picks">
         {RECORD_INFO.map(([k, label]) => (
@@ -856,10 +972,104 @@ function CardPicker({ card, struct, onChange }: { card: TaskCard; struct: TaskSt
           </label>
         ))}
       </div>
-      <span className="panel-note">
-        The key heads each card, the first field ticked after it is its title, and the others show under it.
-      </span>
+      <span className="panel-note">The first field ticked is each card’s title, and the others show under it.</span>
     </fieldset>
+  )
+}
+
+// The board's settings: its name, and what its cards of each struct its
+// columns hold show, a struct picked anew for the first time showing what
+// cards show unless told. Cards of a struct whoever changes it doesn't see
+// keep what they show, as do those not changed here.
+function BoardSettings({
+  board,
+  onSave,
+  onClose,
+}: {
+  board: TaskBoard
+  onSave: (name: string, cards: Record<string, TaskCard | undefined>) => Promise<void>
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const [name, setName] = useState(board.name)
+  const [cards, setCards] = useState(board.cards)
+  const [structs, setStructs] = useState<TaskStruct[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const dialog = ref.current
+    if (!dialog) return
+    dialog.showModal()
+    return () => dialog.close()
+  }, [])
+
+  useEffect(() => {
+    listTaskStructs().then(setStructs, (err) => setError(message(err)))
+  }, [])
+
+  // The structs the board's columns hold that whoever changes it sees, in
+  // the order of their first columns.
+  const held = [...new Set(board.columns.flatMap((c) => (c.struct !== null ? [c.struct] : [])))].flatMap(
+    (s) => structs?.find((t) => t.id === s) ?? [],
+  )
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    setSaving(true)
+    setError(null)
+    try {
+      await onSave(name.trim(), cards)
+    } catch (err) {
+      setError(message(err))
+      setSaving(false)
+    }
+  }
+
+  return (
+    <dialog
+      ref={ref}
+      className="review-dialog task-column-dialog"
+      aria-label="Task board settings"
+      onClose={onClose}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <header className="panel-header">
+        <h2>Task board settings</h2>
+        <button className="panel-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      </header>
+      <form className="task-column-form" onSubmit={submit}>
+        <label className="panel-field">
+          Name
+          <input autoFocus value={name} maxLength={255} onChange={(e) => setName(e.target.value)} />
+        </label>
+        {structs === null && !error && <p className="panel-note">Looking up the fields of its records…</p>}
+        {structs !== null && held.length === 0 && (
+          <p className="panel-note">Once a column holds a struct’s records, pick here what their cards show.</p>
+        )}
+        {held.map((s) => (
+          <CardSettings
+            key={s.id}
+            legend={held.length > 1 ? `Cards of ${s.name}` : 'Cards'}
+            struct={s}
+            card={cards[s.id] ?? defaultCard(s.fields, s.key)}
+            onChange={(card) => setCards({ ...cards, [s.id]: card })}
+          />
+        ))}
+        {error && <p className="panel-warning">{error}</p>}
+        <div className="review-actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" disabled={saving || !name.trim()}>
+            Save
+          </button>
+        </div>
+      </form>
+    </dialog>
   )
 }
 
@@ -879,18 +1089,14 @@ function sortsOf(facets: SearchFacet[], sort: string): [string, string][] {
 // it holds, picked among those whoever changes it sees, the query picking
 // them, written in the Records page's search bar, how many it matches as
 // it is typed, how they sort, the flow moving them on and how many of them
-// it works on at once, what its cards show, and its place on the board. A
-// struct picked takes what another column of it on the board shows, if one
-// was told; what is picked anew goes for the board's other columns of it
-// too, unless untold. One whose struct they don't see keeps it, and what
-// its cards show, which only those who see it change. A column whose query
-// names a state is named after it unless named otherwise. Its records go to
+// it works on at once, and its place on the board; what its cards show is
+// the board's, in its settings. One whose struct they don't see keeps it. A
+// column whose query names a state is named after it unless named
+// otherwise. Its records go to
 // the flow taking each one's state, which the dialog says, unless it names
 // a flow to give them all to, or lets them rest.
 function ColumnDialog({
   column,
-  cardFor,
-  others,
   places,
   place,
   onSave,
@@ -899,15 +1105,10 @@ function ColumnDialog({
 }: {
   // None for a new one.
   column: TaskColumn | null
-  // What the cards of the board's columns of a struct show, if told.
-  cardFor: (struct: number) => TaskCard | null
-  // How many of the board's other columns hold the struct's records.
-  others: (struct: number) => number
   // How many places there are, the new one's counted, and the column's.
   places: number
   place: number
-  // Saves it, with everywhere its cards' picks for the other columns of its struct too.
-  onSave: (edit: TaskColumnEdit, place: number, everywhere: boolean) => Promise<void>
+  onSave: (edit: TaskColumnEdit, place: number) => Promise<void>
   onRemove?: () => Promise<void>
   onClose: () => void
 }) {
@@ -916,12 +1117,6 @@ function ColumnDialog({
   const [struct, setStruct] = useState<number | null>(column?.struct ?? null)
   const [query, setQuery] = useState(column?.query ?? '')
   const [sort, setSort] = useState(column?.sort ?? '')
-  // What its cards show; none while they show what they do unless told.
-  const [card, setCard] = useState<TaskCard | null>(column?.card ?? null)
-  // Whether what they show was picked here, and goes for the board's other
-  // columns of the struct too.
-  const [changed, setChanged] = useState(false)
-  const [everywhere, setEverywhere] = useState(true)
   const [at, setAt] = useState(place)
   // The flow it gives its records to; none for the one taking each state.
   const [flow, setFlow] = useState<number | null>(column?.flow ?? null)
@@ -1019,17 +1214,14 @@ function ColumnDialog({
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!named || struct === null) return
-    const edit = { name: named, struct, query: query.trim(), sort, card, flow, maxRuns }
-    run(() => onSave(edit, at, changed && everywhere))
+    const edit = { name: named, struct, query: query.trim(), sort, flow, maxRuns }
+    run(() => onSave(edit, at))
   }
 
   const pick = (s: number | null) => {
     setStruct(s)
-    setCard(s === null ? null : s === column?.struct ? column.card : cardFor(s))
-    setChanged(false)
     setFlow(column !== null && s === column.struct ? column.flow : null)
   }
-  const siblings = picked ? others(picked.id) : 0
 
   const title = column ? `Change ${column.name}` : 'Add a column'
   return (
@@ -1117,19 +1309,6 @@ function ColumnDialog({
             )}
             <span className="panel-note">{flowNote}</span>
           </div>
-        )}
-        {picked && (
-          <CardPicker
-            card={card ?? defaultCard(picked.fields, picked.key)}
-            struct={picked}
-            onChange={(c) => (setCard(c), setChanged(true))}
-          />
-        )}
-        {changed && siblings > 0 && (
-          <label className="panel-check">
-            <input type="checkbox" checked={everywhere} onChange={(e) => setEverywhere(e.target.checked)} />
-            The same on the board's other {siblings === 1 ? `${picked?.name} column` : `${siblings} ${picked?.name} columns`}
-          </label>
         )}
         {places > 1 && (
           <label className="panel-field">
@@ -1234,13 +1413,10 @@ function PlayControls({
 // column of already is left unticked.
 function StatesDialog({
   columns,
-  cardFor,
   onAdd,
   onClose,
 }: {
   columns: TaskColumn[]
-  // What the cards of the board's columns of a struct show, if told.
-  cardFor: (struct: number) => TaskCard | null
   onAdd: (columns: TaskColumnEdit[]) => Promise<void>
   onClose: () => void
 }) {
@@ -1306,7 +1482,6 @@ function StatesDialog({
           struct: picked.id,
           query: `state:${quote(r.state)}`,
           sort: '',
-          card: cardFor(picked.id),
           flow: r.rest ? null : r.flow,
           maxRuns: r.rest ? 0 : null,
         })),

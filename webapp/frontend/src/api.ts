@@ -616,6 +616,10 @@ export type TaskBoard = {
   stopped: string
   // How many of the runs it started are going, on its own page.
   running: number
+  // What its cards of each struct its columns hold show, by the struct's
+  // id; one left out shows its key, the first other field, its state and
+  // when it was last written.
+  cards: Record<string, TaskCard | undefined>
 }
 
 // Why a column shows no records: its struct was deleted for good, is in the
@@ -637,9 +641,6 @@ export type TaskColumn = {
   // A facet's key to sort by, with a - before it for the other way; empty
   // for the latest written first.
   sort: string
-  // What its cards show; null for its key, the first other field, its
-  // state and when it was last written.
-  card: TaskCard | null
   // The flow it gives its records to while the board plays, whatever their
   // state; null for the flow taking each one's state. Its name is empty for
   // one whoever asks doesn't see.
@@ -694,11 +695,12 @@ export type CardRun = {
   steps?: string[]
 }
 
-// What a column's cards show of each record: the fields picked, in order,
-// the key heading the card and the first other field read as its title;
-// and whether its state, when it was last written, and the run that last
-// moved it on show.
-export type TaskCard = { fields: string[]; state: boolean; updated: boolean; run: boolean }
+// What a board's cards of a struct show of each record: the field heading
+// each as its ID, the struct's key unless told, and the one holding the
+// address the ID links to, if any; the other fields picked, in order, the
+// first read as its title; and whether its state, when it was last written,
+// and the run that last moved it on show.
+export type TaskCard = { key?: string; url?: string; fields: string[]; state: boolean; updated: boolean; run: boolean }
 
 // What is saved of a column.
 export type TaskColumnEdit = {
@@ -706,7 +708,6 @@ export type TaskColumnEdit = {
   struct: number | null
   query: string
   sort: string
-  card: TaskCard | null
   flow: number | null
   maxRuns: number | null
 }
@@ -731,8 +732,12 @@ export function createTaskBoard(name: string, owner?: { kind: 'global' } | { kin
 }
 
 // Saves the board's name, how many of its runs go at once (left out to keep
-// it) and all its columns, in order, and answers with their records.
-export function saveTaskBoard(id: number, board: { name: string; maxRuns?: number; columns: TaskColumnEdit[] }): Promise<TaskBoard> {
+// it), all its columns, in order, and what its cards of each struct show
+// (left out to keep them), and answers with their records.
+export function saveTaskBoard(
+  id: number,
+  board: { name: string; maxRuns?: number; columns: TaskColumnEdit[]; cards?: Record<string, TaskCard | undefined> },
+): Promise<TaskBoard> {
   return request(`/api/taskboards/${id}`, { method: 'PUT', body: JSON.stringify(board) })
 }
 

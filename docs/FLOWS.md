@@ -486,9 +486,12 @@ repositories:
   - A **task board** (`#/taskboards/<id>`, listed on the home page) lays
     shared structs' records out in columns, each a struct and a query in
     the Records page's search, such as Jira tickets `state:new` beside pull
-    requests `state:in_review`, each picking what its cards show of a
-    record: its fields, its state, when it was last written and the run
-    that last moved it on. As a flow or a person moves a record into
+    requests `state:in_review`. Its settings pick what its cards of each
+    struct show of a record: the field heading each as its ID, and the one
+    holding the address it links to, such as a Jira ticket's URL, then the
+    other fields, its state, when it was last written and the run that last
+    moved it on. So keep a record's own address in a field of the struct,
+    as a flow filing a ticket would. As a flow or a person moves a record into
     another state it shows in that state's column, so states a flow queries
     read as its queue there. Task boards aren't in versions or the setup
     file.

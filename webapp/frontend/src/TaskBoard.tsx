@@ -32,6 +32,7 @@ import {
   PencilIcon,
   PlayIcon,
   PlusIcon,
+  SidebarIcon,
   TaskBoardIcon,
 } from './icons'
 import { timeAgo } from './home'
@@ -49,6 +50,10 @@ import { HomeFrame } from './FlowList'
 // card shows its run while it goes.
 const REFRESH_MS = 10_000
 const BUSY_REFRESH_MS = 2_000
+
+// Where whether task boards hide the side menu is remembered, for every
+// board in this browser.
+const RAIL_KEY = 'spoletta.taskboard.rail'
 
 // What went wrong, without the request it answered.
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err)).replace(/^\w+ \S+: \d+ /, '').trim()
@@ -118,6 +123,24 @@ export default function TaskBoardPage({ id }: { id: number }) {
   const [setting, setSetting] = useState(false)
   // Whether columns are being laid out from a struct's states.
   const [laying, setLaying] = useState(false)
+  // Whether the side menu is hidden, giving the columns the window's width.
+  const [railHidden, setRailHidden] = useState(() => {
+    try {
+      return localStorage.getItem(RAIL_KEY) === 'hidden'
+    } catch {
+      return false
+    }
+  })
+  const toggleRail = () => {
+    const hidden = !railHidden
+    setRailHidden(hidden)
+    try {
+      if (hidden) localStorage.setItem(RAIL_KEY, 'hidden')
+      else localStorage.removeItem(RAIL_KEY)
+    } catch {
+      // Only remembered while it can be.
+    }
+  }
   // Only the answer to the latest ask shows, so a slow one doesn't undo a save.
   const asked = useRef(0)
 
@@ -188,6 +211,14 @@ export default function TaskBoardPage({ id }: { id: number }) {
             words: 'task board settings rename name cards fields id url link',
             run: () => setSetting(true),
           },
+          {
+            id: 'taskboard:rail',
+            title: railHidden ? 'Show the side menu' : 'Hide the side menu',
+            group: 'Task board',
+            hint: railHidden ? 'Beside the task board' : 'Giving the task board’s columns the window’s width',
+            words: 'task board side menu sidebar rail hide show width',
+            run: toggleRail,
+          },
           board.playing
             ? {
                 id: 'taskboard:pause',
@@ -238,6 +269,14 @@ export default function TaskBoardPage({ id }: { id: number }) {
             <TaskBoardIcon /> {board?.name ?? '…'}
           </span>
         </h1>
+        <button
+          onClick={toggleRail}
+          aria-label={railHidden ? 'Show the side menu' : 'Hide the side menu'}
+          aria-pressed={!railHidden}
+          title={railHidden ? 'Show the side menu' : 'Hide the side menu, giving the columns the window’s width'}
+        >
+          <SidebarIcon />
+        </button>
         <button onClick={() => setSetting(true)} disabled={!board} title="Rename the task board, and pick what its cards show">
           <GearIcon /> Settings
         </button>
@@ -273,7 +312,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
           It stopped playing: {board.stopped}
         </div>
       )}
-      <HomeFrame at="taskboard">
+      <HomeFrame at="taskboard" rail={!railHidden}>
         {board === null ? (
           !error && <p className="flows-note task-board-note">Loading…</p>
         ) : board.columns.length === 0 ? (
@@ -690,11 +729,6 @@ function CardWork({ run, onRetry }: { run: CardRun; onRetry: () => void }) {
   )
 }
 
-// Whether a stuck record's run went wrong, failing or cut short, or ended
-// well but left it where it was, or went round too often: the first wants
-// what failed fixed, the others the flow or the record looked at.
-const brokeOf = (run: CardRun) => run.why === undefined || run.why === 'failed' || run.why === 'interrupted' || run.why === 'terminated'
-
 // A record as a card, showing what the board picks of its struct's: the
 // field picked as its ID heading it, else its key, linked to the address
 // the field picked for it holds, which opens in a tab of its own, or else
@@ -728,7 +762,7 @@ function Card({
   const [title, ...rest] = card.fields.filter((f) => f !== idField).map((f) => [f, shownOf(content[f])] as const)
   const heading = title?.[1] ?? null
   const run = card.run && record.run !== null
-  const look = !work ? '' : work.status !== 'stuck' ? ` ${work.status}` : brokeOf(work) ? ' stuck broke' : ' stuck'
+  const look = work ? ` ${work.status}` : ''
   return (
     <li className={`task-card${look}`}>
       {href && (

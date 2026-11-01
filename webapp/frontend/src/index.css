@@ -131,14 +131,14 @@ body,
 }
 
 .tab-inbox.waiting {
-  color: #953800;
+  color: var(--status-waiting-text);
 }
 
 .tab-inbox-count {
   min-width: 18px;
   padding: 0 5px;
   border-radius: 9px;
-  background: #bc4c00;
+  background: var(--status-waiting);
   color: #fff;
   font-size: 11px;
   font-weight: 600;
@@ -1254,6 +1254,30 @@ body {
   color: #656d76;
 }
 
+/* The colour of each status a run, a step or a record is in, the same
+   wherever it shows (run lists and badges, the board's processes, Home's
+   chips and strips, the inbox, task boards' cards): running amber, waiting
+   for a person orange, done green, failed red, ended on a value already
+   stored purple. Each has a mark (dots, edges), a tint behind it and text
+   on the tint. What else shares a colour (a struct's icon, the star) keeps
+   its own. */
+:root {
+  --status-running: #bf8700;
+  --status-running-tint: #fff8c5;
+  --status-running-text: #7d4e00;
+  --status-waiting: #bc4c00;
+  --status-waiting-tint: #fff1e5;
+  --status-waiting-text: #953800;
+  --status-done: #1a7f37;
+  --status-done-tint: #dafbe1;
+  --status-failed: #cf222e;
+  --status-failed-tint: #ffebe9;
+  --status-failed-text: #82071e;
+  --status-terminated: #8250df;
+  --status-terminated-tint: #fbefff;
+  --status-terminated-text: #6639ba;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;
@@ -1264,21 +1288,21 @@ body {
 
 .status-dot.running,
 .status-dot.active {
-  background: #bf8700;
+  background: var(--status-running);
   animation: process-pulse 1s ease-in-out infinite;
 }
 
 .status-dot.waiting {
-  background: #bc4c00;
+  background: var(--status-waiting);
 }
 
 .status-dot.done {
-  background: #1a7f37;
+  background: var(--status-done);
 }
 
 .status-dot.failed,
 .status-dot.error {
-  background: #cf222e;
+  background: var(--status-failed);
 }
 
 .status-dot.skipped {
@@ -1287,7 +1311,7 @@ body {
 
 .status-dot.terminated,
 .status-dot.duplicate {
-  background: #8250df;
+  background: var(--status-terminated);
 }
 
 .run-badge {
@@ -1301,28 +1325,28 @@ body {
 }
 
 .run-badge.running {
-  color: #7d4e00;
-  background: #fff8c5;
+  color: var(--status-running-text);
+  background: var(--status-running-tint);
 }
 
 .run-badge.done {
-  color: #1a7f37;
-  background: #dafbe1;
+  color: var(--status-done);
+  background: var(--status-done-tint);
 }
 
 .run-badge.failed {
-  color: #82071e;
-  background: #ffebe9;
+  color: var(--status-failed-text);
+  background: var(--status-failed-tint);
 }
 
 .run-badge.terminated {
-  color: #6639ba;
-  background: #fbefff;
+  color: var(--status-terminated-text);
+  background: var(--status-terminated-tint);
 }
 
 .run-badge.waiting {
-  color: #953800;
-  background: #fff1e5;
+  color: var(--status-waiting-text);
+  background: var(--status-waiting-tint);
 }
 
 .run-panel {
@@ -2312,19 +2336,19 @@ body {
 }
 
 .process-node.active {
-  background: #fff8c5;
-  border-color: #bf8700;
+  background: var(--status-running-tint);
+  border-color: var(--status-running);
   animation: process-pulse 1s ease-in-out infinite;
 }
 
 .process-node.done {
   background: #f0fff4;
-  border-color: #1a7f37;
+  border-color: var(--status-done);
 }
 
 .process-node.error {
-  background: #ffebe9;
-  border-color: #cf222e;
+  background: var(--status-failed-tint);
+  border-color: var(--status-failed);
 }
 
 /* Its condition didn't hold, so it didn't run. */
@@ -2336,14 +2360,14 @@ body {
 
 /* Generated a unique value another run already stored. */
 .process-node.duplicate {
-  background: #fbefff;
-  border-color: #8250df;
+  background: var(--status-terminated-tint);
+  border-color: var(--status-terminated);
 }
 
 /* A human process waiting for a decision. */
 .process-node.waiting {
-  background: #fff1e5;
-  border-color: #bc4c00;
+  background: var(--status-waiting-tint);
+  border-color: var(--status-waiting);
   animation: waiting-pulse 1.4s ease-in-out infinite;
 }
 
@@ -8825,15 +8849,15 @@ select.flow-owner:disabled {
 }
 
 .home-chip.waiting .home-chip-dot {
-  background: #bc4c00;
+  background: var(--status-waiting);
 }
 
 .home-chip.failing .home-chip-dot {
-  background: #cf222e;
+  background: var(--status-failed);
 }
 
 .home-chip.running .home-chip-dot {
-  background: #bf8700;
+  background: var(--status-running);
 }
 
 .home-chip.on {
@@ -8842,20 +8866,20 @@ select.flow-owner:disabled {
 
 /* As the inbox's count in the tab bar. */
 .home-chip.waiting.on {
-  color: #953800;
-  background: #fff1e5;
+  color: var(--status-waiting-text);
+  background: var(--status-waiting-tint);
   border-color: #ffb77c;
 }
 
 .home-chip.failing.on {
   color: #a40e26;
-  background: #ffebe9;
+  background: var(--status-failed-tint);
   border-color: #ff8182;
 }
 
 .home-chip.running.on {
-  color: #7d4e00;
-  background: #fff8c5;
+  color: var(--status-running-text);
+  background: var(--status-running-tint);
   border-color: #d4a72c;
 }
 
@@ -9055,17 +9079,17 @@ select.flow-owner:disabled {
   font-size: 12px;
   font-weight: 600;
   line-height: 18px;
-  color: #953800;
+  color: var(--status-waiting-text);
   text-decoration: none;
   white-space: nowrap;
-  background: #fff1e5;
+  background: var(--status-waiting-tint);
   border: 1px solid #ffd8b5;
   border-radius: 999px;
 }
 
 .home-waiting:hover {
-  color: #953800;
-  border-color: #bc4c00;
+  color: var(--status-waiting-text);
+  border-color: var(--status-waiting);
 }
 
 .home-quiet {
@@ -9113,18 +9137,18 @@ select.flow-owner:disabled {
 
 .run-tick.failed {
   height: 18px;
-  background: #cf222e;
+  background: var(--status-failed);
 }
 
 .run-tick.running {
   height: 13px;
-  background: #bf8700;
+  background: var(--status-running);
   animation: process-pulse 1s ease-in-out infinite;
 }
 
 .run-tick.waiting {
   height: 13px;
-  background: #bc4c00;
+  background: var(--status-waiting);
 }
 
 .run-tick.stopped {
@@ -10271,15 +10295,23 @@ a.run-tick:hover {
 
 /* Beside the rail (HomeFrame) a task board still keeps to the window's
    height, its columns scrolling on their own, and starts where the list
-   does. */
+   does, but takes the rest of the window's width, as its columns need it
+   more than the list does; with the rail hidden, all of it. */
 .task-board-page .home-page {
   display: flex;
   flex-direction: column;
+  max-width: none;
 }
 
 .home-page > .task-board,
 .home-page > .task-board-note {
   padding: 16px 24px 16px 8px;
+}
+
+.railless > .home-page > .task-board,
+.railless > .home-page > .task-board-note,
+.railless > .home-page > .task-board-work {
+  padding-left: 24px;
 }
 
 /* How the board's work goes, over its columns: records running, waiting
@@ -10317,15 +10349,23 @@ a.run-tick:hover {
 }
 
 .task-board-work .running {
-  color: #1a7f37;
+  color: var(--status-running-text);
+}
+
+.task-board-work .running::before {
+  background: var(--status-running);
 }
 
 .task-board-work .waiting {
-  color: #8250df;
+  color: var(--status-waiting-text);
+}
+
+.task-board-work .waiting::before {
+  background: var(--status-waiting);
 }
 
 .task-board-work .stuck {
-  color: #bc4c00;
+  color: var(--status-failed);
 }
 
 /* A column: its name, how many records it holds and what moves them on;
@@ -10739,7 +10779,7 @@ a.run-tick:hover {
 }
 
 .task-card-retry:hover {
-  background: #fff8f2;
+  background: var(--status-failed-tint);
 }
 
 /* The run going on a card's record, or why the board skips it as stuck,
@@ -10799,34 +10839,40 @@ a.run-tick:hover {
 /* Running as a process running on a flow's board does, its yellow edge
    pulsing. */
 .task-card.running {
-  border-color: #bf8700;
+  border-color: var(--status-running);
   animation: process-pulse 1s ease-in-out infinite;
 }
 
 .task-card.running .task-card-work {
-  background: #fff8c5;
+  background: var(--status-running-tint);
   border-top-color: #f5e0a0;
 }
 
 .task-card.running .task-card-work-status {
-  color: #9a6700;
+  color: var(--status-running-text);
 }
 
 .task-card.running .task-card-work-dot {
-  background: #bf8700;
+  background: var(--status-running);
 }
 
+/* Waiting for a person, as a human process waiting on a flow's board is,
+   in orange. */
 .task-card.waiting {
-  border-color: #8250df;
+  border-color: var(--status-waiting);
 }
 
 .task-card.waiting .task-card-work {
-  background: #faf6ff;
-  border-top-color: #eadcfc;
+  background: var(--status-waiting-tint);
+  border-top-color: #ffd8b5;
 }
 
 .task-card.waiting .task-card-work-status {
-  color: #8250df;
+  color: var(--status-waiting-text);
+}
+
+.task-card.waiting .task-card-work-dot {
+  background: var(--status-waiting);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -10840,26 +10886,16 @@ a.run-tick:hover {
   }
 }
 
-/* Stuck as its run went wrong, in red; as it ended well but left the
-   record where it was, or went round too often, in orange. */
+/* Stuck, whatever left it so, in red as a failure is, since the board goes
+   no further with it until a person does; its band says why. */
 .task-card.stuck {
-  border-color: #bc4c00;
+  border-color: var(--status-failed);
 }
 
 .task-card.stuck .task-card-work {
-  color: #bc4c00;
-  background: #fff6ef;
-  border-top-color: #ffdcc2;
-}
-
-.task-card.stuck.broke {
-  border-color: #cf222e;
-}
-
-.task-card.stuck.broke .task-card-work {
-  color: #cf222e;
-  background: #fff5f5;
-  border-top-color: #ffd5d2;
+  color: var(--status-failed);
+  background: var(--status-failed-tint);
+  border-top-color: #ffcecb;
 }
 
 .task-card.stuck .task-card-work-status {

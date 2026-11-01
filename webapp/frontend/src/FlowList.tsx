@@ -692,7 +692,18 @@ function HomeRail({
 // flows and task boards for the rail's counts, again whenever the page says
 // it changed them (`changed`, such as the trash restoring one); without them
 // the rail counts nothing, the page saying what went wrong for its own part.
-export function HomeFrame({ at, changed = 0, children }: { at: Beside; changed?: number; children: ReactNode }) {
+// A task board may hide the rail (`rail`), its columns taking the width.
+export function HomeFrame({
+  at,
+  changed = 0,
+  rail = true,
+  children,
+}: {
+  at: Beside
+  changed?: number
+  rail?: boolean
+  children: ReactNode
+}) {
   const me = useMe()
   const [flows, setFlows] = useState<Flow[] | null>(null)
   const [boards, setBoards] = useState<TaskBoard[] | null>(null)
@@ -703,14 +714,16 @@ export function HomeFrame({ at, changed = 0, children }: { at: Beside; changed?:
   }, [changed])
 
   return (
-    <div className="home-layout">
-      <HomeRail
-        flows={flows}
-        boards={boards}
-        me={me}
-        here={at}
-        onShow={(patch) => (window.location.hash = listHash({ ...EVERYTHING, ...patch }))}
-      />
+    <div className={rail ? 'home-layout' : 'home-layout railless'}>
+      {rail && (
+        <HomeRail
+          flows={flows}
+          boards={boards}
+          me={me}
+          here={at}
+          onShow={(patch) => (window.location.hash = listHash({ ...EVERYTHING, ...patch }))}
+        />
+      )}
       <div className="home-page">{children}</div>
     </div>
   )

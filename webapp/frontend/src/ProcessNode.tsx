@@ -47,7 +47,7 @@ export const KIND_ICONS: Record<ProcessKind, () => ReactNode> = {
   connector: ConnectorIcon,
 }
 
-const KIND_LABELS: Record<ProcessKind, string> = {
+export const KIND_LABELS: Record<ProcessKind, string> = {
   agent: 'Agent',
   script: 'Script',
   human: 'Human',

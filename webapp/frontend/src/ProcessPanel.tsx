@@ -134,6 +134,7 @@ export default function ProcessPanel({
   repositories,
   onOpenFlowSettings,
   onTry,
+  onKindChange,
   onClose,
   onError,
 }: {
@@ -181,6 +182,9 @@ export default function ProcessPanel({
   // Opens the dialog trying an agent, script or connector process on its
   // own; see TrialDialog.
   onTry?: () => void
+  // Whether switching it to another kind may go ahead, asked before it
+  // switches, as that can delete its links; see mayChangeKind in Board.
+  onKindChange?: (to: ProcessKind) => Promise<boolean>
   onClose: () => void
   onError: (err: unknown) => void
 }) {
@@ -228,10 +232,20 @@ export default function ProcessPanel({
     pending.current = { ...pending.current, ...patch }
     onChange(saved.current)
     window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(flush, SAVE_DELAY_MS)
+    // A switch of kind, a click rather than typing, goes at once.
+    if (patch.kind !== undefined) flush()
+    else timer.current = window.setTimeout(flush, SAVE_DELAY_MS)
   }, [name, kind, prompt, script, model, thinking, recording, settings])
 
   useEffect(() => flush, [])
+
+  // What was typed is saved first, so undoing the switch keeps it.
+  const switchKind = async (to: ProcessKind) => {
+    if (to === kind) return
+    flush()
+    if (onKindChange && !(await onKindChange(to))) return
+    setKind(to)
+  }
 
   // Absent means every repository, so unpicking the last one keeps [].
   const repositoryPicker = (
@@ -335,7 +349,7 @@ export default function ProcessPanel({
                   role="radio"
                   aria-checked={kind === k.value}
                   className={kind === k.value ? 'selected' : ''}
-                  onClick={() => setKind(k.value)}
+                  onClick={() => void switchKind(k.value)}
                 >
                   {k.label}
                 </button>

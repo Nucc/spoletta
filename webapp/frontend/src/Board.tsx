@@ -57,7 +57,7 @@ import ObjectNode, {
   type ObjectNodeData,
   type ObjectNodeType,
 } from './ObjectNode'
-import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
+import ProcessNode, { KIND_LABELS, type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
 import NoteNode, { type NoteNodeType } from './NoteNode'
 import NoteEdge from './NoteEdge'
 import ObjectPanel from './ObjectPanel'
@@ -1923,12 +1923,17 @@ export default function Board({
   const [showUndo, dismissUndo, undoNotice] = useUndoNotice()
   useEffect(() => onChanged(dismissUndo), [dismissUndo])
   const held = useRef(false)
-  const mayDelete = async (what: string, goes: string) => {
+  // Keeps the board as it is as a step to undo back to, and finds whether
+  // a run holds it.
+  const holdsBoard = async () => {
     try {
       held.current = (await queueHistory(() => recordHistory(flowId, client))).held
     } catch {
       held.current = runs.some((r) => r.status === 'running' && r.version !== versions.published)
     }
+  }
+  const mayDelete = async (what: string, goes: string) => {
+    await holdsBoard()
     return (
       !held.current ||
       confirm({
@@ -3054,19 +3059,64 @@ export default function Board({
       return
     }
     if ((from === 'human') === (to === 'human')) return
-    const person = (object: number) => {
-      const node = getNode(objectNodeId(object))
-      return node?.type === 'object' && node.data.human
+    setEdges((es) => es.filter((e) => !mismatched(e, id, to)))
+  }
+  // Whether becoming kind to, across being human, deletes the edge.
+  const mismatched = (e: FlowEdge, id: string, to: ProcessKind) => {
+    const l = e.data?.link
+    if (l && String(l.process) === id && l.direction === 'input' && to !== 'human') {
+      const node = getNode(objectNodeId(l.object))
+      if (node?.type === 'object' && node.data.human) return true
     }
-    setEdges((es) =>
-      es.filter((e) => {
-        const l = e.data?.link
-        if (l && String(l.process) === id && l.direction === 'input' && to !== 'human' && person(l.object)) return false
-        if (l) return !(l.direction === 'output' && String(l.process) === id)
-        // A person can fail past their time limit, so what handles it stays.
-        return !(to === 'human' && e.id.startsWith(CONNECTION_PREFIX) && e.source === id && !e.data?.failure)
-      }),
+    if (l) return l.direction === 'output' && String(l.process) === id
+    // A person can fail past their time limit, so what handles it stays.
+    return to === 'human' && e.id.startsWith(CONNECTION_PREFIX) && e.source === id && !e.data?.failure
+  }
+
+  // Switching a process to another kind can be undone too: when it deletes
+  // links, the board's history keeps a step from before it, and a notice,
+  // once it is saved, names what went and offers to undo it; while a run
+  // holds the board it asks first instead. The process's panel asks this
+  // before it switches, having saved what was typed.
+  const kindNotice = useRef<string | null>(null)
+  const mayChangeKind = async (id: string, to: ProcessKind) => {
+    const node = getNode(id)
+    if (node?.type !== 'process' || (node.data.kind === 'human') === (to === 'human')) return true
+    const gone = [
+      ...new Set(
+        edges
+          .filter((e) => mismatched(e, id, to))
+          .map((e) => {
+            const end = getNode(e.data?.link ? objectNodeId(e.data.link.object) : e.target)
+            return end?.type === 'object' || end?.type === 'process' ? end.data.name : null
+          })
+          .filter((n): n is string => n !== null),
+      ),
+    ]
+    if (gone.length === 0) return true
+    const what = `${gone.length === 1 ? 'its link' : 'its links'} to ${gone.join(', ')}`
+    const kind = KIND_LABELS[to]
+    await changesSettled()
+    await holdsBoard()
+    if (
+      held.current &&
+      !(await confirm({
+        title: `Switch ${node.data.name} to ${kind}?`,
+        message: <p>That deletes {what}. A run of the board is going on, so this can't be undone until it ends.</p>,
+        confirm: 'Switch',
+      }))
     )
+      return false
+    kindNotice.current = `Switching ${node.data.name} to ${kind} deleted ${what}`
+    return true
+  }
+  // Shown once the switch the panel sends at once is answered, which would
+  // otherwise dismiss it as the next change.
+  const changedKind = () => {
+    const message = kindNotice.current
+    kindNotice.current = null
+    if (message === null || held.current) return
+    window.setTimeout(() => void changesSettled().then(() => showUndo({ message, undo: () => stepHistory(true) })))
   }
 
   // The run's log or its timeline, in a window over the board; see RunLogs
@@ -4059,7 +4109,9 @@ export default function Board({
             onChange={(fields) => {
               dropMismatchedEdges(panelNode.id, panelNode.data.kind, fields.kind)
               updateData(panelNode.id, fields)
+              if (fields.kind !== panelNode.data.kind) changedKind()
             }}
+            onKindChange={(to) => mayChangeKind(panelNode.id, to)}
             onZoomIn={() => zoomIn(panelNode.id)}
             flows={otherFlows}
             onFlowSaved={() => loadBoard().catch(report)}

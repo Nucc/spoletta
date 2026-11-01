@@ -363,7 +363,20 @@ export function CredentialPicker({
         )}
       </legend>
       {credentials?.length === 0 && (
-        <p className="panel-note">{admin ? 'None this flow may use.' : 'None this flow may use; admins add them in Settings, under Credentials.'}</p>
+        <p className="panel-note">
+          {admin ? (
+            <>
+              None this flow may use.{' '}
+              {!readOnly && (
+                <TabLink hash="#/settings/credentials" title="Add credentials in Settings, in a new tab">
+                  Add one in Settings
+                </TabLink>
+              )}
+            </>
+          ) : (
+            'None this flow may use; admins add them in Settings, under Credentials.'
+          )}
+        </p>
       )}
       {credentials?.map((c) => (
         <div key={c.id} className="mcp-pick" title={c.description || c.baseUrl}>

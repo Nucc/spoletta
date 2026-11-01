@@ -1,9 +1,10 @@
-// What a process was set to in the version a run ran, as lines of a name
-// and a value under the run's step (Runs.tsx), so its settings are read
-// beside what it did rather than in a panel taking the run's place. Only
-// what the step doesn't show already: not its model, prompt or script, nor
-// the operation a connector carried out. A setting left at its default says
-// so. scripts/run-views.ts checks it.
+// What a process is set to, as lines of a name and a value: under a run's
+// step (Runs.tsx), so its settings are read beside what it did rather than
+// in a panel taking the run's place, and in a process's panel that can't be
+// changed (ProcessPanel.tsx), which also sums each group up in a line while
+// it is folded. Only what is set apart from the process's body: not its
+// model, prompt or script, nor the operation a connector carries out. A
+// setting left at its default says so. scripts/run-views.ts checks it.
 
 import type { ProcessKind, ProcessSettings } from './api'
 
@@ -36,7 +37,9 @@ const picked = (ids: number[] | undefined, names: Map<number, string> | null, wh
 
 const orDefault = (value: number | undefined, fallback: string) => (value === undefined ? `${fallback} (default)` : String(value))
 
-export function settingsRows(kind: ProcessKind, s: ProcessSettings, names: SettingNames, defaults: SettingDefaults): [string, string][] {
+// What an agent or script works with: the skills, credentials, MCP servers
+// and repositories it picks, and whether its prompt describes its flow.
+export function canUseRows(kind: ProcessKind, s: ProcessSettings, names: SettingNames): [string, string][] {
   const rows: [string, string][] = []
   if (kind === 'agent') {
     rows.push(['Skills', picked(s.skills, names.skills)])
@@ -58,7 +61,16 @@ export function settingsRows(kind: ProcessKind, s: ProcessSettings, names: Setti
     rows.push(['Repositories', s.repositories === undefined ? "all of the flow's" : s.repositories.length === 0 ? 'none' : s.repositories.join(', ')])
   }
   if (kind === 'agent') {
-    rows.push(['Told about its flow', s.describeFlow ? 'yes, in OPL' : 'no'])
+    rows.push(['Whole flow in its prompt', s.describeFlow ? 'yes' : 'no'])
+  }
+  return rows
+}
+
+// How far a step may go: its rounds, loops, time, retries and how many of
+// its inputs it needs.
+export function limitRows(kind: ProcessKind, s: ProcessSettings, defaults: SettingDefaults): [string, string][] {
+  const rows: [string, string][] = []
+  if (kind === 'agent') {
     rows.push(['Rounds', orDefault(s.rounds, String(defaults.rounds))])
   }
   if (kind === 'agent' || kind === 'script' || kind === 'connector') {
@@ -69,12 +81,51 @@ export function settingsRows(kind: ProcessKind, s: ProcessSettings, names: Setti
   if (kind !== 'human') {
     rows.push(['Needs', s.quorum === undefined ? 'all its inputs (default)' : `${s.quorum} of its inputs`])
   }
-  if (kind === 'human') {
-    const after = (seconds: number | undefined) => (seconds === undefined ? 'never' : durationText(seconds))
-    rows.push(['Remind every', after(s.remindAfter)])
-    rows.push(['Fail after', after(s.waitAtMost)])
-    rows.push(['Hand on after', after(s.escalateAfter)])
-    rows.push(['Hand on to', s.escalateTo && s.escalateTo.length > 0 ? s.escalateTo.join(', ') : 'nobody'])
-  }
   return rows
+}
+
+// What a human process does while nobody decides it.
+export function waitRows(kind: ProcessKind, s: ProcessSettings): [string, string][] {
+  if (kind !== 'human') return []
+  const after = (seconds: number | undefined) => (seconds === undefined ? 'never' : durationText(seconds))
+  return [
+    ['Remind every', after(s.remindAfter)],
+    ['Fail after', after(s.waitAtMost)],
+    ['Hand on after', after(s.escalateAfter)],
+    ['Hand on to', s.escalateTo && s.escalateTo.length > 0 ? s.escalateTo.join(', ') : 'nobody'],
+  ]
+}
+
+export function settingsRows(kind: ProcessKind, s: ProcessSettings, names: SettingNames, defaults: SettingDefaults): [string, string][] {
+  return [...canUseRows(kind, s, names), ...limitRows(kind, s, defaults), ...waitRows(kind, s)]
+}
+
+// A folded group's line: the names of what its process picks, and which
+// repositories it works on when the flow has any, none picked of none
+// saying nothing.
+export function canUseSummary(kind: ProcessKind, s: ProcessSettings, names: SettingNames, repositories: number): string {
+  const picks = canUseRows(kind, s, names)
+    .filter(([label, value]) => (label === 'Skills' || label === 'Credentials' || label === 'MCP servers') && value !== 'none')
+    .map(([, value]) => value)
+  if (kind === 'agent' && s.describeFlow) picks.push('the whole flow in its prompt')
+  const works =
+    kind !== 'agent' && kind !== 'script'
+      ? ''
+      : s.repositories === undefined
+        ? repositories > 0
+          ? 'every repository of the flow'
+          : ''
+        : s.repositories.length === 0
+          ? repositories > 0
+            ? 'no repository'
+            : ''
+          : s.repositories.join(', ')
+  return [picks.length > 0 ? picks.join(', ') : 'nothing picked', works].filter(Boolean).join(' · ')
+}
+
+// The rows set apart from their defaults, as one line; never is a human
+// process's default.
+export function changedSummary(rows: [string, string][], none: string): string {
+  const changed = rows.filter(([, value]) => !value.endsWith('(default)') && value !== 'never' && value !== 'nobody')
+  return changed.length === 0 ? none : changed.map(([label, value]) => `${label} ${value}`).join(', ')
 }

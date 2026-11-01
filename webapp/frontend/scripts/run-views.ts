@@ -8,7 +8,7 @@
 import { runMatches, runOrigin, type FlowRunDetail, type RunObject, type RunStep } from '../src/api.ts'
 import { diffLines, pairObjects, pairProcesses, pairSteps } from '../src/compare.ts'
 import { formatSpan, lanesOf, scaleOf, shown, stretchesOf, ticksOf, type Bar } from '../src/timeline.ts'
-import { durationText, settingsRows } from '../src/stepSettings.ts'
+import { canUseSummary, changedSummary, durationText, limitRows, settingsRows, waitRows } from '../src/stepSettings.ts'
 
 declare const process: { exitCode?: number }
 
@@ -232,7 +232,7 @@ check('spans read as people say them', [850, 12_000, 200_000, 7_500_000, 270_000
       ['Credentials', 'Jira, one not shown here'],
       ['MCP servers', 'github (one tool), sentry'],
       ['Repositories', 'none'],
-      ['Told about its flow', 'no'],
+      ['Whole flow in its prompt', 'no'],
       ['Rounds', '3 (default)'],
       ['Loops', '5 (default)'],
       ['Timeout', "the worker's (default)"],
@@ -259,6 +259,32 @@ check('spans read as people say them', [850, 12_000, 200_000, 7_500_000, 270_000
     ['Hand on to', 'Lead, Finance'],
   ])
   check('durations as they are written', [0, 59, 3600, 90061].map(durationText), ['0s', '59s', '1h', '1d 1h 1m 1s'])
+
+  // A folded group's line in the process's panel.
+  check(
+    'what an agent can use, folded',
+    [
+      canUseSummary('agent', {}, names, 2),
+      canUseSummary('agent', { repositories: [] }, names, 0),
+      canUseSummary('agent', { skills: [1], mcpServers: [2], describeFlow: true, repositories: ['shop'] }, names, 2),
+      canUseSummary('script', { credentials: [4], repositories: [], describeFlow: true }, names, 2),
+    ],
+    [
+      'nothing picked · every repository of the flow',
+      'nothing picked',
+      'Review code, github, the whole flow in its prompt · shop',
+      'Jira · no repository',
+    ],
+  )
+  check(
+    'limits and waits set apart from their defaults',
+    [
+      changedSummary(limitRows('agent', {}, defaults), 'all at their defaults'),
+      changedSummary(limitRows('script', { timeout: 90, retries: 2 }, defaults), 'all at their defaults'),
+      changedSummary(waitRows('human', { remindAfter: 3600, escalateTo: ['Lead'] }), 'none'),
+    ],
+    ['all at their defaults', 'Timeout 1m 30s, Retries 2', 'Remind every 1h, Hand on to Lead'],
+  )
 }
 
 console.log(`${checked} checks of the run views, ${failed} failed`)

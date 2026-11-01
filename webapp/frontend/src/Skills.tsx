@@ -288,7 +288,16 @@ export function SkillPicker({
           Skills
         </TabLink>
       </legend>
-      {skills?.length === 0 && <p className="panel-note">None this flow may use.</p>}
+      {skills?.length === 0 && (
+        <p className="panel-note">
+          None this flow may use.{' '}
+          {!readOnly && (
+            <TabLink hash="#/settings/skills" title="Write skills in Settings, in a new tab">
+              Write one in Settings
+            </TabLink>
+          )}
+        </p>
+      )}
       {skills?.map((s) => (
         <div key={s.id} className="mcp-pick" title={s.description}>
           <label className="panel-check">

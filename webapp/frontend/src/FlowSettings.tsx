@@ -383,7 +383,14 @@ export function RepositoryPicker({
         </button>
       </legend>
       {repositories.length === 0 ? (
-        <p className="panel-note">The flow has none.</p>
+        <p className="panel-note">
+          The flow has none.{' '}
+          {!readOnly && (
+            <button type="button" className="link-button" onClick={onOpenSettings}>
+              Add one in the flow's settings
+            </button>
+          )}
+        </p>
       ) : (
         <>
           <label className="panel-check">

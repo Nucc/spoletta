@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import {
   DEFAULT_LOOPS,
   DEFAULT_ROUNDS,
@@ -35,7 +35,7 @@ import { CredentialPicker } from './Credentials'
 import { ConnectorFields } from './ConnectorFields'
 import { Hint } from './Hints'
 import { RepositoryPicker } from './FlowSettings'
-import { durationText } from './stepSettings'
+import { canUseRows, canUseSummary, changedSummary, durationText, limitRows, waitRows, type SettingNames } from './stepSettings'
 import { ModelOptions } from './ModelProviders'
 import type { RunStatus } from './ProcessNode'
 
@@ -261,14 +261,44 @@ export default function ProcessPanel({
   useEffect(() => {
     if (!readOnly) bodyRef.current?.focus()
   }, [kind, readOnly])
+  useGrowing(bodyRef, kind === 'script' ? script : prompt, kind, readOnly)
+
+  // What the settings pick by id, by name, for the lines of a group folded
+  // or of settings that can't be changed.
+  const names: SettingNames = useMemo(
+    () => ({
+      skills: skills && new Map(skills.map((s) => [s.id, s.name])),
+      credentials: credentials && new Map(credentials.map((c) => [c.id, c.name])),
+      mcpServers: mcpServers && new Map(mcpServers.map((s) => [s.id, s.name])),
+    }),
+    [skills, credentials, mcpServers],
+  )
+  const limits = limitRows(kind, settings, { rounds: DEFAULT_ROUNDS, loops: DEFAULT_LOOPS })
+  const waits = waitRows(kind, settings)
+  const tries = onTry !== undefined && !readOnly && (kind === 'agent' || kind === 'script' || kind === 'connector')
 
   return (
     <aside className="panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
         <h2>Process{readOnly && <span className="run-badge">read-only</span>}</h2>
-        <button className="panel-close" onClick={onClose} aria-label="Close panel">
-          ×
-        </button>
+        <div className="panel-header-actions">
+          {tries && (
+            <button
+              className="panel-header-button"
+              // What is typed goes first, so the trial runs it.
+              onClick={() => {
+                flush()
+                onTry?.()
+              }}
+              title="Run only this process, on inputs you give it, without running the flow before or after it"
+            >
+              Try this process…
+            </button>
+          )}
+          <button className="panel-close" onClick={onClose} aria-label="Close panel">
+            ×
+          </button>
+        </div>
       </header>
       {readOnly && readOnlyWhy && <p className="panel-note panel-read-only">{readOnlyWhy}</p>}
       {!readOnly && (
@@ -276,51 +306,67 @@ export default function ProcessPanel({
           {KIND_HELP[kind]}
         </Hint>
       )}
-      <label className="panel-field">
-        <span>Name</span>
-        <input value={name} readOnly={readOnly} onChange={(e) => setName(e.target.value)} />
-        {name.trim() === '' && <small className="panel-warning">Name can't be empty.</small>}
-      </label>
-      <div className="panel-field" role="radiogroup" aria-label="Type">
-        <span>Type</span>
-        <div className="segmented process-kinds">
-          {KINDS.map((k) => (
-            <button
-              key={k.value}
-              role="radio"
-              aria-checked={kind === k.value}
-              className={kind === k.value ? 'selected' : ''}
-              disabled={readOnly}
-              onClick={() => setKind(k.value)}
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      {kind === 'agent' && (
-        <div className="panel-row">
+      {readOnly ? (
+        <SettingLines
+          rows={[
+            ['Name', name],
+            ['Type', KINDS.find((k) => k.value === kind)?.label ?? kind],
+            ...(kind === 'agent'
+              ? ([
+                  ['Model', model || (models?.default ? `the default, ${models.default}` : 'the default')],
+                  ['Thinking', thinking || 'the default'],
+                ] as [string, string][])
+              : []),
+          ]}
+        />
+      ) : (
+        <>
           <label className="panel-field">
-            <span>Model</span>
-            <select value={model} disabled={readOnly} onChange={(e) => setModel(e.target.value)}>
-              <option value="">Default{models?.default ? ` (${models.default})` : ''}</option>
-              {/* A model dropped from pi's list stays selectable so it isn't silently replaced. */}
-              {model !== '' && !models?.models.includes(model) && <option value={model}>{model}</option>}
-              {models && <ModelOptions models={models} />}
-            </select>
+            <span>Name</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} />
+            {name.trim() === '' && <small className="panel-warning">Name can't be empty.</small>}
           </label>
-          <label className="panel-field">
-            <span>Thinking</span>
-            <select value={thinking} disabled={readOnly} onChange={(e) => setThinking(e.target.value as ThinkingLevel | '')}>
-              <option value="">Default</option>
-              {THINKING_LEVELS.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
+          <div className="panel-field" role="radiogroup" aria-label="Type">
+            <span>Type</span>
+            <div className="segmented process-kinds">
+              {KINDS.map((k) => (
+                <button
+                  key={k.value}
+                  role="radio"
+                  aria-checked={kind === k.value}
+                  className={kind === k.value ? 'selected' : ''}
+                  onClick={() => setKind(k.value)}
+                >
+                  {k.label}
+                </button>
               ))}
-            </select>
-          </label>
-        </div>
+            </div>
+          </div>
+          {kind === 'agent' && (
+            <div className="panel-row">
+              <label className="panel-field">
+                <span>Model</span>
+                <select value={model} onChange={(e) => setModel(e.target.value)}>
+                  <option value="">Default{models?.default ? ` (${models.default})` : ''}</option>
+                  {/* A model dropped from pi's list stays selectable so it isn't silently replaced. */}
+                  {model !== '' && !models?.models.includes(model) && <option value={model}>{model}</option>}
+                  {models && <ModelOptions models={models} />}
+                </select>
+              </label>
+              <label className="panel-field">
+                <span>Thinking</span>
+                <select value={thinking} onChange={(e) => setThinking(e.target.value as ThinkingLevel | '')}>
+                  <option value="">Default</option>
+                  {THINKING_LEVELS.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+        </>
       )}
       {kind === 'connector' ? (
         <ConnectorFields
@@ -340,10 +386,14 @@ export default function ProcessPanel({
             Made of processes on a board of its own. The objects it takes show at the board's start, the ones it
             generates at its end.
           </p>
-          <label className="panel-check">
-            <input type="checkbox" checked={recording} disabled={readOnly} onChange={(e) => setRecording(e.target.checked)} />
-            <span>Record each time it runs as a run of its own</span>
-          </label>
+          {readOnly ? (
+            <SettingLines rows={[['Each time it runs', recording ? 'recorded as a run of its own' : 'part of the run it is in']]} />
+          ) : (
+            <label className="panel-check">
+              <input type="checkbox" checked={recording} onChange={(e) => setRecording(e.target.checked)} />
+              <span>Record each time it runs as a run of its own</span>
+            </label>
+          )}
           <button className="panel-button" onClick={onZoomIn}>
             Open its board
           </button>
@@ -363,208 +413,246 @@ export default function ProcessPanel({
           onError={onError}
         />
       ) : kind === 'agent' ? (
-        <>
-          <label key="agent" className="panel-field panel-field-grow">
+        readOnly ? (
+          <BodyText key="agent" label="Prompt" text={prompt} />
+        ) : (
+          <label key="agent" className="panel-field panel-body">
             <span>Prompt</span>
             <PromptEditor
               textareaRef={bodyRef}
-              readOnly={readOnly}
+              readOnly={false}
               value={prompt}
               commands={commands}
               placeholder={commands?.length ? 'Describe what this process should do… Type / for a command.' : 'Describe what this process should do…'}
               onChange={setPrompt}
             />
           </label>
-          <SkillPicker
-            skills={skills}
-            selected={settings.skills ?? []}
-            readOnly={readOnly}
-            onChange={(ids) => setSettings(({ skills: _, ...rest }) => (ids.length > 0 ? { ...rest, skills: ids } : rest))}
-          />
-          {credentialPicker}
-          <MCPServerPicker
-            servers={mcpServers}
-            selected={settings.mcpServers ?? []}
-            tools={settings.mcpTools ?? {}}
-            readOnly={readOnly}
-            onChange={(ids) =>
-              setSettings(({ mcpServers: _, ...rest }) => (ids.length > 0 ? { ...rest, mcpServers: ids } : rest))
-            }
-            onToolsChange={(tools) =>
-              setSettings(({ mcpTools: _, ...rest }) => (Object.keys(tools).length > 0 ? { ...rest, mcpTools: tools } : rest))
-            }
-            onOpenSettings={onOpenMCPSettings}
-          />
-          {repositoryPicker}
-          <label className="panel-check" title="The flow in OPL goes into the prompt, so the agent knows where its work comes from and goes">
-            <input
-              type="checkbox"
-              checked={Boolean(settings.describeFlow)}
-              disabled={readOnly}
-              onChange={(e) =>
-                setSettings(({ describeFlow: _, ...rest }) => (e.target.checked ? { ...rest, describeFlow: true } : rest))
-              }
-            />
-            <span>Tell it about the flow it works in, in OPL</span>
-          </label>
-        </>
+        )
       ) : kind === 'human' ? (
         // The prompt doubles as the person's instructions; switching kinds keeps it.
-        <label key="human" className={`panel-field${review ? '' : ' panel-field-grow'}`}>
-          <span>Instructions for the person</span>
-          <textarea
-            ref={bodyRef}
-            readOnly={readOnly}
-            value={prompt}
-            rows={review ? 3 : undefined}
-            placeholder="What should the person check before deciding, or fill in?"
-            onChange={(e) => setPrompt(e.target.value)}
-          />
-        </label>
+        readOnly ? (
+          <BodyText key="human" label="Instructions for the person" text={prompt} />
+        ) : (
+          <label key="human" className="panel-field panel-body">
+            <span>Instructions for the person</span>
+            <textarea
+              ref={bodyRef}
+              value={prompt}
+              placeholder="What should the person check before deciding, or fill in?"
+              onChange={(e) => setPrompt(e.target.value)}
+            />
+          </label>
+        )
+      ) : readOnly ? (
+        <BodyText key="script" label="Script" text={script} code />
       ) : (
-        <label key="script" className="panel-field panel-field-grow">
+        <label key="script" className="panel-field panel-body">
           <span>Script</span>
           <textarea
             ref={bodyRef}
-            readOnly={readOnly}
             value={script}
             placeholder={SCRIPT_PLACEHOLDER}
             spellCheck={false}
             onChange={(e) => setScript(e.target.value)}
           />
-          <small className="panel-note">
-            Runs with bash, curl and jq. Each object it takes is a file in <code>$INPUTS</code>, named after the object
-            with spaces as underscores. What it prints is its output; a list of items is a JSON array. A non-zero exit
-            fails it. With repositories, it runs in their workspace, <code>$WORKSPACE</code>, on the branch{' '}
-            <code>$BRANCH</code>. In a scheduled run, <code>$SINCE</code> (or <code>$LAST_RUN</code>) is when the
-            schedule's last run that got through started, as a Unix timestamp, empty if none did. Each credential it
-            picks is at <code>$CREDENTIAL_NAME_URL</code>, called with{' '}
-            <code>Authorization: Bearer $CREDENTIALS_TOKEN</code>.
-          </small>
         </label>
       )}
-      {kind === 'script' && credentialPicker}
-      {kind === 'script' && repositoryPicker}
-      {kind === 'human' && (
-        <div className="panel-row panel-durations">
-          <DurationSetting
-            label="Remind every"
-            title="How often whoever may decide it is reminded while it waits, such as 4h or 1d, but never once it fails; never when empty"
-            value={settings.remindAfter}
-            readOnly={readOnly}
-            onChange={(remindAfter) =>
-              setSettings(({ remindAfter: _, ...rest }) => (remindAfter === undefined ? rest : { ...rest, remindAfter }))
-            }
-          />
-          <DurationSetting
-            label="Fail after"
-            title="The longest it waits with nobody deciding before it fails, such as 2d; never when empty. Drag from this process onto another to run that one when it fails."
-            value={settings.waitAtMost}
-            readOnly={readOnly}
-            onChange={(waitAtMost) =>
-              setSettings(({ waitAtMost: _, ...rest }) => (waitAtMost === undefined ? rest : { ...rest, waitAtMost }))
-            }
-          />
-          <DurationSetting
-            label="Hand on after"
-            title="How long it waits with nobody deciding before the roles below may decide it too, and are told so, such as 1d; never when empty"
-            value={settings.escalateAfter}
-            readOnly={readOnly}
-            onChange={(escalateAfter) =>
-              setSettings(({ escalateAfter: _, ...rest }) => (escalateAfter === undefined ? rest : { ...rest, escalateAfter }))
-            }
-          />
-          <RolesSetting
-            label="Hand on to"
-            title="The roles that may decide it too once it has waited that long, such as Lead, Finance; those who decide it now still may"
-            value={settings.escalateTo}
-            readOnly={readOnly}
-            onChange={(escalateTo) =>
-              setSettings(({ escalateTo: _, ...rest }) => (escalateTo === undefined ? rest : { ...rest, escalateTo }))
-            }
-          />
-        </div>
+      {(kind === 'agent' || kind === 'script') && <TakesLine kind={kind} takes={takes} generates={generates} />}
+      {kind === 'script' && !readOnly && (
+        <small className="panel-note">
+          Runs with bash, curl and jq. Each object it takes is a file in <code>$INPUTS</code>, named after the object
+          with spaces as underscores. What it prints is its output; a list of items is a JSON array. A non-zero exit
+          fails it. With repositories, it runs in their workspace, <code>$WORKSPACE</code>, on the branch{' '}
+          <code>$BRANCH</code>. In a scheduled run, <code>$SINCE</code> (or <code>$LAST_RUN</code>) is when the
+          schedule's last run that got through started, as a Unix timestamp, empty if none did. Each credential it
+          picks is at <code>$CREDENTIAL_NAME_URL</code>, called with{' '}
+          <code>Authorization: Bearer $CREDENTIALS_TOKEN</code>.
+        </small>
       )}
-      {(kind === 'agent' || kind === 'script' || kind === 'connector') && (
-        <div className="panel-row panel-numbers">
-          {kind === 'agent' && (
-            <NumberSetting
-              label="Rounds"
-              title="When this agent decides states of what it reviews: how many times it runs in a run before sending the work back fails it"
-              value={settings.rounds}
-              fallback={DEFAULT_ROUNDS}
-              min={1}
-              max={MAX_ROUNDS}
-              readOnly={readOnly}
-              onChange={(rounds) => setSettings(({ rounds: _, ...rest }) => (rounds === undefined ? rest : { ...rest, rounds }))}
-            />
+      {(kind === 'agent' || kind === 'script') && (
+        <SettingsGroup key={`uses-${kind}`} title="Can use" summary={canUseSummary(kind, settings, names, repositories.length)}>
+          {readOnly ? (
+            <SettingLines rows={canUseRows(kind, settings, names)} />
+          ) : (
+            <>
+              {kind === 'agent' && (
+                <SkillPicker
+                  skills={skills}
+                  selected={settings.skills ?? []}
+                  readOnly={false}
+                  onChange={(ids) => setSettings(({ skills: _, ...rest }) => (ids.length > 0 ? { ...rest, skills: ids } : rest))}
+                />
+              )}
+              {credentialPicker}
+              {kind === 'agent' && (
+                <MCPServerPicker
+                  servers={mcpServers}
+                  selected={settings.mcpServers ?? []}
+                  tools={settings.mcpTools ?? {}}
+                  readOnly={false}
+                  onChange={(ids) =>
+                    setSettings(({ mcpServers: _, ...rest }) => (ids.length > 0 ? { ...rest, mcpServers: ids } : rest))
+                  }
+                  onToolsChange={(tools) =>
+                    setSettings(({ mcpTools: _, ...rest }) => (Object.keys(tools).length > 0 ? { ...rest, mcpTools: tools } : rest))
+                  }
+                  onOpenSettings={onOpenMCPSettings}
+                />
+              )}
+              {repositoryPicker}
+              {kind === 'agent' && (
+                <label
+                  className="panel-check"
+                  title="Its prompt then holds the flow written out as sentences (OPL), so the agent knows where its work comes from and where it goes"
+                >
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings.describeFlow)}
+                    onChange={(e) =>
+                      setSettings(({ describeFlow: _, ...rest }) => (e.target.checked ? { ...rest, describeFlow: true } : rest))
+                    }
+                  />
+                  <span>Describe the whole flow in its prompt</span>
+                </label>
+              )}
+            </>
           )}
-          <NumberSetting
-            label="Loops"
-            title="How many times it may run round a loop with no person deciding in between, such as a failure connection leading back to it, before someone is asked whether it goes on"
-            value={settings.loops}
-            fallback={DEFAULT_LOOPS}
-            min={1}
-            max={MAX_LOOPS}
-            readOnly={readOnly}
-            onChange={(loops) => setSettings(({ loops: _, ...rest }) => (loops === undefined ? rest : { ...rest, loops }))}
-          />
-          <NumberSetting
-            label="Timeout (s)"
-            title="How long a step may take before it fails; the worker's own limit when empty"
-            value={settings.timeout}
-            fallback="Worker's"
-            min={1}
-            max={MAX_TIMEOUT}
-            readOnly={readOnly}
-            onChange={(timeout) => setSettings(({ timeout: _, ...rest }) => (timeout === undefined ? rest : { ...rest, timeout }))}
-          />
-          <NumberSetting
-            label="Retries"
-            title="How many more times a failed step is tried before it fails for good; a stopped step isn't. Drag from this process onto another to run that one when it fails."
-            value={settings.retries}
-            fallback={0}
-            min={0}
-            max={MAX_RETRIES}
-            readOnly={readOnly}
-            onChange={(retries) => setSettings(({ retries: _, ...rest }) => (retries === undefined ? rest : { ...rest, retries }))}
-          />
-        </div>
+        </SettingsGroup>
+      )}
+      {(kind === 'agent' || kind === 'script') &&
+        queries.length > 0 &&
+        (readOnly ? (
+          <div className="panel-queries">
+            <span className="panel-label">Stored records</span>
+            <SettingLines rows={queries.map((q) => [q.object, queryText(q)])} />
+          </div>
+        ) : (
+          <div className="panel-queries">
+            <span className="panel-label">Stored records</span>
+            {queries.map((q) => (
+              <QueryLinkFields key={q.link} q={q} readOnly={false} onQuery={onQuery} />
+            ))}
+          </div>
+        ))}
+      {kind === 'human' && (
+        <SettingsGroup
+          key="waits"
+          title="While it waits"
+          summary={changedSummary(waits, 'no reminders, time limit or handing on')}
+        >
+          {readOnly ? (
+            <SettingLines rows={waits} />
+          ) : (
+            <div className="panel-row panel-durations">
+              <DurationSetting
+                label="Remind every"
+                title="How often whoever may decide it is reminded while it waits, such as 4h or 1d, but never once it fails; never when empty"
+                value={settings.remindAfter}
+                readOnly={false}
+                onChange={(remindAfter) =>
+                  setSettings(({ remindAfter: _, ...rest }) => (remindAfter === undefined ? rest : { ...rest, remindAfter }))
+                }
+              />
+              <DurationSetting
+                label="Fail after"
+                title="The longest it waits with nobody deciding before it fails, such as 2d; never when empty. Drag from this process onto another to run that one when it fails."
+                value={settings.waitAtMost}
+                readOnly={false}
+                onChange={(waitAtMost) =>
+                  setSettings(({ waitAtMost: _, ...rest }) => (waitAtMost === undefined ? rest : { ...rest, waitAtMost }))
+                }
+              />
+              <DurationSetting
+                label="Hand on after"
+                title="How long it waits with nobody deciding before the roles below may decide it too, and are told so, such as 1d; never when empty"
+                value={settings.escalateAfter}
+                readOnly={false}
+                onChange={(escalateAfter) =>
+                  setSettings(({ escalateAfter: _, ...rest }) => (escalateAfter === undefined ? rest : { ...rest, escalateAfter }))
+                }
+              />
+              <RolesSetting
+                label="Hand on to"
+                title="The roles that may decide it too once it has waited that long, such as Lead, Finance; those who decide it now still may"
+                value={settings.escalateTo}
+                readOnly={false}
+                onChange={(escalateTo) =>
+                  setSettings(({ escalateTo: _, ...rest }) => (escalateTo === undefined ? rest : { ...rest, escalateTo }))
+                }
+              />
+            </div>
+          )}
+        </SettingsGroup>
       )}
       {kind !== 'human' && (
-        <div className="panel-row">
-          <NumberSetting
-            label="Needs"
-            title="How many of the objects it takes without waiting for a state must come, holding their conditions, before it runs; all of them when empty. The rest that come later are left."
-            value={settings.quorum}
-            fallback="All inputs"
-            min={1}
-            max={99}
-            readOnly={readOnly}
-            onChange={(quorum) => setSettings(({ quorum: _, ...rest }) => (quorum === undefined ? rest : { ...rest, quorum }))}
-          />
-        </div>
-      )}
-      {(kind === 'agent' || kind === 'script') && queries.length > 0 && (
-        <div className="panel-queries">
-          <span className="panel-label">Stored records</span>
-          {queries.map((q) => (
-            <QueryLinkFields key={q.link} q={q} readOnly={readOnly} onQuery={onQuery} />
-          ))}
-        </div>
-      )}
-      {onTry && !readOnly && (kind === 'agent' || kind === 'script' || kind === 'connector') && (
-        <button
-          className="panel-button"
-          // What is typed goes first, so the trial runs it.
-          onClick={() => {
-            flush()
-            onTry()
-          }}
-          title="Run only this process, on inputs you give it, without running the flow before or after it"
+        <SettingsGroup
+          key={`limits-${kind}`}
+          title="Limits"
+          summary={changedSummary(limits, 'all at their defaults')}
         >
-          Try this process…
-        </button>
+          {readOnly ? (
+            <SettingLines rows={limits} />
+          ) : (
+            <div className="panel-limits">
+              {kind === 'agent' && (
+                <NumberSetting
+                  label="Rounds"
+                  title="When this agent decides states of what it reviews: how many times it runs in a run before sending the work back fails it"
+                  value={settings.rounds}
+                  fallback={DEFAULT_ROUNDS}
+                  min={1}
+                  max={MAX_ROUNDS}
+                  readOnly={false}
+                  onChange={(rounds) => setSettings(({ rounds: _, ...rest }) => (rounds === undefined ? rest : { ...rest, rounds }))}
+                />
+              )}
+              {(kind === 'agent' || kind === 'script' || kind === 'connector') && (
+                <>
+                  <NumberSetting
+                    label="Loops"
+                    title="How many times it may run round a loop with no person deciding in between, such as a failure connection leading back to it, before someone is asked whether it goes on"
+                    value={settings.loops}
+                    fallback={DEFAULT_LOOPS}
+                    min={1}
+                    max={MAX_LOOPS}
+                    readOnly={false}
+                    onChange={(loops) => setSettings(({ loops: _, ...rest }) => (loops === undefined ? rest : { ...rest, loops }))}
+                  />
+                  <NumberSetting
+                    label="Timeout (s)"
+                    title="How long a step may take before it fails, in seconds; the worker's own limit when empty"
+                    value={settings.timeout}
+                    fallback="the worker's"
+                    min={1}
+                    max={MAX_TIMEOUT}
+                    readOnly={false}
+                    onChange={(timeout) => setSettings(({ timeout: _, ...rest }) => (timeout === undefined ? rest : { ...rest, timeout }))}
+                  />
+                  <NumberSetting
+                    label="Retries"
+                    title="How many more times a failed step is tried before it fails for good; a stopped step isn't. Drag from this process onto another to run that one when it fails."
+                    value={settings.retries}
+                    fallback={0}
+                    min={0}
+                    max={MAX_RETRIES}
+                    readOnly={false}
+                    onChange={(retries) => setSettings(({ retries: _, ...rest }) => (retries === undefined ? rest : { ...rest, retries }))}
+                  />
+                </>
+              )}
+              <NumberSetting
+                label="Needs"
+                title="How many of the objects it takes without waiting for a state must come, holding their conditions, before it runs; all of them when empty. The rest that come later are left."
+                value={settings.quorum}
+                fallback="all inputs"
+                min={1}
+                max={99}
+                readOnly={false}
+                onChange={(quorum) => setSettings(({ quorum: _, ...rest }) => (quorum === undefined ? rest : { ...rest, quorum }))}
+              />
+            </div>
+          )}
+        </SettingsGroup>
       )}
       {review && <ReviewForm review={review} />}
       {run?.status === 'active' && <p className="panel-note">Running…</p>}
@@ -603,9 +691,122 @@ export default function ProcessPanel({
   )
 }
 
-// A whole number a process's settings may hold, from min to max; empty
-// leaves it out, which means fallback. What is typed shows as it is, and only
-// a number in range is saved.
+// Grows the process's prompt, script or instructions with their text, from
+// the few lines its CSS gives it at least to the most it allows, past which
+// it scrolls; again as the panel is made wider or narrower.
+function useGrowing(ref: RefObject<HTMLTextAreaElement | null>, text: string, kind: ProcessKind, readOnly: boolean) {
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let width = -1
+    const fit = () => {
+      // Shrinking it first would scroll the panel back up when it is short.
+      const panel = el.closest('.panel')
+      const top = panel?.scrollTop ?? 0
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`
+      if (panel) panel.scrollTop = top
+    }
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth === width) return
+      width = el.clientWidth
+      fit()
+    })
+    width = el.clientWidth
+    fit()
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [text, kind, readOnly])
+}
+
+// Settings as names and values, where they can't be changed.
+function SettingLines({ rows }: { rows: [string, string][] }) {
+  return (
+    <dl className="data-fields panel-lines">
+      {rows.map(([name, value]) => (
+        <div key={name}>
+          <dt>{name}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+// A process's prompt, script or instructions where they can't be changed: a
+// text to read, not a box to type in.
+function BodyText({ label, text, code = false }: { label: string; text: string; code?: boolean }) {
+  return (
+    <div className="panel-field">
+      <span>{label}</span>
+      {text.trim() === '' ? <p className="panel-note">None written.</p> : <pre className={`panel-text${code ? ' code' : ''}`}>{text}</pre>}
+    </div>
+  )
+}
+
+// What an agent or script gets and what it must hand back, as the board's
+// links draw them, so its prompt or script can be written to them.
+function TakesLine({ kind, takes, generates }: { kind: 'agent' | 'script'; takes: string[]; generates: string[] }) {
+  const list = (names: string[]) =>
+    names.map((n, i) => (
+      <Fragment key={i}>
+        {i > 0 && ', '}
+        <strong>{n}</strong>
+      </Fragment>
+    ))
+  return (
+    <p className="panel-io">
+      {takes.length === 0 ? (
+        'Takes nothing'
+      ) : (
+        <>
+          Takes {list(takes)}
+          {kind === 'script' && (
+            <>
+              {' '}
+              in <code>$INPUTS</code>
+            </>
+          )}
+        </>
+      )}
+      {' · '}
+      {generates.length === 0 ? (
+        'hands in nothing; link it to an object for it to generate'
+      ) : (
+        <>
+          {kind === 'script' ? 'prints' : 'hands in'} {list(generates)}
+        </>
+      )}
+    </p>
+  )
+}
+
+// A group of settings under a heading, open at first so what can be set
+// shows; folded, its line says what is set, so nothing picked is out of
+// sight. Mount with a key per kind, as what it holds changes with it.
+function SettingsGroup({ title, summary, children }: { title: string; summary: string; children: ReactNode }) {
+  const [open, setOpen] = useState(true)
+  return (
+    <details className="settings-group" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        <span className="settings-group-title">{title}</span>
+        {!open && <span className="settings-group-summary">{summary}</span>}
+      </summary>
+      <div className="settings-group-body">{children}</div>
+    </details>
+  )
+}
+
+// What a link taking stored records takes, said in a line.
+function queryText(q: QueryLink): string {
+  if (q.query === null) return 'the object in the run'
+  const parts = [`stored records${q.query.where ? ` where ${q.query.where}` : ''}`]
+  parts.push(q.query.state ? `in ${q.query.state}` : 'in any state')
+  parts.push(q.query.oldest ? 'oldest first' : 'newest first')
+  parts.push(`at most ${q.query.limit ?? 20}`)
+  return parts.join(', ')
+}
+
 // An input link to a persistent or shared object, which can take the object's stored
 // records instead of the object in the run; see queries.go.
 export type QueryLink = {
@@ -678,6 +879,9 @@ function QueryLinkFields({ q, readOnly, onQuery }: { q: QueryLink; readOnly: boo
   )
 }
 
+// A whole number a process's settings may hold, from min to max; empty
+// leaves it out, which means fallback, as its placeholder says. What is typed
+// shows as it is, and only a number in range is saved.
 function NumberSetting({
   label,
   title,
@@ -703,13 +907,18 @@ function NumberSetting({
   }, [value])
   return (
     <label className="panel-field" title={title}>
-      <span>{label}</span>
+      <span>
+        {label}{' '}
+        <span className="panel-help" aria-hidden="true">
+          ?
+        </span>
+      </span>
       <input
         type="number"
         min={min}
         max={max}
         value={text}
-        placeholder={String(fallback)}
+        placeholder={`${fallback} (default)`}
         readOnly={readOnly}
         onChange={(e) => {
           setText(e.target.value)
@@ -1286,28 +1495,39 @@ function SubflowFields({
 
   return (
     <>
-      <label className="panel-field">
-        <span>Procedure it runs</span>
-        <select
-          value={flow ?? ''}
-          disabled={readOnly}
-          onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
-        >
-          <option value="">Pick a procedure…</option>
-          {flow !== undefined && (flows === null || gone) && (
-            <option value={flow}>
-              {trashed !== undefined ? `${trashed} (in the trash)` : gone ? `Flow #${flow} (deleted)` : `Flow #${flow}`}
-            </option>
-          )}
-          {flows
-            ?.filter((f) => f.module || f.id === flow)
-            .map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      {readOnly ? (
+        <SettingLines
+          rows={[
+            [
+              'Procedure it runs',
+              flow === undefined
+                ? 'none picked'
+                : trashed !== undefined
+                  ? `${trashed} (in the trash)`
+                  : (flows?.find((f) => f.id === flow)?.name ?? (gone ? `Flow #${flow} (deleted)` : `Flow #${flow}`)),
+            ],
+          ]}
+        />
+      ) : (
+        <label className="panel-field">
+          <span>Procedure it runs</span>
+          <select value={flow ?? ''} onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}>
+            <option value="">Pick a procedure…</option>
+            {flow !== undefined && (flows === null || gone) && (
+              <option value={flow}>
+                {trashed !== undefined ? `${trashed} (in the trash)` : gone ? `Flow #${flow} (deleted)` : `Flow #${flow}`}
+              </option>
+            )}
+            {flows
+              ?.filter((f) => f.module || f.id === flow)
+              .map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+          </select>
+        </label>
+      )}
       {trashed !== undefined && (
         <p className="panel-warning">
           {trashed} is in the trash, so this fails to run it until someone restores it from the trash; or pick another

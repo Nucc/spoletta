@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useId, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useMe } from './Account'
 
 // Help shown where and when it applies, rather than all at once: a guide
@@ -6,7 +6,8 @@ import { useMe } from './Account'
 // what it edits, and tips on the board at the moment they apply, as a link
 // is selected or drawn from a state. Each can be hidden, which is
 // remembered per person in the browser, and the board's menu shows them
-// all again.
+// all again. What a panel's settings mean waits behind a ? beside each,
+// opened in place.
 
 // The hints a person hid, by id, kept under their own key: user 0's
 // without sign-in.
@@ -71,6 +72,46 @@ export function Hint({ id, className, children }: { id: string; className?: stri
       </button>
     </div>
   )
+}
+
+// What a panel's settings mean, each folded behind a ? beside its name,
+// so the settings fill the panel rather than their help. The ? opens its
+// note in place, under the setting, and closes it again, also while the
+// panel can't be changed, when the notes are read most. Every note starts
+// folded; mount the panel with key={id} so another node's do too.
+export function useHelp() {
+  const prefix = useId()
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
+  const toggle = (key: string) =>
+    setOpen((o) => {
+      const next = new Set(o)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
+  return {
+    // Beside a setting's name, never inside a label wrapping its control,
+    // where a button would take the label from the control.
+    button: (key: string, about: string) => (
+      <button
+        type="button"
+        className="panel-help"
+        aria-expanded={open.has(key)}
+        aria-controls={`${prefix}${key}`}
+        aria-label={`Help on ${about}`}
+        title={open.has(key) ? 'Hide what this means' : 'Show what this means'}
+        onClick={() => toggle(key)}
+      >
+        ?
+      </button>
+    ),
+    // Hidden rather than left out while folded, so the button always
+    // controls something.
+    note: (key: string, text: ReactNode) => (
+      <p id={`${prefix}${key}`} className="panel-note" hidden={!open.has(key)}>
+        {text}
+      </p>
+    ),
+  }
 }
 
 // What to do first on a board with nothing on it.

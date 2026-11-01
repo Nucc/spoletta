@@ -6,7 +6,7 @@ import { quantityText, type Quantity } from './quantity'
 import QuantityInput from './QuantityInput'
 import { fieldsOf, ownedBy, type Field } from './structure'
 import { openTab } from './tabs'
-import { Hint } from './Hints'
+import { Hint, useHelp } from './Hints'
 
 const SAVE_DELAY_MS = 500
 
@@ -103,6 +103,7 @@ export default function ObjectPanel({
   const fields = fieldsOf(objects, id)
   const inherited = fields.filter((f) => f.inherited)
   const parts = ownedBy(objects, id)
+  const help = useHelp()
 
   // Saves the name unless it is empty or unchanged; also when the panel
   // closes, since a removed field may never blur.
@@ -186,7 +187,10 @@ export default function ObjectPanel({
       {owner ? (
         <>
           <div className="panel-field" role="radiogroup" aria-label={`How it makes up ${owner.name}`}>
-            <span>How it makes up {owner.name}</span>
+            <span className="help-head">
+              How it makes up {owner.name}
+              {help.button('relation', `how it makes up ${owner.name}`)}
+            </span>
             <label className="panel-check">
               <input
                 type="radio"
@@ -210,55 +214,82 @@ export default function ObjectPanel({
               <span>A part it aggregates</span>
             </label>
           </div>
-          <p className="panel-note">
-            It is a field of what {owner.name} holds, named like it: a JSON object with its own fields, or any JSON value
-            while it has none. Only how the board draws it tells an attribute from a part.
-          </p>
+          {help.note(
+            'relation',
+            <>
+              It is a field of what {owner.name} holds, named like it: a JSON object with its own fields, or any JSON value
+              while it has none. Only how the board draws it tells an attribute from a part.
+            </>,
+          )}
         </>
       ) : structRoot ? null : (
         <>
-          <label className="panel-check">
-            <input type="checkbox" checked={human} disabled={!own} onChange={(e) => onHumanChange(e.target.checked)} />
-            <span>A person</span>
-          </label>
-          <p className="panel-note">
-            A human object, such as a requester. Its link into a process is an agent link, ending in a filled circle: the
-            person carries the process out, so it must be a human process. When the run reaches it, the person fills in
-            the objects it generates without decision states, and the processes taking them go on with what they entered.
-          </p>
+          <div className="help-head">
+            <label className="panel-check">
+              <input type="checkbox" checked={human} disabled={!own} onChange={(e) => onHumanChange(e.target.checked)} />
+              <span>A person</span>
+            </label>
+            {help.button('human', 'A person')}
+          </div>
+          {help.note(
+            'human',
+            <>
+              A human object, such as a requester. Its link into a process is an agent link, ending in a filled circle: the
+              person carries the process out, so it must be a human process. When the run reaches it, the person fills in
+              the objects it generates without decision states, and the processes taking them go on with what they entered.
+            </>,
+          )}
         </>
       )}
-      <label className="panel-field">
-        <span>How many</span>
-        <QuantityInput key={quantityText(quantity)} quantity={quantity} disabled={!own} onChange={onQuantityChange} />
-      </label>
-      <p className="panel-note">
-        As its links write it at its end: 1 for one object, or a list of items, such as exactly 4, 2..5, at least one as
-        1..*, or * for any number.{' '}
-        {owner
-          ? `A list's field holds a JSON array, one item per ${name}, and what is handed in must have as many.`
-          : `A process generating a list hands in a JSON array with as many items, or is asked again, and a flow process
-        taking it runs once per item, each item as this object inside it; a list it collects from its items' runs has as
-        many as ran. Stored, each item's run claims its item, so an item another run took is skipped.`}
-      </p>
+      <div className="panel-field">
+        <span className="help-head">
+          <label htmlFor={`object-${id}-quantity`}>How many</label>
+          {help.button('quantity', 'How many')}
+        </span>
+        <QuantityInput
+          key={quantityText(quantity)}
+          id={`object-${id}-quantity`}
+          quantity={quantity}
+          disabled={!own}
+          onChange={onQuantityChange}
+        />
+      </div>
+      {help.note(
+        'quantity',
+        <>
+          As its links write it at its end: 1 for one object, or a list of items, such as exactly 4, 2..5, at least one as
+          1..*, or * for any number.{' '}
+          {owner
+            ? `A list's field holds a JSON array, one item per ${name}, and what is handed in must have as many.`
+            : `A process generating a list hands in a JSON array with as many items, or is asked again, and a flow process
+          taking it runs once per item, each item as this object inside it; a list it collects from its items' runs has as
+          many as ran. Stored, each item's run claims its item, so an item another run took is skipped.`}
+        </>,
+      )}
       {structRoot && (
         <>
-          <label className="panel-check">
-            <input
-              type="checkbox"
-              checked={shared}
-              disabled={!editable}
-              onChange={(e) => onSharedChange(e.target.checked)}
-            />
-            <span>Share its records with every flow using it</span>
-          </label>
-          <p className="panel-note">
-            Every copy of {name}, in whatever flow, reads and writes the same records, told apart by its unique
-            attributes, so mark one unique first. A process only generating it adds new records and refreshes the
-            fields of known ones, keeping their state; one that takes or queries it too moves the records it generates
-            into the state it comes out in. Which records get worked on, or worked on again, is up to the processes'
-            queries: no run claims a record, so runs querying the same state at once may take the same one.
-          </p>
+          <div className="help-head">
+            <label className="panel-check">
+              <input
+                type="checkbox"
+                checked={shared}
+                disabled={!editable}
+                onChange={(e) => onSharedChange(e.target.checked)}
+              />
+              <span>Share its records with every flow using it</span>
+            </label>
+            {help.button('shared', 'sharing its records')}
+          </div>
+          {help.note(
+            'shared',
+            <>
+              Every copy of {name}, in whatever flow, reads and writes the same records, told apart by its unique
+              attributes, so mark one unique first. A process only generating it adds new records and refreshes the
+              fields of known ones, keeping their state; one that takes or queries it too moves the records it generates
+              into the state it comes out in. Which records get worked on, or worked on again, is up to the processes'
+              queries: no run claims a record, so runs querying the same state at once may take the same one.
+            </>,
+          )}
           {shared && (
             <a className="link-button records-table-link" href={`#/flows/${flow}/records`}>
               <TableIcon /> Show its records
@@ -280,20 +311,26 @@ export default function ObjectPanel({
       )}
       {!owner && !human && !structRoot && !shared && (
         <>
-          <label className="panel-check">
-            <input
-              type="checkbox"
-              checked={persistent}
-              disabled={!editable}
-              onChange={(e) => onPersistentChange(e.target.checked)}
-            />
-            <span>Store what runs generate</span>
-          </label>
-          <p className="panel-note">
-            Each run that ends done keeps what it generated this object with. A unique attribute's value can be stored
-            only once: a step generating a value another run stored terminates its run, so nothing is processed twice.
-            Values are compared ignoring case and spacing; empty ones never collide.
-          </p>
+          <div className="help-head">
+            <label className="panel-check">
+              <input
+                type="checkbox"
+                checked={persistent}
+                disabled={!editable}
+                onChange={(e) => onPersistentChange(e.target.checked)}
+              />
+              <span>Store what runs generate</span>
+            </label>
+            {help.button('persistent', 'storing what runs generate')}
+          </div>
+          {help.note(
+            'persistent',
+            <>
+              Each run that ends done keeps what it generated this object with. A unique attribute's value can be stored
+              only once: a step generating a value another run stored terminates its run, so nothing is processed twice.
+              Values are compared ignoring case and spacing; empty ones never collide.
+            </>,
+          )}
           {persistent && (
             <a
               className="link-button records-table-link"
@@ -307,11 +344,15 @@ export default function ObjectPanel({
       )}
       {!human && (
         <>
-          <label className="panel-field">
-            <span className="field-label-icon">
-              <GeneralizationIcon size={14} /> Specializes
+          <div className="panel-field">
+            <span className="help-head">
+              <label className="field-label-icon" htmlFor={`object-${id}-general`}>
+                <GeneralizationIcon size={14} /> Specializes
+              </label>
+              {help.button('general', 'Specializes')}
             </span>
             <select
+              id={`object-${id}-general`}
               value={general ?? ''}
               disabled={!own}
               onChange={(e) => onGeneralChange(e.target.value === '' ? null : Number(e.target.value))}
@@ -325,23 +366,28 @@ export default function ObjectPanel({
                   </option>
                 ))}
             </select>
-          </label>
-          <p className="panel-note">
-            Such as a car specializing a vehicle: it has every field of the object it specializes, first, and its own.
-          </p>
+          </div>
+          {help.note(
+            'general',
+            <>Such as a car specializing a vehicle: it has every field of the object it specializes, first, and its own.</>,
+          )}
         </>
       )}
       <section className="attributes" aria-label="Attributes">
         <div className="attributes-title">
           <ExhibitionIcon size={14} />
           <span>Attributes</span>
+          {help.button('attributes', 'Attributes')}
         </div>
-        <p className="panel-note">
-          A process generating this object hands in a JSON object with exactly its fields: what it inherits, these
-          attributes and the objects it is made of. With none, it hands in data only. The definitions say what each
-          holds. An agent's output is checked as it hands it in, and it fixes what doesn't fit; a script's that doesn't fit
-          fails the step. A file attribute holds the path of a file the process wrote.
-        </p>
+        {help.note(
+          'attributes',
+          <>
+            A process generating this object hands in a JSON object with exactly its fields: what it inherits, these
+            attributes and the objects it is made of. With none, it hands in data only. The definitions say what each
+            holds. An agent's output is checked as it hands it in, and it fixes what doesn't fit; a script's that doesn't
+            fit fails the step. A file attribute holds the path of a file the process wrote.
+          </>,
+        )}
         {inherited.length > 0 && (
           <ul className="inherited-fields" aria-label="Inherited fields">
             {inherited.map((f) => (
@@ -403,13 +449,17 @@ export default function ObjectPanel({
         <section className="attributes" aria-label="State rules">
           <div className="attributes-title">
             <span>State rules</span>
+            {help.button('rules', 'State rules')}
           </div>
-          <p className="panel-note">
-            Generated in no state, the object comes out in the first state whose rule holds of what it holds, such as{' '}
-            <code>confidence &gt;= 0.8</code> or <code>kind == "bug" and labels contains "p1"</code>: comparisons of its
-            fields, by name, with ==, !=, &lt;, &lt;=, &gt;, &gt;= or contains, joined by and. An object without attributes
-            holds its value in <code>data</code>.
-          </p>
+          {help.note(
+            'rules',
+            <>
+              Generated in no state, the object comes out in the first state whose rule holds of what it holds, such as{' '}
+              <code>confidence &gt;= 0.8</code> or <code>kind == "bug" and labels contains "p1"</code>: comparisons of its
+              fields, by name, with ==, !=, &lt;, &lt;=, &gt;, &gt;= or contains, joined by and. An object without
+              attributes holds its value in <code>data</code>.
+            </>,
+          )}
           {states.map((s) => (
             <StateRuleRow key={s.id} state={s} editable={own} onSave={(rule) => onStateRule(s.id, rule)} />
           ))}

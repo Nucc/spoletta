@@ -7,6 +7,7 @@ import { parseQuantity, QUANTITY_HINT, quantityText, type Quantity } from './qua
 // Mount it with key set to the quantity's text, so a change made elsewhere
 // shows.
 export default function QuantityInput({
+  id,
   quantity,
   disabled,
   autoFocus,
@@ -14,6 +15,7 @@ export default function QuantityInput({
   onChange,
   onDone,
 }: {
+  id?: string
   quantity: Quantity
   disabled?: boolean
   autoFocus?: boolean
@@ -42,6 +44,7 @@ export default function QuantityInput({
 
   return (
     <input
+      id={id}
       className={`quantity-input${parsed ? '' : ' invalid'}${className ? ` ${className}` : ''}`}
       value={text}
       disabled={disabled}

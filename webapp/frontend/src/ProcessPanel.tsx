@@ -667,7 +667,7 @@ export default function ProcessPanel({
         </SettingsGroup>
       )}
       {review && <ReviewForm review={review} />}
-      {run?.status === 'active' && <p className="panel-note">Running…</p>}
+      {run?.status === 'active' && <p className="panel-note">{run.id === undefined ? 'Running…' : `Running in run #${run.id}; its step there says for how long.`}</p>}
       {run?.error &&
         (run.status === 'duplicate' ? (
           <div className="panel-run">

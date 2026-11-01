@@ -25,7 +25,7 @@ import {
 } from './api'
 import { ClockIcon, TerminalIcon } from './icons'
 import StepTerminal, { formatLogTime, useStepLogs } from './StepTerminal'
-import { formatSpan } from './timeline'
+import { elapsedText, formatSpan } from './timeline'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
@@ -325,6 +325,7 @@ export function RunPanel({
   onOpenReview,
   reviewFormFor,
   settingsOf,
+  limitOf,
   onChanged,
   onClose,
 }: {
@@ -364,6 +365,9 @@ export function RunPanel({
   // a value (stepSettings.ts); none when the board doesn't show that version
   // or the process.
   settingsOf?: (process: number) => [string, string][] | undefined
+  // How long a step of the process may go in the run's version, in seconds,
+  // a person's wait included, if it says; on the same terms.
+  limitOf?: (process: number) => number | undefined
   // A follow-up started or was stopped, so the run is loaded again.
   onChanged: () => void
   onClose: () => void
@@ -433,7 +437,14 @@ export function RunPanel({
         {run.startedBy && ` by ${run.startedBy}`}
         {run.apiKey && ` through the API key ${run.apiKey}`}
         {run.webhook !== null && ` for a delivery to ${webhookLabel(run.webhook)}`}
-        {run.finishedAt && ` · took ${formatDuration(run.startedAt, run.finishedAt)}`}
+        {run.finishedAt ? (
+          ` · took ${formatDuration(run.startedAt, run.finishedAt)}`
+        ) : (
+          <>
+            {' · running for '}
+            <Elapsed since={run.startedAt} />
+          </>
+        )}
         {run.version !== null && ` · version ${run.version}`}
         {(spent > 0 || run.spendLimit > 0) && (
           <span title={run.spendLimit > 0 ? 'Past that it is stopped' : undefined}>
@@ -523,6 +534,7 @@ export function RunPanel({
                     : undefined
                 }
                 settings={s.process !== null && s.kind !== 'copied' && s.kind !== 'input' && s.kind !== 'loop' ? settingsOf?.(s.process) : undefined}
+                limit={s.process !== null && s.kind !== 'loop' ? limitOf?.(s.process) : undefined}
                 version={run.version}
                 busy={busy}
                 onChanged={onChanged}
@@ -620,6 +632,7 @@ function Step({
   onOpenReview,
   reviewForm,
   settings,
+  limit,
   version,
   busy,
   onChanged,
@@ -641,6 +654,8 @@ function Step({
   reviewForm?: ReactNode
   // What its process was set to in the run's version, and that version.
   settings?: [string, string][]
+  // How long it may go, in seconds, if its process says.
+  limit?: number
   version: number | null
   busy: boolean
   onChanged: () => void
@@ -659,13 +674,22 @@ function Step({
         <span className={`status-dot ${s.status}`} aria-hidden="true" />
         <span className="step-name">{s.processName}</span>
         <span className={`process-kind ${s.kind}`}>{s.kind}</span>
-        <span className="step-meta">{s.finishedAt ? formatDuration(s.startedAt, s.finishedAt) : STEP_LABELS[s.status]}</span>
+        <span className="step-meta" title={s.finishedAt ? undefined : STEP_LABELS[s.status]}>
+          {s.finishedAt ? formatDuration(s.startedAt, s.finishedAt) : <Elapsed since={s.startedAt} limit={limit} />}
+        </span>
       </summary>
       {/* What it took, then what came of it and what to do about it, then how
           it got there. */}
       <div className="step-body">
         <p className="panel-note">
-          {STEP_LABELS[s.status]} · started {formatTime(s.startedAt)}
+          {STEP_LABELS[s.status]}
+          {!s.finishedAt && (
+            <>
+              {' for '}
+              <Elapsed since={s.startedAt} limit={limit} />
+            </>
+          )}{' '}
+          · started {formatTime(s.startedAt)}
           {s.slotWaitMs !== null && s.slotWaitMs >= SLOT_WAIT_SHOWN_MS && ` after waiting ${formatSpan(s.slotWaitMs)} for a slot`}
           {s.try !== null && s.try > 1 && ` · try ${s.try}`}
           {s.process === null && ' · process since deleted'}
@@ -676,8 +700,10 @@ function Step({
             Stop step
           </button>
         )}
-        {(s.kind === 'agent' || s.kind === 'script') &&
-          (s.status === 'active' || s.followUps.some((f) => f.status === 'active')) && <StepActivity run={run} step={s.id} />}
+        {(s.kind === 'agent' || s.kind === 'script' || s.kind === 'connector') &&
+          (s.status === 'active' || s.followUps.some((f) => f.status === 'active')) && (
+            <StepActivity run={run} step={s.id} calls={s.kind === 'connector'} />
+          )}
         {reviewForm ??
           s.inputs.map((input, i) => (
             <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} data />
@@ -847,28 +873,45 @@ const ACTIVITY_LINES = 6
 // What the worker does of a step while it goes, the latest lines of its log
 // followed as they come: getting its workspace ready, fetching and cloning
 // with git's progress and what it waits for, then starting pi or bash.
-function StepActivity({ run, step }: { run: number; step: number }) {
+function StepActivity({ run, step, calls }: { run: number; step: number; calls: boolean }) {
   const { lines, error } = useStepLogs(run, step, true, true)
-  const shown = (lines ?? []).filter((l) => l.source === 'worker').slice(-ACTIVITY_LINES)
+  const shown = (lines ?? [])
+    .filter((l) => (calls ? l.source === 'webapp' && CALL_LINE.test(l.message) : l.source === 'worker'))
+    .slice(-ACTIVITY_LINES)
   return (
     <div className="step-activity" aria-live="polite">
-      <span>Worker</span>
+      <span>{calls ? 'Calls' : 'Worker'}</span>
       {error ? (
         <p className="term-error">Its log couldn't load: {error}</p>
       ) : shown.length === 0 ? (
-        <p className="term-dim">Waiting for the worker…</p>
+        <p className="term-dim">{calls ? 'No call sent yet…' : 'Waiting for the worker…'}</p>
       ) : (
         shown.map((l) => (
           <div key={l.id} className={`term-log ${l.level}`}>
             <time dateTime={l.time} title={new Date(l.time).toLocaleString()}>
               {formatLogTime(l.time)}
             </time>
-            <pre>{l.message}</pre>
+            <pre>{calls ? l.message.replace(CALL_LINE, '') : l.message}</pre>
           </div>
         ))
       )}
     </div>
   )
+}
+
+// A connector step's request in its run's log, by its method and path
+// (connectorCallLine in connectors.go).
+const CALL_LINE = /^calls /
+
+// How long a step or run still going has gone, of its limit if it has one,
+// ticking each second.
+function Elapsed({ since, limit }: { since: string; limit?: number }) {
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [])
+  return <>{elapsedText(Date.parse(since), now, limit)}</>
 }
 
 // What a re-run copied from the run it re-runs, as the run left it before

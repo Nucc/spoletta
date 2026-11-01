@@ -182,8 +182,20 @@ flows:
 	if got := g.got(); len(got) != 1 || !strings.HasPrefix(got[0], "GET /repos/acme/app/issues Bearer ghp-secret") {
 		t.Errorf("GitHub got %v", got)
 	}
-	if s := onlyStep(t, d, "Fetch"); !strings.Contains(s.Prompt, "cp_github list_issues") || strings.Contains(s.Prompt, "ghp-secret") {
-		t.Errorf("the step's prompt: %s", s.Prompt)
+	fetchStep := onlyStep(t, d, "Fetch")
+	if !strings.Contains(fetchStep.Prompt, "cp_github list_issues") || strings.Contains(fetchStep.Prompt, "ghp-secret") {
+		t.Errorf("the step's prompt: %s", fetchStep.Prompt)
+	}
+	// Each request it sends is in the run's log, under its step, by its
+	// method and path alone, which its step shows while it goes.
+	logs := a.runLogs(d.ID, 0)
+	if l := logLineWith(t, logs, "calls GET /repos/acme/app/issues"); l.Step == nil || *l.Step != fetchStep.ID || l.Source != "webapp" {
+		t.Errorf("the call's line: %+v", l)
+	}
+	for _, l := range logs {
+		if strings.Contains(l.Message, "ghp-secret") || strings.Contains(l.Message, g.srv.URL) {
+			t.Errorf("the log tells the token or the address: %s", l.Message)
+		}
 	}
 
 	a.worker.onAgent("Find", handsIn(map[string]any{"number": 7, "title": "Crash on start"}))

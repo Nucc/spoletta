@@ -7,7 +7,7 @@
 
 import { runMatches, runOrigin, type FlowRunDetail, type RunObject, type RunStep } from '../src/api.ts'
 import { diffLines, pairObjects, pairProcesses, pairSteps } from '../src/compare.ts'
-import { formatSpan, lanesOf, scaleOf, shown, stretchesOf, ticksOf, type Bar } from '../src/timeline.ts'
+import { elapsedText, formatSpan, lanesOf, scaleOf, shown, stretchesOf, ticksOf, type Bar } from '../src/timeline.ts'
 import { canUseSummary, changedSummary, durationText, limitRows, settingsRows, waitRows } from '../src/stepSettings.ts'
 
 declare const process: { exitCode?: number }
@@ -153,6 +153,11 @@ function run(id: number, steps: RunStep[], objects: Partial<RunObject>[] = []): 
 }
 
 check('spans read as people say them', [850, 12_000, 200_000, 7_500_000, 270_000_000].map(formatSpan), ['850ms', '12s', '3m 20s', '2h 5m', '3d 3h'])
+check(
+  'how long a step has gone, of its limit',
+  [elapsedText(T0, T0 + 24_900, 30), elapsedText(T0, T0 + 200_000), elapsedText(T0, T0 + 400), elapsedText(T0, T0 - 2_000, 60), elapsedText(T0, T0 + 3_600_000, 172_800)],
+  ['24s of 30s', '3m 20s', '0s', '0s of 1m', '1h of 2d'],
+)
 
 // Comparing: steps go beside the other run's that took the same, then by
 // order; lines are marked where the other text lacks them.

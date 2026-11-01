@@ -319,13 +319,20 @@ const (
 )
 
 // Calls a connector's service, at its installed server's URL, with its token.
+// called, if set, is told of each request by its method and path, as what
+// goes wrong names it; never its URL or query, which may hold the token.
 type connectorClient struct {
 	url, token string
 	service    *connector
+	called     func(method, path string)
 }
 
 // How long a call to a service may take; the proxy has no limit of its own.
 const connectorTimeout = time.Minute
+
+// A connector process's request in its run's log, by its method and path;
+// the run's panel finds them by their first word (StepActivity in Runs.tsx).
+const connectorCallLine = "calls %s %s"
 
 // Sends a request to the service's API at the path, the body as JSON if
 // there is one, and decodes what it answers into out.
@@ -347,6 +354,9 @@ func (c connectorClient) do(ctx context.Context, method, path string, query url.
 func (c connectorClient) send(ctx context.Context, method, path string, query url.Values, body any) ([]byte, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, connectorTimeout)
 	defer cancel()
+	if c.called != nil {
+		c.called(method, path)
+	}
 	u := strings.TrimSuffix(c.url, "/") + path
 	if c.service != nil && c.service.endpoint != nil {
 		u = c.service.endpoint(c.url, path)
@@ -819,7 +829,11 @@ func runConnectorStep(ctx context.Context, db *sql.DB, b *runBoard, runID, id in
 	}
 	started(stepID)
 	if res.Error == "" {
-		v, err := op.run(ctx, c.client(server.URL, token), a)
+		// Each request goes in the run's log as it is sent, which the step
+		// shows while it goes.
+		client := c.client(server.URL, token)
+		client.called = func(method, path string) { runLog(db, runID, stepID, logInfo, connectorCallLine, method, path) }
+		v, err := op.run(ctx, client, a)
 		switch {
 		case ctx.Err() != nil:
 			res.Error = stopReason(ctx)

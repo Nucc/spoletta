@@ -208,6 +208,14 @@ export function ticksOf(stretches: Stretch[], max = 8): number[] {
 }
 
 // A length of time as a person reads it: 850ms, 12s, 3m 20s, 2h 5m, 3d 4h.
+// How long something still going has gone, in whole seconds, and of how long
+// it may if there is a limit: 24s of 30s. A browser's clock a little behind
+// the server's says 0s rather than less.
+export function elapsedText(from: number, now: number, limitSeconds?: number): string {
+  const s = Math.max(0, Math.floor((now - from) / SECOND))
+  return `${s === 0 ? '0s' : formatSpan(s * SECOND)}${limitSeconds ? ` of ${formatSpan(limitSeconds * SECOND)}` : ''}`
+}
+
 export function formatSpan(ms: number): string {
   if (ms < SECOND) return `${Math.round(ms)}ms`
   const s = Math.round(ms / SECOND)

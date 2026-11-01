@@ -4285,6 +4285,14 @@ export default function Board({
                   }
                 : undefined
             }
+            limitOf={
+              shownRun && !compare && shownVersion === runVersion
+                ? (process) => {
+                    const n = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === String(process))
+                    return n && (n.data.kind === 'human' ? n.data.settings.waitAtMost : n.data.settings.timeout)
+                  }
+                : undefined
+            }
             onChanged={() => setRunReload((n) => n + 1)}
             onClose={() => setRunId(null)}
           />

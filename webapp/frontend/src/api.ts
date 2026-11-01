@@ -2122,6 +2122,9 @@ export type BoardContents = {
   links: Link[]
   boards: InnerBoard[]
   notes: Note[]
+  // A version's flow settings, which its runs keep to; left out of the board
+  // itself, whose flow has them, and of versions from before they were kept.
+  settings?: FlowSettings
 }
 
 // Versions from before boards have no parents, recording or boards,
@@ -2130,9 +2133,10 @@ export type BoardContents = {
 type Snapshot = {
   processes: (Omit<Process, 'flow' | 'parent' | 'recording' | 'settings'> & Partial<Pick<Process, 'parent' | 'recording' | 'settings'>>)[]
   // source is left out for an object that isn't a copy, and sourceFlow is
-  // never kept.
-  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'sourceFlow'> &
-    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source'>>)[]
+  // never kept. Rather than whether it is shared, it keeps the store of
+  // records it reads and writes, left out when it has none.
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'sourceFlow' | 'shared'> &
+    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source'>> & { store?: number })[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -2152,6 +2156,8 @@ type Snapshot = {
   boards?: InnerBoard[]
   // Left out while a board has none, as in versions from before notes.
   notes?: Note[]
+  // A flow without repositories may have them as null.
+  settings?: Omit<FlowSettings, 'repositories'> & { repositories: Repository[] | null }
 }
 
 // The flow's board as its version has it, without changing the board.
@@ -2165,9 +2171,10 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       recording: p.recording ?? false,
       settings: p.settings ?? {},
     })),
-    objects: s.objects.map((o) => ({
+    objects: s.objects.map(({ store, ...o }) => ({
       ...o,
       flow,
+      shared: store != null,
       parent: o.parent ?? null,
       many: o.many ?? false,
       min: o.min ?? 0,
@@ -2186,6 +2193,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
     end: s.end ?? null,
     boards: s.boards ?? [],
     notes: s.notes ?? [],
+    settings: s.settings && { ...s.settings, repositories: s.settings.repositories ?? [] },
     connections: s.connections.map((c) => ({ ...c, kind: c.kind ?? '' })),
     links: s.links.map((l) => ({
       ...l,

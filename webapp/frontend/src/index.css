@@ -1725,9 +1725,14 @@ body {
   color: #1f2328;
 }
 
-/* Settings as names and values, where they can't be changed. */
+/* Settings as names and values, where they can't be changed, the names one
+   width in every group so their values line up, as under a run's step. */
 .panel-lines {
   font-size: 13px;
+}
+
+.data-fields.panel-lines {
+  grid-template-columns: minmax(0, 12em) minmax(0, 1fr);
 }
 
 .panel-lines dd {

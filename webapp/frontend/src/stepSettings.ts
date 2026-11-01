@@ -17,8 +17,9 @@ export type SettingNames = {
   mcpServers: Map<number, string> | null
 }
 
-// What a process's rounds and loops are when it doesn't set them.
-export type SettingDefaults = { rounds: number; loops: number }
+// What a process's rounds and loops are when it doesn't set them, and how
+// many repositories its flow has, all of which it works on unless it picks.
+export type SettingDefaults = { rounds: number; loops: number; repositories: number }
 
 // A number of seconds as days, hours, minutes and seconds, such as 1d 12h,
 // as a process's duration settings are written.
@@ -38,8 +39,10 @@ const picked = (ids: number[] | undefined, names: Map<number, string> | null, wh
 const orDefault = (value: number | undefined, fallback: string) => (value === undefined ? `${fallback} (default)` : String(value))
 
 // What an agent or script works with: the skills, credentials, MCP servers
-// and repositories it picks, and whether its prompt describes its flow.
-export function canUseRows(kind: ProcessKind, s: ProcessSettings, names: SettingNames): [string, string][] {
+// and repositories it picks, and whether its prompt describes its flow. None
+// of the repositories picked stands out only while the flow has some, as on
+// a flow without any it is all there is.
+export function canUseRows(kind: ProcessKind, s: ProcessSettings, names: SettingNames, repositories: number): [string, string][] {
   const rows: [string, string][] = []
   if (kind === 'agent') {
     rows.push(['Skills', picked(s.skills, names.skills)])
@@ -58,7 +61,16 @@ export function canUseRows(kind: ProcessKind, s: ProcessSettings, names: Setting
     ])
   }
   if (kind === 'agent' || kind === 'script') {
-    rows.push(['Repositories', s.repositories === undefined ? "all of the flow's" : s.repositories.length === 0 ? 'none' : s.repositories.join(', ')])
+    rows.push([
+      'Repositories',
+      s.repositories === undefined
+        ? "all of the flow's"
+        : s.repositories.length === 0
+          ? repositories > 0
+            ? "none of the flow's"
+            : 'none'
+          : s.repositories.join(', '),
+    ])
   }
   if (kind === 'agent') {
     rows.push(['Whole flow in its prompt', s.describeFlow ? 'yes' : 'no'])
@@ -68,7 +80,7 @@ export function canUseRows(kind: ProcessKind, s: ProcessSettings, names: Setting
 
 // How far a step may go: its rounds, loops, time, retries and how many of
 // its inputs it needs.
-export function limitRows(kind: ProcessKind, s: ProcessSettings, defaults: SettingDefaults): [string, string][] {
+export function limitRows(kind: ProcessKind, s: ProcessSettings, defaults: Pick<SettingDefaults, 'rounds' | 'loops'>): [string, string][] {
   const rows: [string, string][] = []
   if (kind === 'agent') {
     rows.push(['Rounds', orDefault(s.rounds, String(defaults.rounds))])
@@ -97,7 +109,7 @@ export function waitRows(kind: ProcessKind, s: ProcessSettings): [string, string
 }
 
 export function settingsRows(kind: ProcessKind, s: ProcessSettings, names: SettingNames, defaults: SettingDefaults): [string, string][] {
-  return [...canUseRows(kind, s, names), ...limitRows(kind, s, defaults), ...waitRows(kind, s)]
+  return [...canUseRows(kind, s, names, defaults.repositories), ...limitRows(kind, s, defaults), ...waitRows(kind, s)]
 }
 
 // The same under the headings a process's panel groups them by, those with
@@ -106,7 +118,7 @@ export type SettingGroup = { title: string; rows: [string, string][] }
 
 export function settingGroups(kind: ProcessKind, s: ProcessSettings, names: SettingNames, defaults: SettingDefaults): SettingGroup[] {
   return [
-    { title: 'Can use', rows: canUseRows(kind, s, names) },
+    { title: 'Can use', rows: canUseRows(kind, s, names, defaults.repositories) },
     { title: 'Limits', rows: limitRows(kind, s, defaults) },
     { title: 'While it waits', rows: waitRows(kind, s) },
   ].filter((g) => g.rows.length > 0)
@@ -122,7 +134,7 @@ export function atDefault(value: string): boolean {
 // repositories it works on when the flow has any, none picked of none
 // saying nothing.
 export function canUseSummary(kind: ProcessKind, s: ProcessSettings, names: SettingNames, repositories: number): string {
-  const picks = canUseRows(kind, s, names)
+  const picks = canUseRows(kind, s, names, repositories)
     .filter(([label, value]) => (label === 'Skills' || label === 'Credentials' || label === 'MCP servers') && value !== 'none')
     .map(([, value]) => value)
   if (kind === 'agent' && s.describeFlow) picks.push('the whole flow in its prompt')

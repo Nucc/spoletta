@@ -4126,7 +4126,8 @@ export default function Board({
                 .map((o) => [o.name, shapeOf(fieldsOf(contents?.objects ?? [], o.id))]),
             )}
             onOpenMCPSettings={() => openMCPSettings(true)}
-            repositories={flow.settings.repositories}
+            // A version's own, which its runs work on.
+            repositories={(contents?.settings ?? flow.settings).repositories}
             onOpenFlowSettings={() => openFlowSettings(true)}
             onTry={viewOnly ? undefined : () => setTrying(Number(panelNode.id))}
             onClose={() => setPanelId(null)}
@@ -4281,7 +4282,9 @@ export default function Board({
               shownRun && !compare && shownVersion === runVersion
                 ? (process) => {
                     const n = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === String(process))
-                    return n && settingGroups(n.data.kind, n.data.settings, settingNames, { rounds: DEFAULT_ROUNDS, loops: DEFAULT_LOOPS })
+                    // The version's repositories, or the flow's for a version from before it kept them.
+                    const repositories = (contents?.settings ?? flow.settings).repositories.length
+                    return n && settingGroups(n.data.kind, n.data.settings, settingNames, { rounds: DEFAULT_ROUNDS, loops: DEFAULT_LOOPS, repositories })
                   }
                 : undefined
             }

@@ -8,7 +8,7 @@
 import { runMatches, runOrigin, type FlowRunDetail, type RunObject, type RunStep } from '../src/api.ts'
 import { diffLines, pairObjects, pairProcesses, pairSteps } from '../src/compare.ts'
 import { elapsedText, formatSpan, lanesOf, scaleOf, shown, stretchesOf, ticksOf, type Bar } from '../src/timeline.ts'
-import { atDefault, canUseSummary, changedSummary, durationText, limitRows, settingGroups, settingsRows, waitRows } from '../src/stepSettings.ts'
+import { atDefault, canUseRows, canUseSummary, changedSummary, durationText, limitRows, settingGroups, settingsRows, waitRows } from '../src/stepSettings.ts'
 
 declare const process: { exitCode?: number }
 
@@ -228,7 +228,7 @@ check(
       [3, 'sentry'],
     ]),
   }
-  const defaults = { rounds: 3, loops: 5 }
+  const defaults = { rounds: 3, loops: 5, repositories: 0 }
   check(
     "an agent's settings, those left out at their defaults",
     settingsRows('agent', { skills: [1], credentials: [4, 9], mcpServers: [2, 3], mcpTools: { '2': ['get_issue'] }, repositories: [] }, names, defaults),
@@ -274,6 +274,17 @@ check(
     ],
   )
   check('a person waits under a heading of its own', settingGroups('human', {}, names, defaults).map((g) => g.title), ['While it waits'])
+  check(
+    'no repository picked stands out only on a flow that has some',
+    [0, 2].map((repositories) => {
+      const row = canUseRows('agent', { repositories: [] }, names, repositories).find(([n]) => n === 'Repositories')!
+      return [row[1], atDefault(row[1])]
+    }),
+    [
+      ['none', true],
+      ["none of the flow's", false],
+    ],
+  )
 
   // A folded group's line in the process's panel.
   check(

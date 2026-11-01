@@ -484,7 +484,7 @@ export default function ProcessPanel({
       {(kind === 'agent' || kind === 'script') && (
         <SettingsGroup key={`uses-${kind}`} title="Can use" summary={canUseSummary(kind, settings, names, repositories.length)}>
           {readOnly ? (
-            <SettingLines rows={canUseRows(kind, settings, names)} />
+            <SettingLines rows={canUseRows(kind, settings, names, repositories.length)} />
           ) : (
             <>
               {kind === 'agent' && (

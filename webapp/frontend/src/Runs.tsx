@@ -399,7 +399,11 @@ export function RunPanel({
     >
       <header className="panel-header">
         <h2>
-          Run #{run.id} <span className={`run-badge ${run.status}`}>{RUN_LABELS[run.status]}</span>
+          {/* Waiting for a person, as the run list says it, in its colour. */}
+          Run #{run.id}{' '}
+          <span className={`run-badge ${run.waiting ? 'waiting' : run.status}`} title={run.waiting ? 'A step waits for a person' : undefined}>
+            {run.waiting ? STANDING_LABELS.waiting : RUN_LABELS[run.status]}
+          </span>
         </h2>
         <button className="panel-close" onClick={onClose} aria-label="Close run">
           ×

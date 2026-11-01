@@ -155,8 +155,8 @@ export default function ProcessPanel({
   // and says why, and how to change it, if it can be.
   readOnly?: boolean
   readOnlyWhy?: string
-  // How this process did in the latest flow run, if it has run.
-  run?: { status?: RunStatus; output?: string; error?: string }
+  // How this process did in the run the board shows, if it ran there.
+  run?: { id?: number; status?: RunStatus; output?: string; error?: string }
   review?: Review
   onChange: (fields: Fields) => void
   // Shows a flow process's board, or the flow a subflow process runs.
@@ -255,9 +255,11 @@ export default function ProcessPanel({
   )
 
   // Both bodies are kept, so switching type back and forth loses nothing.
+  // Settings that can't be changed take no focus, which would show them as
+  // being edited.
   useEffect(() => {
-    bodyRef.current?.focus()
-  }, [kind])
+    if (!readOnly) bodyRef.current?.focus()
+  }, [kind, readOnly])
 
   return (
     <aside className="panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
@@ -280,7 +282,7 @@ export default function ProcessPanel({
       </label>
       <div className="panel-field" role="radiogroup" aria-label="Type">
         <span>Type</span>
-        <div className="segmented">
+        <div className="segmented process-kinds">
           {KINDS.map((k) => (
             <button
               key={k.value}
@@ -483,7 +485,7 @@ export default function ProcessPanel({
         </div>
       )}
       {(kind === 'agent' || kind === 'script' || kind === 'connector') && (
-        <div className="panel-row">
+        <div className="panel-row panel-numbers">
           {kind === 'agent' && (
             <NumberSetting
               label="Rounds"
@@ -578,14 +580,22 @@ export default function ProcessPanel({
           </div>
         ) : (
           <div className="panel-run">
-            <span>Last run failed</span>
+            <span>{run.id === undefined ? 'Last run failed' : `Failed in run #${run.id}`}</span>
             <pre className="failed">{run.error}</pre>
           </div>
         ))}
       {run?.output && (
         <div className="panel-run">
-          <span>{kind === 'human' ? 'Last decision' : 'Last run output'}</span>
-          <Data text={run.output} />
+          <Data
+            label={
+              run.id === undefined
+                ? kind === 'human'
+                  ? 'Last decision'
+                  : 'Last run output'
+                : `${kind === 'human' ? 'Decision' : 'Output'} in run #${run.id}`
+            }
+            text={run.output}
+          />
         </div>
       )}
     </aside>
@@ -876,7 +886,7 @@ function RolesSetting({
       <input
         type="text"
         value={text}
-        placeholder="Nobody, or roles such as Lead, Finance"
+        placeholder="Roles such as Lead"
         readOnly={readOnly}
         onChange={(e) => {
           setText(e.target.value)
@@ -927,11 +937,7 @@ function LoopForm({ review, loop }: { review: Review; loop: NonNullable<Review['
           <div className="review-inputs">
             {review.inputs.map((input, i) => (
               <div key={i} className="panel-run">
-                <span>
-                  {input.name}
-                  {input.state && ` (${input.state})`}
-                </span>
-                <Data text={input.content} />
+                <Data label={input.state ? `${input.name} (${input.state})` : input.name} text={input.content} />
               </div>
             ))}
           </div>
@@ -993,11 +999,7 @@ function DecisionForm({ review }: { review: Review }) {
           <div className="review-inputs">
             {review.inputs.map((input, i) => (
               <div key={i} className="panel-run">
-                <span>
-                  {input.name}
-                  {input.state && ` (${input.state})`}
-                </span>
-                <Data text={input.content} />
+                <Data label={input.state ? `${input.name} (${input.state})` : input.name} text={input.content} />
               </div>
             ))}
           </div>

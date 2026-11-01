@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -8,29 +8,55 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 const maxDepth = 8
 
 // Content as the fields and items it holds when it is a JSON object or array,
-// the way processes hand objects in; Markdown rendered; other text as it is.
-export function Data({ text }: { text: string }) {
+// the way processes hand objects in, without the envelope an object without
+// attributes holds its value in; Markdown rendered; other text as it is. Raw
+// shows the text as it is. A label heads it, with Raw beside it rather than
+// over the content.
+export function Data({ text, label }: { text: string; label?: ReactNode }) {
   const [raw, setRaw] = useState(false)
   const parsed = parse(text)
-  if (parsed === undefined && !isMarkdown(text)) return <pre>{text}</pre>
-  if (raw) {
+  const formatted = parsed !== undefined || isMarkdown(text)
+  const toggle = formatted && (
+    <button className="link-button data-toggle" onClick={() => setRaw(!raw)}>
+      {raw ? 'Formatted' : 'Raw'}
+    </button>
+  )
+  const body =
+    !formatted || raw ? <pre>{text}</pre> : parsed === undefined ? <Text text={text} /> : <Value value={held(parsed)} />
+  if (label === undefined) {
+    if (!formatted) return body
     return (
       <div className="data">
-        <button className="link-button data-toggle" onClick={() => setRaw(false)}>
-          Formatted
-        </button>
-        <pre>{text}</pre>
+        {toggle}
+        {body}
       </div>
     )
   }
   return (
-    <div className="data">
-      <button className="link-button data-toggle" onClick={() => setRaw(true)}>
-        Raw
-      </button>
-      {parsed === undefined ? <Text text={text} /> : <Value value={parsed} />}
-    </div>
+    <>
+      <div className="data-head">
+        <span>{label}</span>
+        {toggle}
+      </div>
+      {formatted ? <div className="data">{body}</div> : body}
+    </>
   )
+}
+
+const onlyData = (v: Json): v is { data: Json } =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 1 && 'data' in v
+
+// An object, or a list of them, out of the envelope of one without attributes.
+const opened = (v: Json): Json => (onlyData(v) ? v.data : Array.isArray(v) ? v.map((e) => (onlyData(e) ? e.data : e)) : v)
+
+// What content holds as a process hands it in: an object without attributes
+// holds its value under data (see attributes.go), alone or in a list of
+// them, and an output of several objects holds each under its name. Deeper
+// down, a field named data is the content's own.
+function held(v: Json): Json {
+  if (onlyData(v) || Array.isArray(v)) return opened(v)
+  if (v !== null && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, e]) => [k, opened(e)]))
+  return v
 }
 
 // Lines that only Markdown starts with: headings, list items, quotes, fences
@@ -131,16 +157,26 @@ function Value({ value }: { value: Json }) {
   return (
     <dl className="data-fields">
       {entries.map(([k, e]) => (
-        <div key={k}>
+        // A value beside its name; one with fields of its own, or a text to
+        // read, under it.
+        <div key={k} className={isNested(e) || isProse(e) ? 'data-wide' : undefined}>
           <dt>{k}</dt>
-          {/* Each value in a box of its own; nested fields keep their indent. */}
-          <dd className={isNested(e) ? undefined : 'data-value'}>
+          <dd>
             <Value value={e} />
           </dd>
         </div>
       ))}
     </dl>
   )
+}
+
+// How long a line of text may be and still show beside its name.
+const shortText = 160
+
+// Whether the value is a text to read rather than a value: lines, Markdown or
+// a long line.
+function isProse(v: Json): boolean {
+  return typeof v === 'string' && (v.includes('\n') || v.length > shortText || isMarkdown(v))
 }
 
 // Whether the value holds fields of its own, as an object or a list of them.

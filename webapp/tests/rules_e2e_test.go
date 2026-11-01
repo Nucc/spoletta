@@ -116,25 +116,28 @@ func TestRuleRefusals(t *testing.T) {
 	}
 }
 
-// An agent step adds up what its model's replies used.
+// An agent step whose calls the model proxy has no record of adds up what
+// its model's replies used, what they read from the cache among what they
+// took in.
 func TestAgentStepUsage(t *testing.T) {
 	a := newApp(t)
+	a.worker.quiet = true
 	f := a.newFlow("Usage")
 	think := a.agent(f.ID, "Think", "Think.")
 	tool := a.agent(f.ID, "Tool", "Use a tool.")
 	a.call("POST", "/api/connections", map[string]any{"source": think.ID, "target": tool.ID}, http.StatusCreated, nil)
 	a.startAt(f.ID, think.ID)
-	reply := func(in, out int, cost float64) map[string]any {
+	reply := func(in, cached, out int, cost float64) map[string]any {
 		return map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "hm"}},
-			"usage": map[string]any{"input": in, "output": out, "totalTokens": in + out, "cost": map[string]any{"total": cost}}}
+			"usage": map[string]any{"input": in, "cacheRead": cached, "output": out, "totalTokens": in + cached + out, "cost": map[string]any{"total": cost}}}
 	}
-	a.worker.onMessages("Think", reply(1000, 200, 0.01), map[string]any{"role": "toolResult", "content": []map[string]any{}}, reply(1500, 300, 0.02))
+	a.worker.onMessages("Think", reply(1000, 0, 200, 0.01), map[string]any{"role": "toolResult", "content": []map[string]any{}}, reply(1500, 500, 300, 0.02))
 	a.worker.onAgent("Think", corePlain("thought"))
 	a.worker.onAgent("Tool", corePlain("done"))
 
 	d := a.finish(a.startRun(f.ID).ID)
 	u := onlyStep(t, d, "Think").Usage
-	if u == nil || u.Input != 2500 || u.Output != 500 || u.Cost < 0.0299 || u.Cost > 0.0301 {
+	if u == nil || u.Input != 3000 || u.Cached != 500 || u.Output != 500 || u.Cost < 0.0299 || u.Cost > 0.0301 {
 		t.Errorf("Think's usage = %+v", u)
 	}
 	if u := onlyStep(t, d, "Tool").Usage; u != nil {

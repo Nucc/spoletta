@@ -1353,6 +1353,23 @@ body {
   overflow-y: auto;
 }
 
+/* The run's name and status stay in sight as its steps scroll under them,
+   held at the panel's edge rather than inside its padding. */
+.run-panel > .panel-header {
+  position: sticky;
+  top: -16px;
+  z-index: 1;
+  margin: -16px -16px 0;
+  padding: 16px;
+  padding-bottom: 8px;
+  background: #fff;
+}
+
+/* A step or object scrolled to stops below the run's name. */
+.run-panel :is(.step, .run-focus) {
+  scroll-margin-top: 56px;
+}
+
 .run-stop {
   align-self: flex-start;
   padding: 6px 12px;
@@ -1384,6 +1401,39 @@ body {
 
 .step-rerun:hover {
   background: #f6f8fa;
+}
+
+/* What to do about a step, under what came of it. */
+.step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* How a step got to what came of it: its model, prompt and conversation,
+   and the Terminal showing it all. */
+.step-how {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #d8dee4;
+}
+
+.step-how > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.step-how h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #656d76;
 }
 
 .steps {
@@ -1630,6 +1680,25 @@ body {
 .segmented button.selected {
   color: #fff;
   background: #1f6feb;
+}
+
+/* A process's types share the panel's width, going on a second row when it
+   is narrower than they are; the gaps between them draw their borders. */
+.segmented.process-kinds {
+  align-self: stretch;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: #d8dee4;
+}
+
+.segmented.process-kinds button {
+  flex: 1 0 auto;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.segmented.process-kinds button + button {
+  border-left: none;
 }
 
 .panel-warning {
@@ -1910,33 +1979,49 @@ body {
   font-size: 12px;
 }
 
-.data-fields {
+/* A labelled content's label, Raw at its end rather than over the content. */
+.data-head {
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
+  justify-content: space-between;
   gap: 8px;
+}
+
+.data-head > .data-toggle {
+  float: none;
+  margin-left: 0;
+  font-weight: 400;
+}
+
+/* Fields as names and values in two columns, the values as text, since
+   nothing here is edited; a value with fields of its own, or a text to read,
+   goes under its name across both. */
+.data-fields {
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px 12px;
   margin: 0;
+}
+
+.data-fields > div {
+  display: contents;
 }
 
 .data-fields dt {
   color: #656d76;
   font-size: 12px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .data-fields dd {
-  margin: 2px 0 0;
+  min-width: 0;
+  margin: 0;
 }
 
-.data-fields dd.data-value {
-  padding: 6px 8px;
-  background: #fff;
-  border: 1px solid #d8dee4;
-  border-radius: 6px;
-}
-
-.data-value > .data-text {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+.data-fields > .data-wide > :is(dt, dd) {
+  grid-column: 1 / -1;
 }
 
 .data-fields dd > .data-fields,
@@ -2044,12 +2129,23 @@ body {
   font-weight: 400;
 }
 
-/* A run that moved to another replica as the one walking it stopped. */
-.panel-note.run-move {
-  padding: 6px 8px;
-  border-left: 3px solid #d4a72c;
-  background: #fff8c5;
-  color: #57606a;
+/* The times a run moved to another replica as the one walking it stopped:
+   a line to unfold, in no status's colour, since nothing is wrong. */
+.run-moves {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #656d76;
+}
+
+.run-moves summary {
+  cursor: pointer;
+}
+
+.run-moves ol {
+  margin: 6px 0 0;
+  padding-left: 20px;
 }
 
 .panel-row {
@@ -2090,6 +2186,21 @@ body {
 
 .panel-row .panel-field:first-child {
   flex: 1;
+  min-width: 0;
+}
+
+/* A process's limits, each as wide as the others. */
+.panel-numbers {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+}
+
+.panel-numbers .panel-field {
+  min-width: 0;
+}
+
+.panel-numbers input {
   min-width: 0;
 }
 
@@ -5582,6 +5693,10 @@ input.record-field-name {
 .data-dialog pre {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.data-dialog .data {
+  font-size: 14px;
 }
 
 /* The settings: a tab per part down the side, the part on the right. */

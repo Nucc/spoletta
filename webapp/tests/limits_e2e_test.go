@@ -46,6 +46,29 @@ func callModel(llm *llmAccess, provider string) (int, string) {
 	return resp.StatusCode, string(body)
 }
 
+// A step's usage is what the model proxy recorded and priced of its calls,
+// what was read from and written to the cache among what they took in, not
+// what its model's replies said.
+func TestAStepsUsageIsWhatTheProxyRecorded(t *testing.T) {
+	a := newApp(t)
+	a.worker.quiet = true
+	f := a.newFlow("Counted")
+	a.startAt(f.ID, a.agent(f.ID, "Call", "Call.").ID)
+	a.worker.onMessages("Call", map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "hm"}},
+		"usage": map[string]any{"input": 3, "output": 7, "cacheWrite": 1227, "cost": map[string]any{"total": 0.5}}})
+	a.worker.onAgent("Call", func(ctx context.Context, run agentRun) runResult {
+		if s, body := callModel(run.LLM, "fireworks"); s != http.StatusOK {
+			t.Errorf("the call answered %d: %s", s, body)
+		}
+		return submitted(data("called"))
+	})
+	d := a.finish(a.startRun(f.ID).ID)
+	u := onlyStep(t, d, "Call").Usage
+	if u == nil || u.Input != 1230 || u.Cached != 1000 || u.Output != 7 || u.Cost != callMicros/1e6 || u.Unpriced != 0 {
+		t.Errorf("Call's usage = %+v", u)
+	}
+}
+
 func TestARunThatSpendsWhatItMayIsStopped(t *testing.T) {
 	a := newApp(t)
 	a.worker.quiet = true

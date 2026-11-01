@@ -4033,7 +4033,7 @@ export default function Board({
                     ? `These are version ${shownVersion}’s settings. Go back to the board to change the process.`
                     : undefined
             }
-            run={{ status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
+            run={{ id: shownRun?.id, status: panelNode.data.status, output: panelNode.data.output, error: panelNode.data.runError }}
             // The form shows in one place at a time.
             review={reviewNode?.id === panelNode.id ? undefined : reviewOf(panelNode)}
             onChange={(fields) => {
@@ -4087,6 +4087,7 @@ export default function Board({
             module={moduleOf(objectIdOf(objectPanelNode.id))}
             structRoot={isStructRoot(objectPanelNode.id)}
             content={objectPanelNode.data.content}
+            run={shownRun?.id}
             onRename={(name) => commitName(objectPanelNode.id, name)}
             onAdd={(name) => addAttribute(objectPanelNode.id, name)}
             onUpdate={(id, patch) => changeAttribute(objectPanelNode.id, id, patch)}

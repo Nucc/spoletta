@@ -30,6 +30,7 @@ export default function ObjectPanel({
   module,
   structRoot = false,
   content,
+  run,
   generals,
   onPersistentChange,
   onSharedChange,
@@ -67,8 +68,10 @@ export default function ObjectPanel({
   module?: { id: number; name: string; struct: boolean }
   // The object a struct is: whether it is a person or stored is up to each copy.
   structRoot?: boolean
-  // What the object held at the end of the latest run, if it was generated.
+  // What the object held at the end of the run the board shows, if it was
+  // generated there, and which run that is.
   content?: string
+  run?: number
   // The objects it can specialize.
   generals: FlowObject[]
   onRename: (name: string) => void
@@ -418,8 +421,7 @@ export default function ObjectPanel({
       </div>
       {content !== undefined && (
         <div className="panel-run">
-          <span>Last run</span>
-          <Data text={content || '(empty)'} />
+          <Data label={run === undefined ? 'Last run' : `In run #${run}`} text={content || '(empty)'} />
         </div>
       )}
     </aside>

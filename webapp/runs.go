@@ -63,33 +63,62 @@ type run struct {
 // refers to.
 var runColumns = "id, flow_id, status, status = '" + runRunning + "' AND " + runWaiting + ", version_id, parent_run_id, process_ref, process_name, rerun_of, rerun_from, rerun_from_name, item_key, schedule_id, " + userLabelColumn("started_by") + ", COALESCE((SELECT k.name FROM api_keys k WHERE k.id = api_key_id), ''), CASE WHEN webhook_id IS NOT NULL THEN COALESCE((SELECT h.name FROM webhooks h WHERE h.id = webhook_id), '') END, record_id, trial_of, trial_of_name, started_at, finished_at"
 
-// The tokens a step's model calls took in and gave out, and what they cost
-// at the models' catalog prices, in dollars.
+// The tokens a step's model calls took in, those read from the provider's
+// cache among them, and gave out, and what they cost in dollars, as the
+// model proxy recorded and priced them (spend.go), which is what the run is
+// held to; for a step whose calls it has no record of, from before it kept
+// them, as its model's replies said, at the catalog's prices.
 type stepUsage struct {
 	Input  int64   `json:"input"`
+	Cached int64   `json:"cached,omitempty"`
 	Output int64   `json:"output"`
 	Cost   float64 `json:"cost"`
+	// Calls to a model without a known price, counted at the most a model
+	// costs.
+	Unpriced int64 `json:"unpriced,omitempty"`
 }
 
-// The usage of each agent step of a run, by step id, summed over the
-// replies of its model.
+// The usage of each agent step of a run, by step id: the proxy's record of
+// its calls, else the replies of its model summed.
 func runUsage(ctx context.Context, db *sql.DB, run int64) (map[int64]*stepUsage, error) {
 	usage := map[int64]*stepUsage{}
-	err := scanAll(ctx, db, `SELECT m.step_id,
+	err := scanAll(ctx, db, `SELECT step_id, SUM(input_tokens + cache_read_tokens + cache_write_tokens), SUM(cache_read_tokens),
+			SUM(output_tokens), SUM(cost_micros), SUM(NOT priced)
+		FROM llm_usage WHERE run_id = ? AND step_id IS NOT NULL
+		GROUP BY step_id`, func(rows *sql.Rows) error {
+		var id, micros int64
+		u := &stepUsage{}
+		if err := rows.Scan(&id, &u.Input, &u.Cached, &u.Output, &micros, &u.Unpriced); err != nil {
+			return err
+		}
+		u.Cost = dollars(micros)
+		usage[id] = u
+		return nil
+	}, run)
+	if err != nil {
+		return nil, err
+	}
+	// pi's input leaves out what was read from and written to the cache,
+	// which it counts apart.
+	err = scanAll(ctx, db, `SELECT m.step_id,
 			COALESCE(SUM(CAST(JSON_EXTRACT(m.message, '$.usage.input') AS DOUBLE)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.message, '$.usage.cacheRead') AS DOUBLE)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.message, '$.usage.cacheWrite') AS DOUBLE)), 0),
 			COALESCE(SUM(CAST(JSON_EXTRACT(m.message, '$.usage.output') AS DOUBLE)), 0),
 			COALESCE(SUM(CAST(JSON_EXTRACT(m.message, '$.usage.cost.total') AS DOUBLE)), 0)
 		FROM run_step_messages m JOIN run_steps s ON s.id = m.step_id
 		WHERE s.run_id = ? AND JSON_EXTRACT(m.message, '$.usage') IS NOT NULL
 		GROUP BY m.step_id`, func(rows *sql.Rows) error {
 		var id int64
-		var in, out float64
+		var in, read, wrote, out float64
 		u := &stepUsage{}
-		if err := rows.Scan(&id, &in, &out, &u.Cost); err != nil {
+		if err := rows.Scan(&id, &in, &read, &wrote, &out, &u.Cost); err != nil {
 			return err
 		}
-		u.Input, u.Output = int64(in), int64(out)
-		usage[id] = u
+		if usage[id] == nil {
+			u.Input, u.Cached, u.Output = int64(in+read+wrote), int64(read), int64(out)
+			usage[id] = u
+		}
 		return nil
 	}, run)
 	return usage, err

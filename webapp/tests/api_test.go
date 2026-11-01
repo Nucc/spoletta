@@ -365,11 +365,14 @@ type object struct {
 // condition link that runs its process when the object enters the state. A
 // human process decides by setting its object to one of the states its
 // output link lists.
-// The tokens a step's model calls took in and gave out, and what they cost.
+// The tokens a step's model calls took in, those read from the cache among
+// them, and gave out, what they cost, and how many had no known price.
 type stepUsage struct {
-	Input  int64   `json:"input"`
-	Output int64   `json:"output"`
-	Cost   float64 `json:"cost"`
+	Input    int64   `json:"input"`
+	Cached   int64   `json:"cached"`
+	Output   int64   `json:"output"`
+	Cost     float64 `json:"cost"`
+	Unpriced int64   `json:"unpriced"`
 }
 
 type objectState struct {

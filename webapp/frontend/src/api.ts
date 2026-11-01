@@ -1349,7 +1349,11 @@ export type StepStatus = 'active' | 'waiting' | 'done' | 'error' | 'duplicate' |
 // One execution of a process in a run, with the process as it was then.
 // The tokens a step's model calls took in and gave out, and what they cost
 // at the models' catalog prices, in dollars.
-export type StepUsage = { input: number; output: number; cost: number }
+// What a step's model calls took in, those read from the provider's cache
+// among them, and gave out, and what they cost, as the model proxy priced
+// them; unpriced counts the calls to a model without a known price, counted
+// at the most a model costs.
+export type StepUsage = { input: number; cached?: number; output: number; cost: number; unpriced?: number }
 
 export type RunStep = {
   id: number

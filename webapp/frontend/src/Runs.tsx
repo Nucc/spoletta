@@ -53,9 +53,11 @@ export const STEP_LABELS: Record<StepStatus, string> = {
 // Tokens, in thousands once there are many.
 const formatTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n))
 
-// What model calls used, as tokens in and out and their cost.
+// What model calls used, as tokens in, those from the cache among them, and
+// out, and their cost.
 export const formatUsage = (u: StepUsage) =>
-  `${formatTokens(u.input)} in · ${formatTokens(u.output)} out${u.cost > 0 ? ` · $${u.cost.toFixed(u.cost < 0.1 ? 4 : 2)}` : ''}`
+  `${formatTokens(u.input)} in${u.cached ? ` (${formatTokens(u.cached)} from the cache)` : ''} · ${formatTokens(u.output)} out` +
+  (u.cost > 0 ? ` · ${formatDollars(u.cost)}${u.unpriced ? ' (no known price, counted high)' : ''}` : '')
 
 // The usage of every step that has one, added up; undefined if none has.
 const totalUsage = (steps: RunStep[]): StepUsage | undefined =>
@@ -374,6 +376,10 @@ export function RunPanel({
     first?.scrollIntoView({ block: 'start', behavior: 'smooth' })
     // Only a new focus moves the panel, not the run refreshing.
   }, [focus?.seq])
+  // What it spent as the model proxy priced its calls, its subflows' and
+  // items' runs with it, else, for a run from before the proxy counted, what
+  // its agents' replies said.
+  const spent = run.spent > 0 ? run.spent : (totalUsage(run.steps)?.cost ?? 0)
   return (
     <aside ref={panel} className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
       <header className="panel-header">
@@ -408,16 +414,17 @@ export function RunPanel({
         {run.startedBy && ` by ${run.startedBy}`}
         {run.apiKey && ` through the API key ${run.apiKey}`}
         {run.webhook !== null && ` for a delivery to ${webhookLabel(run.webhook)}`}
-        {run.finishedAt && `, took ${formatDuration(run.startedAt, run.finishedAt)}`}
-        {totalUsage(run.steps) && `; its agents used ${formatUsage(totalUsage(run.steps)!)}`}
+        {run.finishedAt && ` · took ${formatDuration(run.startedAt, run.finishedAt)}`}
+        {run.version !== null && ` · version ${run.version}`}
+        {(spent > 0 || run.spendLimit > 0) && (
+          <span title={run.spendLimit > 0 ? 'Past that it is stopped' : undefined}>
+            {` · ${formatDollars(spent)}`}
+            {run.spendLimit > 0 && ` of the ${formatDollars(run.spendLimit)} it may spend`}
+          </span>
+        )}
       </p>
+      {run.version === null && <p className="panel-note">Ran before versions were kept, so the board shows it as the board is now.</p>}
       {run.moves.length > 0 && <RunMoves moves={run.moves} onOpenStep={(step) => onOpenStep(run.id, step)} />}
-      {(run.spent > 0 || run.spendLimit > 0) && (
-        <p className="panel-note">
-          It spent {formatDollars(run.spent)} on its models
-          {run.spendLimit > 0 && ` of the ${formatDollars(run.spendLimit)} it may; past that it is stopped`}.
-        </p>
-      )}
       <div className="run-actions">
         <button className="run-logs-button" onClick={onLogs} title="Read what happened in the run, step by step">
           Logs
@@ -460,13 +467,6 @@ export function RunPanel({
           </button>
         </p>
       )}
-      <p className="panel-note">
-        {run.version === null
-          ? 'Ran before versions were kept, so the board shows it as the board is now.'
-          : run.status === 'running'
-            ? `Running on version ${run.version}.`
-            : `Ran on version ${run.version}, which the board shows until the run closes.`}
-      </p>
       {focus?.kind === 'object' && <ObjectInRun run={run} name={focus.name} objects={focusedObjects} onClose={onClearFocus} />}
       {focus?.kind === 'process' && !run.steps.some(focused) && (
         <p className="panel-note run-focus">
@@ -519,26 +519,37 @@ export const rerunnableFrom = (run: FlowRunDetail, s: RunStep) =>
 // what that cost.
 // Each time the run moved to another replica, as the one walking it
 // stopped, and the steps going then that were lost; a run moved never ends
-// interrupted for it. See adopt.go.
+// interrupted for it. See adopt.go. The moves are a line to unfold, and only
+// the steps they lost show without it.
 function RunMoves({ moves, onOpenStep }: { moves: RunMove[]; onOpenStep: (step: number) => void }) {
   return (
-    <>
-      {moves.map((m, i) => (
-        <p key={i} className="panel-note run-move">
-          Moved {formatTime(m.movedAt)} to {m.host ? `the server on ${m.host}` : 'another server'} (replica {m.to.slice(0, 8)}), as
-          the one running it{m.from && ` (replica ${m.from.slice(0, 8)})`} stopped; it went on from what it had stored.
-          {m.lost.map((l) => (
-            <span key={l.step}>
-              {' '}
-              <button className="link-button" onClick={() => onOpenStep(l.step)}>
-                {l.process}
-              </button>{' '}
-              was going and was lost, {l.retried ? 'so it was tried again.' : 'with no tries left, so it failed.'}
-            </span>
+    <div className="run-moves">
+      <details>
+        <summary>
+          Moved to another server {moves.length === 1 ? 'once' : `${moves.length} times`}, as the one running it stopped; it
+          went on {moves.length === 1 ? '' : 'each time '}from what it had stored.
+        </summary>
+        <ol>
+          {moves.map((m, i) => (
+            <li key={i}>
+              {formatTime(m.movedAt)}: to {m.host ? `the server on ${m.host}` : 'another server'} (replica {m.to.slice(0, 8)})
+              {m.from && `, from replica ${m.from.slice(0, 8)}`}
+            </li>
           ))}
-        </p>
-      ))}
-    </>
+        </ol>
+      </details>
+      {moves.flatMap((m) =>
+        m.lost.map((l) => (
+          <p key={l.step} className="panel-note">
+            <button className="link-button" onClick={() => onOpenStep(l.step)}>
+              {l.process}
+            </button>{' '}
+            was going as it moved, {formatTime(m.movedAt)}, and was lost,{' '}
+            {l.retried ? 'so it was tried again.' : 'with no tries left, so it failed.'}
+          </p>
+        )),
+      )}
+    </div>
   )
 }
 
@@ -602,6 +613,12 @@ function Step({
 }) {
   const [terminal, setTerminal] = useState(false)
   if (s.kind === 'copied' || s.kind === 'input') return <CopiedStep step={s} focused={focused} objects={objects} />
+  const generated = objects.map((o) => (o.state ? `${o.name} (${o.state})` : o.name)).join(', ')
+  // What it handed back is shown under the objects it generated; a flow's or
+  // a subflow's is its run's, and a person's what they decided or entered.
+  const showsOutput =
+    s.kind !== 'human' && s.kind !== 'flow' && s.kind !== 'subflow' && s.kind !== 'loop' && (s.status === 'done' || s.status === 'duplicate')
+  const showsPrompt = s.prompt !== '' && s.kind !== 'loop'
   return (
     <details className={`step${focused ? ' focused' : ''}`} open={s.status !== 'done' || s.followUps.length > 0}>
       <summary>
@@ -610,6 +627,8 @@ function Step({
         <span className={`process-kind ${s.kind}`}>{s.kind}</span>
         <span className="step-meta">{s.finishedAt ? formatDuration(s.startedAt, s.finishedAt) : STEP_LABELS[s.status]}</span>
       </summary>
+      {/* What it took, then what came of it and what to do about it, then how
+          it got there. */}
       <div className="step-body">
         <p className="panel-note">
           {STEP_LABELS[s.status]} · started {formatTime(s.startedAt)}
@@ -623,42 +642,8 @@ function Step({
             Stop step
           </button>
         )}
-        {onRerun && (
-          <button
-            className="step-rerun"
-            onClick={onRerun}
-            title="Run the flow again from this process, with what came before it copied from this run"
-          >
-            Re-run from here
-          </button>
-        )}
         {(s.kind === 'agent' || s.kind === 'script') &&
           (s.status === 'active' || s.followUps.some((f) => f.status === 'active')) && <StepActivity run={run} step={s.id} />}
-        {s.kind === 'agent' && (
-          <p className="panel-note">
-            Model: {s.model || 'default'} · thinking: {s.thinking || 'default'}
-          </p>
-        )}
-        {s.session && (
-          <p className="panel-note">
-            pi session <code className="step-session">{s.session}</code>
-          </p>
-        )}
-        {s.branch && (
-          <p className="panel-note">
-            Worked on the branch <code>{s.branch}</code>
-          </p>
-        )}
-        {s.commits.length > 0 && <StepCommits commits={s.commits} />}
-        {s.childRun !== null && (
-          <p className="panel-note">
-            Ran its board as{' '}
-            <button className="link-button" onClick={() => onOpenRun(s.childRun!)}>
-              run #{s.childRun}
-            </button>
-            .
-          </p>
-        )}
         {s.inputs.map((input, i) => (
           <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} data />
         ))}
@@ -683,32 +668,15 @@ function Step({
             text={s.prompt}
           />
         )}
-        {s.prompt && s.kind !== 'loop' && (
-          <details className="step-prompt">
-            <summary>
-              {s.kind === 'script' ? 'Script it ran' : s.kind === 'connector' ? 'Operation it carried out' : 'Prompt sent to the agent'}
-            </summary>
-            <pre>{s.prompt}</pre>
-          </details>
-        )}
-        {(s.kind === 'agent' || s.kind === 'script') && s.prompt && (
-          <button
-            className="terminal-button"
-            onClick={() => setTerminal(true)}
-            title={`Follow what the ${s.kind === 'agent' ? 'agent does' : 'script does'} as in a terminal, with the files it changed beside it`}
-          >
-            <TerminalIcon /> Terminal
-          </button>
-        )}
-        {s.kind === 'agent' && s.prompt && <Conversation run={run} step={s} />}
-        {/* Outside the step, whose details close as it ends and would hide
-            the dialog while it stays modal. */}
-        {terminal && createPortal(<StepTerminal run={run} step={s} onClose={() => setTerminal(false)} />, document.body)}
         {s.kind === 'human' && s.outcome && (
           <Block
             label={s.decidedBy ? `Decision · ${s.decidedBy}` : 'Decision'}
             text={decisionText(s.outcome, objects[0]?.name, s.instructions)}
           />
+        )}
+        {/* A person filling in what the process generates decides nothing. */}
+        {s.kind === 'human' && !s.outcome && s.output && (
+          <Block label={`Entered${generated && `: ${generated}`}${s.decidedBy && ` · ${s.decidedBy}`}`} text={s.output} data />
         )}
         {s.kind === 'human' && s.status !== 'waiting' && (s.comments ?? []).length > 0 && (
           <Block
@@ -723,24 +691,8 @@ function Step({
             failed={s.status !== 'duplicate' && s.status !== 'skipped'}
           />
         )}
-        {onOpenReview && (
-          <button className="step-rerun" onClick={onOpenReview} title="Open what it waits for in the middle of the screen">
-            {s.kind === 'loop' ? 'Answer it' : 'Open the review'}
-          </button>
-        )}
-        {onAsk && (
-          <button className="step-rerun" onClick={onAsk} title="Ask the flow's assistant why this step failed, with the run told it">
-            Ask the assistant why
-          </button>
-        )}
-        {s.kind !== 'human' && s.kind !== 'flow' && s.kind !== 'subflow' && s.kind !== 'loop' && (s.status === 'done' || s.status === 'duplicate') && (
-          <Block label="Output" text={s.output || '(empty)'} data />
-        )}
-        {s.kind !== 'human' && objects.length > 0 && (
-          <p className="panel-note">
-            Generated {objects.map((o) => (o.state ? `${o.name} (${o.state})` : o.name)).join(', ')}
-          </p>
-        )}
+        {showsOutput && <Block label={generated ? `Output: ${generated}` : 'Output'} text={s.output || '(empty)'} data />}
+        {s.kind !== 'human' && !showsOutput && generated && <p className="panel-note">Generated {generated}</p>}
         {s.kind !== 'human' && objects.some((o) => o.files.length > 0) && (
           <div className="panel-run">
             <span>Files</span>
@@ -755,6 +707,83 @@ function Step({
             </ul>
           </div>
         )}
+        {s.childRun !== null && (
+          <p className="panel-note">
+            Ran its board as{' '}
+            <button className="link-button" onClick={() => onOpenRun(s.childRun!)}>
+              run #{s.childRun}
+            </button>
+            .
+          </p>
+        )}
+        {s.branch && (
+          <p className="panel-note">
+            Worked on the branch <code>{s.branch}</code>
+          </p>
+        )}
+        {s.commits.length > 0 && <StepCommits commits={s.commits} />}
+        {(onOpenReview || onAsk || onRerun) && (
+          <div className="step-actions">
+            {onOpenReview && (
+              <button className="step-rerun" onClick={onOpenReview} title="Open what it waits for in the middle of the screen">
+                {s.kind === 'loop' ? 'Answer it' : 'Open the review'}
+              </button>
+            )}
+            {onAsk && (
+              <button className="step-rerun" onClick={onAsk} title="Ask the flow's assistant why this step failed, with the run told it">
+                Ask the assistant why
+              </button>
+            )}
+            {onRerun && (
+              <button
+                className="step-rerun"
+                onClick={onRerun}
+                title="Run the flow again from this process, with what came before it copied from this run"
+              >
+                Re-run from here
+              </button>
+            )}
+          </div>
+        )}
+        {(s.kind === 'agent' || s.session || showsPrompt) && (
+          <section className="step-how">
+            <header>
+              <h4>How it got there</h4>
+              {(s.kind === 'agent' || s.kind === 'script') && s.prompt && (
+                <button
+                  className="terminal-button"
+                  onClick={() => setTerminal(true)}
+                  title={`Follow what the ${s.kind === 'agent' ? 'agent does' : 'script does'} as in a terminal, with the files it changed beside it`}
+                >
+                  <TerminalIcon /> Terminal
+                </button>
+              )}
+            </header>
+            {(s.kind === 'agent' || s.session) && (
+              <p className="panel-note">
+                {s.kind === 'agent' && `Model: ${s.model || 'default'} · thinking: ${s.thinking || 'default'}`}
+                {s.kind === 'agent' && s.session && ' · '}
+                {s.session && (
+                  <>
+                    pi session <code className="step-session">{s.session}</code>
+                  </>
+                )}
+              </p>
+            )}
+            {showsPrompt && (
+              <details className="step-prompt">
+                <summary>
+                  {s.kind === 'script' ? 'Script it ran' : s.kind === 'connector' ? 'Operation it carried out' : 'Prompt sent to the agent'}
+                </summary>
+                <pre>{s.prompt}</pre>
+              </details>
+            )}
+            {s.kind === 'agent' && s.prompt && <Conversation run={run} step={s} />}
+          </section>
+        )}
+        {/* Outside the step, whose details close as it ends and would hide
+            the dialog while it stays modal. */}
+        {terminal && createPortal(<StepTerminal run={run} step={s} onClose={() => setTerminal(false)} />, document.body)}
         {s.followUps.map((f) => (
           <FollowUpItem key={f.id} run={run} step={s.id} followUp={f} onChanged={onChanged} />
         ))}
@@ -1014,11 +1043,37 @@ export function useStepMessages(run: number, step: RunStep, enabled: boolean) {
   return { messages, loaded, error, going }
 }
 
+// The tool an agent hands in its output with; see worker/submit-output.ts.
+const SUBMIT_OUTPUT = 'submit_output'
+
+// The id of the call that handed in the step's output: the last of
+// submit_output's that its result took, once the step shows that output.
+function handedInBy(step: RunStep, messages: StepMessage[]): string | undefined {
+  if (step.status !== 'done' && step.status !== 'duplicate') return undefined
+  const taken = new Set(
+    messages.flatMap(({ message: m }) => (m.role === 'toolResult' && m.toolCallId && !m.isError ? [m.toolCallId] : [])),
+  )
+  let call: string | undefined
+  for (const { message: m } of messages) {
+    if (m.role !== 'assistant') continue
+    for (const b of blocks(m)) if (b.type === 'toolCall' && b.name === SUBMIT_OUTPUT && taken.has(b.id)) call = b.id
+  }
+  return call
+}
+
 // What the agent did: its conversation with the model, loaded once opened.
+// The prompt the step shows above it isn't repeated, and the call handing in
+// the output it shows is a line, its arguments being that output.
 function Conversation({ run, step }: { run: number; step: RunStep }) {
   const [open, setOpen] = useState(false)
   const { messages, loaded, error, going } = useStepMessages(run, step, open)
   const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
+  const handedIn = handedInBy(step, messages)
+  const shown = messages.filter(
+    ({ attempt, message: m }) =>
+      !(attempt === 1 && m.role === 'user' && textOf(m).trim() === step.prompt.trim()) &&
+      !(m.role === 'toolResult' && handedIn !== undefined && m.toolCallId === handedIn),
+  )
 
   return (
     <details className="step-prompt conversation" onToggle={(e) => setOpen(e.currentTarget.open)}>
@@ -1028,16 +1083,16 @@ function Conversation({ run, step }: { run: number; step: RunStep }) {
         <p className="panel-note">{going ? 'Nothing yet.' : 'No conversation was recorded for this step.'}</p>
       )}
       <ol className="messages">
-        {messages.map((m, i) => (
+        {shown.map((m, i) => (
           <li key={m.id}>
-            {m.attempt > 1 && messages[i - 1]?.attempt !== m.attempt && (
+            {m.attempt > 1 && shown[i - 1]?.attempt !== m.attempt && (
               <p className="panel-note">
                 {followUpOf.has(m.attempt)
                   ? `Follow-up, ${formatTime(followUpOf.get(m.attempt)!.startedAt)}: you messaged the agent.`
                   : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again.`}
               </p>
             )}
-            <Message message={m.message} />
+            <Message message={m.message} handedIn={handedIn} />
           </li>
         ))}
       </ol>
@@ -1055,7 +1110,7 @@ const textOf = (m: AgentMessage) =>
     .filter(Boolean)
     .join('\n')
 
-function Message({ message: m }: { message: AgentMessage }) {
+function Message({ message: m, handedIn }: { message: AgentMessage; handedIn?: string }) {
   if (m.omitted !== undefined) {
     return <p className="panel-note">A {m.role} message of {Math.round(m.omitted / 1024)} KB, too large to keep.</p>
   }
@@ -1087,6 +1142,10 @@ function Message({ message: m }: { message: AgentMessage }) {
                 <summary>Thinking</summary>
                 <pre>{b.redacted && !b.thinking ? '(redacted)' : b.thinking}</pre>
               </details>
+            ) : b.type === 'toolCall' && b.id === handedIn ? (
+              <p key={i} className="panel-note">
+                Handed in its output, shown above.
+              </p>
             ) : b.type === 'toolCall' ? (
               <Block key={i} label={`Calls ${b.name}`} text={JSON.stringify(b.arguments, null, 2)} data />
             ) : b.type === 'text' ? (
@@ -1107,8 +1166,14 @@ function Message({ message: m }: { message: AgentMessage }) {
 function Block({ label, text, failed, data }: { label: string; text: string; failed?: boolean; data?: boolean }) {
   return (
     <div className="panel-run">
-      <span>{label}</span>
-      {data ? <Data text={text} /> : <pre className={failed ? 'failed' : undefined}>{text}</pre>}
+      {data ? (
+        <Data label={label} text={text} />
+      ) : (
+        <>
+          <span>{label}</span>
+          <pre className={failed ? 'failed' : undefined}>{text}</pre>
+        </>
+      )}
     </div>
   )
 }

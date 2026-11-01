@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react'
 import { ReviewForm, type Review } from './ProcessPanel'
 
 // A review or input a human process waits for, in the middle of the screen
-// over everything else. Closing it, with × or Escape, leaves the form in the
-// process's panel to come back to.
+// over everything else. Closing it, with × or Escape, leaves the form in its
+// step in the run's panel to come back to.
 export default function ReviewDialog({ name, review, onClose }: { name: string; review: Review; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
 
@@ -23,7 +23,7 @@ export default function ReviewDialog({ name, review, onClose }: { name: string; 
     >
       <header className="panel-header">
         <h2>{name}</h2>
-        <button className="panel-close" onClick={onClose} aria-label="Close" title="Close; the form stays in the process's panel">
+        <button className="panel-close" onClick={onClose} aria-label="Close" title="Close; the form stays in its step in the run's panel">
           ×
         </button>
       </header>

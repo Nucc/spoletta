@@ -61,7 +61,8 @@ import ProcessNode, { type ProcessNodeData, type ProcessNodeType } from './Proce
 import NoteNode, { type NoteNodeType } from './NoteNode'
 import NoteEdge from './NoteEdge'
 import ObjectPanel from './ObjectPanel'
-import ProcessPanel, { type EntryObject, type QueryLink, type Review } from './ProcessPanel'
+import ProcessPanel, { ReviewForm, type EntryObject, type QueryLink, type Review } from './ProcessPanel'
+import { settingsRows, type SettingNames } from './stepSettings'
 import ReviewDialog from './ReviewDialog'
 import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
@@ -186,6 +187,8 @@ import {
   updateProcess,
   updateStart,
   wrapProcesses,
+  DEFAULT_LOOPS,
+  DEFAULT_ROUNDS,
   type BoardContents,
   type BoardDiff,
   type BoardId,
@@ -509,6 +512,11 @@ export default function Board({
   const [commands, setCommands] = useState<Skill[] | null>(null)
   // The credentials the flow's agents and scripts may use; see Credentials.tsx.
   const [credentials, setCredentials] = useState<CredentialChoice[] | null>(null)
+  // Their names by id, which a run's steps name what their settings picked by.
+  const settingNames = useMemo<SettingNames>(() => {
+    const byId = (list: { id: number; name: string }[] | null) => (list === null ? null : new Map(list.map((x) => [x.id, x.name])))
+    return { skills: byId(skills), credentials: byId(credentials), mcpServers: byId(mcpServers) }
+  }, [skills, credentials, mcpServers])
   const [mcpOpen, setMCPOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [oplOpen, setOPLOpen] = useState(false)
@@ -1231,7 +1239,8 @@ export default function Board({
   // Shows the open run on the board: each process as its last step in the
   // run left it, each object with the content and state it last got. A
   // review waiting for a decision shows in the middle of the screen, unless
-  // another does, and opens its process's panel, unless another panel is open.
+  // another does, and the run's panel goes to its step, holding the form
+  // once that closes, unless the panel is on something else.
   useEffect(() => {
     if (!shownRun || compare || shownVersion !== runVersion) return
     const steps = new Map(shownRun.steps.flatMap((s) => (s.process === null ? [] : [[String(s.process), s] as const])))
@@ -1244,7 +1253,8 @@ export default function Board({
       shownReviews.current.add(s.id)
       const asked = s.id === askedStep && shownRun.id === askedRun
       setReviewId((open) => (asked ? process : (open ?? process)))
-      setPanelId((open) => (asked ? process : (open ?? process)))
+      if (asked) setPanelId(null)
+      setRunFocus((f) => (asked || f === null ? { kind: 'step', id: s.id, name: s.processName, seq: (f?.seq ?? 0) + 1 } : f))
     }
     setNodes((ns) =>
       ns.map((n): FlowNode => {
@@ -1402,6 +1412,15 @@ export default function Board({
     else if (isDraft(node.id) || node.type === 'start' || node.type === 'end' || node.type === 'note') return
     else if (shownRun && (node.type === 'process' || (node.type === 'object' && !node.data.human))) showInRun(node.id, node.data.name)
     else setPanelId(node.id)
+  }
+
+  // While a run shows on its version, a click on a process or an object other
+  // than a person shows what it did or held in the run, as a double-click
+  // does; one on a node's buttons does what they do.
+  const onNodeClick: NodeMouseHandler<FlowNode> = (e, node) => {
+    if (!shownRun || compare || shownVersion !== runVersion) return
+    if (e.target instanceof Element && e.target.closest('button, input, textarea, select, a')) return
+    if (node.type === 'process' || (node.type === 'object' && !node.data.human)) showInRun(node.id, node.data.name)
   }
 
   // Brings the run panel back, closing what took it, on what the node did
@@ -3885,6 +3904,7 @@ export default function Board({
                 onConnectEnd={onConnectEnd}
                 onEdgesDelete={onEdgesDelete}
                 isValidConnection={isValidConnection}
+                onNodeClick={onNodeClick}
                 onNodeDoubleClick={onNodeDoubleClick}
                 onNodeContextMenu={onNodeContextMenu}
                 onPaneContextMenu={(e) => {
@@ -4195,6 +4215,21 @@ export default function Board({
             onOpenReview={(process) =>
               nodes.some((n) => n.type === 'process' && n.id === String(process) && n.data.review)
                 ? () => setReviewId(String(process))
+                : undefined
+            }
+            // The form shows in one place at a time.
+            reviewFormFor={(process) => {
+              const n = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === String(process))
+              const review = n && reviewNode?.id !== n.id ? reviewOf(n) : undefined
+              return review && <ReviewForm review={review} />
+            }}
+            // The board's nodes are the run's version's only while it shows the run.
+            settingsOf={
+              shownRun && !compare && shownVersion === runVersion
+                ? (process) => {
+                    const n = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === String(process))
+                    return n && settingsRows(n.data.kind, n.data.settings, settingNames, { rounds: DEFAULT_ROUNDS, loops: DEFAULT_LOOPS })
+                  }
                 : undefined
             }
             onChanged={() => setRunReload((n) => n + 1)}

@@ -1,12 +1,14 @@
 // What a run's timeline (src/timeline.ts) and the comparison of two runs
 // (src/compare.ts) make of runs' steps: the lanes, the rows overlapping
 // steps take, the axis with long waits for people shortened, and which
-// steps and lines of text go beside which. Run with `npm test`, which needs
+// steps and lines of text go beside which; and what a step shows of its
+// process's settings (src/stepSettings.ts). Run with `npm test`, which needs
 // Node 22.6 or later to load TypeScript.
 
 import { runMatches, runOrigin, type FlowRunDetail, type RunObject, type RunStep } from '../src/api.ts'
 import { diffLines, pairObjects, pairProcesses, pairSteps } from '../src/compare.ts'
 import { formatSpan, lanesOf, scaleOf, shown, stretchesOf, ticksOf, type Bar } from '../src/timeline.ts'
+import { durationText, settingsRows } from '../src/stepSettings.ts'
 
 declare const process: { exitCode?: number }
 
@@ -209,6 +211,54 @@ check('spans read as people say them', [850, 12_000, 200_000, 7_500_000, 270_000
     true,
     true,
   ])
+}
+
+// What a step shows of its process's settings.
+{
+  const names = {
+    skills: new Map([[1, 'Review code']]),
+    credentials: new Map([[4, 'Jira']]),
+    mcpServers: new Map([
+      [2, 'github'],
+      [3, 'sentry'],
+    ]),
+  }
+  const defaults = { rounds: 3, loops: 5 }
+  check(
+    "an agent's settings, those left out at their defaults",
+    settingsRows('agent', { skills: [1], credentials: [4, 9], mcpServers: [2, 3], mcpTools: { '2': ['get_issue'] }, repositories: [] }, names, defaults),
+    [
+      ['Skills', 'Review code'],
+      ['Credentials', 'Jira, one not shown here'],
+      ['MCP servers', 'github (one tool), sentry'],
+      ['Repositories', 'none'],
+      ['Told about its flow', 'no'],
+      ['Rounds', '3 (default)'],
+      ['Loops', '5 (default)'],
+      ['Timeout', "the worker's (default)"],
+      ['Retries', '0 (default)'],
+      ['Needs', 'all its inputs (default)'],
+    ],
+  )
+  check(
+    "a script's, while the names load",
+    settingsRows('script', { credentials: [4], timeout: 5400, retries: 2, quorum: 1 }, { skills: null, credentials: null, mcpServers: null }, defaults),
+    [
+      ['Credentials', '1 picked'],
+      ['Repositories', "all of the flow's"],
+      ['Loops', '5 (default)'],
+      ['Timeout', '1h 30m'],
+      ['Retries', '2'],
+      ['Needs', '1 of its inputs'],
+    ],
+  )
+  check('a human process\'s', settingsRows('human', { remindAfter: 4 * 3600, escalateAfter: 86400, escalateTo: ['Lead', 'Finance'] }, names, defaults), [
+    ['Remind every', '4h'],
+    ['Fail after', 'never'],
+    ['Hand on after', '1d'],
+    ['Hand on to', 'Lead, Finance'],
+  ])
+  check('durations as they are written', [0, 59, 3600, 90061].map(durationText), ['0s', '59s', '1h', '1d 1h 1m 1s'])
 }
 
 console.log(`${checked} checks of the run views, ${failed} failed`)

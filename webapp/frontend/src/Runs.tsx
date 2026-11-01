@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Data } from './Data'
 import {
@@ -323,6 +323,8 @@ export function RunPanel({
   onTryAgain,
   onAsk,
   onOpenReview,
+  reviewFormFor,
+  settingsOf,
   onChanged,
   onClose,
 }: {
@@ -354,6 +356,14 @@ export function RunPanel({
   // middle of the screen again, once it was closed; none when the board
   // doesn't show the process.
   onOpenReview?: (process: number) => (() => void) | undefined
+  // The form deciding what a waiting step of the process asks, shown in its
+  // step; none while the middle of the screen shows it, or when the board
+  // doesn't show the process.
+  reviewFormFor?: (process: number) => ReactNode | undefined
+  // What the process was set to in the run's version, as lines of a name and
+  // a value (stepSettings.ts); none when the board doesn't show that version
+  // or the process.
+  settingsOf?: (process: number) => [string, string][] | undefined
   // A follow-up started or was stopped, so the run is loaded again.
   onChanged: () => void
   onClose: () => void
@@ -381,7 +391,12 @@ export function RunPanel({
   // its agents' replies said.
   const spent = run.spent > 0 ? run.spent : (totalUsage(run.steps)?.cost ?? 0)
   return (
-    <aside ref={panel} className="panel run-panel" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
+    // Escape in a field, such as a review's instructions, leaves the run open.
+    <aside
+      ref={panel}
+      className="panel run-panel"
+      onKeyDown={(e) => e.key === 'Escape' && !(e.target instanceof Element && e.target.closest('input, textarea, select')) && onClose()}
+    >
       <header className="panel-header">
         <h2>
           Run #{run.id} <span className={`run-badge ${run.status}`}>{RUN_LABELS[run.status]}</span>
@@ -498,6 +513,13 @@ export function RunPanel({
                     ? onOpenReview?.(s.process)
                     : undefined
                 }
+                reviewForm={
+                  s.status === 'waiting' && (s.kind === 'human' || s.kind === 'loop') && s.process !== null
+                    ? reviewFormFor?.(s.process)
+                    : undefined
+                }
+                settings={s.process !== null && s.kind !== 'copied' && s.kind !== 'input' && s.kind !== 'loop' ? settingsOf?.(s.process) : undefined}
+                version={run.version}
                 busy={busy}
                 onChanged={onChanged}
               />
@@ -592,12 +614,15 @@ function Step({
   onRerun,
   onAsk,
   onOpenReview,
+  reviewForm,
+  settings,
+  version,
   busy,
   onChanged,
 }: {
   run: number
   step: RunStep
-  // Its process, or an object it made, was double-clicked on the board.
+  // Its process, or an object it made, was picked on the board.
   focused: boolean
   objects: FlowRunDetail['objects']
   onStop?: () => void
@@ -606,8 +631,13 @@ function Step({
   onRerun?: () => void
   // For a failed step: asks the flow's assistant why it failed.
   onAsk?: () => void
-  // For a step waiting for a person: opens what it asks in the middle of the screen.
+  // For a step waiting for a person: opens what it asks in the middle of the
+  // screen, and the form deciding it, which shows what it takes, here.
   onOpenReview?: () => void
+  reviewForm?: ReactNode
+  // What its process was set to in the run's version, and that version.
+  settings?: [string, string][]
+  version: number | null
   busy: boolean
   onChanged: () => void
 }) {
@@ -644,9 +674,10 @@ function Step({
         )}
         {(s.kind === 'agent' || s.kind === 'script') &&
           (s.status === 'active' || s.followUps.some((f) => f.status === 'active')) && <StepActivity run={run} step={s.id} />}
-        {s.inputs.map((input, i) => (
-          <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} data />
-        ))}
+        {reviewForm ??
+          s.inputs.map((input, i) => (
+            <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} data />
+          ))}
         {s.changeRequest && (
           <>
             {s.changeRequest.reviewed.map((input, i) => (
@@ -662,7 +693,7 @@ function Step({
             />
           </>
         )}
-        {s.kind === 'loop' && (
+        {s.kind === 'loop' && !reviewForm && (
           <Block
             label={s.decidedBy && s.status !== 'waiting' ? `Asked · answered by ${s.decidedBy}` : 'Asked'}
             text={s.prompt}
@@ -726,7 +757,7 @@ function Step({
           <div className="step-actions">
             {onOpenReview && (
               <button className="step-rerun" onClick={onOpenReview} title="Open what it waits for in the middle of the screen">
-                {s.kind === 'loop' ? 'Answer it' : 'Open the review'}
+                {reviewForm ? 'Show it larger' : s.kind === 'loop' ? 'Answer it' : 'Open the review'}
               </button>
             )}
             {onAsk && (
@@ -745,7 +776,7 @@ function Step({
             )}
           </div>
         )}
-        {(s.kind === 'agent' || s.session || showsPrompt) && (
+        {(s.kind === 'agent' || s.session || showsPrompt || (settings ?? []).length > 0) && (
           <section className="step-how">
             <header>
               <h4>How it got there</h4>
@@ -769,6 +800,19 @@ function Step({
                   </>
                 )}
               </p>
+            )}
+            {settings && settings.length > 0 && (
+              <details className="step-prompt">
+                <summary>{version === null ? 'Settings' : `Settings (version ${version})`}</summary>
+                <dl className="data-fields step-settings">
+                  {settings.map(([name, value]) => (
+                    <div key={name}>
+                      <dt>{name}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </details>
             )}
             {showsPrompt && (
               <details className="step-prompt">

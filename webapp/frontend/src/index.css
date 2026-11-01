@@ -1427,6 +1427,11 @@ body {
   gap: 8px;
 }
 
+.step-settings {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
 .step-how h4 {
   margin: 0;
   font-size: 12px;

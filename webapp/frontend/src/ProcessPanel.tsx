@@ -35,6 +35,7 @@ import { CredentialPicker } from './Credentials'
 import { ConnectorFields } from './ConnectorFields'
 import { Hint } from './Hints'
 import { RepositoryPicker } from './FlowSettings'
+import { durationText } from './stepSettings'
 import { ModelOptions } from './ModelProviders'
 import type { RunStatus } from './ProcessNode'
 
@@ -731,17 +732,6 @@ function parseDuration(text: string): number | null {
   let total = 0
   for (const [, n, unit] of t.matchAll(/(\d+)\s*([dhms])/g)) total += Number(n) * size[unit]
   return total
-}
-
-// A number of seconds as parseDuration takes it, such as 1d 12h.
-function durationText(seconds: number): string {
-  const parts: string[] = []
-  for (const [unit, size] of [['d', 86400], ['h', 3600], ['m', 60], ['s', 1]] as const) {
-    const n = Math.floor(seconds / size)
-    if (n > 0) parts.push(`${n}${unit}`)
-    seconds -= n * size
-  }
-  return parts.join(' ') || '0s'
 }
 
 // The durations a setting offers to pick, in seconds, and what each is called.

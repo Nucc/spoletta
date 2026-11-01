@@ -23,6 +23,7 @@ import {
 } from './api'
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
+import { ModelPicker } from './ModelPicker'
 
 // Where agents' models come from, which admins set up: the providers added
 // here, each with the models picked of it and its key, saved here or kept
@@ -96,14 +97,11 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
       </div>
       {/* With a single model, it is the default, and needn't show. */}
       {models && models.models.length > 1 && (
-        <label className="panel-field default-model">
-          <span>Default model</span>
+        <div className="panel-field default-model">
+          <span id="default-model">Default model</span>
           <span className="flows-note">What agents of processes without a model of their own use.</span>
-          <select value={models.default} onChange={(e) => pickDefault(e.target.value)}>
-            {!models.models.includes(models.default) && <option value={models.default}>{models.default || 'pi’s own'}</option>}
-            <ModelOptions models={models} />
-          </select>
-        </label>
+          <ModelPicker models={models} value={models.default} forDefault labelledBy="default-model" onChange={pickDefault} />
+        </div>
       )}
       <WorkerKeys onError={onError} />
       {editing && providers && (
@@ -120,31 +118,6 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
       )}
     </section>
   )
-}
-
-// The models offered as options, grouped by provider when there are several.
-export function ModelOptions({ models }: { models: Models }) {
-  const groups = new Map<string, string[]>()
-  for (const m of models.models) {
-    const provider = m.split('/')[0]
-    groups.set(provider, [...(groups.get(provider) ?? []), m])
-  }
-  if (groups.size < 2) {
-    return models.models.map((m) => (
-      <option key={m} value={m}>
-        {m}
-      </option>
-    ))
-  }
-  return [...groups].map(([provider, ms]) => (
-    <optgroup key={provider} label={models.providers?.[provider] ?? provider}>
-      {ms.map((m) => (
-        <option key={m} value={m}>
-          {m.slice(provider.length + 1)}
-        </option>
-      ))}
-    </optgroup>
-  ))
 }
 
 function apiLabel(api?: string): string {
@@ -441,7 +414,7 @@ function ProviderDialog({
               />
             </label>
           ) : (
-            known && <ModelPicker models={known.models} picked={models} onChange={setModels} />
+            known && <CatalogPicker models={known.models} picked={models} onChange={setModels} />
           )}
           {error && <p className="panel-warning">{error}</p>}
           <div className="review-actions">
@@ -464,7 +437,7 @@ function ProviderDialog({
 }
 
 // Picking which of a provider's models agents may use, found by name or ID.
-function ModelPicker({ models, picked, onChange }: { models: CatalogModel[]; picked: string[]; onChange: (ids: string[]) => void }) {
+function CatalogPicker({ models, picked, onChange }: { models: CatalogModel[]; picked: string[]; onChange: (ids: string[]) => void }) {
   const [search, setSearch] = useState('')
   const shown = useMemo(() => {
     const words = search.toLowerCase().split(/\s+/).filter(Boolean)

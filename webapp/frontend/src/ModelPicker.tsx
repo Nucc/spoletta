@@ -8,7 +8,8 @@ import { fuzzy } from './shortcuts'
 // the models the flow's processes use, then each provider's chat models.
 // Those for something else, such as speech or images (see models.ts), are a
 // click away, and a search finds them too. The model picked stays listed
-// even once it is no longer offered, so it isn't silently replaced.
+// even once it is no longer offered, so it isn't silently replaced. The
+// settings pick the default itself with it too, from each provider's.
 
 type Row = { value: string; name: string; detail: string; others?: boolean }
 type Group = { label: string; rows: Row[] }
@@ -28,7 +29,8 @@ const providerName = (models: Models | null, model: string) => {
 export function ModelPicker({
   models,
   value,
-  used,
+  used = [],
+  forDefault = false,
   labelledBy,
   onChange,
 }: {
@@ -36,7 +38,9 @@ export function ModelPicker({
   models: Models | null
   value: string
   // The models the flow's other processes use.
-  used: string[]
+  used?: string[]
+  // Picks the default itself, so there is no default to pick, nor a flow.
+  forDefault?: boolean
   labelledBy: string
   onChange: (model: string) => void
 }) {
@@ -54,18 +58,25 @@ export function ModelPicker({
     name: shortModel(m),
     detail: offered.includes(m) ? providerName(models, m) : `${providerName(models, m)} · no longer offered`,
   })
-  const defaultRow: Row = {
-    value: '',
-    name: 'Default',
-    detail: models?.default ? `${shortModel(models.default)} · ${providerName(models, models.default)}` : 'pi picks one',
-  }
-  const inFlow = [...new Set([value, ...used].filter((m) => m !== ''))].sort()
+  const defaultRow: Row = forDefault
+    ? { value: '', name: 'pi’s own', detail: 'none picked here' }
+    : {
+        value: '',
+        name: 'Default',
+        detail: models?.default ? `${shortModel(models.default)} · ${providerName(models, models.default)}` : 'pi picks one',
+      }
+  // The default picked shows under its provider, unless no longer offered.
+  const inFlow = forDefault
+    ? value !== '' && !offered.includes(value)
+      ? [value]
+      : []
+    : [...new Set([value, ...used].filter((m) => m !== ''))].sort()
   const firsts = new Set(inFlow)
   const others = offered.filter((m) => !firsts.has(m) && otherModel(m))
 
   let groups: Group[]
   if (query.trim()) {
-    const found = [defaultRow, ...[...new Set([...inFlow, ...offered])].map(row)]
+    const found = [...(forDefault ? [] : [defaultRow]), ...[...new Set([...inFlow, ...offered])].map(row)]
       .map((r) => ({ r, m: fuzzy(query, r.value === '' ? `default ${r.detail}` : `${r.value} ${r.detail}`) }))
       .filter((x) => x.m !== null)
       .sort((a, b) => b.m!.score - a.m!.score)
@@ -81,8 +92,8 @@ export function ModelPicker({
       byProvider.set(p, [...(byProvider.get(p) ?? []), row(m)])
     }
     groups = [
-      { label: '', rows: [defaultRow] },
-      { label: 'In this flow', rows: inFlow.map(row) },
+      { label: '', rows: forDefault ? [] : [defaultRow] },
+      { label: forDefault ? '' : 'In this flow', rows: inFlow.map(row) },
       ...[...byProvider].map(([label, rows]) => ({ label, rows })),
       showOthers
         ? { label: 'For speech, images, embeddings and more', rows: others.map(row) }

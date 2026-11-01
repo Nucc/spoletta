@@ -35,7 +35,7 @@ import { CredentialPicker } from './Credentials'
 import { ConnectorFields } from './ConnectorFields'
 import { Hint } from './Hints'
 import { RepositoryPicker } from './FlowSettings'
-import { canUseRows, canUseSummary, changedSummary, durationText, limitRows, waitRows, type SettingNames } from './stepSettings'
+import { atDefault, canUseRows, canUseSummary, changedSummary, durationText, limitRows, waitRows, type SettingNames } from './stepSettings'
 import { ModelPicker, modelText } from './ModelPicker'
 import type { RunStatus } from './ProcessNode'
 
@@ -736,7 +736,7 @@ function SettingLines({ rows }: { rows: [string, string][] }) {
   return (
     <dl className="data-fields panel-lines">
       {rows.map(([name, value]) => (
-        <div key={name}>
+        <div key={name} className={atDefault(value) ? 'at-default' : undefined}>
           <dt>{name}</dt>
           <dd>{value}</dd>
         </div>

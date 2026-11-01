@@ -62,7 +62,7 @@ import NoteNode, { type NoteNodeType } from './NoteNode'
 import NoteEdge from './NoteEdge'
 import ObjectPanel from './ObjectPanel'
 import ProcessPanel, { ReviewForm, type EntryObject, type QueryLink, type Review } from './ProcessPanel'
-import { settingsRows, type SettingNames } from './stepSettings'
+import { settingGroups, type SettingNames } from './stepSettings'
 import ReviewDialog from './ReviewDialog'
 import StartNode, { type StartNodeType } from './StartNode'
 import EndNode, { type EndNodeType } from './EndNode'
@@ -4281,7 +4281,7 @@ export default function Board({
               shownRun && !compare && shownVersion === runVersion
                 ? (process) => {
                     const n = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === String(process))
-                    return n && settingsRows(n.data.kind, n.data.settings, settingNames, { rounds: DEFAULT_ROUNDS, loops: DEFAULT_LOOPS })
+                    return n && settingGroups(n.data.kind, n.data.settings, settingNames, { rounds: DEFAULT_ROUNDS, loops: DEFAULT_LOOPS })
                   }
                 : undefined
             }

@@ -8,7 +8,7 @@
 import { runMatches, runOrigin, type FlowRunDetail, type RunObject, type RunStep } from '../src/api.ts'
 import { diffLines, pairObjects, pairProcesses, pairSteps } from '../src/compare.ts'
 import { elapsedText, formatSpan, lanesOf, scaleOf, shown, stretchesOf, ticksOf, type Bar } from '../src/timeline.ts'
-import { canUseSummary, changedSummary, durationText, limitRows, settingsRows, waitRows } from '../src/stepSettings.ts'
+import { atDefault, canUseSummary, changedSummary, durationText, limitRows, settingGroups, settingsRows, waitRows } from '../src/stepSettings.ts'
 
 declare const process: { exitCode?: number }
 
@@ -264,6 +264,16 @@ check(
     ['Hand on to', 'Lead, Finance'],
   ])
   check('durations as they are written', [0, 59, 3600, 90061].map(durationText), ['0s', '59s', '1h', '1d 1h 1m 1s'])
+
+  check(
+    "a step's settings under their headings, what is at its default told apart",
+    settingGroups('script', { timeout: 90 }, names, defaults).map((g) => [g.title, g.rows.filter(([, v]) => !atDefault(v)).map(([n]) => n)]),
+    [
+      ['Can use', []],
+      ['Limits', ['Timeout']],
+    ],
+  )
+  check('a person waits under a heading of its own', settingGroups('human', {}, names, defaults).map((g) => g.title), ['While it waits'])
 
   // A folded group's line in the process's panel.
   check(

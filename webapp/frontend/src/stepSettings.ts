@@ -100,6 +100,24 @@ export function settingsRows(kind: ProcessKind, s: ProcessSettings, names: Setti
   return [...canUseRows(kind, s, names), ...limitRows(kind, s, defaults), ...waitRows(kind, s)]
 }
 
+// The same under the headings a process's panel groups them by, those with
+// none left out.
+export type SettingGroup = { title: string; rows: [string, string][] }
+
+export function settingGroups(kind: ProcessKind, s: ProcessSettings, names: SettingNames, defaults: SettingDefaults): SettingGroup[] {
+  return [
+    { title: 'Can use', rows: canUseRows(kind, s, names) },
+    { title: 'Limits', rows: limitRows(kind, s, defaults) },
+    { title: 'While it waits', rows: waitRows(kind, s) },
+  ].filter((g) => g.rows.length > 0)
+}
+
+// Whether a line's value is what the process has when nothing is set, as
+// the lines show it, so what is set stands out.
+export function atDefault(value: string): boolean {
+  return value.endsWith('(default)') || ['none', 'no', 'never', 'nobody', "all of the flow's"].includes(value)
+}
+
 // A folded group's line: the names of what its process picks, and which
 // repositories it works on when the flow has any, none picked of none
 // saying nothing.
@@ -126,6 +144,6 @@ export function canUseSummary(kind: ProcessKind, s: ProcessSettings, names: Sett
 // The rows set apart from their defaults, as one line; never is a human
 // process's default.
 export function changedSummary(rows: [string, string][], none: string): string {
-  const changed = rows.filter(([, value]) => !value.endsWith('(default)') && value !== 'never' && value !== 'nobody')
+  const changed = rows.filter(([, value]) => !atDefault(value))
   return changed.length === 0 ? none : changed.map(([label, value]) => `${label} ${value}`).join(', ')
 }

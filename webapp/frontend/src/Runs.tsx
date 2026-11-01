@@ -26,6 +26,7 @@ import {
 import { ClockIcon, TerminalIcon } from './icons'
 import StepTerminal, { formatLogTime, useStepLogs } from './StepTerminal'
 import { elapsedText, formatSpan } from './timeline'
+import { atDefault, changedSummary, type SettingGroup } from './stepSettings'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
@@ -362,9 +363,9 @@ export function RunPanel({
   // doesn't show the process.
   reviewFormFor?: (process: number) => ReactNode | undefined
   // What the process was set to in the run's version, as lines of a name and
-  // a value (stepSettings.ts); none when the board doesn't show that version
-  // or the process.
-  settingsOf?: (process: number) => [string, string][] | undefined
+  // a value under its panel's headings (stepSettings.ts); none when the board
+  // doesn't show that version or the process.
+  settingsOf?: (process: number) => SettingGroup[] | undefined
   // How long a step of the process may go in the run's version, in seconds,
   // a person's wait included, if it says; on the same terms.
   limitOf?: (process: number) => number | undefined
@@ -653,7 +654,7 @@ function Step({
   onOpenReview?: () => void
   reviewForm?: ReactNode
   // What its process was set to in the run's version, and that version.
-  settings?: [string, string][]
+  settings?: SettingGroup[]
   // How long it may go, in seconds, if its process says.
   limit?: number
   version: number | null
@@ -833,15 +834,25 @@ function Step({
             )}
             {settings && settings.length > 0 && (
               <details className="step-prompt">
-                <summary>{version === null ? 'Settings' : `Settings (version ${version})`}</summary>
-                <dl className="data-fields step-settings">
-                  {settings.map(([name, value]) => (
-                    <div key={name}>
-                      <dt>{name}</dt>
-                      <dd>{value}</dd>
-                    </div>
+                <summary>
+                  {version === null ? 'Settings' : `Settings (version ${version})`}
+                  <span className="step-fold-note">{changedSummary(settings.flatMap((g) => g.rows), 'all at their defaults')}</span>
+                </summary>
+                <div className="step-settings">
+                  {settings.map((g) => (
+                    <section key={g.title}>
+                      <h5>{g.title}</h5>
+                      <dl className="data-fields">
+                        {g.rows.map(([name, value]) => (
+                          <div key={name} className={atDefault(value) ? 'at-default' : undefined}>
+                            <dt>{name}</dt>
+                            <dd>{value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </section>
                   ))}
-                </dl>
+                </div>
               </details>
             )}
             {showsPrompt && (

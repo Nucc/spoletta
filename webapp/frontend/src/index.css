@@ -1427,9 +1427,51 @@ body {
   gap: 8px;
 }
 
+/* What a step's process was set to, in a box as its prompt is, under the
+   headings its panel groups them by; what is left at its default greyed,
+   so what was set stands out. */
 .step-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin-top: 6px;
+  padding: 8px 10px;
   font-size: 13px;
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.step-settings h5 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #656d76;
+}
+
+.step-settings .data-fields {
+  /* One width for every group's names, so their values line up. */
+  grid-template-columns: minmax(0, 12em) minmax(0, 1fr);
+  gap: 2px 16px;
+}
+
+.step-settings .data-fields dt {
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.step-settings .at-default dd,
+.panel-lines .at-default dd {
+  color: #8c959f;
+}
+
+/* What a fold holds, said beside its title. */
+.step-fold-note {
+  margin-left: 8px;
+  font-weight: 400;
+  color: #656d76;
 }
 
 .step-how h4 {
@@ -1690,6 +1732,8 @@ body {
 
 .panel-lines dd {
   font-weight: 400;
+  /* A long id or a row of JSON wraps rather than widening the panel. */
+  overflow-wrap: anywhere;
 }
 
 /* A group of a process's settings under a heading, folded with a line

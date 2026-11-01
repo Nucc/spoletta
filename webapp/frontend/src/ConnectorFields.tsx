@@ -47,6 +47,35 @@ export function ConnectorFields({
     onChange({ ...settings, operation: name, args: Object.keys(kept).length > 0 ? kept : undefined })
   }
 
+  // Where it can't be changed, what it is set to reads as text: the
+  // operation by its name until the connectors' directory loads.
+  if (readOnly) {
+    const names = op ? op.params.map((p) => p.name) : []
+    const rows: [string, string][] = [
+      ['Connector', server?.name ?? (settings ? 'a removed connector' : 'none picked')],
+      ['Does', op ? op.title : settings?.operation || 'nothing picked'],
+      ...[...names, ...Object.keys(args).filter((k) => !names.includes(k))].map((k): [string, string] => [k, args[k] ?? 'not set']),
+    ]
+    return (
+      <div className="connector-fields">
+        <dl className="data-fields panel-lines">
+          {rows.map(([name, value]) => (
+            <div key={name}>
+              <dt>{name}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {op && (
+          <p className="panel-note">
+            {op.description}
+            {op.write && <span className="mcp-badge write">changes {entry?.title} when it runs</span>}
+          </p>
+        )}
+      </div>
+    )
+  }
+
   if (servers && connectors.length === 0) {
     return (
       <p className="panel-note">

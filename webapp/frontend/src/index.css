@@ -1633,6 +1633,13 @@ body {
   overflow-y: auto;
 }
 
+/* What a process or object handed in, and the JSON processes hand in, keep
+   their height, the panel scrolling instead: shrunk, they would scroll in
+   boxes of their own, cut off with nothing to show it. */
+.panel > .panel-run {
+  flex-shrink: 0;
+}
+
 .panel-header {
   display: flex;
   align-items: center;
@@ -1674,8 +1681,9 @@ body {
   gap: 16px;
 }
 
+/* Muted as notes are, still readable while a run holds the board. */
 .panel-check:has(input:disabled) {
-  color: #8c959f;
+  color: #656d76;
 }
 
 /* A process's prompt, script or instructions, growing with the text from
@@ -2999,8 +3007,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 0;
-  overflow: auto;
 }
 
 .attributes-title {

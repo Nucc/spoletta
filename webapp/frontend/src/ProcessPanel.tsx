@@ -36,7 +36,7 @@ import { ConnectorFields } from './ConnectorFields'
 import { Hint } from './Hints'
 import { RepositoryPicker } from './FlowSettings'
 import { canUseRows, canUseSummary, changedSummary, durationText, limitRows, waitRows, type SettingNames } from './stepSettings'
-import { ModelOptions } from './ModelProviders'
+import { ModelPicker, modelText } from './ModelPicker'
 import type { RunStatus } from './ProcessNode'
 
 type Fields = {
@@ -113,6 +113,7 @@ export default function ProcessPanel({
   trashedFlow,
   initial,
   models,
+  usedModels,
   mcpServers,
   skills,
   commands,
@@ -142,8 +143,10 @@ export default function ProcessPanel({
   // For a subflow process, the procedure it runs if that is in the trash.
   trashedFlow?: string
   initial: Fields
-  // Models pi offers, or null while they load.
+  // Models pi offers, or null while they load, and those the flow's other
+  // agents use, which its picker lists first.
   models: Models | null
+  usedModels: string[]
   // The MCP servers agents can use, or null while they load.
   mcpServers: MCPServer[] | null
   // The skills its agent may be given and the commands its prompt may name,
@@ -327,7 +330,7 @@ export default function ProcessPanel({
             ['Type', KINDS.find((k) => k.value === kind)?.label ?? kind],
             ...(kind === 'agent'
               ? ([
-                  ['Model', model || (models?.default ? `the default, ${models.default}` : 'the default')],
+                  ['Model', modelText(models, model)],
                   ['Thinking', thinking || 'the default'],
                 ] as [string, string][])
               : []),
@@ -358,15 +361,10 @@ export default function ProcessPanel({
           </div>
           {kind === 'agent' && (
             <div className="panel-row">
-              <label className="panel-field">
-                <span>Model</span>
-                <select value={model} onChange={(e) => setModel(e.target.value)}>
-                  <option value="">Default{models?.default ? ` (${models.default})` : ''}</option>
-                  {/* A model dropped from pi's list stays selectable so it isn't silently replaced. */}
-                  {model !== '' && !models?.models.includes(model) && <option value={model}>{model}</option>}
-                  {models && <ModelOptions models={models} />}
-                </select>
-              </label>
+              <div className="panel-field">
+                <span id="process-model">Model</span>
+                <ModelPicker models={models} value={model} used={usedModels} labelledBy="process-model" onChange={setModel} />
+              </div>
               <label className="panel-field">
                 <span>Thinking</span>
                 <select value={thinking} onChange={(e) => setThinking(e.target.value as ThinkingLevel | '')}>

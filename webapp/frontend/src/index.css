@@ -1766,6 +1766,127 @@ body {
   width: 180px;
 }
 
+/* An agent's model: the field shows it by its short name and where it
+   comes from, and opens a list searched as one types; see ModelPicker. */
+.model-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.model-picker-button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 28px 8px 8px;
+  font: inherit;
+  font-weight: 400;
+  font-size: 14px;
+  color: #1f2328;
+  text-align: left;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23656d76' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.model-picker-name {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-detail {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: #656d76;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  width: max(100%, 340px);
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(140, 149, 159, 0.2);
+}
+
+.model-picker-list input {
+  width: 100%;
+}
+
+.model-picker-list ul {
+  max-height: 320px;
+  margin: 6px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.model-picker-list li[role='option'] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-weight: 400;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.model-picker-list li[role='option'] > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-picker-list li[role='option'] > small {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  font-size: 12px;
+  color: #656d76;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-list li[aria-selected='true'] {
+  background: #f6f8fa;
+}
+
+.model-picker-list li.picked > span {
+  font-weight: 600;
+}
+
+.model-picker-list li.model-picker-more > span {
+  color: #0969da;
+}
+
+.model-picker-group {
+  padding: 10px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #656d76;
+}
+
+.model-picker-none {
+  padding: 8px;
+  font-size: 13px;
+  font-weight: 400;
+  color: #656d76;
+}
+
 .panel-header-actions {
   display: flex;
   align-items: center;

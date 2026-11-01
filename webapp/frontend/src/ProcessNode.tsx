@@ -3,6 +3,7 @@ import { Handle, Position, useNodeConnections, type Node, type NodeProps } from 
 import { useBoardActions } from './actions'
 import type { ProcessKind, ProcessSettings, RunInput, ThinkingLevel } from './api'
 import { AgentIcon, ConnectorIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, RerunIcon, ScriptIcon, StopIcon, SubflowIcon, TrashIcon, ZoomInIcon } from './icons'
+import { shortModel } from './models'
 import { stoppable } from './Runs'
 import WidthResizer from './WidthResizer'
 
@@ -73,7 +74,7 @@ function subtitle(data: ProcessNodeData): string {
     return op ? `Connector · ${op.replaceAll('_', ' ')}` : 'Connector'
   }
   if (data.kind !== 'agent') return KIND_LABELS[data.kind]
-  return `Agent · ${data.model ? data.model.slice(data.model.indexOf('/') + 1) : 'default model'}`
+  return `Agent · ${data.model ? shortModel(data.model) : 'default model'}`
 }
 
 // OPM process: a rounded card, its corners as round as the card is tall, with

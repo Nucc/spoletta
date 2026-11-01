@@ -4089,6 +4089,7 @@ export default function Board({
               settings: panelNode.data.settings,
             }}
             models={models}
+            usedModels={(contents?.processes ?? []).filter((p) => p.kind === 'agent' && p.model !== '' && String(p.id) !== panelNode.id).map((p) => p.model)}
             mcpServers={mcpServers}
             skills={skills}
             commands={commands}

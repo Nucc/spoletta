@@ -394,6 +394,15 @@ export const TableIcon = () => (
 )
 
 // Columns of cards, for a task board.
+// A state going on to another, as a task board's Flows strip draws them.
+export const TransitionIcon = () => (
+  <Icon>
+    <rect x="1" y="5" width="4.5" height="6" rx="2" />
+    <rect x="10.5" y="5" width="4.5" height="6" rx="2" />
+    <path d="M6 8h3.5M8 6.25L9.75 8 8 9.75" />
+  </Icon>
+)
+
 export const TaskBoardIcon = () => (
   <Icon>
     <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />

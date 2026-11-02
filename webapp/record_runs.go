@@ -69,9 +69,117 @@ type recordFlow struct {
 	// The states its queries take records in, in their order, "" for a
 	// query taking any, so a task board's column of a state can offer it.
 	States []string `json:"states"`
+	// The states it leaves the records it takes in (recordLeaves), so a
+	// task board can draw where its records go from each state.
+	Leaves []string `json:"leaves"`
 	// Why its queries wouldn't select each record asked about, by record
 	// id, for those they wouldn't.
 	Off map[string]string `json:"off"`
+}
+
+// The states a run on the board leaves a record of the store in, by name in
+// the order the board lists them, as storeShared moves it: a process's
+// output link to an object of the store that the process also takes moves
+// the record into the states the link lists to decide between, else into
+// the one it names, else, naming none, into whichever of the object's
+// states has a rule that may hold of it (see rules.go). A process only
+// generating the object, or a link naming no state of an object without
+// rules, leaves the record in the state it was in, so names none. A
+// procedure a subflow process runs isn't looked into.
+func recordLeaves(b *runBoard, store int64) []string {
+	into := map[int64]bool{}
+	for _, l := range b.Links {
+		if l.Direction != directionOutput || b.store(l.Object) != store || !b.takes(l.Process, l.Object) {
+			continue
+		}
+		switch listed := b.linkStates[l.ID]; {
+		case len(listed) > 0:
+			for _, st := range listed {
+				into[st] = true
+			}
+		case l.State != 0:
+			into[l.State] = true
+		default:
+			for _, st := range b.States {
+				if r, err := parseRule(st.Rule); st.Object == l.Object && err == nil && len(r) > 0 {
+					into[st.ID] = true
+				}
+			}
+		}
+	}
+	leaves := []string{}
+	for _, st := range b.States {
+		if into[st.ID] && !slices.Contains(leaves, st.Name) {
+			leaves = append(leaves, st.Name)
+		}
+	}
+	return leaves
+}
+
+// The states each flow publishing no version leaves the store's records in
+// on its board as it is, by flow: what recordLeaves reads of a board, its
+// objects of the store with their links and states, read for every such
+// flow at once.
+func unpublishedLeaves(ctx context.Context, db *sql.DB, store int64) (map[int64][]string, error) {
+	of := func(object string) string {
+		return ` JOIN objects o ON o.id = ` + object + ` JOIN flows f ON f.id = o.flow_id
+			WHERE o.store_id = ? AND ` + liveFlows + ` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL`
+	}
+	boards := map[int64]*snapshot{}
+	board := func(flow int64) *snapshot {
+		if boards[flow] == nil {
+			boards[flow] = &snapshot{}
+		}
+		return boards[flow]
+	}
+	err := scanAll(ctx, db, `SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, o.flow_id FROM object_links l`+of("l.object_id"),
+		func(rows *sql.Rows) error {
+			var l snapshotLink
+			var flow int64
+			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &l.State, &flow); err != nil {
+				return err
+			}
+			s := board(flow)
+			if !slices.ContainsFunc(s.Objects, func(o snapshotObject) bool { return o.ID == l.Object }) {
+				s.Objects = append(s.Objects, snapshotObject{ID: l.Object, Store: &store})
+			}
+			s.Links = append(s.Links, l)
+			return nil
+		}, store)
+	if err != nil {
+		return nil, err
+	}
+	err = scanAll(ctx, db, `SELECT ls.link_id, ls.state_id, o.flow_id FROM link_states ls JOIN object_links l ON l.id = ls.link_id`+of("l.object_id"),
+		func(rows *sql.Rows) error {
+			var ls snapshotLinkState
+			var flow int64
+			if err := rows.Scan(&ls.Link, &ls.State, &flow); err != nil {
+				return err
+			}
+			board(flow).LinkStates = append(board(flow).LinkStates, ls)
+			return nil
+		}, store)
+	if err != nil {
+		return nil, err
+	}
+	err = scanAll(ctx, db, `SELECT st.id, st.object_id, st.name, COALESCE(st.rule, ''), o.flow_id FROM object_states st`+of("st.object_id")+` ORDER BY st.id`,
+		func(rows *sql.Rows) error {
+			var st objectState
+			var flow int64
+			if err := rows.Scan(&st.ID, &st.Object, &st.Name, &st.Rule, &flow); err != nil {
+				return err
+			}
+			board(flow).States = append(board(flow).States, st)
+			return nil
+		}, store)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64][]string{}
+	for flow, s := range boards {
+		out[flow] = recordLeaves(newRunBoard(flow, *s), store)
+	}
+	return out, nil
 }
 
 // The flows querying the store's records, a job flow's own boards, or
@@ -105,6 +213,7 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 				}
 			}
 			if len(f.queries) > 0 {
+				f.Leaves = recordLeaves(b, store)
 				fs = append(fs, f)
 			}
 			return nil
@@ -150,6 +259,15 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 	if err != nil {
 		return nil, err
 	}
+	if len(unpublished) > 0 {
+		leaves, err := unpublishedLeaves(ctx, db, store)
+		if err != nil {
+			return nil, err
+		}
+		for id, f := range unpublished {
+			f.Leaves = leaves[id]
+		}
+	}
 	slices.SortStableFunc(fs, func(x, y *recordFlow) int {
 		return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.ID, y.ID))
 	})
@@ -167,6 +285,9 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 			if !slices.Contains(f.States, q.State) {
 				f.States = append(f.States, q.State)
 			}
+		}
+		if f.Leaves == nil {
+			f.Leaves = []string{}
 		}
 		may = append(may, f)
 	}

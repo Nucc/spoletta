@@ -114,6 +114,17 @@ type flowRef struct {
 	Name string `json:"name"`
 }
 
+// A flow the board playing may start on a struct's records, as its page
+// draws what moves them on: the states it takes them in, "" for any, and
+// those it leaves them in (recordLeaves); its name empty for one whoever
+// reads the page doesn't see.
+type boardFlow struct {
+	ID     int64    `json:"id"`
+	Name   string   `json:"name"`
+	States []string `json:"states"`
+	Leaves []string `json:"leaves"`
+}
+
 // The flows taking records in a state, as the board playing picks one, and
 // whether they take it by querying any state, as none names it.
 type stateFlows struct {
@@ -796,6 +807,20 @@ func fillPlay(ctx context.Context, db *sql.DB, u *user, b *taskBoard, structs ma
 			}
 		}
 		fs := flows[root]
+		if _, ok := b.Flows[*c.Struct]; !ok {
+			if b.Flows == nil {
+				b.Flows = map[int64][]boardFlow{}
+			}
+			drawn := []boardFlow{}
+			for _, f := range fs {
+				name, err := nameOf(f)
+				if err != nil {
+					return err
+				}
+				drawn = append(drawn, boardFlow{f.ID, name, f.States, f.Leaves})
+			}
+			b.Flows[*c.Struct] = drawn
+		}
 		switch {
 		case c.rests():
 		case c.Flow != nil:

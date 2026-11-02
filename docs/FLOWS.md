@@ -559,6 +559,15 @@ repositories:
     And don't also schedule a flow a board plays to query the same state, as
     its runs may take the records the board's are working on; a flow
     picking its record may be, as each run holds the one it took.
+  - A board's **Flows** button draws over its columns each column's state,
+    the flow its records go to and arrows to the columns of the states that
+    flow leaves them in: those its processes taking the record name on
+    their output links to the struct's copy (or decide between, or whose
+    rules may hold), in the version it published, else its board as it is.
+    A state several flows take shows **Pick a flow**, which names one on
+    its column, as the column's dialog does. So a flow with no arrow out
+    leaves its records where they were, stuck, and wants an output link
+    into the next state.
 - Deleting a flow, procedure or struct moves it to the **trash**, from
   where those who may change it restore it, for 30 days by default. While
   it is there it runs nothing and exports nowhere: a subflow process running

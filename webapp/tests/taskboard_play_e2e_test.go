@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,8 @@ type playBoard struct {
 	Stopped  string       `json:"stopped"`
 	Running  int          `json:"running"`
 	Columns  []playColumn `json:"columns"`
+	// The flows it draws over its columns, by struct.
+	Flows map[string][]drawnFlow `json:"flows"`
 }
 
 type playColumn struct {
@@ -483,6 +486,9 @@ func TestTaskBoardNamesOnlyFlowsSeen(t *testing.T) {
 	if _, run := playCardRun(b, "T-1"); run.FlowName != "Implement bugs" || !slices.Equal(run.Steps, []string{"Implement"}) {
 		t.Errorf("Bob sees T-1's run as %+v, want Implement bugs at Implement", run)
 	}
+	if got := drawnLines(t, b.Flows[strconv.FormatInt(tickets.ID, 10)]); len(got) != 1 || got["Implement bugs"] != "open -> done" {
+		t.Errorf("Bob sees the board draw %q, want Implement bugs taking open to done", got)
+	}
 
 	usersSignIn(a, p, carol)
 	b = waitBoard(a, b.ID, "the board", func(playBoard) bool { return true })
@@ -491,6 +497,9 @@ func TestTaskBoardNamesOnlyFlowsSeen(t *testing.T) {
 	}
 	if got := b.Columns[0].taking(); len(got) != 1 || got[0] != "open: " {
 		t.Errorf("Carol sees %q taking open, want a flow unnamed", got)
+	}
+	if got := drawnLines(t, b.Flows[strconv.FormatInt(tickets.ID, 10)]); len(got) != 1 || got[""] != "open -> done" {
+		t.Errorf("Carol sees the board draw %q, want a flow unnamed taking open to done", got)
 	}
 	close(release)
 	waitBoard(a, b.ID, "T-1 done", func(b playBoard) bool { return len(b.Columns[1].Cards.Records) == 1 && b.Running == 0 })

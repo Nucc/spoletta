@@ -10988,7 +10988,8 @@ button.panel-help:focus-visible {
 }
 
 /* A task board: a column per query of a shared struct's records, side by
-   side and scrolling across, each column's cards scrolling on their own. */
+   side and scrolling across, each column's cards scrolling on their own;
+   over them, while it shows, the Flows strip, scrolling across with them. */
 .task-board-page {
   height: 100%;
 }
@@ -11021,10 +11022,289 @@ button.panel-help:focus-visible {
   flex: 1;
   min-height: 0;
   display: flex;
-  align-items: stretch;
-  gap: 16px;
+  flex-direction: column;
   padding: 16px;
   overflow-x: auto;
+}
+
+/* The columns, measured by the strip from where they lie in it. */
+.task-columns {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+}
+
+/* The Flows strip (TaskFlows.tsx): each column's state in a box over it,
+   the flow moving its records on halfway to the next, as a process is
+   drawn, and arrows to the states it leaves them in; above the columns, so
+   the picker opening under a flow shows over their cards. A flow that
+   doesn't start, as several take its state or it takes another, warns as a
+   problem on the board does, its arrows dashed. */
+.task-flows {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  margin-bottom: 4px;
+}
+
+.task-flows-arrows {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.task-flow-arrow {
+  fill: none;
+  stroke: #6e7781;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.task-flow-arrow.warn {
+  stroke: #9a6700;
+  stroke-dasharray: 5 4;
+}
+
+.task-flow-head {
+  fill: #6e7781;
+}
+
+.task-flow-head.warn {
+  fill: #9a6700;
+}
+
+.task-flow-state,
+.task-flow-chip,
+.task-flow-rest,
+.task-flow-note {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.task-flow-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #1f2328;
+  background: #f6f8fa;
+  border: 1px solid #8c959f;
+  border-radius: 10px;
+}
+
+.task-flow-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(31, 35, 40, 0.06);
+  cursor: pointer;
+}
+
+.task-flow-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-flow-chip svg {
+  flex-shrink: 0;
+  color: #656d76;
+}
+
+.task-flow-chip:hover {
+  border-color: #54aeff;
+}
+
+.task-flow-chip.warn {
+  color: #7d4e00;
+  background: #fff8c5;
+  border-color: #d4a72c;
+  box-shadow: none;
+}
+
+.task-flow-chip.warn svg {
+  color: currentColor;
+}
+
+.task-flow-chip.warn:hover {
+  border-color: #9a6700;
+}
+
+.task-flow-chip:focus-visible,
+.task-flow-rest:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
+/* Why no flow moves a column's records on, beside its state; it opens the
+   picker as a flow does. */
+.task-flow-rest {
+  display: block;
+  padding: 0 4px;
+  line-height: 28px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  color: #656d76;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.task-flow-rest:hover {
+  color: #1f2328;
+  text-decoration: underline;
+}
+
+.task-flow-note {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 16px;
+  color: #656d76;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.task-flow-note.warn {
+  color: #7d4e00;
+}
+
+.task-flows-empty {
+  flex-shrink: 0;
+  max-width: 640px;
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #656d76;
+}
+
+/* Picking the flow moving a column's records on, under its flow, its caret
+   pointing at it. */
+.task-flow-picker {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(140, 149, 159, 0.3);
+}
+
+.task-flow-picker::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: calc(var(--caret) - 6px);
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border-top: 1px solid #d0d7de;
+  border-left: 1px solid #d0d7de;
+  transform: rotate(45deg);
+}
+
+.task-flow-picker-intro,
+.task-flow-picker-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #656d76;
+}
+
+.task-flow-picker-note {
+  font-size: 12px;
+}
+
+.task-flow-options {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.task-flow-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.task-flow-option + .task-flow-option {
+  border-top: 1px solid #d8dee4;
+}
+
+.task-flow-option.chosen {
+  background: #ddf4ff;
+}
+
+.task-flow-option input {
+  margin: 2px 0 0;
+  accent-color: #0969da;
+}
+
+.task-flow-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.task-flow-option-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2328;
+}
+
+.task-flow-option-sub {
+  font-size: 12px;
+  color: #656d76;
+}
+
+.task-flow-option-sub.warn {
+  color: #7d4e00;
+}
+
+.task-flow-picker .review-actions button.primary {
+  font-weight: 600;
+  color: #fff;
+  background: #1f883d;
+  border-color: #1a7f37;
+}
+
+.task-flow-picker .review-actions button.primary:hover:not(:disabled) {
+  background: #1a7f37;
+}
+
+.task-flow-picker .review-actions button.primary:disabled {
+  opacity: 0.5;
 }
 
 /* Beside the rail (HomeFrame) a task board still keeps to the window's
@@ -11466,6 +11746,31 @@ button.panel-help:focus-visible {
   font-size: 13px;
   white-space: nowrap;
   color: #656d76;
+}
+
+/* Flows, pressed while the strip shows, with how many columns several
+   flows take the state of, starting none. */
+.toolbar .task-board-flows[aria-pressed='true'] {
+  font-weight: 600;
+  color: #0550ae;
+  background: #ddf4ff;
+  border-color: #54aeff;
+}
+
+.task-board-flows-count {
+  min-width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #7d4e00;
+  background: #fff8c5;
+  border: 1px solid #d4a72c;
+  border-radius: 9px;
 }
 
 .toolbar .task-board-start,

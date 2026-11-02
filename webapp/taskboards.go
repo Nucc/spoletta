@@ -67,6 +67,11 @@ type taskBoard struct {
 	// id; a struct left out shows what they show unless told: its key, the
 	// first other field, its state and when it was last written.
 	Cards map[int64]taskCard `json:"cards"`
+	// On its own page, the flows its playing may start on the records of
+	// each struct its columns hold, by the struct's id, with the states they
+	// take and leave records in, so it draws which flow moves each column's
+	// records on and where to; see taskboard_play.go.
+	Flows map[int64][]boardFlow `json:"flows,omitempty"`
 }
 
 // A column of a task board: the struct whose records it holds, null once

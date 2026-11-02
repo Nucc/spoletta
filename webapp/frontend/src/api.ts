@@ -790,7 +790,15 @@ export type TaskBoard = {
   // id; one left out shows its key, the first other field, its state and
   // when it was last written.
   cards: Record<string, TaskCard | undefined>
+  // On its own page, the flows its playing may start on the records of each
+  // struct its columns hold, by the struct's id, which its Flows strip draws.
+  flows?: Record<string, BoardFlow[] | undefined>
 }
+
+// A flow a task board playing may start on a struct's records: the states
+// it takes them in ('' for any) and leaves them in; its name empty for one
+// whoever asks doesn't see.
+export type BoardFlow = { id: number; name: string; states: string[]; leaves: string[] }
 
 // Why a column shows no records: its struct was deleted for good, is in the
 // trash, isn't one whoever asks sees, or keeps no records.
@@ -943,9 +951,10 @@ export function listTaskStructs(): Promise<TaskStruct[]> {
 }
 
 // A flow a person may start on a struct's records: one whose queries read
-// them, the states they take them in ('' for any), and why its queries
-// wouldn't select each record asked about, by id, for those they wouldn't.
-export type RecordFlow = { id: number; name: string; states: string[]; off: Record<string, string> }
+// them, the states they take them in ('' for any) and leave them in, and
+// why its queries wouldn't select each record asked about, by id, for those
+// they wouldn't.
+export type RecordFlow = { id: number; name: string; states: string[]; leaves: string[]; off: Record<string, string> }
 
 // A run going on a record: one started on it, or the one that last moved it
 // on, still running.

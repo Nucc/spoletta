@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   addSharedRecord,
   deleteSharedRecords,
@@ -34,6 +34,7 @@ import {
   PlusIcon,
   SidebarIcon,
   TaskBoardIcon,
+  TransitionIcon,
 } from './icons'
 import { timeAgo } from './home'
 import { indexFacets, parse, quote, selection, type Facets } from './query'
@@ -45,6 +46,8 @@ import { useConfirm } from './Confirm'
 import { usePaletteSource } from './CommandPalette'
 import { HomeFrame } from './FlowList'
 import ErrorBanner from './ErrorBanner'
+import { FlowStrip, type FlowChoice } from './TaskFlows'
+import { byState, conflicts, strip } from './boardflows'
 
 // How often the board's records are asked for again, as flows and people
 // move them on; more often while it plays or runs go on its records, so a
@@ -55,6 +58,10 @@ const BUSY_REFRESH_MS = 2_000
 // Where whether task boards hide the side menu is remembered, for every
 // board in this browser.
 const RAIL_KEY = 'spoletta.taskboard.rail'
+
+// Where whether task boards show their Flows strip is remembered, for every
+// board in this browser.
+const FLOWS_KEY = 'spoletta.taskboard.flows'
 
 // What went wrong, in the server's words.
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
@@ -142,6 +149,24 @@ export default function TaskBoardPage({ id }: { id: number }) {
       // Only remembered while it can be.
     }
   }
+  // Whether the Flows strip shows over the columns.
+  const [flowsShown, setFlowsShown] = useState(() => {
+    try {
+      return localStorage.getItem(FLOWS_KEY) === 'shown'
+    } catch {
+      return false
+    }
+  })
+  const toggleFlows = () => {
+    const shown = !flowsShown
+    setFlowsShown(shown)
+    try {
+      if (shown) localStorage.setItem(FLOWS_KEY, 'shown')
+      else localStorage.removeItem(FLOWS_KEY)
+    } catch {
+      // Only remembered while it can be.
+    }
+  }
   // Only the answer to the latest ask shows, so a slow one doesn't undo a save.
   const asked = useRef(0)
 
@@ -185,6 +210,60 @@ export default function TaskBoardPage({ id }: { id: number }) {
   const pause = () => act(() => pauseTaskBoard(id))
   const retry = (records: number[]) => act(() => retryTaskBoardRecords(id, records))
 
+  // What the Flows strip draws of each column: its state, the flow moving
+  // its records on and where to; and how many columns several flows take
+  // the state of, starting none, which the Flows button counts.
+  const items = useMemo(
+    () =>
+      board
+        ? strip(
+            board.columns.map((c) => ({
+              struct: c.struct,
+              state: c.cards ? namedState(c.query, c.cards.states) : '',
+              flow: c.flow,
+              rests: c.maxRuns === 0,
+              flowProblem: c.flowProblem,
+              shown: c.cards !== undefined,
+            })),
+            board.flows ?? {},
+          )
+        : [],
+    [board],
+  )
+  const conflicting = conflicts(items)
+  // Where the columns are laid out, which the strip draws over: each one's
+  // centre and their width, measured as they show and whenever they move.
+  const row = useRef<HTMLDivElement>(null)
+  const [laidOut, setLaidOut] = useState<{ centers: number[]; width: number }>({ centers: [], width: 0 })
+  const columnCount = board?.columns.length ?? 0
+  useLayoutEffect(() => {
+    const el = row.current
+    if (!el || !flowsShown) return
+    const measure = () => {
+      const centers = (Array.from(el.children) as HTMLElement[]).map((c) => Math.round(c.offsetLeft + c.offsetWidth / 2))
+      const width = el.scrollWidth
+      setLaidOut((l) => (l.width === width && l.centers.join() === centers.join() ? l : { centers, width }))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [flowsShown, columnCount, railHidden])
+  // Saves the flow the strip's picker picked for the column, by its place,
+  // as its dialog saves it: a column resting names no flow, and one
+  // resting no more works on as many records as the board lets it.
+  const pickFlow = (at: number, choice: FlowChoice) =>
+    change(() =>
+      saveTaskBoard(id, {
+        name: board!.name,
+        columns: board!.columns.map((c, i) =>
+          i !== at
+            ? editOf(c)
+            : { ...editOf(c), flow: choice.rest ? null : choice.flow, maxRuns: choice.rest ? 0 : c.maxRuns === 0 ? null : c.maxRuns },
+        ),
+      }),
+    )
+
   usePaletteSource(() => ({
     items: board
       ? [
@@ -211,6 +290,16 @@ export default function TaskBoardPage({ id }: { id: number }) {
             hint: `Rename ${board.name}, and pick what its cards show`,
             words: 'task board settings rename name cards fields id url link',
             run: () => setSetting(true),
+          },
+          {
+            id: 'taskboard:flows',
+            title: flowsShown ? 'Hide the flows moving records on' : 'Show the flows moving records on',
+            group: 'Task board',
+            hint: flowsShown
+              ? `Over ${board.name}’s columns`
+              : `Which flow moves each column’s records on, and to which state, over ${board.name}’s columns`,
+            words: 'task board flows states transitions arrows moves lifecycle pick',
+            run: toggleFlows,
           },
           {
             id: 'taskboard:rail',
@@ -291,6 +380,19 @@ export default function TaskBoardPage({ id }: { id: number }) {
         >
           Columns from states
         </button>
+        <button
+          className="task-board-flows"
+          onClick={toggleFlows}
+          disabled={!board}
+          aria-pressed={flowsShown}
+          title={
+            (flowsShown ? 'Hide the flows moving each state’s records on' : 'Show which flow moves each column’s records on, and to which state') +
+            (conflicting > 0 ? `; several flows take the state of ${conflicting === 1 ? 'a column' : `${conflicting} columns`}, starting none` : '')
+          }
+        >
+          <TransitionIcon /> Flows
+          {conflicting > 0 && <span className="task-board-flows-count">{conflicting}</span>}
+        </button>
         <button onClick={load} title="Fetch the latest records">
           Refresh
         </button>
@@ -327,17 +429,30 @@ export default function TaskBoardPage({ id }: { id: number }) {
           <>
             <BoardWork columns={board.columns} />
             <main className="task-board">
-              {board.columns.map((c, i) => (
-                <Column
-                  key={i}
-                  column={c}
-                  card={c.cards ? cardOf(board, c, c.cards) : null}
-                  onEdit={() => setEditing(i)}
-                  onOpen={(record) => setOpened({ column: i, record })}
-                  onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
-                  onRetry={retry}
+              {flowsShown && laidOut.centers.length === board.columns.length && (
+                <FlowStrip
+                  items={items}
+                  columns={board.columns}
+                  flows={board.flows ?? {}}
+                  centers={laidOut.centers}
+                  width={laidOut.width}
+                  runner={board.playing && board.playedBy ? board.playedBy : ''}
+                  onPick={pickFlow}
                 />
-              ))}
+              )}
+              <div className="task-columns" ref={row}>
+                {board.columns.map((c, i) => (
+                  <Column
+                    key={i}
+                    column={c}
+                    card={c.cards ? cardOf(board, c, c.cards) : null}
+                    onEdit={() => setEditing(i)}
+                    onOpen={(record) => setOpened({ column: i, record })}
+                    onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
+                    onRetry={retry}
+                  />
+                ))}
+              </div>
             </main>
           </>
         )}
@@ -463,14 +578,6 @@ function namedState(query: string, states: string[]): string {
   const named = selection(STATE, parse(query).ast, 'state')
   if (named.length !== 1) return ''
   return states.find((s) => s.toLowerCase() === named[0].toLowerCase()) ?? ''
-}
-
-// The flows taking records in the state, by a query naming it, else, as
-// none does, by one of any state, whether they take it so, and the others.
-function byState(flows: RecordFlow[], state: string): { taking: RecordFlow[]; any: boolean; others: RecordFlow[] } {
-  const naming = flows.filter((f) => state !== '' && f.states.includes(state))
-  const taking = naming.length > 0 ? naming : flows.filter((f) => f.states.includes(''))
-  return { taking, any: naming.length === 0 && taking.length > 0, others: flows.filter((f) => !taking.includes(f)) }
 }
 
 // The value of a flow's select for a column whose records rest.

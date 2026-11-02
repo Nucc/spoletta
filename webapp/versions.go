@@ -85,6 +85,9 @@ type snapshotObject struct {
 	General  *int64 `json:"general,omitempty"`
 	// The module's object it is a copy of; left out for others.
 	Source *int64 `json:"source,omitempty"`
+	// The record each run works on; left out for none, as in versions from
+	// before objects picked records. See picks.go.
+	Pick *objectPick `json:"pick,omitempty"`
 }
 
 type snapshotLink struct {
@@ -186,11 +189,18 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, store_id, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, store_id, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id, pick FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Store, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source)
+		var pick []byte
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Store, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &pick)
+		if err != nil {
+			return err
+		}
+		if o.Pick, err = pickOf(pick); err != nil {
+			return err
+		}
 		s.Objects = append(s.Objects, o)
-		return err
+		return nil
 	}, flow)
 	if err != nil {
 		return s, err
@@ -415,12 +425,12 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 	}
 	// Generals go in once every object is there, since one may come later.
 	for _, o := range ownersFirst(s.Objects) {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) AS saved
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, pick)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
 				many = saved.many, min_items = saved.min_items, max_items = saved.max_items, human = saved.human, at_end = saved.at_end, parent_id = saved.parent_id,
-				owner_id = saved.owner_id, relation = saved.relation, general_id = NULL`,
-			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation)
+				owner_id = saved.owner_id, relation = saved.relation, general_id = NULL, pick = saved.pick`,
+			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation, storedPick(o.Pick))
 		if err != nil {
 			return err
 		}

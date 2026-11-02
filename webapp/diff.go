@@ -437,6 +437,7 @@ func (d *boardDiff) diffObjects(a, b snapshot, m diffMatch) {
 		fs.add("items", quantityText(w), quantityText(o))
 		fs.add("person", yesNo(w.Human), yesNo(o.Human))
 		fs.add("outcome", yesNo(w.End), yesNo(o.End))
+		fs.add("each run works on", pickText(w.Pick), pickText(o.Pick))
 		if w.X != o.X || w.Y != o.Y || !sameFloat(w.Width, o.Width) {
 			d.Layout = true
 		}
@@ -449,6 +450,25 @@ func (d *boardDiff) diffObjects(a, b snapshot, m diffMatch) {
 			d.Objects = append(d.Objects, diffItem{Change: diffRemoved, ID: o.ID, Name: o.Name, Board: o.Parent, Object: o.Owner})
 		}
 	}
+}
+
+// Which record a pick takes, in a few words, such as "the earliest in
+// open"; empty for none.
+func pickText(p *objectPick) string {
+	if p == nil {
+		return ""
+	}
+	s := "the latest"
+	if p.Oldest {
+		s = "the earliest"
+	}
+	if p.State != "" {
+		s += " in " + p.State
+	}
+	if p.Where != "" {
+		s += " where " + p.Where
+	}
+	return s
 }
 
 // The name an object's id has on s, and the board it is on.

@@ -1,7 +1,7 @@
 import { useContext, useEffect, useState } from 'react'
 import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
 import { StructFlowsContext, useBoardActions } from './actions'
-import type { ObjectAttribute, ObjectState, Relation } from './api'
+import type { ObjectAttribute, ObjectPick, ObjectState, Relation } from './api'
 import { AggregationIcon, DatabaseIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
 import { AppendButton, NameInput, Subtitle } from './ProcessNode'
 import { quantityText, type Quantity } from './quantity'
@@ -30,6 +30,8 @@ export type ObjectNodeData = {
   persistent: boolean
   // Every flow using it reads and writes one store of records; see FlowObject.
   shared: boolean
+  // The record each run works on; see FlowObject.
+  pick?: ObjectPick | null
   // A list of items on its own board; inside a flow process taking it, the
   // item. Its links write how many items it holds at its end.
   many: boolean
@@ -56,6 +58,15 @@ export type ObjectNodeData = {
 }
 
 export type ObjectNodeType = Node<ObjectNodeData, 'object'>
+
+// Which record a pick takes, as the node and its panel say it, such as "the
+// oldest in open".
+export function pickText(pick: ObjectPick): string {
+  let s = pick.oldest ? 'the oldest' : 'the latest'
+  if (pick.state) s += ` in ${pick.state}`
+  if (pick.where) s += ` where ${pick.where}`
+  return s
+}
 
 // Handle ids of a state: links into it generate the object in that state,
 // links out of it take the object once it enters that state.
@@ -122,7 +133,7 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
                   data.human
                     ? 'Person'
                     : data.copied && !data.owned
-                      ? `${data.many && !data.boundary ? 'List · ' : ''}From a ${structs.has(data.sourceFlow ?? 0) ? 'struct' : 'procedure'}`
+                      ? `${data.many && !data.boundary ? 'List · ' : ''}From a ${structs.has(data.sourceFlow ?? 0) ? 'struct' : 'procedure'}${data.pick ? ` · each run: ${pickText(data.pick)}` : ''}`
                       : data.general
                       ? `${data.many && !data.boundary ? 'List of ' : ''}${data.general}`
                       : !data.many

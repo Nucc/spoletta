@@ -100,6 +100,7 @@ func boardProblems(s snapshot, f problemFacts) []problem {
 	c.start()
 	c.processes()
 	c.objects()
+	c.picked()
 	c.unreached()
 	out := []problem{}
 	for _, level := range []string{problemError, problemWarning} {
@@ -161,6 +162,13 @@ func newProblemCheck(s snapshot, f problemFacts) *problemCheck {
 		states := c.linkStates[l.ID]
 		if generatesOutput(p.Kind, l.State != 0 || len(states) > 0, len(states) > 0, c.takes(p.ID, l.Object)) {
 			c.generated[l.Object] = true
+		}
+	}
+	// An object picking a record holds the one its run took from the
+	// start; see picks.go.
+	for _, o := range s.Objects {
+		if picksRecord(o) && !f.module {
+			c.generated[o.ID] = true
 		}
 	}
 	for _, cn := range s.Connections {
@@ -536,6 +544,56 @@ func (c *problemCheck) objects() {
 	}
 }
 
+// What is wrong with the objects picking a record each run works on (see
+// picks.go): one that can't pick, or a state it has no record in, takes
+// none, so what takes it never runs; a process generating it without
+// taking it would write over the record blind; a query of it reads the
+// store, not the run's record.
+func (c *problemCheck) picked() {
+	for _, o := range c.s.Objects {
+		if o.Pick == nil {
+			continue
+		}
+		switch {
+		case o.Store == nil:
+			c.onObject(problemError, "pick", o, "%s picks a record for each run, but isn't shared, so runs take none: share its struct again, or stop it picking.", quote(o.Name))
+			continue
+		case c.f.module:
+			c.onObject(problemError, "pick", o, "%s picks a record for each run, but a procedure's runs are given what they take: stop it picking.", quote(o.Name))
+			continue
+		case !picksRecord(o):
+			c.onObject(problemError, "pick", o, "%s picks a record for each run, but only an object on the top board that isn't a list picks one: stop it picking.", quote(o.Name))
+			continue
+		case o.Pick.State != "" && !slices.ContainsFunc(c.s.States, func(st objectState) bool { return st.Object == o.ID && st.Name == o.Pick.State }):
+			c.onObject(problemError, "pick", o, "%s picks a record in %s, but has no such state, so no run has one to work on.", quote(o.Name), quote(o.Pick.State))
+		}
+		for _, p := range c.s.Processes {
+			var takes, queries, yields bool
+			for _, l := range c.links[p.ID] {
+				if l.Object != o.ID {
+					continue
+				}
+				switch {
+				case l.Direction == directionOutput:
+					yields = true
+				case l.Query != nil:
+					queries = true
+				default:
+					takes = true
+				}
+			}
+			if queries {
+				c.onProcess(problemWarning, "pick-query", p, "%s queries %s, which reads the stored records rather than the one each run works on: link %s to it plainly to take the run's record, or query another copy of the struct to look records up.",
+					quote(p.Name), quote(o.Name), quote(o.Name))
+			}
+			if yields && !takes && !queries {
+				c.onProcess(problemError, "pick-change", p, "%s generates %s without taking it, but each run works on one %s record: link %s to it so it sees what it changes, or generate another copy of the struct to add new records.",
+					quote(p.Name), quote(o.Name), quote(o.Name), quote(o.Name))
+			}
+		}
+	}
+}
+
 // A process no run gets to: not the start, nor a process connected to it
 // or generating what it takes, nor what an API run or a flow running the
 // procedure gives. Without a start, the start's error says it all.
@@ -600,6 +658,16 @@ func (c *problemCheck) reach(inputs bool) (reached, given map[int64]bool) {
 	var seeds []int64
 	if c.started() {
 		seeds = append(seeds, *c.s.Start.Target)
+		// What takes a record the run took starts with it.
+		for _, o := range c.s.Objects {
+			if picksRecord(o) && !c.f.module {
+				for _, t := range c.takers[o.ID] {
+					if c.procs[t].Parent == nil {
+						seeds = append(seeds, t)
+					}
+				}
+			}
+		}
 	}
 	reached = walk(seeds)
 	given = map[int64]bool{}

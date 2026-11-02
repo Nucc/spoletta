@@ -38,9 +38,10 @@ package main
 // in the state it was seen in, and selected by the flow's query. Records in
 // no column are none of the board's.
 //
-// No run claims a record (see shared.go), so a run that failed, or ended
-// without moving its record on, would leave it in its column to be started
-// again for ever, a ticket filed and a model paid each time. So a record
+// A run holds a record only while it goes (see shared.go), so a run that
+// failed, or ended without moving its record on, would leave it in its
+// column to be started again for ever, a ticket filed and a model paid each
+// time. So a record
 // whose latest run from the board ended with it in the state that run
 // started it in is stuck: the board skips it, and its card says why, until
 // a person tries it again or corrects it by hand. A record going round the
@@ -327,14 +328,16 @@ type goingRun struct {
 }
 
 // The runs going on the store's records, by record id: one started on a
-// record, or the one that last moved it on, still running, as
-// recordsGoing has them.
+// record, one that took it (see picks.go), or the one that last moved it
+// on, still running, as recordsGoing has them.
 func storeGoing(ctx context.Context, db *sql.DB, store int64) (map[int64][]goingRun, error) {
 	going := map[int64][]goingRun{}
 	waiting := "EXISTS (SELECT 1 FROM run_steps ws WHERE ws.run_id = r.id AND ws.status = 'waiting')"
 	err := scanAll(ctx, db, `SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN shared_records sr ON sr.id = r.record_id
 			WHERE r.status = ? AND sr.object_id = ?
 		UNION SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN shared_records sr ON sr.run_id = r.id
+			WHERE r.status = ? AND sr.object_id = ?
+		UNION SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN taken_records t ON t.run_id = r.id JOIN shared_records sr ON sr.id = t.record_id
 			WHERE r.status = ? AND sr.object_id = ?
 		ORDER BY 1, 2`, func(rows *sql.Rows) error {
 		var record int64
@@ -344,7 +347,7 @@ func storeGoing(ctx context.Context, db *sql.DB, store int64) (map[int64][]going
 		}
 		going[record] = append(going[record], g)
 		return nil
-	}, runRunning, store, runRunning, store)
+	}, runRunning, store, runRunning, store, runRunning, store)
 	return going, err
 }
 
@@ -644,7 +647,9 @@ func playTurn(ctx context.Context, db *sql.DB, eng *engine, signIn bool, board i
 // going on. The board's row is locked while it counts its runs going and
 // records the new one, so its starts are one at a time.
 func startBoardRun(ctx context.Context, db *sql.DB, eng *engine, board int64, f *recordFlow, store, record int64, state string, u *user) (bool, bool, error) {
-	tx, err := db.BeginTx(ctx, nil)
+	// Read committed, and the record's row locked, so a run that took the
+	// record meanwhile shows; see picks.go.
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return false, false, err
 	}
@@ -669,7 +674,7 @@ func startBoardRun(ctx context.Context, db *sql.DB, eng *engine, board int64, f 
 		return false, false, nil
 	}
 	var content, now string
-	err = tx.QueryRowContext(ctx, "SELECT content, state FROM shared_records WHERE id = ? AND object_id = ?", record, store).Scan(&content, &now)
+	err = tx.QueryRowContext(ctx, "SELECT content, state FROM shared_records WHERE id = ? AND object_id = ? FOR UPDATE", record, store).Scan(&content, &now)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, true, nil
 	}
@@ -681,8 +686,9 @@ func startBoardRun(ctx context.Context, db *sql.DB, eng *engine, board int64, f 
 	}
 	var going bool
 	err = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE record_id = ? AND status = ?)
-		OR EXISTS (SELECT 1 FROM shared_records sr JOIN runs r ON r.id = sr.run_id WHERE sr.id = ? AND r.status = ?)`,
-		record, runRunning, record, runRunning).Scan(&going)
+		OR EXISTS (SELECT 1 FROM shared_records sr JOIN runs r ON r.id = sr.run_id WHERE sr.id = ? AND r.status = ?)
+		OR EXISTS (SELECT 1 FROM taken_records t JOIN runs r ON r.id = t.run_id WHERE t.record_id = ? AND r.status = ?)`,
+		record, runRunning, record, runRunning, record, runRunning).Scan(&going)
 	if err != nil || going {
 		return false, err == nil, err
 	}
@@ -704,10 +710,18 @@ func startBoardRun(ctx context.Context, db *sql.DB, eng *engine, board int64, f 
 	if _, err := tx.ExecContext(ctx, "INSERT INTO task_board_runs (run_id, board_id, record_id, state) VALUES (?, ?, ?, ?)", nr.id, board, record, state); err != nil {
 		return false, false, err
 	}
+	nr.record = record
+	// A record of another struct the flow picks may have none free; the
+	// board tries again next turn.
+	var none *nothingToTake
+	if err := takeRecords(ctx, tx, f.ID, &nr); errors.As(err, &none) {
+		return false, true, nil
+	} else if err != nil {
+		return false, false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, false, err
 	}
-	nr.record = record
 	eng.start(nr, f.ID, nil)
 	return true, true, nil
 }

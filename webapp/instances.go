@@ -238,7 +238,10 @@ func recordState(ctx context.Context, db *sql.DB, b *runBoard, step, object int6
 	if _, err := db.ExecContext(ctx, "UPDATE object_instances SET state = ? WHERE step_id = ? AND object_id = ?", state, step, object); err != nil {
 		return err
 	}
-	return recordSharedState(ctx, db, step, b.store(object), state)
+	if err := recordSharedState(ctx, db, step, b.store(object), state); err != nil {
+		return err
+	}
+	return noteTaken(ctx, db, step, object)
 }
 
 // Starts the walk of a run's top board with the persistent objects carried

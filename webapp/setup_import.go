@@ -1470,8 +1470,14 @@ func (b *builder) resolveObject(bo *bobj) error {
 	if o.Persistent && b.shared(bo) {
 		return problemf("%s: it is a copy of a shared object, which every flow using it stores already; it isn't persistent too", at)
 	}
+	if msg, err := b.checkPick(bo, o); err != nil || msg != "" {
+		if err != nil {
+			return err
+		}
+		return problemf("%s: %s", at, msg)
+	}
 	so := snapshotObject{ID: bo.id, Name: o.Name, X: bo.x, Y: bo.y, Width: o.Width, Persistent: o.Persistent, Many: o.Many,
-		Min: o.Min, Max: o.Max, Human: o.Human, End: o.End, Parent: bo.parent, Owner: bo.owner, Relation: o.Relation, Source: bo.source}
+		Min: o.Min, Max: o.Max, Human: o.Human, End: o.End, Parent: bo.parent, Owner: bo.owner, Relation: o.Relation, Source: bo.source, Pick: o.Pick}
 	if o.Shared {
 		so.Store = &bo.id
 	}
@@ -1596,6 +1602,32 @@ func (b *builder) shared(bo *bobj) bool {
 	}
 	store, err := storeOf(b.ctx, b.tx, *bo.source)
 	return err == nil && store != 0
+}
+
+// Says what is wrong with the object's pick, as checkPick does for one; its
+// state isn't checked, as a copy's states come from what it copies.
+func (b *builder) checkPick(bo *bobj, o *setupObject) (string, error) {
+	if o.Pick == nil {
+		return "", nil
+	}
+	if msg := o.Pick.problem(); msg != "" {
+		return msg, nil
+	}
+	var module bool
+	if err := b.tx.QueryRowContext(b.ctx, "SELECT module FROM flows WHERE id = ?", b.flow).Scan(&module); err != nil {
+		return "", err
+	}
+	switch {
+	case !b.shared(bo):
+		return "only a shared struct's object picks a record", nil
+	case b.isStruct || module:
+		return "only a job flow's object picks a record; a procedure's runs are given what they take", nil
+	case bo.parent != nil || bo.owner != nil:
+		return "only an object on the flow's top board picks a record", nil
+	case o.Many:
+		return "a list picks no record; each run works on one", nil
+	}
+	return "", nil
 }
 
 // Says what is wrong with the link as to queries, as checkQuery does for

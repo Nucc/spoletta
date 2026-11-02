@@ -460,7 +460,7 @@ func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src
 			return id, false, refused, err
 		}
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return 0, false, nil, err
 	}
@@ -502,6 +502,12 @@ func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src
 		if err != nil {
 			return 0, false, nil, err
 		}
+	}
+	var none *nothingToTake
+	if err := takeRecords(ctx, tx, flow, &nr); errors.As(err, &none) {
+		return 0, false, &apiRefusal{http.StatusConflict, "nothing to run on: " + none.Error()}, nil
+	} else if err != nil {
+		return 0, false, nil, err
 	}
 	dup, err := recordGiven(ctx, tx, b, nr.id, src.given, in, given)
 	if err != nil {

@@ -542,9 +542,14 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 		}
 	}
 
-	r, err := p.tx.ExecContext(p.ctx, `INSERT INTO objects (flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, source_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.req.Flow, o.Name, x, y, o.Width, o.Persistent && owner == nil, o.Many, o.Min, o.Max, o.Human && owner == nil, end, parent, owner, relation, source)
+	// A copy of a struct landing on a top board picks as it did; see picks.go.
+	var pick *objectPick
+	if source != nil && parent == nil && owner == nil {
+		pick = o.Pick
+	}
+	r, err := p.tx.ExecContext(p.ctx, `INSERT INTO objects (flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, source_id, pick)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.req.Flow, o.Name, x, y, o.Width, o.Persistent && owner == nil, o.Many, o.Min, o.Max, o.Human && owner == nil, end, parent, owner, relation, source, storedPick(pick))
 	if err != nil {
 		return 0, err
 	}

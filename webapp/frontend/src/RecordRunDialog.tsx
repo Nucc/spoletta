@@ -5,8 +5,8 @@ import { listRecordFlows, startRecordRuns, type FlowRun, type RecordFlow, type R
 // listed are those whose queries read the struct's records, and each run's
 // queries read its record alone (record_runs.go). Before a person starts
 // them, it says which records a flow's query wouldn't select, and which
-// have a run going on them already, since no run claims a record; neither
-// stops them.
+// have a run going on them already, even one holding it; neither stops
+// them, as the person picked them.
 export function RecordRunDialog({
   struct,
   name,

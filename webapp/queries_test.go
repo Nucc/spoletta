@@ -23,7 +23,7 @@ func TestLinkQueryProblem(t *testing.T) {
 func TestQueryPhrase(t *testing.T) {
 	for q, want := range map[linkQuery]string{
 		{}: "the latest 20 stored records of Review",
-		{Where: "score >= 4", State: "approved", Limit: 1, Oldest: true}: "the earliest 1 stored records of Review in approved where score >= 4",
+		{Where: "score >= 4", State: "approved", Limit: 1, Oldest: true}: "the earliest stored record of Review in approved where score >= 4",
 	} {
 		if got := queryPhrase("Review", &q); got != want {
 			t.Errorf("queryPhrase(%+v) = %q, want %q", q, got, want)

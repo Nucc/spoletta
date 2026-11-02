@@ -299,9 +299,13 @@ func finishStep(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, stat
 	for attempt := 1; ; attempt++ {
 		dup, err := finishStepOnce(ctx, db, b, stepID, status, output, errMsg, contents)
 		if !mysqlErrorIs(err, mysqlErrDeadlock) || attempt == 3 {
-			if err != nil {
+			var c *recordConflict
+			switch {
+			case errors.As(err, &c):
+				logStepFinished(db, stepID, false)
+			case err != nil:
 				stepLog(db, stepID, logError, "step %d couldn't be recorded as ended: %v", stepID, err)
-			} else {
+			default:
 				logStepFinished(db, stepID, false)
 			}
 			return dup, err
@@ -371,7 +375,22 @@ func finishStepOnce(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, 
 	}
 	if dup == nil {
 		if err := storeShared(ctx, tx, b, runID, stepID); err != nil {
-			return nil, err
+			// A record its run took that changed meanwhile fails the step,
+			// which keeps what it generated, for the history; see picks.go.
+			var c *recordConflict
+			if !errors.As(err, &c) {
+				return nil, err
+			}
+			if _, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT store"); err != nil {
+				return nil, err
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE run_steps SET status = ?, error = ? WHERE id = ?", stepError, c.msg, stepID); err != nil {
+				return nil, err
+			}
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
+			return nil, c
 		}
 	}
 	if dup != nil {
@@ -403,7 +422,8 @@ func insertRunObject(ctx context.Context, db execer, run, step, object int64, na
 	return err
 }
 
-// Records the state a human step set its object to; the object keeps its content.
+// Records the state a human step set its object to; the object keeps its
+// content. A record the run took for it moves too; see picks.go.
 func recordDecision(ctx context.Context, db *sql.DB, b *runBoard, stepID, stateID int64, content string) error {
 	st, ok := b.states[stateID]
 	if !ok {
@@ -413,7 +433,10 @@ func recordDecision(ctx context.Context, db *sql.DB, b *runBoard, stepID, stateI
 	if err := db.QueryRowContext(ctx, "SELECT run_id FROM run_steps WHERE id = ?", stepID).Scan(&run); err != nil {
 		return err
 	}
-	return insertRunObject(ctx, db, run, stepID, st.Object, b.objects[st.Object].Name, st.Name, content)
+	if err := insertRunObject(ctx, db, run, stepID, st.Object, b.objects[st.Object].Name, st.Name, content); err != nil {
+		return err
+	}
+	return moveTaken(ctx, db, run, stepID, st.Object, st.Name)
 }
 
 func getRun(ctx context.Context, db *sql.DB, id int64) (run, error) {
@@ -484,15 +507,20 @@ func endedRun(ctx context.Context, db *sql.DB, id int64) (run, error) {
 // Starts a run of the whole flow, for schedule if one started it, or the
 // user who did, on its board as it is, or with published on the version it
 // published if any; see newRun. The run goes on in the server; this returns
-// its id once it started, or sql.ErrNoRows without the flow.
+// its id once it started, or sql.ErrNoRows without the flow, or a
+// *nothingToTake if it would work on a record and none is free; see
+// picks.go.
 func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule, startedBy *int64, published bool) (int64, error) {
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
 	nr, err := newRun(ctx, tx, flow, schedule, startedBy, published)
 	if err != nil {
+		return 0, err
+	}
+	if err := takeRecords(ctx, tx, flow, &nr); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -512,6 +540,9 @@ type pendingRun struct {
 	record int64
 	// Whether it runs the version the flow published; see publish.go.
 	published bool
+	// The records it took for the objects picking one, by object; see
+	// picks.go.
+	taken map[int64]value
 }
 
 // Records a run of the flow on its board as it is, or with published on the
@@ -629,6 +660,11 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
+			return
+		}
+		var none *nothingToTake
+		if errors.As(err, &none) {
+			http.Error(w, "nothing to run on: "+none.Error(), http.StatusConflict)
 			return
 		}
 		if err != nil {

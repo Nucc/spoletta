@@ -185,5 +185,5 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 	}
 	// The run may have been stopped, but the step still has to end.
 	res.Duplicate, err = finishStep(context.Background(), db, b, stepID, status, res.Output, res.Error, res.Objects)
-	return res, err
+	return conflicted(res, err)
 }

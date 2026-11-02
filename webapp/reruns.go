@@ -533,6 +533,13 @@ func registerRerunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		if src.Record != nil {
 			nr.record = *src.Record
 		}
+		// It works on the records the run took, as they are now; see picks.go.
+		if _, err := tx.ExecContext(r.Context(), `INSERT INTO taken_records (run_id, object_ref, record_id, state)
+			SELECT ?, t.object_ref, t.record_id, sr.state FROM taken_records t JOIN shared_records sr ON sr.id = t.record_id WHERE t.run_id = ?`,
+			nr.id, src.ID); err != nil {
+			serverError(w, err)
+			return
+		}
 		dup, err := recordCopied(r.Context(), tx, src.ID, stepID, nr.id, p)
 		if err != nil {
 			serverError(w, err)

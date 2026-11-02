@@ -163,6 +163,9 @@ func (o *oplWriter) objectSentences(ob snapshotObject, indent string) {
 	if ob.Store != nil {
 		o.line(indent, "%s is shared, so every flow using it reads and writes the same records.", name)
 	}
+	if ob.Pick != nil {
+		o.line(indent, "%s", pickPhrase(name, ob.Pick))
+	}
 	var states []int64
 	var rules []string
 	for _, st := range o.s.States {
@@ -417,6 +420,9 @@ func queryPhrase(object string, q *linkQuery) string {
 		which = "earliest"
 	}
 	s := fmt.Sprintf("the %s %d stored records of %s", which, q.limit(), object)
+	if q.limit() == 1 {
+		s = fmt.Sprintf("the %s stored record of %s", which, object)
+	}
 	if q.State != "" {
 		s += " in " + q.State
 	}

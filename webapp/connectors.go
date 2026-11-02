@@ -862,7 +862,7 @@ func runConnectorStep(ctx context.Context, db *sql.DB, b *runBoard, runID, id in
 	}
 	// The run may have been stopped, but the step still has to end.
 	res.Duplicate, err = finishStep(context.Background(), db, b, stepID, status, res.Output, res.Error, res.Objects)
-	return res, err
+	return conflicted(res, err)
 }
 
 // An entry of the directory: a built-in connector, or an MCP server picked

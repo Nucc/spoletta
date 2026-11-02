@@ -138,6 +138,9 @@ export type FlowObject = {
   // A struct's object whose copies, in whatever flow, read and write one
   // store of records, and those copies; see shared.go.
   shared: boolean
+  // For a shared struct's copy on a job flow's top board: the record each
+  // run works on; see picks.go.
+  pick: ObjectPick | null
   // A list of items: an agent generating it replies with a list, and a flow
   // process taking it runs once per item. Inside that flow process, it is
   // the item.
@@ -1181,6 +1184,7 @@ export function createObject(
     | 'width'
     | 'persistent'
     | 'shared'
+    | 'pick'
     | 'source'
     | 'sourceFlow'
     | 'many'
@@ -1258,6 +1262,21 @@ export function setLinkCondition(id: number, condition: boolean): Promise<void> 
 // Makes an input link a query, or with null a plain link again.
 export function setLinkQuery(id: number, query: LinkQuery | null): Promise<void> {
   return request(`/api/links/${id}/query`, { method: 'PUT', body: JSON.stringify({ query }) })
+}
+
+// Which record each run of the flow works on: the latest written (or the
+// oldest) in the state (any when empty) whose fields hold the rule. The run
+// takes it as it starts and holds it while it goes; see picks.go.
+export type ObjectPick = {
+  state?: string
+  where?: string
+  oldest?: boolean
+}
+
+// Has each run of the flow work on the record the pick selects, or with null
+// none.
+export function setObjectPick(id: number, pick: ObjectPick | null): Promise<void> {
+  return request(`/api/objects/${id}/pick`, { method: 'PUT', body: JSON.stringify({ pick }) })
 }
 
 export function setLinkRole(id: number, role: LinkRole): Promise<void> {
@@ -2301,8 +2320,8 @@ type Snapshot = {
   // source is left out for an object that isn't a copy, and sourceFlow is
   // never kept. Rather than whether it is shared, it keeps the store of
   // records it reads and writes, left out when it has none.
-  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'sourceFlow' | 'shared'> &
-    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source'>> & { store?: number })[]
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'sourceFlow' | 'shared' | 'pick'> &
+    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'pick'>> & { store?: number })[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -2341,6 +2360,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       ...o,
       flow,
       shared: store != null,
+      pick: o.pick ?? null,
       parent: o.parent ?? null,
       many: o.many ?? false,
       min: o.min ?? 0,

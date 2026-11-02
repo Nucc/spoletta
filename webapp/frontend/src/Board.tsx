@@ -176,6 +176,7 @@ import {
   setLinkRoute,
   setLinkCondition,
   setLinkQuery,
+  setObjectPick,
   setStateRule,
   setLinkRole,
   setLinkStates,
@@ -210,6 +211,7 @@ import {
   type FlowRunDetail,
   type Link,
   type LinkQuery,
+  type ObjectPick,
   type LinkRole,
   type Models,
   type Note,
@@ -737,6 +739,7 @@ export default function Board({
         general: objects.find((g) => g.id === o.general)?.name,
         persistent: o.persistent,
         shared: o.shared,
+        pick: o.pick,
         many: o.many,
         min: o.min,
         max: o.max,
@@ -2289,6 +2292,19 @@ export default function Board({
     try {
       await updateObject(objectIdOf(objectId), { persistent })
       updateObjectData(objectId, { persistent })
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
+  // Has each run work on the record the pick selects, or none; see picks.go.
+  const setPick = async (objectId: string, pick: ObjectPick | null) => {
+    if (readOnly) return false
+    try {
+      await setObjectPick(objectIdOf(objectId), pick)
+      updateObjectData(objectId, { pick })
       return true
     } catch (err) {
       report(err)
@@ -4166,6 +4182,8 @@ export default function Board({
             flow={flowId}
             shared={objectPanelNode.data.shared}
             onSharedChange={(shared) => setShared(objectPanelNode.id, shared)}
+            pick={objectPanelNode.data.pick ?? null}
+            onPickChange={(pick) => setPick(objectPanelNode.id, pick)}
             quantity={objectPanelNode.data}
             onQuantityChange={(quantity) => setQuantity(objectPanelNode.id, quantity)}
             human={objectPanelNode.data.human}

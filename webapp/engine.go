@@ -188,6 +188,12 @@ func (e *engine) start(nr pendingRun, flow int64, given map[int64]value) {
 		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
 		fr.record = nr.record
 		fr.published = nr.published
+		// What it took of the records goes in as what it was given does.
+		if len(nr.taken) > 0 {
+			with := maps.Clone(nr.taken)
+			maps.Copy(with, given)
+			given = with
+		}
 		w := newWalk(ctx, e, id, lr, fr, nil, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
 		if err := w.carry(); err != nil {
 			runLog(e.db, id, 0, logError, "the objects it carries couldn't be carried in: %v", err)
@@ -588,6 +594,10 @@ type walk struct {
 	// from outside.
 	target *int64
 	given  []int64
+	// The objects of the top board picking a record, and those holding the
+	// record the run took, which start it too; see picks.go.
+	picked map[int64]bool
+	taken  []int64
 	// Ends waiting reviews when the run is terminated.
 	terminate context.CancelFunc
 	reviews   context.Context
@@ -685,6 +695,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{}, rules: map[int64][]ruledState{},
 		generated: map[int64]bool{}, values: map[int64]value{}, skipped: map[int64]bool{}, unstored: map[int64]bool{}, ran: map[int64]int{},
+		picked: map[int64]bool{},
 		allowed: map[int64]int{}, trusted: map[int64]bool{},
 	}
 	w.reviews, w.terminate = context.WithCancel(ctx)
@@ -771,6 +782,15 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 			w.successors[c.Source] = append(w.successors[c.Source], c.Target)
 		}
 	}
+	// An object picking a record holds the one its run took from the start.
+	if board == nil {
+		for _, o := range s.Objects {
+			if picksRecord(o) {
+				w.picked[o.ID] = true
+				w.generated[o.ID] = true
+			}
+		}
+	}
 	// What generates an object, as the board's problems count it too.
 	for p, ends := range w.outputs {
 		for _, end := range ends {
@@ -785,13 +805,20 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 			w.values[o.ID] = value{}
 		}
 	}
-	// Objects from outside are passed on like generated ones.
+	// Objects from outside are passed on like generated ones, as are the
+	// records the run took for the objects picking one, though only a
+	// process linked to one takes it; see picks.go.
 	for o, v := range given {
 		w.values[o] = v
 		w.generated[o] = true
-		w.given = append(w.given, o)
+		if board == nil && w.picked[o] {
+			w.taken = append(w.taken, o)
+		} else {
+			w.given = append(w.given, o)
+		}
 	}
 	slices.Sort(w.given)
+	slices.Sort(w.taken)
 
 	if board == nil {
 		w.target = s.Start.Target
@@ -815,7 +842,7 @@ func (w *walk) enter() {
 		next = append(next, func() { w.runProcess(*w.target, p, 0) })
 	}
 	w.mu.Lock()
-	for _, o := range w.given {
+	for _, o := range append(slices.Clone(w.given), w.taken...) {
 		if st := w.values[o].state; st != 0 {
 			for _, t := range w.takersIn(o, st) {
 				next = append(next, func() { w.runProcess(t, p, o) })

@@ -32,8 +32,10 @@ import (
 //
 // Records belong to the struct, not to the runs writing them: they are
 // written once the step writing them is done and stay whatever its run
-// does later, and no run claims them, so two runs querying the same state
-// at once may both work on one record.
+// does later. A query claims none, so two runs querying the same state at
+// once may both work on one record; a run holds only the record an object
+// picking one took for it (see picks.go), and its steps changing the object
+// write that record.
 //
 // People correct records by hand as well, adding, changing and deleting
 // them (records.go).
@@ -75,7 +77,7 @@ func checkShared(ctx context.Context, db *sql.DB, object int64) (string, error) 
 // written.
 func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int64) error {
 	type generated struct {
-		store          int64
+		object, store  int64
 		affects        bool
 		content, state string
 	}
@@ -86,13 +88,12 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 	}
 	err := scanAll(ctx, tx, "SELECT object_ref, content, state FROM run_objects WHERE step_id = ? ORDER BY object_ref, id",
 		func(rows *sql.Rows) error {
-			var object int64
 			var g generated
-			if err := rows.Scan(&object, &g.content, &g.state); err != nil {
+			if err := rows.Scan(&g.object, &g.content, &g.state); err != nil {
 				return err
 			}
-			if g.store = b.store(object); g.store != 0 {
-				g.affects = process.Valid && b.takes(process.Int64, object)
+			if g.store = b.store(g.object); g.store != 0 {
+				g.affects = process.Valid && b.takes(process.Int64, g.object)
 				objects = append(objects, g)
 			}
 			return nil
@@ -117,6 +118,20 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 		attrs, err := uniqueAttributes(ctx, tx, g.store)
 		if err != nil {
 			return err
+		}
+		// The record the run took for the object is the one it changes,
+		// whatever its unique attributes say; see picks.go.
+		if g.affects {
+			t, ok, err := takenBy(ctx, tx, runID, g.object)
+			if err != nil {
+				return err
+			}
+			if ok {
+				if err := writeTaken(ctx, tx, b, t, g.object, runID, stepID, attrs, stripFence(g.content), g.state); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		items := []string{stripFence(g.content)}
 		// A list on its own board holds its items; inside a flow process

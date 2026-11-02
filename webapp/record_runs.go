@@ -26,8 +26,9 @@ import (
 // record again, as it is then; once the record is deleted, its queries fail.
 //
 // Nothing stops a person starting a run on a record its flow's query
-// wouldn't select, or one another run is working on, since no run claims a
-// record; the page says so before they do.
+// wouldn't select, or one another run is working on, as a person picked it,
+// even one another run holds (see picks.go); the page says so before they
+// do. An object of the flow picking a record of the store takes that one.
 
 // How many records one request starts runs on at most.
 const maxRecordRuns = 50
@@ -73,9 +74,11 @@ type recordFlow struct {
 	Off map[string]string `json:"off"`
 }
 
-// The flows querying the store's records, a job flow's own boards, which
-// the user may start, by name. A flow that published a version runs that
-// on records (see publish.go), so its queries are that version's.
+// The flows querying the store's records, a job flow's own boards, or
+// picking one (see picks.go), which the user may start, by name, with a
+// pick read as the query taking the one record it selects. A flow that
+// published a version runs that on records (see publish.go), so its queries
+// and picks are that version's.
 func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*recordFlow, error) {
 	var fs []*recordFlow
 	err := scanAll(ctx, db, `SELECT f.id, f.name, v.snapshot FROM flows f JOIN flow_versions v ON v.id = f.published_version_id
@@ -96,6 +99,11 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 					f.queries = append(f.queries, *l.Query)
 				}
 			}
+			for _, o := range s.Objects {
+				if picksRecord(o) && *o.Store == store {
+					f.queries = append(f.queries, o.Pick.query())
+				}
+			}
 			if len(f.queries) > 0 {
 				fs = append(fs, f)
 			}
@@ -104,28 +112,41 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 	if err != nil {
 		return nil, err
 	}
-	err = scanAll(ctx, db, `SELECT f.id, f.name, l.query FROM objects o
+	unpublished := map[int64]*recordFlow{}
+	err = scanAll(ctx, db, `SELECT f.id, f.name, l.query, NULL FROM objects o
 			JOIN object_links l ON l.object_id = o.id AND l.direction = 'input' AND l.query IS NOT NULL
 			JOIN flows f ON f.id = o.flow_id
 		WHERE o.store_id = ? AND `+liveFlows+` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL
-		ORDER BY f.name, f.id, l.id`, func(rows *sql.Rows) error {
+		UNION ALL SELECT f.id, f.name, NULL, o.pick FROM objects o JOIN flows f ON f.id = o.flow_id
+		WHERE o.store_id = ? AND o.pick IS NOT NULL AND o.parent_id IS NULL AND o.owner_id IS NULL AND NOT o.many
+			AND `+liveFlows+` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL`, func(rows *sql.Rows) error {
 		var id int64
 		var name string
-		var raw []byte
-		if err := rows.Scan(&id, &name, &raw); err != nil {
+		var query, pick []byte
+		if err := rows.Scan(&id, &name, &query, &pick); err != nil {
 			return err
 		}
 		var q linkQuery
-		if err := json.Unmarshal(raw, &q); err != nil {
-			return err
+		if query != nil {
+			if err := json.Unmarshal(query, &q); err != nil {
+				return err
+			}
+		} else {
+			p, err := pickOf(pick)
+			if err != nil {
+				return err
+			}
+			q = p.query()
 		}
-		if n := len(fs); n > 0 && fs[n-1].ID == id {
-			fs[n-1].queries = append(fs[n-1].queries, q)
-			return nil
+		f := unpublished[id]
+		if f == nil {
+			f = &recordFlow{ID: id, Name: name, Off: map[string]string{}}
+			unpublished[id] = f
+			fs = append(fs, f)
 		}
-		fs = append(fs, &recordFlow{ID: id, Name: name, queries: []linkQuery{q}, Off: map[string]string{}})
+		f.queries = append(f.queries, q)
 		return nil
-	}, store)
+	}, store, store)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +193,8 @@ func offQuery(queries []linkQuery, content, state string) string {
 	return why
 }
 
-// A run going on a record: one started on it, or the one that last moved it
-// on, still running.
+// A run going on a record: one started on it, one that took it (see
+// picks.go), or the one that last moved it on, still running.
 type recordRun struct {
 	Run  int64 `json:"run"`
 	Flow int64 `json:"flow"`
@@ -187,7 +208,7 @@ func recordsGoing(ctx context.Context, db *sql.DB, store int64, records []int64)
 	}
 	in := "?" + strings.Repeat(", ?", len(records)-1)
 	var args []any
-	for range 2 {
+	for range 3 {
 		args = append(args, store)
 		for _, r := range records {
 			args = append(args, r)
@@ -197,6 +218,8 @@ func recordsGoing(ctx context.Context, db *sql.DB, store int64, records []int64)
 	err := scanAll(ctx, db, `SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN runs r ON r.record_id = sr.id
 			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND r.status = ?
 		UNION SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN runs r ON r.id = sr.run_id
+			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND r.status = ?
+		UNION SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN taken_records t ON t.record_id = sr.id JOIN runs r ON r.id = t.run_id
 			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND r.status = ?
 		ORDER BY 1, 2`, func(rows *sql.Rows) error {
 		var record int64
@@ -259,7 +282,7 @@ func recordIDs(s string) ([]int64, error) {
 // Starts a run of the flow on the record, for the user who did, on the
 // version the flow published, if any; see startRun.
 func startRecordRun(ctx context.Context, db *sql.DB, eng *engine, flow, record int64, startedBy *int64) (int64, error) {
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return 0, err
 	}
@@ -271,10 +294,13 @@ func startRecordRun(ctx context.Context, db *sql.DB, eng *engine, flow, record i
 	if _, err := tx.ExecContext(ctx, "UPDATE runs SET record_id = ? WHERE id = ?", record, nr.id); err != nil {
 		return 0, err
 	}
+	nr.record = record
+	if err := takeRecords(ctx, tx, flow, &nr); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	nr.record = record
 	eng.start(nr, flow, nil)
 	return nr.id, nil
 }
@@ -393,6 +419,11 @@ func registerRecordRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			}
 			started = append(started, id)
 			rid, err := startRecordRun(ctx, db, eng, body.Flow, id, requestUserID(r))
+			var none *nothingToTake
+			if errors.As(err, &none) {
+				http.Error(w, "nothing to run on: "+none.Error(), http.StatusConflict)
+				return
+			}
 			if err != nil {
 				serverError(w, err)
 				return

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FlowObject, ObjectAttribute, ObjectState, Relation } from './api'
+import type { FlowObject, ObjectAttribute, ObjectPick, ObjectState, Relation } from './api'
 import { Data } from './Data'
 import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TableIcon, TrashIcon, ZoomInIcon } from './icons'
+import { pickText } from './ObjectNode'
 import { quantityText, type Quantity } from './quantity'
 import QuantityInput from './QuantityInput'
 import { fieldsOf, ownedBy, type Field } from './structure'
@@ -24,6 +25,7 @@ export default function ObjectPanel({
   states,
   persistent,
   shared,
+  pick,
   quantity,
   human,
   editable,
@@ -34,6 +36,7 @@ export default function ObjectPanel({
   generals,
   onPersistentChange,
   onSharedChange,
+  onPickChange,
   onQuantityChange,
   onHumanChange,
   onRelationChange,
@@ -59,6 +62,9 @@ export default function ObjectPanel({
   // Every flow using a struct's object reads and writes one store of its
   // records; see shared.go.
   shared: boolean
+  // For a shared struct's copy on the top board: the record each run works
+  // on; see picks.go.
+  pick: ObjectPick | null
   quantity: Quantity
   human: boolean
   // False while a run is in progress.
@@ -78,6 +84,7 @@ export default function ObjectPanel({
   // Each resolves to whether the server took the change.
   onPersistentChange: (persistent: boolean) => Promise<boolean>
   onSharedChange: (shared: boolean) => Promise<boolean>
+  onPickChange: (pick: ObjectPick | null) => Promise<boolean>
   onQuantityChange: (quantity: Quantity) => Promise<boolean>
   onHumanChange: (human: boolean) => Promise<boolean>
   onRelationChange: (relation: Relation) => Promise<boolean>
@@ -287,7 +294,8 @@ export default function ObjectPanel({
               attributes, so mark one unique first. A process only generating it adds new records and refreshes the
               fields of known ones, keeping their state; one that takes or queries it too moves the records it generates
               into the state it comes out in. Which records get worked on, or worked on again, is up to the processes'
-              queries: no run claims a record, so runs querying the same state at once may take the same one.
+              queries, which claim none, so runs querying the same state at once may take the same one; or to a copy
+              picking the record each run works on, which its run holds until it ends.
             </>,
           )}
           {shared && (
@@ -308,6 +316,35 @@ export default function ObjectPanel({
         <a className="link-button records-table-link" href={`#/flows/${module.id}/records`}>
           <TableIcon /> Show its records
         </a>
+      )}
+      {!owner && !human && !structRoot && shared && object?.parent === null && !quantity.many && (
+        <>
+          <div className="help-head">
+            <label className="panel-check">
+              <input
+                type="checkbox"
+                checked={pick !== null}
+                disabled={!editable}
+                onChange={(e) => onPickChange(e.target.checked ? { state: states[0]?.name, oldest: true } : null)}
+              />
+              <span>Each run works on one of its records</span>
+            </label>
+            {help.button('pick', 'the record each run works on')}
+          </div>
+          {help.note(
+            'pick',
+            <>
+              As each run starts it takes one {name} record: the one it was started on, from the Records page or a task
+              board, else {pick ? pickText(pick) : 'the oldest or latest in a state'} that no other run holds. Every
+              process linked to {name} gets that record as it was then, so they all work on the same one, and the run
+              holds it until it ends, so no other run takes it meanwhile. With none free, no run starts. A process taking{' '}
+              {name} and generating it changes that record, only the fields it changes; if someone else moved it on
+              meanwhile, the step fails rather than moving it back. To add new records, generate another copy of the
+              struct.
+            </>,
+          )}
+          {pick && <PickFields pick={pick} states={states} editable={editable} onChange={onPickChange} />}
+        </>
       )}
       {!owner && !human && !structRoot && !shared && (
         <>
@@ -631,4 +668,61 @@ function example(fields: Field[], many: boolean): string {
       : `{\n${fs.map((f) => `${indent}  ${JSON.stringify(f.name)}: ${f.many ? `[${value(f.fields, indent + '  ')}]` : value(f.fields, indent + '  ')}`).join(',\n')}\n${indent}}`
   const object = (indent: string) => value(fields.length > 0 ? fields : [{ name: 'data', definition: '', file: false, many: false, min: 0, max: null, fields: [], inherited: false }], indent)
   return many ? `[\n  ${object('  ')}\n]` : object('')
+}
+
+// Which record each run takes: in which state, the oldest or the latest,
+// and a rule its fields hold, saved as each changes.
+function PickFields({
+  pick,
+  states,
+  editable,
+  onChange,
+}: {
+  pick: ObjectPick
+  states: ObjectState[]
+  editable: boolean
+  onChange: (pick: ObjectPick) => Promise<boolean>
+}) {
+  const [where, setWhere] = useState(pick.where ?? '')
+  useEffect(() => setWhere(pick.where ?? ''), [pick.where])
+  const set = (patch: ObjectPick) => onChange({ ...pick, ...patch })
+  return (
+    <div className="query-link">
+      <div className="panel-row">
+        <select
+          aria-label="In which state"
+          value={pick.state ?? ''}
+          disabled={!editable}
+          onChange={(e) => set({ state: e.target.value || undefined })}
+        >
+          <option value="">In any state</option>
+          {states.map((s) => (
+            <option key={s.id} value={s.name}>
+              In {s.name}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Which first"
+          value={pick.oldest ? 'oldest' : 'latest'}
+          disabled={!editable}
+          onChange={(e) => set({ oldest: e.target.value === 'oldest' || undefined })}
+        >
+          <option value="oldest">The oldest</option>
+          <option value="latest">The latest</option>
+        </select>
+      </div>
+      <label className="panel-field" title="A rule its fields must hold, as a state's: comparisons joined by and. Empty takes any.">
+        <span>Where</span>
+        <input
+          type="text"
+          value={where}
+          placeholder='priority == "high"'
+          readOnly={!editable}
+          onChange={(e) => setWhere(e.target.value)}
+          onBlur={() => where.trim() !== (pick.where ?? '') && set({ where: where.trim() || undefined })}
+        />
+      </label>
+    </div>
+  )
 }

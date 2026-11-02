@@ -234,6 +234,8 @@ type setupObject struct {
 	Relation    string       `yaml:"relation,omitempty"`
 	Specializes string       `yaml:"specializes,omitempty"`
 	CopyOf      *setupSource `yaml:"copyOf,omitempty"`
+	// Only a shared struct's copy on a job flow's top board; see picks.go.
+	Pick *objectPick `yaml:"pick,omitempty"`
 	// Written as just the name when it has no key or rule.
 	States     []setupState     `yaml:"states,omitempty"`
 	Attributes []setupAttribute `yaml:"attributes,omitempty"`

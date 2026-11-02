@@ -370,7 +370,10 @@ agent's prompt; it may be empty. The process doesn't wait for it, nor does
 it make the process run: what else it takes, the start or a `next` does.
 What this run stored isn't among them. It is the process's only link taking that
 object; it names no state and doesn't consume. `limit: 1` is the latest
-record, and with `oldest: true` the first.
+record, and with `oldest: true` the first. Each query reads the store anew,
+so two processes querying `limit: 1` may get different records if the store
+changed in between; to have every process of a run work on the same record
+of a shared struct, have the object **pick** it instead (3.8).
 
 A process tells its objects apart by name: no two it takes may share one,
 nor two it yields, compared as file names in `$INPUTS` (`Jira Ticket` and
@@ -468,10 +471,32 @@ repositories:
     on their fields narrows them, such as `attempts < 3`. To retry what
     failed, have the failure handler take it and yield it `failed`, and
     query that state too.
+  - Or the object **picks** the record each run works on: `pick: {state:
+    new, oldest: true}` (and `where:`, a rule on its fields) on the copy of
+    the struct on a job flow's top board. As a run starts it takes one
+    record: the one it was started on (Run… on a record, a task board),
+    else the oldest (or, without `oldest`, the latest) in that state that no
+    other run holds. That record is the object's value in the run, so every
+    process linked to it, plainly, gets the same one as it was then, and
+    the run **holds** it until it ends: no other run picks it, and a task
+    board counts the run as going on it. With none free, no run starts (a
+    schedule skips the time; Run says there is nothing to run on). A
+    process that takes the object and yields it changes **that record**,
+    whatever it writes in the unique attribute, and only the fields it
+    changed from what it was handed, so a person's edit to the others
+    meanwhile stays; if someone else moved the record to another state
+    meanwhile, the step fails rather than move it back, and a re-run takes
+    the record again as it is then. A person deciding its state moves the
+    record too. A process yielding a picked object without taking it is an
+    error, as it would write over the record blind: to add **new** records,
+    yield another copy of the struct (give it a `key`, since a copy keeps
+    the struct's name). A procedure's object, a part or a list picks
+    nothing.
   - Records stay once the step writing them is done, whatever its run does
-    later. No run claims a record, so two runs querying the same state at
-    once may take the same one; don't let the working flow's runs overlap
-    (a schedule skips a time while its last run goes on).
+    later. A query claims no record, so two runs querying the same state at
+    once may take the same one; pick the record instead, or don't let the
+    working flow's runs overlap (a schedule skips a time while its last run
+    goes on).
   - A shared object's copy isn't `persistent` too. The struct's board lists
     its records, and its Records page (`#/flows/<struct>/records`) shows them
     as a table, a column per field, searched and sorted as a flow's Data page
@@ -480,7 +505,8 @@ repositories:
   - A person can pick the record a flow works on: **Run…** on a record (or
     on those ticked) starts a flow querying the struct on it, a run per
     record, and each of that run's queries of the struct reads the record
-    alone, whatever its state and rule select. So a flow implementing "the
+    alone, whatever its state and rule select, as does an object picking
+    one. So a flow implementing "the
     open Jira ticket" its query gives it implements the one picked; write
     its query for the scheduled case, and it serves both.
   - A **task board** (`#/taskboards/<id>`, listed on the home page) lays
@@ -498,7 +524,7 @@ repositories:
   - A task board can **play**: while it plays, every record its columns
     hold that no run is going on goes to the flow taking records in its
     state, the one flow (of those whoever pressed Play may start on the
-    struct's records) with a query naming that state whose rule holds of
+    struct's records) with a query or pick naming that state whose rule holds of
     the record, or, when no flow names the state, the one querying the
     struct in any state, and that flow runs on it, a run per record as
     **Run…** starts one, on the version the flow published if any, else its
@@ -514,8 +540,8 @@ repositories:
     rests at first. So a lifecycle such as exception `new` → ticket filed →
     pull request opened → merged is one flow per step, each taking the
     state its step starts from, with a column per state. A flow meant for a
-    step queries its struct in the step's state, once, and has an output
-    link leaving the record in the next state: a run that ends done with the
+    step picks its struct's record in the step's state (or queries it there,
+    once), and has an output link leaving the record in the next state: a run that ends done with the
     record still in the state it took it in leaves it **stuck**, as does one
     that fails or is stopped, and the board skips a stuck record until a
     person tries it again or corrects it. A record started from the same
@@ -527,7 +553,8 @@ repositories:
     flow takes: its records rest until a webhook's or a schedule's run moves
     them on, as a flow checking and leaving them be would leave them stuck.
     And don't also schedule a flow a board plays to query the same state, as
-    its runs may take the records the board's are working on.
+    its runs may take the records the board's are working on; a flow
+    picking its record may be, as each run holds the one it took.
 - Deleting a flow, procedure or struct moves it to the **trash**, from
   where those who may change it restore it, for 30 days by default. While
   it is there it runs nothing and exports nowhere: a subflow process running
@@ -980,6 +1007,7 @@ check that each one is what you meant.
 | specialization | `"Bug" is a "Ticket".` |
 | persistent | `"Exceptions" is stored, so each run keeps what it generated of it.` |
 | shared | `"Exception" is shared, so every flow using it reads and writes the same records.` |
+| pick | `Each run works on the earliest stored record of "Ticket" in open, which no other run takes meanwhile.` |
 | states | `"Post" can be "good" or "weak".` |
 | rule | `"Ticket" is "urgent" when priority <= 2.` |
 | attributes and exhibited parts | `"Ticket" exhibits "key" and "summary".` |
@@ -1756,6 +1784,9 @@ Check them before you import.
   them out (a `name` other than the source's is refused); links refer to it
   by the source's name.
 - A file attribute can't be filled in by a person.
+- `pick` only on a copy of a shared struct, on a job flow's top board, not a
+  list; its `state` one of its states. A process yielding it must take it
+  too (the board's problems call that an error, and Run refuses it).
 
 **Common mistakes that import fine but don't work**
 1. A first agent taking an object nothing produces gets it **empty** when the

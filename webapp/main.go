@@ -135,6 +135,7 @@ func main() {
 	registerTaskBoardPlayRoutes(mux, db)
 	registerObjectRoutes(mux, db)
 	registerQueryRoutes(mux, db)
+	registerPickRoutes(mux, db)
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
 	// How many agent, script and connector steps run at once.

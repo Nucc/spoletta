@@ -335,7 +335,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	}
 	// The run may have been stopped, but the step still has to end.
 	if res.Duplicate, err = finishStep(context.Background(), db, b, stepID, status, res.Output, res.Error, res.Objects); err != nil {
-		return res, err
+		return conflicted(res, err)
 	}
 	return res, recordDecisions(context.Background(), db, b, stepID, res.Decisions)
 }

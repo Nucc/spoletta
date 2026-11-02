@@ -218,16 +218,17 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 		if !ok {
 			continue
 		}
-		var target *int64
-		if b.Start.Target != nil {
-			if t, ok := p.procMap[*b.Start.Target]; ok {
-				target = &t
-			}
-		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, target_id, route, end_x, end_y) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			id, b.Start.X, b.Start.Y, target, storedRoute(b.Start.Route), b.End.X, b.End.Y)
+		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, end_x, end_y) VALUES (?, ?, ?, ?, ?)",
+			id, b.Start.X, b.Start.Y, b.End.X, b.End.Y)
 		if err != nil {
 			return res, "", err
+		}
+		for _, t := range b.Start.Targets {
+			if to, ok := p.procMap[t.Process]; ok {
+				if _, err := tx.ExecContext(ctx, "INSERT INTO start_targets (process_id, route) VALUES (?, ?)", to, storedRoute(t.Route)); err != nil {
+					return res, "", err
+				}
+			}
 		}
 	}
 	// A flow process from before boards were kept still needs one.

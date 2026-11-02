@@ -125,7 +125,7 @@ func planRerun(ctx context.Context, tx *sql.Tx, src run, stepID int64, board sna
 		}
 	}
 	// The process its board starts from takes what came from outside too.
-	if p.w.target != nil && *p.w.target == p.process {
+	if slices.Contains(p.w.targets, p.process) {
 		for _, o := range p.w.given {
 			if !slices.Contains(p.inputs, o) {
 				p.inputs = append(p.inputs, o)

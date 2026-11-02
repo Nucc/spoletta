@@ -189,6 +189,8 @@ import {
   updateObject,
   updateProcess,
   updateStart,
+  connectStart,
+  disconnectStart,
   wrapProcesses,
   DEFAULT_LOOPS,
   DEFAULT_ROUNDS,
@@ -255,7 +257,7 @@ const NEW_OBJECT = 'New object'
 const DUPLICATE_OFFSET = 40
 const DRAFT_PREFIX = 'draft-'
 const START_ID = 'start'
-const START_EDGE_ID = 'start-edge'
+const START_EDGE_PREFIX = 'start-edge-'
 // A board ends here.
 const END_ID = 'end'
 // How far below the lowest node a top board's end sits until it is moved.
@@ -341,7 +343,7 @@ const objectIdOf = (nodeId: string) => Number(nodeId.slice(OBJECT_PREFIX.length)
 // process's links to the states it decides on. Direct connections have no
 // object to split.
 const startEdge = (target: number | string, route: number[] | null = null): FlowEdge => ({
-  id: START_EDGE_ID,
+  id: `${START_EDGE_PREFIX}${target}`,
   type: 'link',
   source: START_ID,
   target: String(target),
@@ -926,7 +928,7 @@ export default function Board({
         ...(inner ? row(outs, { x: inner.end.x, y: inner.end.y - BOUNDARY_GAP.y }, 'out') : []),
       ])
       setEdges([
-        ...(start.target !== null && ids.has(start.target) ? [startEdge(start.target, start.route)] : []),
+        ...start.targets.filter((t) => ids.has(t.process)).map((t) => startEdge(t.process, t.route)),
         ...c.connections.filter((cn) => ids.has(cn.source)).map(connectionEdge),
         ...c.links.filter((l) => ids.has(l.process)).map((l) => linkEdge(l, humans.has(l.process))),
         ...ins.map((o) => boundaryEdge(objectNodeId(o), START_ID)),
@@ -1654,7 +1656,7 @@ export default function Board({
     setEdges((es) => es.map((e) => (e.id === edgeId ? { ...e, data: { ...e.data, route } } : e)))
     if (!save) return
     const link = edges.find((e) => e.id === edgeId)?.data?.link
-    if (edgeId === START_EDGE_ID) updateStart(flowId, boardId, { route }).catch(report)
+    if (edgeId.startsWith(START_EDGE_PREFIX)) connectStart(Number(edgeId.slice(START_EDGE_PREFIX.length)), route).catch(report)
     else if (link) setLinkRoute(link.id, route).catch(report)
   }
 
@@ -1751,9 +1753,9 @@ export default function Board({
     }
     try {
       if (source === START_ID) {
-        // The initial node has a single outgoing transition; a new one replaces it.
-        await updateStart(flowId, boardId, { target: Number(target) })
-        setEdges((es) => [...es.filter((e) => e.id !== START_EDGE_ID), startEdge(target)])
+        // A run begins with every process the start points at, at once.
+        await connectStart(Number(target))
+        setEdges((es) => [...es.filter((e) => e.id !== `${START_EDGE_PREFIX}${target}`), startEdge(target)])
         return
       }
       if (target === END_ID) {
@@ -1832,8 +1834,8 @@ export default function Board({
     const gone = removed.filter((e) => !e.id.startsWith(POINTER_PREFIX))
     if (gone.length === 0) return
     const reqs = gone.map((e) =>
-      e.id === START_EDGE_ID
-        ? updateStart(flowId, boardId, { target: null })
+      e.id.startsWith(START_EDGE_PREFIX)
+        ? disconnectStart(Number(e.id.slice(START_EDGE_PREFIX.length)))
         : e.id.startsWith(END_EDGE_PREFIX)
           ? updateObject(Number(e.id.slice(END_EDGE_PREFIX.length)), { end: false })
           : e.id.startsWith(LINK_PREFIX)
@@ -1904,7 +1906,10 @@ export default function Board({
       const o = await createObject({ flow: flowId, name: NEW_OBJECT, parent: boardId, ...at('object', processFirst ? secondY : firstY) })
       const links: Link[] = []
       if (processFirst) {
-        if (edge.id === START_EDGE_ID) await updateStart(flowId, boardId, { target: p.id })
+        if (edge.id.startsWith(START_EDGE_PREFIX)) {
+          await connectStart(p.id)
+          await disconnectStart(Number(edge.target))
+        }
         else links.push(await createLink({ process: p.id, object: objectIdOf(edge.source), direction: 'input', state }))
         links.push(await createLink({ process: p.id, object: o.id, direction: 'output' }))
         links.push(await createLink({ process: Number(edge.target), object: o.id, direction: 'input' }))
@@ -1925,7 +1930,7 @@ export default function Board({
       setNodes((ns) => [...ns, toNode(p, true), toObjectNode(o)])
       setEdges((es) => [
         ...es.filter((e) => e.id !== edge.id),
-        ...(edge.id === START_EDGE_ID ? [startEdge(p.id)] : []),
+        ...(edge.id.startsWith(START_EDGE_PREFIX) ? [startEdge(p.id)] : []),
         ...links.map((l) => linkEdge(l, false)),
       ])
     } catch (err) {
@@ -3568,7 +3573,7 @@ export default function Board({
       note: noteNodeId,
       link: (id) => `${LINK_PREFIX}${id}`,
       connection: (id) => `${CONNECTION_PREFIX}${id}`,
-      start: START_EDGE_ID,
+      start: (process) => `${START_EDGE_PREFIX}${process}`,
       parentOf: (p) => parents.get(p),
     })
   }, [diff, compare, shownVersion, boardId, contents])

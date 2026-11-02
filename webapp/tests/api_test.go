@@ -744,11 +744,20 @@ type specObject struct {
 // The start node is a board's single UML initial node. It points at no more
 // than one process; a flow's top board keeps it in flow_starts.
 type startNode struct {
-	X      float64 `json:"x"`
-	Y      float64 `json:"y"`
-	Target *int64  `json:"target"`
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	// The processes a run begins with, all at once, by id.
+	Targets []startTarget `json:"targets"`
+	// The first of them, and where its link runs, as versions from before a
+	// start pointed at several had it.
+	Target *int64 `json:"target"`
 	// Where its link's segments run, if moved by hand; reset when the target changes.
 	Route json.RawMessage `json:"route"`
+}
+
+type startTarget struct {
+	Process int64           `json:"process"`
+	Route   json.RawMessage `json:"route"`
 }
 
 // A step is one execution of a process in a run. A process can run several

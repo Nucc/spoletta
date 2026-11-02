@@ -297,9 +297,20 @@ func (x exporter) board(parent *int64) setupBoard {
 			}
 		}
 	}
-	b.Start = &setupStart{X: addrOf(start.X), Y: addrOf(start.Y), Route: exportRoute(start.Route)}
-	if start.Target != nil {
-		b.Start.Next = x.e.procIDs[*start.Target]
+	b.Start = &setupStart{X: addrOf(start.X), Y: addrOf(start.Y)}
+	for _, t := range start.Targets {
+		name := x.e.procIDs[t.Process]
+		b.Start.Next = append(b.Start.Next, name)
+		if r := exportRoute(t.Route); r != nil {
+			if b.Start.Routes == nil {
+				b.Start.Routes = map[string]any{}
+			}
+			b.Start.Routes[name] = r
+		}
+	}
+	// The one process it starts with keeps its route as it always did.
+	if len(start.Targets) == 1 {
+		b.Start.Route, b.Start.Routes = b.Start.Routes[b.Start.Next[0]], nil
 	}
 	if end != nil {
 		b.End = &setupPoint{end.X, end.Y}

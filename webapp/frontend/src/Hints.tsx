@@ -127,7 +127,7 @@ export function EmptyBoardGuide({ inner }: { inner: boolean }) {
         <li>
           {inner
             ? 'Connect this board’s start to the process it begins with; the objects the flow process takes come in at the start, and those it generates go out at the end.'
-            : 'Connect the start to the process a run begins with, such as a person filling in what the run works on.'}
+            : 'Connect the start to the process a run begins with, such as a person filling in what the run works on, or to several to begin with them all at once.'}
         </li>
         <li>
           Processes connect through the objects they generate and take: drag from a process to the object it generates, and from an object

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,7 +94,7 @@ flows:
 		t.Errorf("procedures = %+v", f.Procedures)
 	}
 	fl := f.Flows[0]
-	if fl.Start == nil || fl.Start.Next != "Fetch" || fl.End == nil || *fl.End != (setupPoint{10, 20}) {
+	if fl.Start == nil || !slices.Equal(fl.Start.Next, setupNames{"Fetch"}) || fl.End == nil || *fl.End != (setupPoint{10, 20}) {
 		t.Errorf("start, end = %+v, %+v", fl.Start, fl.End)
 	}
 	if len(fl.Schedules) != 1 || fl.Schedules[0].Enabled == nil || *fl.Schedules[0].Enabled {

@@ -39,7 +39,7 @@ func soundBoard() snapshot {
 			{ID: 49, Process: 4, Object: 13, Direction: directionOutput},
 		},
 		LinkStates: []snapshotLinkState{{Link: 42, State: 20}, {Link: 42, State: 21}, {Link: 47, State: 22}},
-		Start:      startNode{Target: versionID(1)},
+		Start:      startsWith(1),
 		Settings:   &flowSettings{Repositories: []repository{{Name: "app", URL: "https://example.com/app.git"}}},
 	}
 }
@@ -109,14 +109,14 @@ func TestBoardProblems(t *testing.T) {
 		object  int64
 		says    string
 	}{
-		{name: "no start", change: func(s *snapshot, f *problemFacts) { s.Start.Target = nil },
+		{name: "no start", change: func(s *snapshot, f *problemFacts) { s.Start.Targets = nil },
 			level: problemError, rule: "start", says: "connect the start"},
 		{name: "empty board", change: func(s *snapshot, f *problemFacts) { *s = snapshot{} },
 			level: problemError, rule: "start", says: "no process yet"},
 		{name: "start on an inner board", change: func(s *snapshot, f *problemFacts) {
 			s.Processes[0].Parent = versionID(99)
 		}, level: problemError, rule: "start", says: "connect the start"},
-		{name: "procedure without a start", change: func(s *snapshot, f *problemFacts) { s.Start.Target = nil; f.module = true },
+		{name: "procedure without a start", change: func(s *snapshot, f *problemFacts) { s.Start.Targets = nil; f.module = true },
 			level: problemWarning, rule: "start", says: "procedure's start leads nowhere"},
 		{name: "subflow running nothing", change: func(s *snapshot, f *problemFacts) {
 			s.Processes = append(s.Processes, process{ID: 6, Name: "Call", Kind: kindSubflow})
@@ -270,7 +270,7 @@ func TestBoardProblemsLeaveAlone(t *testing.T) {
 			t.Errorf("problems:%s", describeProblems(ps))
 		}
 		// With its board started at Log, Check still takes what is given.
-		s.Boards = []innerBoard{{Process: 6, Start: startNode{Target: versionID(8)}}}
+		s.Boards = []innerBoard{{Process: 6, Start: startsWith(8)}}
 		if ps := boardProblems(s, f); len(ps) != 0 {
 			t.Errorf("problems with a start:%s", describeProblems(ps))
 		}

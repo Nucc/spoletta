@@ -118,7 +118,7 @@ func diffSnapshots(a, b snapshot) boardDiff {
 	d.diffSamples(a, b, m)
 	d.diffNotes(a, b, m)
 	d.Settings = diffSettings(a.Settings, b.Settings)
-	if a.Start.X != b.Start.X || a.Start.Y != b.Start.Y || !sameJSON(a.Start.Route, b.Start.Route) || !sameEnd(a.End, b.End) {
+	if a.Start.X != b.Start.X || a.Start.Y != b.Start.Y || !sameStartRoutes(a.Start, b.Start, m) || !sameEnd(a.End, b.End) {
 		d.Layout = true
 	}
 	inner := map[int64]innerBoard{}
@@ -128,13 +128,31 @@ func diffSnapshots(a, b snapshot) boardDiff {
 	for _, ib := range b.Boards {
 		for old, now := range m.procs {
 			if now == ib.Process {
-				if was, ok := inner[old]; ok && (was.Start.X != ib.Start.X || was.Start.Y != ib.Start.Y || was.End != ib.End || !sameJSON(was.Start.Route, ib.Start.Route)) {
+				if was, ok := inner[old]; ok && (was.Start.X != ib.Start.X || was.Start.Y != ib.Start.Y || was.End != ib.End || !sameStartRoutes(was.Start, ib.Start, m)) {
 					d.Layout = true
 				}
 			}
 		}
 	}
 	return d
+}
+
+// Whether the links from a start to the processes it points at in both run
+// the same way; one pointing at a process only one does is a change of the
+// board, not of its layout.
+func sameStartRoutes(a, b startNode, m diffMatch) bool {
+	was := map[int64]json.RawMessage{}
+	for _, t := range a.Targets {
+		was[t.Process] = t.Route
+	}
+	for old, route := range was {
+		for _, t := range b.Targets {
+			if m.procs[old] == t.Process && !sameJSON(route, t.Route) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func sameEnd(a, b *boardEnd) bool {
@@ -858,12 +876,12 @@ const connectionStart = "start"
 // A board's connections and starts.
 func connectionsOf(s snapshot) []connection {
 	out := slices.Clone(s.Connections)
-	if s.Start.Target != nil {
-		out = append(out, connection{Target: *s.Start.Target, Kind: connectionStart})
+	for _, t := range s.Start.processes() {
+		out = append(out, connection{Target: t, Kind: connectionStart})
 	}
 	for _, ib := range s.Boards {
-		if ib.Start.Target != nil {
-			out = append(out, connection{Source: ib.Process, Target: *ib.Start.Target, Kind: connectionStart})
+		for _, t := range ib.Start.processes() {
+			out = append(out, connection{Source: ib.Process, Target: t, Kind: connectionStart})
 		}
 	}
 	return out

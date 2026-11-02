@@ -33,9 +33,18 @@ func diffBoard() snapshot {
 		},
 		LinkStates:  []snapshotLinkState{{Link: 43, State: 20}},
 		Connections: []connection{{ID: 50, Source: 1, Target: 2}},
-		Start:       startNode{Target: versionID(1)},
+		Start:       startsWith(1),
 		Settings:    &flowSettings{Repositories: []repository{}},
 	}
+}
+
+// A start pointing at the processes.
+func startsWith(processes ...int64) startNode {
+	var s startNode
+	for _, p := range processes {
+		s.Targets = append(s.Targets, startTarget{Process: p})
+	}
+	return s
 }
 
 // A copy of a board, to change.
@@ -210,7 +219,7 @@ func TestDiffOfLinksAndConnections(t *testing.T) {
 	b.Links[0].Role = roleInstrument
 	b.Links = append(b.Links, snapshotLink{ID: 46, Process: 3, Object: 10, Direction: directionInput})
 	b.Connections = []connection{{ID: 51, Source: 2, Target: 3}, {ID: 52, Source: 1, Target: 3, Kind: connectionFailure}}
-	b.Start.Target = versionID(2)
+	b.Start.Targets = startsWith(2).Targets
 	d := diffSnapshots(diffBoard(), b)
 
 	want := []diffSummary{{diffChanged, 40, "Brief → Write"}, {diffAdded, 46, "Brief → Publish"}}
@@ -265,10 +274,10 @@ func TestDiffOfFlowSettings(t *testing.T) {
 func TestDiffOfInnerBoards(t *testing.T) {
 	a := diffBoard()
 	a.Processes = append(a.Processes, process{ID: 5, Name: "Inside", Kind: kindFlow}, process{ID: 6, Name: "Step", Kind: kindAgent, Parent: versionID(5)})
-	a.Boards = []innerBoard{{Process: 5, Start: startNode{Target: versionID(6)}}}
+	a.Boards = []innerBoard{{Process: 5, Start: startsWith(6)}}
 	b := cloneBoard(t, a)
 	b.Processes[1].Parent = versionID(5)
-	b.Boards[0].Start.Target = versionID(2)
+	b.Boards[0].Start.Targets = startsWith(2).Targets
 	b.Boards[0].End = boardEnd{X: 5}
 	d := diffSnapshots(a, b)
 

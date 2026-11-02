@@ -44,3 +44,17 @@ func routeJSON(stored []byte) json.RawMessage {
 	}
 	return stored
 }
+
+// A route given as JSON, as stored: nil for none or null, the default
+// route. False if it isn't one.
+func routeOf(raw json.RawMessage) (any, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, true
+	}
+	var lanes route
+	if err := json.Unmarshal(raw, &lanes); err != nil || len(lanes) > maxRouteLanes {
+		return nil, false
+	}
+	b, err := json.Marshal(lanes)
+	return b, err == nil
+}

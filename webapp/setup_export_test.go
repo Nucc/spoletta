@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -49,9 +50,9 @@ func exportedTriage() (*exportedFlow, map[int64]*exportedFlow) {
 		},
 		LinkStates:  []snapshotLinkState{{Link: 61, State: 42}, {Link: 61, State: 43}},
 		Connections: []connection{{Source: 10, Target: 11}, {Source: 10, Target: 12, Kind: connectionFailure}},
-		Start:       startNode{X: 9, Y: 9, Target: exportID(10), Route: []byte("null")},
+		Start:       startNode{X: 9, Y: 9, Targets: []startTarget{{Process: 10, Route: []byte("null")}}},
 		End:         &boardEnd{100, 200},
-		Boards:      []innerBoard{{Process: 13, Start: startNode{X: 1, Y: 1, Target: exportID(14)}, End: boardEnd{2, 2}}},
+		Boards:      []innerBoard{{Process: 13, Start: startNode{X: 1, Y: 1, Targets: startsWith(14).Targets}, End: boardEnd{2, 2}}},
 	}}
 	review := &exportedFlow{id: 2, name: "Review", module: true}
 	customer := &exportedFlow{id: 3, name: "Customer", isStruct: true, s: snapshot{Objects: []snapshotObject{
@@ -149,7 +150,7 @@ func TestExporterBoard(t *testing.T) {
 	}
 	b := x.board(nil)
 
-	if b.Start == nil || b.Start.Next != "Fetch" || *b.Start.X != 9 || b.Start.Route != nil {
+	if b.Start == nil || !slices.Equal(b.Start.Next, setupNames{"Fetch"}) || *b.Start.X != 9 || b.Start.Route != nil {
 		t.Errorf("start = %+v", b.Start)
 	}
 	if b.End == nil || *b.End != (setupPoint{100, 200}) {
@@ -191,7 +192,7 @@ func TestExporterBoard(t *testing.T) {
 	if group.Board == nil {
 		t.Fatal("Group has no board")
 	}
-	if group.Board.Start == nil || group.Board.Start.Next != "Inner" || *group.Board.End != (setupPoint{2, 2}) {
+	if group.Board.Start == nil || !slices.Equal(group.Board.Start.Next, setupNames{"Inner"}) || *group.Board.End != (setupPoint{2, 2}) {
 		t.Errorf("Group's board starts %+v, ends %+v", group.Board.Start, group.Board.End)
 	}
 	if len(group.Board.Processes) != 1 || group.Board.Processes[0].Prompt != "think" {

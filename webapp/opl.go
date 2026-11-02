@@ -119,8 +119,16 @@ func (o *oplWriter) board(board *int64, indent string) {
 	if board != nil {
 		where = o.process(*board)
 	}
-	if start.Target != nil {
-		o.line(indent, "%s starts with %s.", where, o.process(*start.Target))
+	switch ps := start.processes(); len(ps) {
+	case 0:
+	case 1:
+		o.line(indent, "%s starts with %s.", where, o.process(ps[0]))
+	default:
+		names := make([]string, len(ps))
+		for i, p := range ps {
+			names[i] = o.processes[p].Name
+		}
+		o.line(indent, "%s starts with %s at once.", where, quotedList(names))
 	}
 	if board == nil {
 		var ends []string

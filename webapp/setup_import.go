@@ -1052,9 +1052,11 @@ func (b *builder) layout(board *setupBoard, parent *int64) {
 	rank := map[*bproc]int{}
 	var queue []*bproc
 	if board.Start != nil {
-		if bp := b.procs[board.Start.Next]; bp != nil && sameBoard(bp.parent, parent) {
-			rank[bp] = 0
-			queue = append(queue, bp)
+		for _, name := range board.Start.Next {
+			if bp := b.procs[name]; bp != nil && sameBoard(bp.parent, parent) && !slices.Contains(queue, bp) {
+				rank[bp] = 0
+				queue = append(queue, bp)
+			}
 		}
 	}
 	for len(queue) > 0 {
@@ -1175,18 +1177,32 @@ func (b *builder) resolveBoard(board *setupBoard, parent *int64, where string) e
 		if s.X != nil && s.Y != nil {
 			start.X, start.Y = *s.X, *s.Y
 		}
-		if s.Next != "" {
-			bp := b.procs[s.Next]
-			if bp == nil || !sameBoard(bp.parent, parent) {
-				return problemf("%s: its start goes to %s, which isn't a process on its board", where, quote(s.Next))
+		if s.Route != nil && len(s.Next) != 1 {
+			return problemf("%s: its start has a route but goes to %d processes; give each its own under routes", where, len(s.Next))
+		}
+		for name := range s.Routes {
+			if !slices.Contains(s.Next, name) {
+				return problemf("%s: its start has a route to %s, which it doesn't go to", where, quote(name))
 			}
-			start.Target = &bp.id
 		}
-		r, err := storedSetupRoute(s.Route)
-		if err != nil {
-			return problemf("%s: its start's route: %v", where, err)
+		for _, name := range s.Next {
+			bp := b.procs[name]
+			if bp == nil || !sameBoard(bp.parent, parent) {
+				return problemf("%s: its start goes to %s, which isn't a process on its board", where, quote(name))
+			}
+			if slices.ContainsFunc(start.Targets, func(t startTarget) bool { return t.Process == bp.id }) {
+				return problemf("%s: its start goes to %s twice", where, quote(name))
+			}
+			route := s.Routes[name]
+			if len(s.Next) == 1 {
+				route = s.Route
+			}
+			r, err := storedSetupRoute(route)
+			if err != nil {
+				return problemf("%s: its start's route to %s: %v", where, quote(name), err)
+			}
+			start.Targets = append(start.Targets, startTarget{Process: bp.id, Route: r})
 		}
-		start.Route = r
 	}
 	end = curEnd
 	if board.End != nil {

@@ -183,7 +183,7 @@ func TestStartGiven(t *testing.T) {
 			{ID: 32, Name: "Second", Kind: kindAgent, Parent: ptr(30)},
 		},
 		Objects: []snapshotObject{{ID: 5, Name: "Ticket"}, {ID: 10, Name: "Brief"}},
-		Boards:  []innerBoard{{Process: 30, Start: startNode{Target: ptr(31)}}},
+		Boards:  []innerBoard{{Process: 30, Start: startsWith(31)}},
 	}
 	inner := walkOn(b, ptr(30), map[int64]value{10: {content: "x"}, 5: {}})
 	if got := inner.startGiven(31); !slices.Equal(got, []int64{5, 10}) {

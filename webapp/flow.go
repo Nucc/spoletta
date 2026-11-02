@@ -10,14 +10,65 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-// The start node is a board's single UML initial node. It points at no more
-// than one process; a flow's top board keeps it in flow_starts.
+// The start node is a board's single UML initial node. It points at the
+// processes a run of the board begins with, all at once, or none; where it
+// is, a flow's top board keeps in flow_starts and a flow process's board in
+// inner_boards, and what it points at start_targets, a row per process.
 type startNode struct {
-	X      float64 `json:"x"`
-	Y      float64 `json:"y"`
-	Target *int64  `json:"target"`
-	// Where its link's segments run, if moved by hand; reset when the target changes.
-	Route json.RawMessage `json:"route"`
+	X float64
+	Y float64
+	// In the order of the processes' ids.
+	Targets []startTarget
+}
+
+// A process a start points at, and where the link to it runs, if moved by
+// hand.
+type startTarget struct {
+	Process int64           `json:"process"`
+	Route   json.RawMessage `json:"route"`
+}
+
+// As JSON a start has its targets, and the first again as target with its
+// route, as versions from before a start pointed at several had it, so an
+// older webapp still reads where its board starts.
+type startJSON struct {
+	X       float64         `json:"x"`
+	Y       float64         `json:"y"`
+	Targets []startTarget   `json:"targets"`
+	Target  *int64          `json:"target"`
+	Route   json.RawMessage `json:"route"`
+}
+
+func (s startNode) MarshalJSON() ([]byte, error) {
+	out := startJSON{X: s.X, Y: s.Y, Targets: s.Targets}
+	if out.Targets == nil {
+		out.Targets = []startTarget{}
+	}
+	if len(s.Targets) > 0 {
+		out.Target, out.Route = &s.Targets[0].Process, s.Targets[0].Route
+	}
+	return json.Marshal(out)
+}
+
+func (s *startNode) UnmarshalJSON(b []byte) error {
+	var in startJSON
+	if err := json.Unmarshal(b, &in); err != nil {
+		return err
+	}
+	s.X, s.Y, s.Targets = in.X, in.Y, in.Targets
+	if in.Targets == nil && in.Target != nil {
+		s.Targets = []startTarget{{Process: *in.Target, Route: in.Route}}
+	}
+	return nil
+}
+
+// The processes the start points at.
+func (s startNode) processes() []int64 {
+	ps := make([]int64, len(s.Targets))
+	for i, t := range s.Targets {
+		ps[i] = t.Process
+	}
+	return ps
 }
 
 // A connection is a directed edge between two processes: the target runs

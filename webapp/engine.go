@@ -95,7 +95,7 @@ import (
 // process generates exists from the start; see carry in instances.go.
 //
 // A flow process runs the board inside it, which starts from its start and
-// from the objects the flow process takes, given as they are outside; the
+// from the objects the flow process takes, given as they are outside; each
 // process its start points at takes them all, as do those linked to them. What
 // the processes inside generate of the objects the flow process generates
 // comes out of it. A recording flow process runs its board as a run of its
@@ -590,10 +590,10 @@ type walk struct {
 	board *int64
 	// Where its agents and scripts work; nil without repositories.
 	ws *runWorkspace
-	// Where it starts: the process its start points at, and the objects given
-	// from outside.
-	target *int64
-	given  []int64
+	// Where it starts: the processes its start points at, and the objects
+	// given from outside.
+	targets []int64
+	given   []int64
 	// The objects of the top board picking a record, and those holding the
 	// record the run took, which start it too; see picks.go.
 	picked map[int64]bool
@@ -695,7 +695,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 		takers: map[int64][]taker{}, successors: map[int64][]int64{}, handlers: map[int64][]int64{},
 		objects: map[int64]string{}, stateNames: map[int64]string{}, stateObjects: map[int64]int64{}, rules: map[int64][]ruledState{},
 		generated: map[int64]bool{}, values: map[int64]value{}, skipped: map[int64]bool{}, unstored: map[int64]bool{}, ran: map[int64]int{},
-		picked: map[int64]bool{},
+		picked:  map[int64]bool{},
 		allowed: map[int64]int{}, trusted: map[int64]bool{},
 	}
 	w.reviews, w.terminate = context.WithCancel(ctx)
@@ -821,25 +821,26 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 	slices.Sort(w.taken)
 
 	if board == nil {
-		w.target = s.Start.Target
+		w.targets = s.Start.processes()
 	} else {
 		for _, b := range s.Boards {
 			if b.Process == *board {
-				w.target = b.Start.Target
+				w.targets = b.Start.processes()
 			}
 		}
 	}
 	return w
 }
 
-// Runs the board from its start, and the processes taking the objects given
-// from outside: those taking them in the state they are in, and those whose
-// objects all exist then. Returns once nothing on it is left to run.
+// Runs the board from its start, each process it points at at once, and
+// the processes taking the objects given from outside: those taking them in
+// the state they are in, and those whose objects all exist then. Returns
+// once nothing on it is left to run.
 func (w *walk) enter() {
 	p := newPass()
 	var next []func()
-	if w.target != nil {
-		next = append(next, func() { w.runProcess(*w.target, p, 0) })
+	for _, t := range w.targets {
+		next = append(next, func() { w.runProcess(t, p, 0) })
 	}
 	w.mu.Lock()
 	for _, o := range append(slices.Clone(w.given), w.taken...) {
@@ -914,10 +915,10 @@ func (w *walk) plainInputs(p int64) []linkEnd {
 }
 
 // The objects given from outside lead into a flow process's start, or the
-// start of the flow a subflow process runs, so the process it points at takes
-// them, linked to them or not.
+// start of the flow a subflow process runs, so each process it points at
+// takes them, linked to them or not.
 func (w *walk) startGiven(p int64) []int64 {
-	if w.target == nil || *w.target != p {
+	if !slices.Contains(w.targets, p) {
 		return nil
 	}
 	return w.given

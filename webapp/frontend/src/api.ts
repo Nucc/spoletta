@@ -107,11 +107,13 @@ export type Process = {
 export type Start = {
   x: number
   y: number
-  // Process the flow starts with, if connected.
-  target: number | null
-  // Where its link runs, if moved by hand; cleared when the target changes.
-  route: number[] | null
+  // The processes a run of the board begins with, all at once.
+  targets: StartTarget[]
 }
+
+// A process the start points at, and where the link to it runs if moved by
+// hand.
+export type StartTarget = { process: number; route: number[] | null }
 
 // A process running right after another, or for a failure connection, OPM's
 // exception link, instead of it once it fails, handling the failure.
@@ -1051,8 +1053,20 @@ export function getStart(flow: number): Promise<Start> {
   return request(`/api/start${boardQuery(flow, null)}`)
 }
 
-export function updateStart(flow: number, board: BoardId, patch: Partial<Start>): Promise<Start> {
+// Moves the start.
+export function updateStart(flow: number, board: BoardId, patch: { x?: number; y?: number }): Promise<Start> {
   return request(`/api/start${boardQuery(flow, board)}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+// Points the start of the process's board at it too, beside the others it
+// points at, with where the link to it runs, null for the default route.
+export function connectStart(process: number, route: number[] | null = null): Promise<Start> {
+  return request(`/api/processes/${process}/start`, { method: 'PUT', body: JSON.stringify({ route }) })
+}
+
+// Points the start of the process's board away from it.
+export function disconnectStart(process: number): Promise<Start> {
+  return request(`/api/processes/${process}/start`, { method: 'DELETE' })
 }
 
 // Where a board ends. On a flow process's board, the objects it generates

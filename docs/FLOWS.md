@@ -383,9 +383,12 @@ that meet at one process different names.
 
 ### 3.5 Connections and the start
 
-- `start: {next: P}` on a board names the process a run of it begins with.
-  Without one, nothing on the top board runs. **Always give a board a
-  start.**
+- `start: {next: P}` on a board names the process a run of it begins with,
+  or `start: {next: [P, Q, R]}` the processes it begins with, all at once,
+  in the same pass: three reviewers reviewing one pull request side by side,
+  say. Without one, nothing on the top board runs. **Always give a board a
+  start.** Where a link from the start runs is `route:` for one process, and
+  for several `routes:`, a route by each one's name.
 - `next: [Q]` on P runs Q right after P succeeds (or is skipped), in the same
   pass. Use it for ordering without data (P pushes a branch, Q opens the PR).
   Usually prefer data links: if Q needs what P made, link Q to P's output
@@ -400,8 +403,9 @@ that meet at one process different names.
 
 A `flow` process's `board` is a board of its own. The objects the flow
 process takes and yields on the outer board are its interface. The processes
-inside link to those same objects. The inner board's start process takes
-everything the flow process was given, linked to it or not.
+inside link to those same objects. Each process the inner board's start
+points at takes everything the flow process was given, linked to it or
+not.
 
 When a flow process **takes a list**, it runs **once per item**, and inside
 it that object *is the item*. Whatever the inner processes generate of a
@@ -625,7 +629,7 @@ objects on the top board that some process takes and none generates, each
 required, holding what a person would enter of it: a JSON object with
 exactly its attributes, an array of them for a list, or text for an object
 without attributes. They are given as a subflow process gives its objects:
-the process the start points at takes them all, and the others taking them
+each process the start points at takes them all, and the others taking them
 run once they exist. So a flow meant to be called this way has its first
 process take the request object, with nothing generating it. Connect to the
 end what the caller should get back: `GET /v1/runs/<id>` returns what the run
@@ -1046,7 +1050,7 @@ check that each one is what you meant.
 
 | Construct | Sentence |
 |---|---|
-| start | `The flow starts with "Request".` / `"Each exception" starts with "Fix".` |
+| start | `The flow starts with "Request".` / `"Each exception" starts with "Fix".` / `The flow starts with "Review with Claude", "Review with GPT" and "Review with Gemini" at once.` |
 | end objects | `The flow ends with "Report".` |
 | zoom | `"Each exception" zooms into:`, then the inner board indented |
 

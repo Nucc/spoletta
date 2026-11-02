@@ -119,11 +119,37 @@ type setupNote struct {
 }
 
 type setupStart struct {
-	// The process the board starts with.
-	Next  string   `yaml:"next,omitempty"`
-	X     *float64 `yaml:"x,omitempty"`
-	Y     *float64 `yaml:"y,omitempty"`
-	Route any      `yaml:"route,omitempty"`
+	// The processes the board starts with, all at once: a name, or a list.
+	Next setupNames `yaml:"next,omitempty"`
+	X    *float64   `yaml:"x,omitempty"`
+	Y    *float64   `yaml:"y,omitempty"`
+	// Where the link to the one process it starts with runs; with several,
+	// Routes has the link to each, by its name.
+	Route  any            `yaml:"route,omitempty"`
+	Routes map[string]any `yaml:"routes,omitempty"`
+}
+
+// Names written as one name alone, or as a list of them.
+type setupNames []string
+
+func (n *setupNames) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		*n = setupNames{node.Value}
+		return nil
+	}
+	var names []string
+	if err := node.Decode(&names); err != nil {
+		return err
+	}
+	*n = names
+	return nil
+}
+
+func (n setupNames) MarshalYAML() (any, error) {
+	if len(n) == 1 {
+		return n[0], nil
+	}
+	return []string(n), nil
 }
 
 type setupPoint struct {

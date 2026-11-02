@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -165,16 +166,19 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 		Connections: []connection{},
 		Boards:      []innerBoard{},
 	}
-	var startRoute []byte
 	var endX, endY *float64
 	s.Settings = &flowSettings{}
-	err := tx.QueryRowContext(ctx, `SELECT s.x, s.y, s.target_id, s.route, s.end_x, s.end_y, f.settings FROM flow_starts s
+	err := tx.QueryRowContext(ctx, `SELECT s.x, s.y, s.end_x, s.end_y, f.settings FROM flow_starts s
 		JOIN flows f ON f.id = s.flow_id WHERE s.flow_id = ?`, flow).
-		Scan(&s.Start.X, &s.Start.Y, &s.Start.Target, &startRoute, &endX, &endY, s.Settings)
+		Scan(&s.Start.X, &s.Start.Y, &endX, &endY, s.Settings)
 	if err != nil {
 		return s, err
 	}
-	s.Start.Route = routeJSON(startRoute)
+	targets, err := startTargets(ctx, tx, flow)
+	if err != nil {
+		return s, err
+	}
+	s.Start.Targets = targets[0]
 	if endX != nil && endY != nil {
 		s.End = &boardEnd{X: *endX, Y: *endY}
 	}
@@ -264,12 +268,11 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT b.process_id, b.x, b.y, b.target_id, b.route, b.end_x, b.end_y FROM inner_boards b
+	err = scanAll(ctx, tx, `SELECT b.process_id, b.x, b.y, b.end_x, b.end_y FROM inner_boards b
 		JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ? ORDER BY b.process_id`, func(rows *sql.Rows) error {
 		var b innerBoard
-		var route []byte
-		err := rows.Scan(&b.Process, &b.Start.X, &b.Start.Y, &b.Start.Target, &route, &b.End.X, &b.End.Y)
-		b.Start.Route = routeJSON(route)
+		err := rows.Scan(&b.Process, &b.Start.X, &b.Start.Y, &b.End.X, &b.End.Y)
+		b.Start.Targets = targets[b.Process]
 		s.Boards = append(s.Boards, b)
 		return err
 	}, flow)
@@ -383,6 +386,7 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		"DELETE a FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ?",
 		"DELETE st FROM object_states st JOIN objects o ON o.id = st.object_id WHERE o.flow_id = ?",
 		"DELETE b FROM inner_boards b JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ?",
+		"DELETE t FROM start_targets t JOIN processes p ON p.id = t.process_id WHERE p.flow_id = ?",
 		"DELETE sm FROM process_samples sm JOIN processes p ON p.id = sm.process_id WHERE p.flow_id = ?",
 		"DELETE FROM notes WHERE flow_id = ?",
 	} {
@@ -492,9 +496,12 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		}
 	}
 	for _, b := range s.Boards {
-		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, target_id, route, end_x, end_y) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			b.Process, b.Start.X, b.Start.Y, b.Start.Target, storedRoute(b.Start.Route), b.End.X, b.End.Y)
+		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, end_x, end_y) VALUES (?, ?, ?, ?, ?)",
+			b.Process, b.Start.X, b.Start.Y, b.End.X, b.End.Y)
 		if err != nil {
+			return err
+		}
+		if err := restoreStartTargets(ctx, tx, s, b.Start); err != nil {
 			return err
 		}
 	}
@@ -523,9 +530,25 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 	if s.End != nil {
 		endX, endY = &s.End.X, &s.End.Y
 	}
-	_, err := tx.ExecContext(ctx, "UPDATE flow_starts SET x = ?, y = ?, target_id = ?, route = ?, end_x = ?, end_y = ? WHERE flow_id = ?",
-		s.Start.X, s.Start.Y, s.Start.Target, storedRoute(s.Start.Route), endX, endY, flow)
-	return err
+	_, err := tx.ExecContext(ctx, "UPDATE flow_starts SET x = ?, y = ?, end_x = ?, end_y = ? WHERE flow_id = ?",
+		s.Start.X, s.Start.Y, endX, endY, flow)
+	if err != nil {
+		return err
+	}
+	return restoreStartTargets(ctx, tx, s, s.Start)
+}
+
+// Points the start at the processes it points at in s, those s still has.
+func restoreStartTargets(ctx context.Context, tx *sql.Tx, s snapshot, start startNode) error {
+	for _, t := range start.Targets {
+		if !slices.ContainsFunc(s.Processes, func(p process) bool { return p.ID == t.Process }) {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO start_targets (process_id, route) VALUES (?, ?)", t.Process, storedRoute(t.Route)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Locks the flow, against a run starting on it or another rewrite of its

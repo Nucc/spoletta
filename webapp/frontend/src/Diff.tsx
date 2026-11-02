@@ -22,7 +22,8 @@ export type BoardIds = {
   note: (id: number) => string
   link: (id: number) => string
   connection: (id: number) => string
-  start: string
+  // The link from the start to a process.
+  start: (process: number) => string
   // The board a flow process is on, null for the top board; undefined for
   // one the board doesn't have.
   parentOf: (process: number) => BoardId | undefined
@@ -70,7 +71,7 @@ export function highlightsOf(d: BoardDiff, board: BoardId, ids: BoardIds): Highl
     else if (!d.processes.some((p) => p.id === it.process && p.change === 'removed')) mark(h.nodes, ids.process(it.process), 'changed')
   }
   each(d.links, (it) => mark(h.edges, ids.link(it.id), it.change))
-  each(d.connections, (it) => mark(h.edges, it.id === 0 ? ids.start : ids.connection(it.id), it.change))
+  each(d.connections, (it) => mark(h.edges, it.id === 0 ? ids.start(it.target ?? 0) : ids.connection(it.id), it.change))
   return h
 }
 

@@ -224,12 +224,18 @@ func (c *problemCheck) onObject(level, rule string, o snapshotObject, format str
 
 // Whether the top board's start leads to a process on it.
 func (c *problemCheck) started() bool {
-	t := c.s.Start.Target
-	if t == nil {
-		return false
+	return len(c.topStarts()) > 0
+}
+
+// The processes on the top board its start points at.
+func (c *problemCheck) topStarts() []int64 {
+	var ps []int64
+	for _, t := range c.s.Start.processes() {
+		if p, ok := c.procs[t]; ok && p.Parent == nil {
+			ps = append(ps, t)
+		}
 	}
-	p, ok := c.procs[*t]
-	return ok && p.Parent == nil
+	return ps
 }
 
 // A run begins at the top board's start; without it, Run runs nothing.
@@ -372,10 +378,10 @@ func (c *problemCheck) inputNames(p process) []string {
 			takes(cn.Source)
 		}
 	}
-	if p.Parent != nil && c.innerStart(*p.Parent) == p.ID {
+	if p.Parent != nil && slices.Contains(c.innerStarts(*p.Parent), p.ID) {
 		takes(*p.Parent)
 	}
-	if p.Parent == nil && c.f.module && c.started() && *c.s.Start.Target == p.ID {
+	if p.Parent == nil && c.f.module && slices.Contains(c.topStarts(), p.ID) {
 		for _, o := range c.s.Objects {
 			if o.Parent == nil && o.Owner == nil {
 				names = append(names, o.Name)
@@ -385,14 +391,14 @@ func (c *problemCheck) inputNames(p process) []string {
 	return names
 }
 
-// The process a flow process's board starts with, 0 for none.
-func (c *problemCheck) innerStart(flowProcess int64) int64 {
+// The processes a flow process's board starts with.
+func (c *problemCheck) innerStarts(flowProcess int64) []int64 {
 	for _, b := range c.s.Boards {
-		if b.Process == flowProcess && b.Start.Target != nil {
-			return *b.Start.Target
+		if b.Process == flowProcess {
+			return b.Start.processes()
 		}
 	}
-	return 0
+	return nil
 }
 
 // A review is decided by those holding a role its people name, or admins
@@ -638,9 +644,7 @@ func (c *problemCheck) reach(inputs bool) (reached, given map[int64]bool) {
 				}
 			}
 			if p.Kind == kindFlow {
-				if t := c.innerStart(id); t != 0 {
-					queue = append(queue, t)
-				}
+				queue = append(queue, c.innerStarts(id)...)
 				for _, l := range c.links[id] {
 					if l.Direction != directionInput {
 						continue
@@ -657,7 +661,7 @@ func (c *problemCheck) reach(inputs bool) (reached, given map[int64]bool) {
 	}
 	var seeds []int64
 	if c.started() {
-		seeds = append(seeds, *c.s.Start.Target)
+		seeds = append(seeds, c.topStarts()...)
 		// What takes a record the run took starts with it.
 		for _, o := range c.s.Objects {
 			if picksRecord(o) && !c.f.module {

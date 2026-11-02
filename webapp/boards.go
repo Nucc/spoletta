@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -23,8 +24,9 @@ import (
 //
 // Each board has a start and an end. A flow's top board's start and end live
 // in flow_starts, the others' in inner_boards, which has their columns under
-// the same names. A top board's end has no place until it is moved: the
-// board places it below what is on it.
+// the same names, and the processes a start points at in start_targets, each
+// on the board whose start that is. A top board's end has no place until it
+// is moved: the board places it below what is on it.
 
 // Where a board ends.
 type boardEnd struct {
@@ -114,13 +116,47 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func getStart(ctx context.Context, db querier, flow int64, board *int64) (startNode, error) {
+type rowQuerier interface {
+	querier
+	rowsQuerier
+}
+
+func getStart(ctx context.Context, db rowQuerier, flow int64, board *int64) (startNode, error) {
 	var s startNode
-	var route []byte
 	table, cond, args := startRow(flow, board)
-	err := db.QueryRowContext(ctx, "SELECT x, y, target_id, route FROM "+table+" "+cond, args...).Scan(&s.X, &s.Y, &s.Target, &route)
-	s.Route = routeJSON(route)
+	if err := db.QueryRowContext(ctx, "SELECT x, y FROM "+table+" "+cond, args...).Scan(&s.X, &s.Y); err != nil {
+		return s, err
+	}
+	targets, err := startTargets(ctx, db, flow)
+	s.Targets = targets[boardKey(board)]
 	return s, err
+}
+
+// What the starts of the flow's boards point at, by board: 0 for the top
+// board, else the flow process's id.
+func startTargets(ctx context.Context, db rowsQuerier, flow int64) (map[int64][]startTarget, error) {
+	targets := map[int64][]startTarget{}
+	err := scanAll(ctx, db, `SELECT p.id, COALESCE(p.parent_id, 0), t.route FROM start_targets t JOIN processes p ON p.id = t.process_id
+		WHERE p.flow_id = ? ORDER BY p.id`, func(rows *sql.Rows) error {
+		var t startTarget
+		var board int64
+		var route []byte
+		if err := rows.Scan(&t.Process, &board, &route); err != nil {
+			return err
+		}
+		t.Route = routeJSON(route)
+		targets[board] = append(targets[board], t)
+		return nil
+	}, flow)
+	return targets, err
+}
+
+// A board as startTargets keys it.
+func boardKey(board *int64) int64 {
+	if board == nil {
+		return 0
+	}
+	return *board
 }
 
 func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
@@ -143,26 +179,23 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		rows, err := db.QueryContext(r.Context(),
-			`SELECT b.process_id, b.x, b.y, b.target_id, b.route, b.end_x, b.end_y
-			FROM inner_boards b JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ? ORDER BY b.process_id`, f)
+		targets, err := startTargets(r.Context(), db, f)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		defer rows.Close()
 		bs := []innerBoard{}
-		for rows.Next() {
+		err = scanAll(r.Context(), db, `SELECT b.process_id, b.x, b.y, b.end_x, b.end_y
+			FROM inner_boards b JOIN processes p ON p.id = b.process_id WHERE p.flow_id = ? ORDER BY b.process_id`, func(rows *sql.Rows) error {
 			var b innerBoard
-			var route []byte
-			if err := rows.Scan(&b.Process, &b.Start.X, &b.Start.Y, &b.Start.Target, &route, &b.End.X, &b.End.Y); err != nil {
-				serverError(w, err)
-				return
+			if err := rows.Scan(&b.Process, &b.Start.X, &b.Start.Y, &b.End.X, &b.End.Y); err != nil {
+				return err
 			}
-			b.Start.Route = routeJSON(route)
+			b.Start.Targets = targets[b.Process]
 			bs = append(bs, b)
-		}
-		if err := rows.Err(); err != nil {
+			return nil
+		}, f)
+		if err != nil {
 			serverError(w, err)
 			return
 		}
@@ -180,6 +213,9 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
+		// target points the start at that process alone, or with null at
+		// none; route is where the link to its one process runs. Pointing
+		// it at several is a process's own, PUT /api/processes/{id}/start.
 		var patch struct {
 			X *float64 `json:"x"`
 			Y *float64 `json:"y"`
@@ -219,25 +255,30 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 			// A new target needs a new route.
-			_, err := db.ExecContext(r.Context(), "UPDATE "+table+" SET target_id = ?, route = NULL "+cond,
-				append([]any{target}, args...)...)
+			err := inTx(r.Context(), db, func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(r.Context(), `DELETE t FROM start_targets t JOIN processes p ON p.id = t.process_id
+					WHERE p.flow_id = ? AND p.parent_id <=> ?`, f, board); err != nil {
+					return err
+				}
+				if target == nil {
+					return nil
+				}
+				_, err := tx.ExecContext(r.Context(), "INSERT INTO start_targets (process_id) VALUES (?)", *target)
+				return err
+			})
 			if err != nil {
 				serverError(w, err)
 				return
 			}
 		}
 		if len(patch.Route) > 0 {
-			var lanes route
-			if err := json.Unmarshal(patch.Route, &lanes); err != nil || len(lanes) > maxRouteLanes {
+			stored, ok := routeOf(patch.Route)
+			if !ok {
 				http.Error(w, "invalid route", http.StatusBadRequest)
 				return
 			}
-			var stored []byte
-			if lanes != nil {
-				stored = patch.Route
-			}
-			_, err := db.ExecContext(r.Context(), "UPDATE "+table+" SET route = ? "+cond,
-				append([]any{stored}, args...)...)
+			_, err := db.ExecContext(r.Context(), `UPDATE start_targets t JOIN processes p ON p.id = t.process_id SET t.route = ?
+				WHERE p.flow_id = ? AND p.parent_id <=> ?`, stored, f, board)
 			if err != nil {
 				serverError(w, err)
 				return
@@ -245,6 +286,54 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		writeStart(w, r, f, board)
 	})
+
+	// Points the start of the process's board at it too, so a run begins
+	// with it beside the others it points at, or with a route, moves the
+	// link to it; DELETE points the start away from it.
+	setStartTarget := func(w http.ResponseWriter, r *http.Request, connect bool) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Route json.RawMessage `json:"route"`
+		}
+		if connect && r.ContentLength != 0 {
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+				http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		stored, ok := routeOf(body.Route)
+		if !ok {
+			http.Error(w, "invalid route", http.StatusBadRequest)
+			return
+		}
+		var flow int64
+		var board *int64
+		err = db.QueryRowContext(r.Context(), "SELECT flow_id, parent_id FROM processes WHERE id = ?", id).Scan(&flow, &board)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "process not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if connect {
+			_, err = db.ExecContext(r.Context(), "INSERT INTO start_targets (process_id, route) VALUES (?, ?) AS new ON DUPLICATE KEY UPDATE route = new.route", id, stored)
+		} else {
+			_, err = db.ExecContext(r.Context(), "DELETE FROM start_targets WHERE process_id = ?", id)
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		writeStart(w, r, flow, board)
+	}
+	mux.HandleFunc("PUT /api/processes/{id}/start", func(w http.ResponseWriter, r *http.Request) { setStartTarget(w, r, true) })
+	mux.HandleFunc("DELETE /api/processes/{id}/start", func(w http.ResponseWriter, r *http.Request) { setStartTarget(w, r, false) })
 
 	// A top board's end is null until it is moved.
 	writeEnd := func(w http.ResponseWriter, r *http.Request, flow int64, board *int64) {
@@ -488,18 +577,18 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 		return p, "", err
 	}
 
-	start, err := getStart(ctx, tx, p.Flow, p.Parent)
-	if err != nil {
+	// The start of the flow process's board points at those of them the
+	// start pointed at, as moving them there made it, on new routes; the
+	// start they leave points at the flow process instead.
+	var started int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM start_targets WHERE process_id IN "+placeholders(len(processes)), procArgs...).Scan(&started); err != nil || started == 0 {
 		return p, "", err
 	}
-	if start.Target != nil && inSet[*start.Target] {
-		table, cond, wargs := startRow(p.Flow, p.Parent)
-		if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET target_id = ?, route = NULL "+cond, append([]any{p.ID}, wargs...)...); err != nil {
-			return p, "", err
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE inner_boards SET target_id = ? WHERE process_id = ?", *start.Target, p.ID); err != nil {
-			return p, "", err
-		}
+	if _, err := tx.ExecContext(ctx, "UPDATE start_targets SET route = NULL WHERE process_id IN "+placeholders(len(processes)), procArgs...); err != nil {
+		return p, "", err
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO start_targets (process_id) VALUES (?)", p.ID); err != nil {
+		return p, "", err
 	}
 	return p, "", nil
 }

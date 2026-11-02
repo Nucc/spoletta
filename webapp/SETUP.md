@@ -93,7 +93,8 @@ Flows and procedures have the same shape:
     - cron: "0 9 * * 1-5"       # or @hourly, @every 90m, ...
       timezone: Europe/London
       enabled: false            # enabled if absent
-  start: {next: Fetch}          # the process the top board starts with
+  start: {next: Fetch}          # the process the top board starts with, or a list
+                                # of them, all at once: {next: [Fetch, Plan]}
   end: {x: 40, y: 600}          # where the board's end is drawn
   processes: [...]
   objects: [...]

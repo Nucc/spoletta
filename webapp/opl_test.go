@@ -50,8 +50,8 @@ func TestOPL(t *testing.T) {
 		},
 		LinkStates:  []snapshotLinkState{{Link: 40, State: 20}, {Link: 40, State: 21}, {Link: 45, State: 22}, {Link: 45, State: 23}},
 		Connections: []connection{{ID: 50, Source: 2, Target: 5, Kind: connectionFailure}, {ID: 51, Source: 6, Target: 7}},
-		Start:       startNode{Target: id(1)},
-		Boards:      []innerBoard{{Process: 7, Start: startNode{Target: id(8)}}},
+		Start:       startsWith(1),
+		Boards:      []innerBoard{{Process: 7, Start: startsWith(8)}},
 	}
 	got := opl(s, func(id int64) string {
 		if id == 42 {

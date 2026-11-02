@@ -180,7 +180,7 @@ type layoutAt struct{ x, y float64 }
 // board places stays where it is.
 func TestBuilderLayout(t *testing.T) {
 	board := &setupBoard{
-		Start: &setupStart{Next: "A"},
+		Start: &setupStart{Next: setupNames{"A"}},
 		Processes: []setupProcess{
 			{Name: "A", Next: []string{"B"}, OnFailure: []string{"C"}},
 			{Name: "B", Takes: []setupLink{{Object: "O"}}, Yields: []setupLink{{Object: "P"}}},
@@ -189,7 +189,7 @@ func TestBuilderLayout(t *testing.T) {
 			{Name: "E", X: layoutFloat(500), Y: layoutFloat(50)},
 			{Name: "F"},
 			{Name: "G", Kind: kindFlow, Board: &setupBoard{
-				Start:     &setupStart{Next: "I"},
+				Start:     &setupStart{Next: setupNames{"I"}},
 				Processes: []setupProcess{{Name: "I"}},
 				Objects:   []setupObject{{Name: "J"}},
 			}},

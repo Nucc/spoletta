@@ -17,6 +17,7 @@ import TabBar from './TabBar'
 import TaskBoard from './TaskBoard'
 import Trash from './Trash'
 import { TabContext, useTabs } from './tabs'
+import ErrorBanner from './ErrorBanner'
 
 // The page the URL's hash names: #/flows/<id> for a flow's board,
 // #/flows/<id>/runs/<run> for it with one of its runs open, and with
@@ -174,9 +175,7 @@ function FlowPage({ id, run, step }: { id: number; run: number | null; step: num
   if (error) {
     return (
       <div className="flows-page">
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
+        <ErrorBanner error={error} />
         <p className="flows">
           <a href="#/">Back to every flow</a>
         </p>

@@ -44,6 +44,7 @@ import { QueryBar } from './Search'
 import { useConfirm } from './Confirm'
 import { usePaletteSource } from './CommandPalette'
 import { HomeFrame } from './FlowList'
+import ErrorBanner from './ErrorBanner'
 
 // How often the board's records are asked for again, as flows and people
 // move them on; more often while it plays or runs go on its records, so a
@@ -55,8 +56,8 @@ const BUSY_REFRESH_MS = 2_000
 // board in this browser.
 const RAIL_KEY = 'spoletta.taskboard.rail'
 
-// What went wrong, without the request it answered.
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err)).replace(/^\w+ \S+: \d+ /, '').trim()
+// What went wrong, in the server's words.
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 const editOf = (c: TaskColumn): TaskColumnEdit => ({
   name: c.name,
@@ -302,11 +303,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
           />
         )}
       </header>
-      {(error || actionError) && (
-        <div className="error-banner" role="alert">
-          {error ?? actionError}
-        </div>
-      )}
+      <ErrorBanner error={error ?? actionError} />
       {board?.stopped && !board.playing && (
         <div className="task-board-stopped" role="status">
           It stopped playing: {board.stopped}

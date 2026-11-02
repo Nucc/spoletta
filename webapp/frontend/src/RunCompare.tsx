@@ -4,6 +4,7 @@ import { diffLines, fieldsOf, fieldText, outcomeOf, pairObjects, pairProcesses, 
 import { FlowBuilderIcon } from './icons'
 import { decisionText, formatTime, ORIGIN_LABELS, RUN_LABELS, STEP_LABELS } from './Runs'
 import { formatSpan } from './timeline'
+import ErrorBanner from './ErrorBanner'
 
 // How often the page catches up with a run still going.
 const REFRESH_MS = 3000
@@ -70,11 +71,7 @@ export default function RunCompare({ flow, a: aId, b: bId }: { flow: number; a: 
           Refresh
         </button>
       </header>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <ErrorBanner error={error} />
       <main className="compare-main">
         {!a || !b ? (
           !error && <p className="flows-note">Loading…</p>

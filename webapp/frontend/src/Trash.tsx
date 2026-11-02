@@ -4,6 +4,7 @@ import { FlowBuilderIcon, ObjectIcon, SubflowIcon, TrashIcon } from './icons'
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
 import { HomeFrame } from './FlowList'
+import ErrorBanner from './ErrorBanner'
 
 // The trash (#/trash): the flows, procedures and structs deleted that one
 // may change, the latest first, each saying when it went and by whom, and
@@ -83,11 +84,7 @@ export default function Trash() {
           Trash
         </h1>
       </header>
-      {error && (
-        <div className="error-banner" role="alert" onClick={() => setError(null)}>
-          {error} (click to dismiss)
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {restored && (
         <div className="notice-banner" role="status">
           Restored <a href={`#/flows/${restored.id}`}>{restored.name}</a>.

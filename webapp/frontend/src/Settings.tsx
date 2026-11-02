@@ -19,6 +19,7 @@ import { SkillsSection } from './Skills'
 import { EgressSection } from './Egress'
 import { CredentialsSection } from './Credentials'
 import { SpendingSection } from './Spending'
+import ErrorBanner from './ErrorBanner'
 
 // The parts of the settings, each a tab: #/settings/<tab>.
 export type SettingsTab =
@@ -81,11 +82,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
           Settings
         </h1>
       </header>
-      {error && (
-        <div className="error-banner" role="alert" onClick={() => setError(null)}>
-          {error} (click to dismiss)
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {me && (
         <div className="settings">
           <nav className="settings-tabs" aria-label="Settings">

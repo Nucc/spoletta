@@ -3,6 +3,7 @@ import { getActivity, webhookLabel, type Activity as ActivityData, type Activity
 import { ActivityIcon, FlowBuilderIcon } from './icons'
 import { formatTime } from './Runs'
 import { HomeFrame } from './FlowList'
+import ErrorBanner from './ErrorBanner'
 
 // What goes on across every flow one sees: the runs going on now and those
 // that failed lately, and over the last 7, 30 or 90 days, the runs a day and
@@ -77,11 +78,7 @@ export default function Activity() {
           Activity
         </h1>
       </header>
-      {error && (
-        <div className="error-banner" role="alert" onClick={() => setError(null)}>
-          {error} (click to dismiss)
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
       <HomeFrame at="activity">
         <main className="activity">
           <div className="activity-filters">

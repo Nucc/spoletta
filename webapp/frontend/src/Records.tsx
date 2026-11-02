@@ -20,6 +20,7 @@ import { RecordRunDialog } from './RecordRunDialog'
 import { formatTime } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch } from './Search'
 import { useConfirm } from './Confirm'
+import ErrorBanner from './ErrorBanner'
 
 // How often the records are asked for again, as flows write them.
 const REFRESH_MS = 10_000
@@ -235,11 +236,7 @@ export default function RecordsPage({ id }: { id: number }) {
           Refresh
         </button>
       </header>
-      {(error || flowError || actionError) && (
-        <div className="error-banner" role="alert">
-          {error ?? flowError ?? actionError}
-        </div>
-      )}
+      <ErrorBanner error={error ?? flowError ?? actionError} />
       <main className="data-main">
         {records === null ? (
           <p className="flows-note">Loading…</p>

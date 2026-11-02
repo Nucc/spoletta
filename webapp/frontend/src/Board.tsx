@@ -112,6 +112,8 @@ import { onCopiedElsewhere, readCopied, writeCopied } from './clipboard'
 import { FlowSettingsPanel } from './FlowSettings'
 import { keepTabView, openTab, TabContext, tabView, type TabView } from './tabs'
 import {
+  forgetLostChange,
+  unreachable,
   listTeams,
   setFlowOwner,
   type Team,
@@ -220,6 +222,7 @@ import {
   type ProcessKind,
   type Start,
 } from './api'
+import ErrorBanner from './ErrorBanner'
 
 type FlowNode = ProcessNodeType | ObjectNodeType | StartNodeType | EndNodeType | NoteNodeType
 type FlowEdge = Edge<LinkEdgeData & { kind?: StructureKind }>
@@ -604,10 +607,18 @@ export default function Board({
   // The reviews whose process's panel was opened for them, so closing it keeps it closed.
   const shownReviews = useRef(new Set<number>())
 
+  // The server not answering is said by the banner's notice, which every
+  // request tells, so the board's own error isn't set again by each one
+  // failing, the run list and presence asking every few seconds.
   const report = useCallback((err: unknown) => {
     console.error(err)
-    setError(err instanceof Error ? err.message : String(err))
+    if (!unreachable(err)) setError(err instanceof Error ? err.message : String(err))
   }, [])
+  // Shows the board as the server kept it, once changes made while it
+  // didn't answer were lost.
+  const reloadLost = useCallback(() => {
+    reload.current().then(forgetLostChange, report)
+  }, [report])
 
   useEffect(() => {
     if (me?.user) listTeams().then(setTeams, report)
@@ -3870,11 +3881,7 @@ export default function Board({
           />
         )}
       </header>
-      {error && (
-        <div className="error-banner" onClick={() => setError(null)}>
-          {error} (click to dismiss)
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} reload={{ label: 'Reload board', onClick: reloadLost }} />
       <div className="workspace" style={{ '--panel-width': `${panelColumn.width}px` } as CSSProperties}>
         {(addsBlocks || showsRecords || !structBoard) && (
           <Sidebar>

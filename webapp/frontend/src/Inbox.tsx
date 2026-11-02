@@ -3,6 +3,7 @@ import { listInbox, onInboxChanged, reviewHash, type InboxItem } from './api'
 import { useMe } from './Account'
 import { FlowBuilderIcon, InboxIcon } from './icons'
 import { formatTime } from './Runs'
+import ErrorBanner from './ErrorBanner'
 
 // How often the inbox, and the count of it in the tab bar, ask again.
 export const INBOX_REFRESH_MS = 30_000
@@ -61,11 +62,7 @@ export default function Inbox() {
           Inbox
         </h1>
       </header>
-      {error && (
-        <div className="error-banner" role="alert" onClick={() => setError(null)}>
-          {error} (click to dismiss)
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
       <main className="flows inbox">
         <section className="flow-section" aria-label="Inbox">
           <h2>

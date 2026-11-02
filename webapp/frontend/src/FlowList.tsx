@@ -72,6 +72,7 @@ import {
   type Need,
   type View,
 } from './home'
+import ErrorBanner, { NoticeBanner } from './ErrorBanner'
 
 // The main page: everything one sees, a block of each kind: the flows that
 // run, each a job of its own, such as fixing exceptions or bumping
@@ -445,16 +446,8 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
           />
         </div>
       </header>
-      {error && (
-        <div className="error-banner" role="alert" onClick={() => setError(null)}>
-          {error} (click to dismiss)
-        </div>
-      )}
-      {notice && (
-        <div className="notice-banner" role="status" onClick={() => setNotice(null)}>
-          {notice} (click to dismiss)
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
+      {notice && <NoticeBanner onDismiss={() => setNotice(null)}>{notice}</NoticeBanner>}
       <div className="home-layout">
         <HomeRail flows={all} boards={allBoards} me={me} here={list} onShow={show} />
         <main className="home-main" onKeyDown={onListKey}>

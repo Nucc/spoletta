@@ -257,33 +257,198 @@ export function signIn() {
   window.location.href = `/api/auth/login?${new URLSearchParams({ next: window.location.pathname + window.location.hash })}`
 }
 
+// What went wrong with a request to the server, said for whoever reads it
+// on the page rather than for whoever looks into it: the server's own
+// words when it answered, which it writes for people, else that it couldn't
+// be reached. The request's method, path and status stay on the error, and
+// pages log it whole to the console.
+
+// What a request getting no answer from the webapp says.
+export const UNREACHABLE = "Couldn't reach the server"
+
+// A request the webapp refused or failed, or never answered.
+export class ApiError extends Error {
+  readonly method: string
+  readonly url: string
+  // The status answered, by the webapp or by a proxy in its place; 0 when
+  // nothing answered at all.
+  readonly status: number
+  // Whether the webapp never got it or never answered: the browser got no
+  // answer, or a proxy in front of it answered that it couldn't reach it.
+  readonly unreachable: boolean
+
+  constructor(method: string, url: string, status: number, message: string, unreachable = false, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause })
+    this.name = 'ApiError'
+    this.method = method
+    this.url = url
+    this.status = status
+    this.unreachable = unreachable
+  }
+}
+
+// Whether what went wrong is that the server couldn't be reached, whether
+// as the error itself or as what a page kept of it.
+export function unreachable(err: unknown): boolean {
+  return err instanceof ApiError ? err.unreachable : err === UNREACHABLE
+}
+
+// A body that is a page of HTML rather than the webapp's words.
+const isHTML = (contentType: string, text: string) =>
+  contentType.toLowerCase().includes('text/html') || /^<(!doctype|html)\b/i.test(text)
+
+// Whether an answer came from a proxy in front of the webapp saying it
+// couldn't reach it, as Vite's in development does with an empty 502 and a
+// load balancer with a page of its own; the webapp's own 502s and 503s say
+// in words what it couldn't reach.
+export function proxyAnswer(status: number, contentType: string, body: string): boolean {
+  const text = body.trim()
+  return (status === 502 || status === 503 || status === 504) && (text === '' || isHTML(contentType, text))
+}
+
+// The error a request answered with a status other than success gives, in
+// the webapp's words when it has some.
+export function answerError(method: string, url: string, status: number, contentType: string, body: string): ApiError {
+  if (proxyAnswer(status, contentType, body)) return new ApiError(method, url, status, UNREACHABLE, true)
+  const text = body.trim()
+  // What a failure the webapp didn't foresee says, its log telling more.
+  if (text === '' || isHTML(contentType, text) || text === 'internal server error') {
+    const said = status >= 500 ? 'Something went wrong on the server' : 'The server refused the request'
+    return new ApiError(method, url, status, `${said} (${status})`)
+  }
+  return new ApiError(method, url, status, text)
+}
+
+// What a page shows of an error: its message, starting with a capital as
+// a sentence does, though the webapp writes its own in lower case to be
+// read after something else as well.
+export function errorText(err: unknown): string {
+  const text = (err instanceof Error ? err.message : String(err)).trim()
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+// How things stand with the server, as requests found: whether it answers,
+// whether a change made while it didn't was lost, and whether whoever was
+// told dismissed it.
+export type ServerState = {
+  offline: boolean
+  lostChange: boolean
+  // Moves on each time something new goes wrong, so a notice dismissed
+  // shows again only then.
+  round: number
+  dismissed: number
+}
+
+// What the connection notice says, or nothing when there is nothing to
+// say or it was dismissed.
+export function connectionText(c: ServerState): string | null {
+  if (c.dismissed === c.round || (!c.offline && !c.lostChange)) return null
+  if (!c.offline) return 'The server is back, but changes made while it was away weren’t saved.'
+  if (c.lostChange) return 'Can’t reach the server, so changes aren’t being saved. Waiting for it to come back…'
+  return 'Can’t reach the server, so this page may be out of date. Waiting for it to come back…'
+}
+
+// How things stand with the server, as the latest requests found; see
+// connectionText for what the page says of it.
+let connection: ServerState = { offline: false, lostChange: false, round: 0, dismissed: 0 }
+const connectionListeners = new Set<() => void>()
+// Asks again every so often while the server doesn't answer, so the page
+// hears it is back even with nothing else asking.
+const OFFLINE_RETRY_MS = 5000
+let retrying: number | undefined
+
+function setConnection(change: Partial<Pick<ServerState, 'offline' | 'lostChange'>>) {
+  const next = { ...connection, ...change }
+  window.clearTimeout(retrying)
+  if (next.offline) retrying = window.setTimeout(() => void answer('/api/me').catch(() => {}), OFFLINE_RETRY_MS)
+  if (next.offline === connection.offline && next.lostChange === connection.lostChange) return
+  // Something new went wrong, which shows even if the last was dismissed.
+  if ((next.offline && !connection.offline) || (next.lostChange && !connection.lostChange)) next.round++
+  connection = next
+  connectionListeners.forEach((l) => l())
+}
+
+// Calls back each time how things stand with the server changes.
+export function onConnection(callback: () => void): () => void {
+  connectionListeners.add(callback)
+  return () => connectionListeners.delete(callback)
+}
+
+export const currentConnection = (): ServerState => connection
+
+// Hides the notice of how things stand with the server until something new
+// goes wrong, forgetting a change lost, which whoever dismissed it now knows.
+export function dismissConnection() {
+  connection = { ...connection, lostChange: false, dismissed: connection.round }
+  connectionListeners.forEach((l) => l())
+}
+
+// Forgets a change lost while the server didn't answer, once the board is
+// loaded again from what the server kept.
+export function forgetLostChange() {
+  setConnection({ lostChange: false })
+}
+
+// Sends a request and gives back the webapp's answer, whatever its status,
+// keeping track of whether the server answers: a request nothing answers,
+// or a proxy answers in its place, throws an ApiError saying so.
+async function answer(url: string, init?: RequestInit): Promise<Response> {
+  const method = init?.method ?? 'GET'
+  let res: Response
+  try {
+    res = await fetch(url, init)
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err
+    setConnection({ offline: true })
+    throw new ApiError(method, url, 0, UNREACHABLE, true, err)
+  }
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    const body = await res.clone().text()
+    if (proxyAnswer(res.status, res.headers.get('Content-Type') ?? '', body)) {
+      setConnection({ offline: true })
+      throw new ApiError(method, url, res.status, UNREACHABLE, true)
+    }
+  }
+  setConnection({ offline: false })
+  return res
+}
+
+// The error an answer other than a success gives, in the webapp's words.
+async function refused(res: Response, method: string, url: string): Promise<ApiError> {
+  return answerError(method, url, res.status, res.headers.get('Content-Type') ?? '', await res.text())
+}
+
 async function send(url: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(url, {
+  const res = await answer(url, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   // The session ended, or there was none.
   if (res.status === 401) signIn()
-  if (!res.ok) {
-    throw new Error(`${init?.method ?? 'GET'} ${url}: ${res.status} ${await res.text()}`)
-  }
+  if (!res.ok) throw await refused(res, init?.method ?? 'GET', url)
   return res
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET'
   let res: Response
-  if (method === 'GET' || NOT_BOARDS.some((p) => url.startsWith(p))) {
-    res = await send(url, init)
-  } else {
-    const sent = send(url, init)
-    changing.add(sent)
-    try {
-      res = await sent
-    } finally {
-      changing.delete(sent)
+  try {
+    if (method === 'GET' || NOT_BOARDS.some((p) => url.startsWith(p))) {
+      res = await send(url, init)
+    } else {
+      const sent = send(url, init)
+      changing.add(sent)
+      try {
+        res = await sent
+      } finally {
+        changing.delete(sent)
+      }
+      changeListeners.forEach((l) => l(url))
     }
-    changeListeners.forEach((l) => l(url))
+  } catch (err) {
+    // A change the server never got is lost, though the page may show it.
+    if (method !== 'GET' && unreachable(err)) setConnection({ lostChange: true })
+    throw err
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
@@ -806,13 +971,13 @@ export function updateFlow(id: number, patch: Partial<Pick<Flow, 'name' | 'modul
 // undone: then it moves nothing and says how many are going on.
 export async function trashFlow(id: number, stopRuns = false): Promise<{ running: number }> {
   const url = `/api/flows/${id}`
-  const res = await fetch(url, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stopRuns }) })
+  const res = await answer(url, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stopRuns }) })
   if (res.status === 401) signIn()
   if (res.status === 409) {
-    const refused = (await res.json().catch(() => null)) as { running?: number } | null
-    if (typeof refused?.running === 'number') return { running: refused.running }
+    const running = (await res.clone().json().catch(() => null)) as { running?: number } | null
+    if (typeof running?.running === 'number') return { running: running.running }
   }
-  if (!res.ok) throw new Error(`DELETE ${url}: ${res.status} ${await res.text()}`)
+  if (!res.ok) throw await refused(res, 'DELETE', url)
   return { running: 0 }
 }
 
@@ -1502,9 +1667,10 @@ export function deleteSchedule(id: number): Promise<void> {
 
 // The next times a cron expression gives in a time zone, or why it gives none.
 export async function previewSchedule(cron: string, timezone: string): Promise<{ upcoming: string[] } | { problem: string }> {
-  const res = await fetch(`/api/schedules/preview?${new URLSearchParams({ cron, timezone })}`)
+  const url = `/api/schedules/preview?${new URLSearchParams({ cron, timezone })}`
+  const res = await answer(url)
   if (res.status === 400) return { problem: (await res.text()).trim() }
-  if (!res.ok) throw new Error(`preview schedule: ${res.status} ${await res.text()}`)
+  if (!res.ok) throw await refused(res, 'GET', url)
   return res.json()
 }
 
@@ -1934,7 +2100,7 @@ export function listInbox(): Promise<InboxItem[]> {
 // does, so a session ending doesn't pull them away from what they type.
 export async function countInbox(): Promise<number | null> {
   try {
-    const res = await fetch('/api/inbox')
+    const res = await answer('/api/inbox')
     return res.ok ? ((await res.json()) as InboxItem[]).length : null
   } catch {
     return null

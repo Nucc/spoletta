@@ -858,12 +858,64 @@ body {
   border-color: #c297ff;
 }
 
+/* What went wrong, under a page's header; see ErrorBanner.tsx. */
 .error-banner {
-  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 16px;
   background: #ffebe9;
   color: #82071e;
   border-bottom: 1px solid #ff8182;
+}
+
+.banner-text {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  overflow-wrap: break-word;
+  white-space: pre-line;
+}
+
+.error-banner button,
+.notice-banner button {
+  flex-shrink: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  border-radius: 4px;
   cursor: pointer;
+}
+
+.error-banner .banner-action {
+  padding: 2px 10px;
+  font-weight: 600;
+  background: #fff;
+  border: 1px solid #ff8182;
+}
+
+.error-banner .banner-action:hover {
+  background: #fff5f4;
+}
+
+.error-banner .banner-dismiss,
+.notice-banner .banner-dismiss {
+  padding: 2px 6px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.error-banner .banner-dismiss:hover,
+.error-banner button:focus-visible {
+  background: rgba(130, 7, 30, 0.1);
+  outline: none;
+}
+
+.notice-banner .banner-dismiss:hover,
+.notice-banner button:focus-visible {
+  background: rgba(26, 127, 55, 0.12);
+  outline: none;
 }
 
 .workspace {
@@ -4762,11 +4814,13 @@ button.toolbar-link {
 
 /* Says what an import did, as the error banner says what went wrong. */
 .notice-banner {
-  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 16px;
   background: #dafbe1;
   color: #1a7f37;
   border-bottom: 1px solid #4ac26b;
-  cursor: pointer;
 }
 
 .schedule-form {

@@ -4,6 +4,7 @@ import { FlowBuilderIcon } from './icons'
 import { indexFacets, parse as parseQuery } from './query'
 import { formatTime } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch } from './Search'
+import ErrorBanner from './ErrorBanner'
 
 // How often the log is asked for again, as steps run.
 const REFRESH_MS = 10_000
@@ -71,11 +72,7 @@ export default function AuditLogPage() {
           Refresh
         </button>
       </header>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <ErrorBanner error={error} />
       <main className="data-main">
         {log === null ? (
           <p className="flows-note">Loading…</p>

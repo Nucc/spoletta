@@ -5,6 +5,7 @@ import { FlowBuilderIcon, TableIcon } from './icons'
 import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { formatTime, RUN_LABELS } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch, type Display } from './Search'
+import ErrorBanner from './ErrorBanner'
 
 // How often the table catches up with runs still going.
 const REFRESH_MS = 5000
@@ -128,11 +129,7 @@ export default function FlowDataPage({ id }: { id: number }) {
           Refresh
         </button>
       </header>
-      {error && (
-        <div className="error-banner" role="alert" onClick={() => setError(null)}>
-          {error} (click to dismiss)
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
       <main className="data-main">
         {data === null ? (
           <p className="flows-note">Loading…</p>

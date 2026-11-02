@@ -14,6 +14,7 @@ import { ClockIcon, FlowBuilderIcon, PencilIcon, PlusIcon, TrashIcon } from './i
 import { formatTime, RUN_LABELS } from './Runs'
 import { useConfirm } from './Confirm'
 import { HomeFrame } from './FlowList'
+import ErrorBanner from './ErrorBanner'
 
 // The common times, offered before writing a cron expression by hand.
 const PRESETS: { cron: string; label: string }[] = [
@@ -104,11 +105,7 @@ export default function Schedules() {
           Schedules
         </h1>
       </header>
-      {error && (
-        <div className="error-banner" role="alert" onClick={() => setError(null)}>
-          {error} (click to dismiss)
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
       <HomeFrame at="schedules">
         <main className="flows">
           <section className="flow-section" aria-label="Schedules">

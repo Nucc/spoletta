@@ -5829,6 +5829,12 @@ kbd {
   font-size: 13px;
 }
 
+/* The audit log's table fills its width, its last column, what happened,
+   taking what the others leave. */
+.audit-table {
+  width: 100%;
+}
+
 .data-table th,
 .data-table td {
   padding: 6px 10px;
@@ -6154,7 +6160,10 @@ input.record-field-name {
   font-size: 14px;
 }
 
-/* The settings: a tab per part down the side, the part on the right. */
+/* The settings: a tab per part down the side, in groups, staying in sight
+   while a long part scrolls; the part on the right. The audit log's table
+   takes the window's width, growing to the right only, so the tabs stay
+   where they are on every part. */
 .settings {
   display: flex;
   gap: 32px;
@@ -6164,12 +6173,35 @@ input.record-field-name {
   padding: 32px 16px;
 }
 
+.settings.wide {
+  width: auto;
+  max-width: none;
+  margin-left: max(0px, calc((100% - 980px) / 2));
+  margin-right: 0;
+}
+
 .settings-tabs {
+  position: sticky;
+  top: 16px;
+  align-self: flex-start;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   gap: 2px;
   width: 180px;
+}
+
+.settings-tabs-group {
+  margin: 16px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #656d76;
+}
+
+.settings-tabs-group:first-child {
+  margin-top: 0;
 }
 
 .settings-tabs a {
@@ -6190,6 +6222,12 @@ input.record-field-name {
   font-weight: 600;
 }
 
+/* Inside the tab's own shape rather than a ring around it. */
+.settings-tabs a:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px #0969da;
+}
+
 .settings-main {
   flex: 1;
   min-width: 0;
@@ -6197,6 +6235,75 @@ input.record-field-name {
 
 .settings-main .flow-section h2 {
   margin-top: 0;
+}
+
+/* A part's head: its name with the ? folding the rest of its help, the
+   button adding to it on the right, and what it is for in a sentence. */
+.settings-head {
+  margin-bottom: 16px;
+}
+
+.settings-head.sub {
+  margin: 28px 0 12px;
+}
+
+.settings-head-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.settings-head-row h2,
+.settings-head-row h3 {
+  margin: 0;
+}
+
+.settings-head-row h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-head-action {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.settings-lead,
+.settings-head .panel-note {
+  max-width: 70ch;
+  margin: 4px 0 0;
+  color: #656d76;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.settings-head .panel-note {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+}
+
+/* A part with nothing in it yet: what would go there, and adding it. */
+.settings-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px;
+  border: 1px dashed #d0d7de;
+  border-radius: 10px;
+}
+
+.settings-empty p {
+  max-width: 60ch;
+  margin: 0;
+  color: #656d76;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .settings-facts {
@@ -6213,13 +6320,6 @@ input.record-field-name {
 
 .settings-facts dd {
   margin: 0;
-}
-
-.settings-mcp {
-  padding: 16px;
-  background: #fff;
-  border: 1px solid #d8dee4;
-  border-radius: 10px;
 }
 
 @media (max-width: 720px) {
@@ -6380,21 +6480,38 @@ select.flow-owner:disabled {
   width: 260px;
 }
 
-/* A model provider's row: what it is and where its key comes from, then its models. */
-.provider-models {
+/* An internet host: the host and what it is for on one line, taking the
+   room a key's field takes on other rows, so Remove sits at the end. */
+.egress-item .key-provider {
   flex: 1;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 12px;
+  width: auto;
   min-width: 0;
+}
+
+/* A model provider's row: what it is and where its key comes from, each on
+   a line of its own, cut short rather than wrapped, then how many models. */
+.provider-item .key-provider {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.provider-item .key-provider > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.provider-actions {
-  display: flex;
-  margin-top: 12px;
+.provider-models {
+  flex: none;
+  margin: 0 8px;
+  white-space: nowrap;
 }
 
-.provider-add,
+.settings-button,
 .provider-models-label button {
   padding: 6px 12px;
   font: inherit;
@@ -6406,7 +6523,7 @@ select.flow-owner:disabled {
   cursor: pointer;
 }
 
-.provider-add:hover,
+.settings-button:hover:not(:disabled),
 .provider-models-label button:hover:not(:disabled) {
   background: #f6f8fa;
 }
@@ -6418,7 +6535,6 @@ select.flow-owner:disabled {
 
 .default-model {
   max-width: 420px;
-  margin-top: 20px;
 }
 
 .default-model .flows-note {
@@ -6427,7 +6543,7 @@ select.flow-owner:disabled {
 
 /* The worker's own pi config, below the providers added here. */
 .worker-keys {
-  margin-top: 28px;
+  margin-top: 0;
 }
 
 .worker-keys h3 {
@@ -7219,13 +7335,20 @@ select.flow-owner:disabled {
   color: #cf222e;
 }
 
-.settings-directory .directory-category h3 {
-  margin: 20px 0 8px;
+/* Where the services installed end and those to install start, across
+   the whole grid. */
+.directory-divider {
+  grid-column: 1 / -1;
+  margin: 14px 0 0;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #656d76;
+}
+
+.directory-divider:first-child {
+  margin-top: 0;
 }
 
 .directory-list {
@@ -7324,14 +7447,16 @@ select.flow-owner:disabled {
   cursor: pointer;
 }
 
+/* Every card has one, so none is the page's one green button. */
 .directory-install-button {
-  color: #fff;
-  background: #1f883d;
-  border: 1px solid #1a7f37;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid #d0d7de;
 }
 
 .directory-install-button:hover:not(:disabled) {
-  background: #1a7f37;
+  background: #f6f8fa;
+  border-color: #8c959f;
 }
 
 .directory-install-button:disabled {
@@ -7459,6 +7584,12 @@ select.flow-owner:disabled {
 .api-key-made p {
   flex-basis: 100%;
   margin: 0;
+}
+
+.api-key-made pre {
+  flex-basis: 100%;
+  margin: 0;
+  background: #fff;
 }
 
 .api-key-made code {
@@ -7632,14 +7763,8 @@ select.flow-owner:disabled {
   margin-top: 32px;
 }
 
-.skills-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.skills-new {
+.skills-new,
+.settings-new {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -7653,7 +7778,13 @@ select.flow-owner:disabled {
   cursor: pointer;
 }
 
-.skills-new:disabled {
+.skills-new:hover:not(:disabled),
+.settings-new:hover:not(:disabled) {
+  background: #1a7f37;
+}
+
+.skills-new:disabled,
+.settings-new:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -8745,10 +8876,9 @@ select.flow-owner:disabled {
   gap: 20px;
 }
 
-.spending-header p {
-  max-width: 640px;
-  margin: 6px 0 0;
-  line-height: 1.5;
+/* The gap between its parts spaces the head too. */
+.spending > .settings-head {
+  margin-bottom: 0;
 }
 
 .spending-stats {

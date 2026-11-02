@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { createAPIKey, deleteAPIKey, getFlowAPI, listAPIKeys, type APIKey, type FlowAPI, type JSONSchema } from './api'
 import { PlusIcon } from './icons'
 import { useConfirm } from './Confirm'
+import { SettingsEmpty, SettingsHead } from './SettingsHead'
 
 // The API keys of whoever is signed in, which other systems start flows
 // with as them. A new key shows once, as it is made.
@@ -47,14 +48,14 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
 
   return (
     <section className="flow-section" aria-label="API keys">
-      <h2>API keys</h2>
-      <p className="flows-note">
-        Other systems start flows with a key, as you: they start the flows you may run, and their runs use your MCP
-        connections. Each flow's settings say where to send the request and what it takes.
-      </p>
+      <SettingsHead
+        title="API keys"
+        lead="Keys other systems start flows with, as you, each named after what uses it."
+        more="They start the flows you may run, and their runs use your MCP connections. Each flow's settings say where to send the request and what it takes."
+      />
       <form className="flow-new" onSubmit={onCreate}>
         <input
-          placeholder="Name a new key after what uses it, such as Helpdesk"
+          placeholder="Key name, such as Helpdesk"
           aria-label="Key name"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -72,12 +73,22 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
           <button type="button" onClick={() => navigator.clipboard.writeText(made.key!).catch(onError)}>
             Copy
           </button>
+          <p>
+            Start a flow with it, its number in place of <code>FLOW</code>; the flow’s settings list what it takes.
+          </p>
+          <pre className="api-curl">{tryCurl(made.key)}</pre>
+          <button type="button" onClick={() => navigator.clipboard.writeText(tryCurl(made.key!)).catch(onError)}>
+            Copy command
+          </button>
         </div>
       )}
       {keys === null ? (
         <p className="flows-note">Loading…</p>
       ) : keys.length === 0 ? (
-        <p className="flows-note">No keys yet.</p>
+        <SettingsEmpty>
+          None yet. Make one for each system that starts flows, such as a helpdesk or a CI job, so one can be deleted
+          without stopping the others.
+        </SettingsEmpty>
       ) : (
         <ul className="flow-list key-list">
           {keys.map((k) => (
@@ -103,6 +114,10 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
     </section>
   )
 }
+
+// Starting a flow with a key just made, the flow left to fill in.
+const tryCurl = (key: string) =>
+  [`curl -X POST ${window.location.origin}/v1/flows/FLOW/runs`, `  -H 'Authorization: Bearer ${key}'`].join(' \\\n')
 
 // What a request could give of what a schema describes, to show as an example.
 function example(s: JSONSchema): unknown {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { addUser, listRoles, listUsers, removeUser, updateUser, type User } from './api'
 import { useMe } from './Account'
 import { PlusIcon, TrashIcon } from './icons'
+import { SettingsHead } from './SettingsHead'
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
 
@@ -64,13 +65,17 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
 
   return (
     <section className="flow-section" aria-label="People">
-      <h2>People</h2>
-      <p className="flows-note">
-        Someone holding a role decides the reviews of the processes that a person of that name handles on any board,
-        such as Finance in “Finance handles Approve payment”, and sees those flows to do so. A review no person handles
-        is anyone's to decide; admins decide any. Team managers make teams and say who is in them. Add someone to let
-        them sign in from any domain.
-      </p>
+      <SettingsHead
+        title="People"
+        lead="Who signs in, the roles they hold and whether they are admins or team managers. Add someone to let them sign in from any domain."
+        more={
+          <>
+            Someone holding a role decides the reviews of the processes that a person of that name handles on any
+            board, such as Finance in “Finance handles Approve payment”, and sees those flows to do so. A review no
+            person handles is anyone's to decide; admins decide any. Team managers make teams and say who is in them.
+          </>
+        }
+      />
       <form className="flow-new" onSubmit={onAdd}>
         <input
           type="email"
@@ -80,7 +85,7 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
           onChange={(e) => setEmail(e.target.value)}
         />
         <button type="submit" disabled={!email.trim()}>
-          <PlusIcon /> Add
+          <PlusIcon /> Add person
         </button>
       </form>
       <datalist id="role-names">

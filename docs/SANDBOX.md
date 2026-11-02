@@ -505,7 +505,7 @@ until set:
 Bedrock without a key, which signs in with the worker's AWS credentials,
 doesn't go through the proxy, so no spending limit covers it.
 
-The audit log (`webapp/audit.go`, `#/audit` for admins) records each token
+The audit log (`webapp/audit.go`, `#/settings/audit` for admins) records each token
 a step is handed for its models, MCP servers, the internet, credentials and
 git, when the model, internet and credential ones end, each internet
 connection, allowed or refused, each call through the credential proxy,

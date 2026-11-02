@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import {
   getNotificationSettings,
   listMCPServers,
@@ -19,6 +19,8 @@ import { SkillsSection } from './Skills'
 import { EgressSection } from './Egress'
 import { CredentialsSection } from './Credentials'
 import { SpendingSection } from './Spending'
+import { AuditLogSection } from './Audit'
+import { SettingsHead } from './SettingsHead'
 import ErrorBanner from './ErrorBanner'
 
 // The parts of the settings, each a tab: #/settings/<tab>.
@@ -34,24 +36,42 @@ export type SettingsTab =
   | 'api'
   | 'people'
   | 'teams'
+  | 'audit'
+
+// The groups the tabs show in down the side, each under its heading: the
+// person's own, what runs use, and keeping watch over them.
+type SettingsGroup = 'you' | 'runs' | 'oversight'
+
+const GROUPS: { id: SettingsGroup; label: string }[] = [
+  { id: 'you', label: 'You' },
+  { id: 'runs', label: 'What runs use' },
+  { id: 'oversight', label: 'Oversight' },
+]
 
 // The tabs whoever is signed in sees: their own settings, and an admin's
 // over the instance. Without sign-in, there is only the instance's. The
-// command palette offers the same.
-export function tabsFor(me: Me): { id: SettingsTab; label: string }[] {
-  const tabs: { id: SettingsTab; label: string }[] = []
-  if (me.user) tabs.push({ id: 'account', label: 'Account' })
-  if (configures(me)) tabs.push({ id: 'keys', label: 'Model providers' })
-  tabs.push({ id: 'connectors', label: 'Connectors' })
-  tabs.push({ id: 'mcp', label: 'MCP servers' })
-  if (configures(me)) tabs.push({ id: 'egress', label: 'Internet access' })
-  if (configures(me)) tabs.push({ id: 'credentials', label: 'Credentials' })
-  tabs.push({ id: 'spending', label: 'Spending & limits' })
-  tabs.push({ id: 'skills', label: 'Skills & commands' })
-  tabs.push({ id: 'api', label: 'API keys' })
-  if (me.user) tabs.push({ id: 'teams', label: 'Teams' })
-  if (me.user?.admin) tabs.push({ id: 'people', label: 'People' })
+// command palette offers the same, leaving out the groups.
+export function tabsFor(me: Me): { id: SettingsTab; label: string; group: SettingsGroup }[] {
+  const tabs: { id: SettingsTab; label: string; group: SettingsGroup }[] = []
+  if (me.user) tabs.push({ id: 'account', label: 'Account', group: 'you' })
+  tabs.push({ id: 'api', label: 'API keys', group: 'you' })
+  if (configures(me)) tabs.push({ id: 'keys', label: 'Model providers', group: 'runs' })
+  tabs.push({ id: 'connectors', label: 'Connectors', group: 'runs' })
+  tabs.push({ id: 'mcp', label: 'MCP servers', group: 'runs' })
+  tabs.push({ id: 'skills', label: 'Skills & commands', group: 'runs' })
+  if (configures(me)) tabs.push({ id: 'credentials', label: 'Credentials', group: 'runs' })
+  if (configures(me)) tabs.push({ id: 'egress', label: 'Internet access', group: 'runs' })
+  tabs.push({ id: 'spending', label: 'Spending & limits', group: 'oversight' })
+  if (me.user) tabs.push({ id: 'teams', label: 'Teams', group: 'oversight' })
+  if (me.user?.admin) tabs.push({ id: 'people', label: 'People', group: 'oversight' })
+  if (configures(me)) tabs.push({ id: 'audit', label: 'Audit log', group: 'oversight' })
   return tabs
+}
+
+// The tab the settings open on when the address names none: the person's
+// account, or without sign-in what runs use first, never the API keys.
+function landingTab(tabs: { id: SettingsTab; group: SettingsGroup }[]): SettingsTab | undefined {
+  return (tabs.find((t) => t.id === 'account') ?? tabs.find((t) => t.group === 'runs') ?? tabs[0])?.id
 }
 
 // Where everyone keeps their MCP connections, skills and commands, and admins
@@ -62,12 +82,12 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
   const [error, setError] = useState<string | null>(null)
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
 
-  useEffect(() => {
-    document.title = 'Settings · Spoletta'
-  }, [])
-
   const tabs = me ? tabsFor(me) : []
-  const shown = tabs.find((t) => t.id === tab)?.id ?? tabs[0]?.id
+  const shown = tabs.find((t) => t.id === tab)?.id ?? landingTab(tabs)
+
+  useEffect(() => {
+    document.title = shown === 'audit' ? 'Audit log · Spoletta' : 'Settings · Spoletta'
+  }, [shown])
 
   return (
     <div className="flows-page">
@@ -84,19 +104,25 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
       </header>
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {me && (
-        <div className="settings">
+        <div className={shown === 'audit' ? 'settings wide' : 'settings'}>
           <nav className="settings-tabs" aria-label="Settings">
-            {tabs.map((t) => (
-              <a
-                key={t.id}
-                href={`#/settings/${t.id}`}
-                className={t.id === shown ? 'active' : undefined}
-                aria-current={t.id === shown ? 'page' : undefined}
-              >
-                {t.label}
-              </a>
+            {GROUPS.filter((g) => tabs.some((t) => t.group === g.id)).map((g) => (
+              <Fragment key={g.id}>
+                <div className="settings-tabs-group">{g.label}</div>
+                {tabs
+                  .filter((t) => t.group === g.id)
+                  .map((t) => (
+                    <a
+                      key={t.id}
+                      href={`#/settings/${t.id}`}
+                      className={t.id === shown ? 'active' : undefined}
+                      aria-current={t.id === shown ? 'page' : undefined}
+                    >
+                      {t.label}
+                    </a>
+                  ))}
+              </Fragment>
             ))}
-            {configures(me) && <a href="#/audit">Audit log</a>}
           </nav>
           <main className="settings-main">
             {shown === 'account' && (
@@ -117,6 +143,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
               <TeamsSection canManage={!!(me.user?.admin || me.user?.teamManager)} onError={report} />
             )}
             {shown === 'people' && <PeopleSection onError={report} />}
+            {shown === 'audit' && <AuditLogSection />}
           </main>
         </div>
       )}
@@ -216,8 +243,20 @@ function MCPSection({ me, onError }: { me: Me; onError: (err: unknown) => void }
   }, [refresh])
   return (
     <section className="flow-section settings-mcp" aria-label="MCP servers">
-      <h2>MCP servers</h2>
-      <MCPServers servers={servers} canConfigure={configures(me)} onChanged={refresh} onError={onError} />
+      <SettingsHead
+        title="MCP servers"
+        lead="The servers agents reach tools through, each connected by signing in, or for one taking a token, by an admin."
+        more={
+          <>
+            Pick, in an agent process's panel, the servers it may use and, if you like, which of their tools. Agents use
+            none unless picked, and reach them as whoever their run is for, with that person's connection. Services of
+            the directory, and built-in connectors such as GitHub's, are installed from{' '}
+            <a href="#/settings/connectors">Connectors</a>
+            {configures(me) ? '; add any other server by its URL below.' : '.'}
+          </>
+        }
+      />
+      <MCPServers servers={servers} canConfigure={configures(me)} onChanged={refresh} onError={onError} note={false} />
     </section>
   )
 }

@@ -203,7 +203,7 @@ export default function CommandPalette({
         group: 'Pages',
         hint: 'Tokens handed to steps, calls refused, changes to limits',
         words: 'security',
-        hash: '#/audit',
+        hash: '#/settings/audit',
       })
     }
     if (flow !== null && flowName && !flows?.find((f) => f.id === flow)?.struct) {
@@ -216,7 +216,8 @@ export default function CommandPalette({
         hash: `#/flows/${flow}/data`,
       })
     }
-    for (const t of me ? tabsFor(me) : []) {
+    // The audit log is among the pages above, with what it holds.
+    for (const t of me ? tabsFor(me).filter((t) => t.id !== 'audit') : []) {
       all.push({ id: `settings:${t.id}`, title: t.label, group: 'Settings', words: 'settings', hash: `#/settings/${t.id}` })
     }
     for (const b of boards) {

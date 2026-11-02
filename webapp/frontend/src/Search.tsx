@@ -32,7 +32,7 @@ export function useSearch(page: 'data' | 'records' | 'audit', id: number) {
     const params = new URLSearchParams()
     if (state.query.trim() !== '') params.set('q', state.query)
     if (state.sort) params.set('sort', (state.sort.desc ? '-' : '') + state.sort.key)
-    const base = page === 'audit' ? '#/audit' : `#/flows/${id}/${page}`
+    const base = page === 'audit' ? '#/settings/audit' : `#/flows/${id}/${page}`
     const hash = `${base}${params.size > 0 ? '?' + params.toString().replace(/\+/g, '%20') : ''}`
     if (window.location.hash !== hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + hash)
     try {

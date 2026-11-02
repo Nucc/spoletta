@@ -15,6 +15,7 @@ import {
 } from './api'
 import { useConfirm } from './Confirm'
 import TabLink from './TabLink'
+import { SettingsEmpty } from './SettingsHead'
 
 // What pi takes as a server name; it names the tools mcp__<name>__<tool>.
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -66,14 +67,17 @@ export function MCPSettingsPanel({
 }
 
 // The servers, each to connect, and for those who configure them, to change,
-// remove or add.
+// remove or add. The settings say what they are in their own head, so leave
+// out the note saying it here.
 export function MCPServers({
   servers,
   canConfigure,
   onChanged,
   onError,
+  note = true,
 }: {
   servers: MCPServer[]
+  note?: boolean
   canConfigure: boolean
   onChanged: () => void
   onError: (err: unknown) => void
@@ -116,14 +120,23 @@ export function MCPServers({
   return (
     <>
       {confirmDialog}
-      <p className="panel-note">
-        Servers agents can use. Connect each by signing in, or for one taking a token, have an admin set it for
-        everyone; then pick, in an agent process's panel, the ones it may use and, if you like, which of their tools.
-        Agents use none unless picked, and reach them as whoever their run is for, with that person's connection.
-        Built-in connectors, such as GitHub's, are added from Connectors.
-      </p>
+      {note && (
+        <p className="panel-note">
+          Servers agents can use. Connect each by signing in, or for one taking a token, have an admin set it for
+          everyone; then pick, in an agent process's panel, the ones it may use and, if you like, which of their tools.
+          Agents use none unless picked, and reach them as whoever their run is for, with that person's connection.
+          Built-in connectors, such as GitHub's, are added from Connectors.
+        </p>
+      )}
       {servers.length === 0 ? (
-        <p className="panel-note">No servers yet.</p>
+        note ? (
+          <p className="panel-note">No servers yet.</p>
+        ) : (
+          <SettingsEmpty>
+            No servers yet. Install one from <a href="#/settings/connectors">Connectors</a>
+            {canConfigure ? ', or add any other by its URL below.' : '.'}
+          </SettingsEmpty>
+        )
       ) : (
         <ul className="mcp-list">
           {servers.map((s) => (
@@ -185,7 +198,7 @@ export function MCPServers({
             </select>
           </label>
           <button className="panel-button" type="submit" disabled={!nameOk || !urlOk || adding}>
-            Add
+            Add server
           </button>
         </form>
       )}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { createTeam, deleteTeam, listTeams, listUsers, updateTeam, type Team, type User } from './api'
 import { PlusIcon, TrashIcon } from './icons'
+import { SettingsEmpty, SettingsHead } from './SettingsHead'
 import { useConfirm } from './Confirm'
 
 // The teams, which own flows together. Everyone sees them, and who is in
@@ -38,11 +39,10 @@ export function TeamsSection({ canManage, onError }: { canManage: boolean; onErr
 
   return (
     <section className="flow-section" aria-label="Teams">
-      <h2>Teams</h2>
-      <p className="flows-note">
-        A flow, procedure or struct given to a team is its members'. They see it, change it and run it; nobody else
-        does, but admins.{canManage ? '' : ' Admins and team managers make teams and say who is in them.'}
-      </p>
+      <SettingsHead
+        title="Teams"
+        lead={`A flow, procedure or struct given to a team is its members': they see it, change it and run it; nobody else does, but admins.${canManage ? '' : ' Admins and team managers make teams and say who is in them.'}`}
+      />
       {canManage && (
         <form className="flow-new" onSubmit={onCreate}>
           <input
@@ -59,7 +59,11 @@ export function TeamsSection({ canManage, onError }: { canManage: boolean; onErr
       {teams === null ? (
         <p className="flows-note">Loading…</p>
       ) : teams.length === 0 ? (
-        <p className="flows-note">No teams yet.</p>
+        <SettingsEmpty>
+          {canManage
+            ? 'No teams yet. Make one above, say who is in it, then give it flows on the home page, where each flow says who sees it.'
+            : 'No teams yet.'}
+        </SettingsEmpty>
       ) : (
         <ul className="flow-list people-list">
           {teams.map((t) => (

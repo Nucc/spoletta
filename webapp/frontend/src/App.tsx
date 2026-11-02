@@ -6,7 +6,6 @@ import CommandPalette from './CommandPalette'
 import FlowData from './FlowData'
 import FlowList from './FlowList'
 import Activity from './Activity'
-import AuditLog from './Audit'
 import Inbox, { INBOX_REFRESH_MS } from './Inbox'
 import Records from './Records'
 import RunCompare from './RunCompare'
@@ -25,13 +24,14 @@ import ErrorBanner from './ErrorBanner'
 // #/flows/<id>/compare/<run>/<run> for two of its runs side by side,
 // #/flows/<id>/data for what its runs held, #/flows/<id>/records for a
 // shared struct's records, both with ?q=<search>&sort=<key> for what they
-// show, #/taskboards/<id> for a task board, #/audit for the audit log,
-// with them too, #/schedules for the schedules, #/inbox for what waits on
-// the person, #/settings/<tab> for the settings, #/activity for what goes
-// on across the flows, with ?days=<n> for its period, #/trash for the
-// flows deleted, anything else for the list of flows. #/people, where the
-// people were before the settings, is their tab now. The address is the
-// open tab's; each tab keeps its own (tabs.ts).
+// show, #/taskboards/<id> for a task board, #/schedules for the
+// schedules, #/inbox for what waits on the person, #/settings/<tab> for
+// the settings, #/settings/audit with ?q= and &sort= too, #/activity for
+// what goes on across the flows, with ?days=<n> for its period, #/trash
+// for the flows deleted, anything else for the list of flows. #/people
+// and #/audit, where the people and the audit log were before the
+// settings, are their tabs now. The address is the open tab's; each tab
+// keeps its own (tabs.ts).
 type Page =
   | { flow: number; run: number | null; step: number | null }
   | { compare: number; a: number; b: number }
@@ -40,7 +40,6 @@ type Page =
   | { taskBoard: number }
   | { settings: SettingsTab | null }
   | 'schedules'
-  | 'audit'
   | 'activity'
   | 'inbox'
   | 'trash'
@@ -52,10 +51,10 @@ const pageInHash = (): Page => {
   if (window.location.hash === '#/schedules') return 'schedules'
   if (window.location.hash === INBOX) return 'inbox'
   if (window.location.hash === '#/trash') return 'trash'
-  if (/^#\/audit(?:\?.*)?$/.test(window.location.hash)) return 'audit'
   if (/^#\/activity(?:\?.*)?$/.test(window.location.hash)) return 'activity'
   if (window.location.hash === '#/people') return { settings: 'people' }
-  const s = /^#\/settings(?:\/(\w+))?$/.exec(window.location.hash)
+  if (/^#\/audit(?:\?.*)?$/.test(window.location.hash)) return { settings: 'audit' }
+  const s = /^#\/settings(?:\/(\w+))?(?:\?.*)?$/.exec(window.location.hash)
   if (s) return { settings: (s[1] as SettingsTab | undefined) ?? null }
   const c = /^#\/flows\/(\d+)\/compare\/(\d+)\/(\d+)$/.exec(window.location.hash)
   if (c) return { compare: Number(c[1]), a: Number(c[2]), b: Number(c[3]) }
@@ -137,7 +136,6 @@ function Page() {
   const page = pageInHash()
   if (page === null) return <FlowList onOpen={(id) => (window.location.hash = `#/flows/${id}`)} />
   if (page === 'schedules') return <Schedules />
-  if (page === 'audit') return <AuditLog />
   if (page === 'activity') return <Activity />
   if (page === 'inbox') return <Inbox />
   if (page === 'trash') return <Trash />

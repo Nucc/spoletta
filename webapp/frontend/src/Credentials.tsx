@@ -16,6 +16,7 @@ import { configures, useMe } from './Account'
 import TabLink from './TabLink'
 import { PlusIcon } from './icons'
 import { useConfirm } from './Confirm'
+import { SettingsEmpty, SettingsHead } from './SettingsHead'
 
 // Credentials, kept by admins: a service's base URL and secret, which
 // scripts and agents call it with through the webapp's proxy without ever
@@ -60,28 +61,36 @@ export function CredentialsSection({ onError }: { onError: (err: unknown) => voi
     }
   }
 
+  const add = (
+    <button type="button" className="settings-new" onClick={() => setEditing('new')}>
+      <PlusIcon /> New credential
+    </button>
+  )
   return (
     <section className="flow-section skills" aria-label="Credentials">
-      <div className="skills-header">
-        <h2>Credentials</h2>
-        {editing !== 'new' && (
-          <button type="button" className="skills-new" onClick={() => setEditing('new')}>
-            <PlusIcon /> New credential
-          </button>
-        )}
-      </div>
-      <p className="flows-note">
-        A service’s secret, such as a Jira token or an internal API’s key, which scripts and agents call it with
-        without seeing it. A process picks the credentials it uses; its step reaches each service at{' '}
-        <code>$CREDENTIAL_NAME_URL</code>, the webapp’s proxy, sending <code>Authorization: Bearer $CREDENTIALS_TOKEN</code>,
-        a token that ends with the step, and the proxy puts the secret in its place, blanking it out of what comes back.
-        Every call goes in its run’s log and the audit log.
-      </p>
+      <SettingsHead
+        title="Credentials"
+        lead="Services' secrets, such as a Jira token or an internal API's key, which scripts and agents call them with without seeing them."
+        more={
+          <>
+            A process picks the credentials it uses; its step reaches each service at <code>$CREDENTIAL_NAME_URL</code>,
+            the webapp’s proxy, sending <code>Authorization: Bearer $CREDENTIALS_TOKEN</code>, a token that ends with the
+            step, and the proxy puts the secret in its place, blanking it out of what comes back. Every call goes in its
+            run’s log and the audit log.
+          </>
+        }
+        action={editing !== 'new' && items !== null && items.length > 0 && add}
+      />
       {editing === 'new' && <CredentialEditor teams={teams} signIn={!!me?.user} onSave={save} onCancel={() => setEditing(null)} />}
       {items === null ? (
         <p className="flows-note">Loading…</p>
       ) : items.length === 0 ? (
-        editing !== 'new' && <p className="flows-note">None yet.</p>
+        editing !== 'new' && (
+          <SettingsEmpty action={add}>
+            None yet. Add one for a service such as Jira or an internal API, and the processes picking it call the
+            service without ever seeing its secret.
+          </SettingsEmpty>
+        )
       ) : (
         <ul className="flow-list skill-list">
           {items.map((c) =>

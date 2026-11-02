@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type Ref } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import {
   createSkill,
   deleteSkill,
@@ -18,6 +18,7 @@ import { PlusIcon } from './icons'
 import { OwnerPicker } from './Owner'
 import { useConfirm } from './Confirm'
 import TabLink from './TabLink'
+import { SettingsEmpty, SettingsHead } from './SettingsHead'
 
 // Skills and commands, written for agents in the settings: a skill an agent
 // process picks, a command its prompt names as /name. Each is its maker's
@@ -36,11 +37,13 @@ export function SkillsSection({ onError }: { onError: (err: unknown) => void }) 
   )
 }
 
-const WORDS = {
+const WORDS: Record<SkillKind, { title: string; one: string; lead: ReactNode; more: ReactNode; empty: ReactNode } & Record<'content' | 'contentPlaceholder' | 'description', string>> = {
   skill: {
     title: 'Skills',
     one: 'skill',
-    note: 'Instructions for a kind of work, which an agent reads once its task calls for them. An agent process picks the skills it is given; the agent sees each one’s description and loads the rest when it applies.',
+    lead: 'Instructions for a kind of work, which an agent reads once its task calls for them.',
+    more: 'An agent process picks the skills it is given; the agent sees each one’s description and loads the rest when it applies.',
+    empty: 'None yet. Write one for a kind of work your agents do, such as release notes, then pick it in an agent process’s panel.',
     content: 'Instructions',
     contentPlaceholder: '# Release notes\n\nGroup the changes under Added, Changed and Fixed…',
     description: 'What it does and when it applies, which the agent picks it by',
@@ -48,7 +51,22 @@ const WORDS = {
   command: {
     title: 'Commands',
     one: 'command',
-    note: 'Prompts kept under a name. Type / in an agent’s prompt to name one; it is spelled out as the step runs. One with $1, $@ or ${1:-default} takes the rest of its line as arguments, quoted ones keeping their spaces.',
+    lead: (
+      <>
+        Prompts kept under a name, which <code>/name</code> in an agent’s prompt spells out as the step runs.
+      </>
+    ),
+    more: (
+      <>
+        Type / in an agent’s prompt to pick one. One with <code>$1</code>, <code>$@</code> or{' '}
+        <code>{'${1:-default}'}</code> takes the rest of its line as arguments, quoted ones keeping their spaces.
+      </>
+    ),
+    empty: (
+      <>
+        None yet. Keep a prompt you write often under a name, then type <code>/name</code> in an agent’s prompt.
+      </>
+    ),
     content: 'Prompt',
     contentPlaceholder: 'Review the change. Focus on ${1:-correctness}.',
     description: 'What it is for, shown as you pick it',
@@ -111,22 +129,24 @@ function SkillList({ kind, me, teams, onError }: { kind: SkillKind; me: Me | nul
     }
   }
 
+  const add = (
+    <button type="button" className="settings-new" onClick={() => setEditing('new')}>
+      <PlusIcon /> New {words.one}
+    </button>
+  )
   return (
     <section className="flow-section skills" aria-label={words.title}>
-      <div className="skills-header">
-        <h2>{words.title}</h2>
-        {editing !== 'new' && (
-          <button type="button" className="skills-new" onClick={() => setEditing('new')}>
-            <PlusIcon /> New {words.one}
-          </button>
-        )}
-      </div>
-      <p className="flows-note">{words.note}</p>
+      <SettingsHead
+        title={words.title}
+        lead={words.lead}
+        more={words.more}
+        action={editing !== 'new' && items !== null && items.length > 0 && add}
+      />
       {editing === 'new' && <SkillEditor kind={kind} me={me} teams={teams} onSave={save} onCancel={() => setEditing(null)} />}
       {items === null ? (
         <p className="flows-note">Loading…</p>
       ) : items.length === 0 ? (
-        editing !== 'new' && <p className="flows-note">None yet.</p>
+        editing !== 'new' && <SettingsEmpty action={add}>{words.empty}</SettingsEmpty>
       ) : (
         <ul className="flow-list skill-list">
           {items.map((s) =>

@@ -14,6 +14,7 @@ import {
 } from './api'
 import { ServiceLogo } from './logos'
 import { useConfirm } from './Confirm'
+import { SettingsHead } from './SettingsHead'
 
 // The order categories show in; any other comes after them.
 const CATEGORIES = ['Code', 'Communication', 'Ticketing', 'Support', 'Docs', 'Monitoring', 'Home', 'Other']
@@ -21,14 +22,23 @@ const CATEGORIES = ['Code', 'Communication', 'Ticketing', 'Support', 'Docs', 'Mo
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 // The connectors built into the webapp and the MCP servers picked to go
-// with them, by category, each a card with its logo. An admin installs one
-// with its Install button, then sets it up on the card: a connector's token,
-// which everyone then uses, or an MCP server everyone connects by signing in.
+// with them, each a card with its logo and category, those installed first.
+// An admin installs one with its Install button, then sets it up on the
+// card: a connector's token, which everyone then uses, or an MCP server
+// everyone connects by signing in. The order is worked out once, as the
+// directory first loads, so a card just installed stays where it is, its
+// setup open, rather than jumping to the top.
 export function DirectorySection({ canConfigure, onError }: { canConfigure: boolean; onError: (err: unknown) => void }) {
   const [entries, setEntries] = useState<DirectoryEntry[] | null>(null)
   const [servers, setServers] = useState<MCPServer[]>([])
+  const [order, setOrder] = useState<{ installed: string[]; available: string[] } | null>(null)
   const refresh = useCallback(
-    () => Promise.all([listDirectory(), listMCPServers()]).then(([d, s]) => (setEntries(d), setServers(s)), onError),
+    () =>
+      Promise.all([listDirectory(), listMCPServers()]).then(([d, s]) => {
+        setEntries(d)
+        setServers(s)
+        setOrder((o) => o ?? orderOf(d, s))
+      }, onError),
     [onError],
   )
   useEffect(() => {
@@ -41,40 +51,77 @@ export function DirectorySection({ canConfigure, onError }: { canConfigure: bool
     return () => window.removeEventListener('message', signedIn)
   }, [refresh])
 
-  const byCategory = new Map<string, DirectoryEntry[]>()
-  for (const e of entries ?? []) byCategory.set(e.category, [...(byCategory.get(e.category) ?? []), e])
-  const categories = [...byCategory.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+  const installedAs = (e: DirectoryEntry) => serversOf(e, servers)
+
+  const byName = new Map((entries ?? []).map((e) => [e.name, e]))
+  // Entries the order doesn't know, should the directory grow while it
+  // shows, go last.
+  const known = new Set([...(order?.installed ?? []), ...(order?.available ?? [])])
+  const rest = (entries ?? []).filter((e) => !known.has(e.name)).map((e) => e.name)
+  const card = (name: string) => {
+    const e = byName.get(name)
+    return (
+      e && (
+        <DirectoryCard
+          key={e.name}
+          entry={e}
+          installed={installedAs(e)}
+          taken={(name) => servers.some((s) => s.name.toLowerCase() === name.toLowerCase())}
+          canConfigure={canConfigure}
+          onChanged={refresh}
+          onError={onError}
+        />
+      )
+    )
+  }
 
   return (
     <section className="flow-section settings-directory" aria-label="Connectors">
-      <h2>Connectors</h2>
-      <p className="panel-note">
-        Services flows work with. A built-in connector is part of Spoletta and calls the service's API with a token an
-        admin sets for everyone, so give it one limited to what flows need; agents use its tools, only those that read
-        unless their process picks others, and a connector process carries out one of them as a step. An MCP server is
-        the service's own, which everyone connects by signing in. Install one, then set it up on its card.
-      </p>
-      {entries === null && <p className="panel-note">Loading…</p>}
-      {categories.map((c) => (
-        <div key={c} className="directory-category">
-          <h3>{c}</h3>
-          <ul className="directory-list">
-            {byCategory.get(c)!.map((e) => (
-              <DirectoryCard
-                key={e.name}
-                entry={e}
-                installed={servers.filter((s) => (e.connector ? s.connector === e.name : !s.connector && sameURL(s.url, e.url)))}
-                taken={(name) => servers.some((s) => s.name.toLowerCase() === name.toLowerCase())}
-                canConfigure={canConfigure}
-                onChanged={refresh}
-                onError={onError}
-              />
-            ))}
-          </ul>
-        </div>
-      ))}
+      <SettingsHead
+        title="Connectors"
+        lead="Services flows work with: install one, then set it up on its card."
+        more={
+          <>
+            A built-in connector is part of Spoletta and calls the service's API with a token an admin sets for
+            everyone, so give it one limited to what flows need. Agents use its tools, only those that read unless their
+            process picks others, and a connector process carries out one of them as a step. An MCP server is the
+            service's own, which each person connects by signing in, in <a href="#/settings/mcp">MCP servers</a>.
+          </>
+        }
+      />
+      {order === null ? (
+        <p className="panel-note">Loading…</p>
+      ) : (
+        // One list, so a card keeps its setup open as it is installed.
+        <ul className="directory-list">
+          {order.installed.length > 0 && (
+            <li key="installed" className="directory-divider">
+              Installed
+            </li>
+          )}
+          {order.installed.map(card)}
+          {order.installed.length > 0 && (
+            <li key="available" className="directory-divider">
+              More to install
+            </li>
+          )}
+          {[...order.available, ...rest].map(card)}
+        </ul>
+      )}
     </section>
   )
+}
+
+// The servers an entry is installed as.
+const serversOf = (e: DirectoryEntry, servers: MCPServer[]) =>
+  servers.filter((s) => (e.connector ? s.connector === e.name : !s.connector && sameURL(s.url, e.url)))
+
+// The entries' names, those installed first, each part by category and
+// then by name.
+function orderOf(entries: DirectoryEntry[], servers: MCPServer[]): { installed: string[]; available: string[] } {
+  const sorted = [...entries].sort((a, b) => rank(a.category) - rank(b.category) || a.title.localeCompare(b.title))
+  const installed = sorted.filter((e) => serversOf(e, servers).length > 0).map((e) => e.name)
+  return { installed, available: sorted.map((e) => e.name).filter((n) => !installed.includes(n)) }
 }
 
 function rank(category: string): number {
@@ -136,7 +183,7 @@ function DirectoryCard({
 
   const status =
     installed.length === 0
-      ? 'Not installed'
+      ? null
       : installed.length > 1
         ? `Installed ${installed.length} times`
         : !installed[0].connected
@@ -154,11 +201,13 @@ function DirectoryCard({
         <ServiceLogo name={e.name} title={e.title} />
         <div className="directory-card-title">
           <span className="directory-card-name">{e.title}</span>
-          <span className="directory-card-kind">{e.connector ? 'Built-in connector' : 'MCP server'}</span>
+          <span className="directory-card-kind">
+            {e.connector ? 'Built-in connector' : 'MCP server'} · {e.category}
+          </span>
         </div>
       </div>
       <span className="directory-description">{e.description}</span>
-      <span className={`directory-status${installed.length === 0 ? '' : ready ? ' ready' : ' pending'}`}>{status}</span>
+      {status && <span className={`directory-status${ready ? ' ready' : ' pending'}`}>{status}</span>}
 
       {installed.length > (e.multiple ? 0 : 1) && (
         <ul className="directory-installs">

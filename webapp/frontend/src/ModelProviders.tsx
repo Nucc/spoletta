@@ -24,6 +24,8 @@ import {
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
 import { ModelPicker } from './ModelPicker'
+import { PlusIcon } from './icons'
+import { SettingsEmpty, SettingsHead } from './SettingsHead'
 
 // Where agents' models come from, which admins set up: the providers added
 // here, each with the models picked of it and its key, saved here or kept
@@ -69,39 +71,49 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
     }
   }
 
+  const add = (
+    <button type="button" className="settings-new" onClick={() => setEditing('new')}>
+      <PlusIcon /> Add provider
+    </button>
+  )
   return (
     <section className="flow-section" aria-label="Model providers">
       {confirmDialog}
-      <h2>Model providers</h2>
-      <p className="flows-note">
-        Where agents' models come from. Add a provider with its key, or your own AI gateway as a custom provider; its
-        key is saved here, or kept in a vault that puts it in the webapp's environment, and never shows again. Agents
-        reach their models through the webapp and never see a key.
-      </p>
+      <SettingsHead
+        title="Model providers"
+        lead="Where agents' models come from, and the model they use unless their process picks one."
+        more="Add a provider pi knows with its key, or your own AI gateway as a custom provider. Its key is saved here, or kept in a vault that puts it in the webapp's environment, and never shows again. Agents reach their models through the webapp and never see a key."
+      />
       {providers?.workerError && <p className="panel-warning">{providers.workerError}</p>}
-      {providers === null ? (
-        <p className="flows-note">Loading…</p>
-      ) : (
-        providers.providers.length > 0 && (
-          <ul className="flow-list key-list">
-            {providers.providers.map((p) => (
-              <ProviderItem key={p.id} provider={p} onEdit={() => setEditing(p)} onRemove={() => remove(p)} />
-            ))}
-          </ul>
-        )
-      )}
-      <div className="provider-actions">
-        <button type="button" className="provider-add" onClick={() => setEditing('new')}>
-          Add provider
-        </button>
-      </div>
       {/* With a single model, it is the default, and needn't show. */}
       {models && models.models.length > 1 && (
-        <div className="panel-field default-model">
-          <span id="default-model">Default model</span>
-          <span className="flows-note">What agents of processes without a model of their own use.</span>
-          <ModelPicker models={models} value={models.default} forDefault labelledBy="default-model" onChange={pickDefault} />
-        </div>
+        <>
+          <SettingsHead
+            title="Default model"
+            level={3}
+            id="default-model"
+            lead="What agents of processes without a model of their own use."
+          />
+          <div className="default-model">
+            <ModelPicker models={models} value={models.default} forDefault labelledBy="default-model" onChange={pickDefault} />
+          </div>
+        </>
+      )}
+      <SettingsHead title="Added here" level={3} action={providers && providers.providers.length > 0 && add} />
+      {providers === null ? (
+        <p className="flows-note">Loading…</p>
+      ) : providers.providers.length > 0 ? (
+        <ul className="flow-list key-list">
+          {providers.providers.map((p) => (
+            <ProviderItem key={p.id} provider={p} onEdit={() => setEditing(p)} onRemove={() => remove(p)} />
+          ))}
+        </ul>
+      ) : (
+        <SettingsEmpty action={add}>
+          {models === null || models.models.length > 0
+            ? "None yet, so agents use the worker's own providers below. Add one to pick its models and keep its key here."
+            : "None yet, and the worker offers no model of its own, so agents can't run until a provider is added."}
+        </SettingsEmpty>
       )}
       <WorkerKeys onError={onError} />
       {editing && providers && (
@@ -137,17 +149,21 @@ function providerKeyStatus(p: ModelProvider): { text: string; missing: boolean }
 
 function ProviderItem({ provider: p, onEdit, onRemove }: { provider: ModelProvider; onEdit: () => void; onRemove: () => void }) {
   const status = providerKeyStatus(p)
+  const where = p.baseUrl ? `${apiLabel(p.api)} at ${p.baseUrl}` : p.id
   return (
     <li>
-      <div className="key-item">
+      <div className="key-item provider-item">
         <span className="key-provider">
           <span className="flow-card-name">{p.name}</span>
-          <span className="flows-note">{p.baseUrl ? `${apiLabel(p.api)} at ${p.baseUrl}` : p.id}</span>
-          <span className={`key-status${status.missing ? ' missing' : ''}`}>{status.text}</span>
+          <span className="flows-note" title={where}>
+            {where}
+          </span>
+          <span className={`key-status${status.missing ? ' missing' : ''}`} title={status.text}>
+            {status.text}
+          </span>
         </span>
         <span className="provider-models flows-note" title={p.models.join('\n')}>
-          {p.models.length === 1 ? '1 model: ' : `${p.models.length} models: `}
-          {p.models.join(', ')}
+          {p.models.length === 1 ? '1 model' : `${p.models.length} models`}
         </span>
         <button type="button" onClick={onEdit}>
           Edit
@@ -521,11 +537,12 @@ function WorkerKeys({ onError }: { onError: (err: unknown) => void }) {
   return (
     <div className="worker-keys">
       {confirmDialog}
-      <h3>From the worker's pi config</h3>
-      <p className="flows-note">
-        The models of the worker's own models.json and settings.json, of providers not added above, and the keys they
-        read, which agents reach them with through the webapp. A key saved here goes over the webapp's environment's.
-      </p>
+      <SettingsHead
+        title="From the worker's pi config"
+        level={3}
+        lead="Providers the worker's own models.json and settings.json name that aren't added above, and the keys they read."
+        more="Agents reach these models through the webapp too, which holds their keys. A key saved here is used over the one in the webapp's environment."
+      />
       {keys.workerError && <p className="panel-warning">{keys.workerError}</p>}
       {settable.length > 0 && (
         <ul className="flow-list key-list">

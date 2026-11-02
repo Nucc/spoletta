@@ -12,6 +12,7 @@ import {
   type Limits,
   type Spending,
 } from "./api";
+import { SettingsHead } from "./SettingsHead";
 
 // What agents spent on models this month, by whom and on which runs, and the
 // limits admins set on it; everyone else sees their own spending and the
@@ -90,18 +91,26 @@ export function SpendingSection({
   const topRun = spending
     ? Math.max(0, ...spending.runs.map((r) => r.spent))
     : 0;
+  const unpriced = spending
+    ? spending.people.reduce((sum, p) => sum + p.unpriced, 0)
+    : 0;
+  // Bars say how amounts compare; where every amount reads the same, they
+  // would only show differences too small to read, so they are left out.
+  const runBars =
+    spending !== null &&
+    new Set(spending.runs.map((r) => dollars(r.spent))).size > 1;
+  const personBars =
+    spending !== null &&
+    ((limits?.userMonthSpend ?? 0) > 0 ||
+      new Set(spending.people.map((p) => dollars(p.spent))).size > 1);
 
   return (
     <section className="flow-section spending" aria-label="Spending and limits">
-      <header className="spending-header">
-        <h2>Spending &amp; limits</h2>
-        <p className="flows-note">
-          What agents spend on their models, at the prices of pi's catalog or of
-          the worker's models.json. A model without a known price is counted at
-          the largest models' price, so a limit isn't passed unnoticed. Months
-          are UTC's.
-        </p>
-      </header>
+      <SettingsHead
+        title="Spending & limits"
+        lead="What agents spend on their models this month, and what runs and people may use."
+        more="Spending is at the prices of pi's catalog or of the worker's models.json. A model without a known price is counted at the largest models' price, so a limit isn't passed unnoticed. Months are UTC's."
+      />
 
       <div className="spending-stats">
         <div className="spending-stat">
@@ -129,13 +138,15 @@ export function SpendingSection({
           )}
         </div>
         <div className="spending-stat">
-          <span className="spending-stat-label">Costliest run</span>
+          <span className="spending-stat-label">Without a known price</span>
           <span className="spending-stat-value">
-            {spending ? dollars(topRun) : "…"}
+            {spending ? unpriced.toLocaleString() : "…"}
           </span>
-          {limits && limits.runSpend > 0 && (
+          {spending && (
             <span className="spending-stat-note">
-              of {dollars(limits.runSpend)} a run may spend
+              {unpriced > 0
+                ? `${unpriced === 1 ? "call" : "calls"} counted at the largest models' price`
+                : "every call had its model's price"}
             </span>
           )}
         </div>
@@ -284,13 +295,15 @@ export function SpendingSection({
                             : "spending-who"
                         }
                       >
-                        {p.user === null ? "Nobody signed in" : p.name}
+                        {p.user === null ? "Runs nobody started" : p.name}
                       </span>
                       <span className="spending-amount">
                         {dollars(p.spent)}
                       </span>
                     </div>
-                    <Bar share={share} over={cap > 0 && p.spent >= cap} />
+                    {personBars && (
+                      <Bar share={share} over={cap > 0 && p.spent >= cap} />
+                    )}
                     <span className="spending-meta">
                       {p.calls.toLocaleString()}{" "}
                       {p.calls === 1 ? "call" : "calls"}
@@ -309,6 +322,9 @@ export function SpendingSection({
               <h3>Costliest runs</h3>
               <span className="spending-card-sub">
                 with their subflows and follow-ups
+                {limits &&
+                  limits.runSpend > 0 &&
+                  `; each may spend ${dollars(limits.runSpend)}`}
               </span>
             </div>
             <ol className="spending-bars">
@@ -325,7 +341,9 @@ export function SpendingSection({
                     </a>
                     <span className="spending-amount">{dollars(r.spent)}</span>
                   </div>
-                  <Bar share={topRun > 0 ? r.spent / topRun : 0} />
+                  {runBars && (
+                    <Bar share={topRun > 0 ? r.spent / topRun : 0} />
+                  )}
                 </li>
               ))}
             </ol>

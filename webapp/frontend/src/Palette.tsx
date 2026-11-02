@@ -1,6 +1,6 @@
 import type { DragEvent, ReactNode } from 'react'
 import type { Flow, MCPServer, ProcessKind, ProcessSettings } from './api'
-import { ObjectIcon, SubflowIcon } from './icons'
+import { AgentIcon, HumanIcon, ObjectIcon, PlusIcon, SubflowIcon } from './icons'
 import { ServiceLogo } from './logos'
 
 // Something the sidebar adds to the board: a node of an OPM element, or a
@@ -70,7 +70,7 @@ export function connectorBlocks(servers: MCPServer[]): ConnectorBlock[] {
       kind: 'connector',
       name: label,
       settings: { connector: { server: s.id, operation: '' } },
-      logo: () => <ServiceLogo name={s.connector!} title={label} size={32} />,
+      logo: () => <ServiceLogo name={s.connector!} title={label} size={22} />,
     }
   })
 }
@@ -100,39 +100,49 @@ export const BLOCK_MIME = 'application/x-flow-block'
 
 export const findBlock = (id: string): Block | undefined => BUILDING_BLOCKS.find((b) => b.id === id)
 
-// Blocks are dragged onto the board, or clicked to add one in the middle of it.
-export function BlockPalette({
-  blocks,
-  disabled,
-  onAdd,
-}: {
-  blocks: Block[]
-  disabled: boolean
-  onAdd: (block: Block) => void
-}) {
+// Blocks are dragged onto the board, or clicked to add one in the middle of
+// it. Each shows the badge its node has on the board, two to a row, or four
+// once the sidebar is wide enough, so none is left on a row of its own.
+export function BlockPalette({ blocks, onAdd }: { blocks: Block[]; onAdd: (block: Block) => void }) {
   return (
-    <ul className="palette">
+    <ul className="palette blocks">
       {blocks.map((b) => (
         <li key={b.id}>
-          <PaletteTile block={b} disabled={disabled} onAdd={onAdd}>
-            <span className={`palette-shape ${b.type}${b.human ? ' human' : ''}`} aria-hidden="true" />
-          </PaletteTile>
+          <PaletteItem block={b} onAdd={onAdd}>
+            <BlockBadge block={b} />
+          </PaletteItem>
         </li>
       ))}
     </ul>
   )
 }
 
-// The connectors installed; installing more
+// The badge a block's node has on the board: a new process is an agent's, a
+// person an object's with a person in it, and a note a note's folded corner.
+function BlockBadge({ block }: { block: Block }) {
+  if (block.type === 'note') return <span className="palette-badge note" aria-hidden="true" />
+  if (block.type === 'process') {
+    return (
+      <span className="palette-badge process" aria-hidden="true">
+        <AgentIcon />
+      </span>
+    )
+  }
+  return (
+    <span className="palette-badge object" aria-hidden="true">
+      {block.human ? <HumanIcon /> : <ObjectIcon />}
+    </span>
+  )
+}
+
+// The connectors installed, a row each; installing more
 // is for admins, in the settings.
 export function ConnectorPalette({
   blocks,
-  disabled,
   onAdd,
 }: {
   // Null while the installed connectors load.
   blocks: ConnectorBlock[] | null
-  disabled: boolean
   onAdd: (block: Block) => void
 }) {
   if (blocks === null) return null
@@ -145,79 +155,66 @@ export function ConnectorPalette({
     )
   }
   return (
-    <ul className="palette connectors">
+    <ul className="palette rows">
       {blocks.map((c) => (
         <li key={c.id}>
-          <PaletteTile block={c} disabled={disabled} onAdd={onAdd}>
+          <PaletteItem block={c} onAdd={onAdd} row>
             {c.logo()}
-          </PaletteTile>
+          </PaletteItem>
         </li>
       ))}
     </ul>
   )
 }
 
-// The modules, to reuse in this flow.
-export function FlowPalette({
-  blocks,
-  disabled,
-  onAdd,
-}: {
-  blocks: Block[]
-  disabled: boolean
-  onAdd: (block: Block) => void
-}) {
+// The modules, to reuse in this flow, a row each: people name them, and
+// as many as there are, so each name gets the sidebar's width.
+export function FlowPalette({ blocks, onAdd }: { blocks: Block[]; onAdd: (block: Block) => void }) {
   if (blocks.length === 0) return <p className="panel-note">No procedures yet. Make one on the main page, or mark a flow as one in its settings.</p>
   return (
-    <ul className="palette procedures">
+    <ul className="palette rows">
       {blocks.map((b) => (
         <li key={b.id}>
-          <PaletteTile block={b} disabled={disabled} onAdd={onAdd}>
-            <span className="palette-logo subflow">
+          <PaletteItem block={b} onAdd={onAdd} row>
+            <span className="palette-badge subflow" aria-hidden="true">
               <SubflowIcon />
             </span>
-          </PaletteTile>
+          </PaletteItem>
         </li>
       ))}
     </ul>
   )
 }
 
-// The structs, whose objects to use in this flow.
-export function StructPalette({
-  blocks,
-  disabled,
-  onAdd,
-}: {
-  blocks: Block[]
-  disabled: boolean
-  onAdd: (block: Block) => void
-}) {
+// The structs, whose objects to use in this flow, a row each.
+export function StructPalette({ blocks, onAdd }: { blocks: Block[]; onAdd: (block: Block) => void }) {
   if (blocks.length === 0) return <p className="panel-note">No structs yet. Make one on the main page.</p>
   return (
-    <ul className="palette structs">
+    <ul className="palette rows">
       {blocks.map((b) => (
         <li key={b.id}>
-          <PaletteTile block={b} disabled={disabled} onAdd={onAdd}>
-            <span className="palette-logo struct">
+          <PaletteItem block={b} onAdd={onAdd} row>
+            <span className="palette-badge object" aria-hidden="true">
               <ObjectIcon />
             </span>
-          </PaletteTile>
+          </PaletteItem>
         </li>
       ))}
     </ul>
   )
 }
 
-function PaletteTile({
+// A block to drag onto the board or click: a tile, or a row with a + that
+// shows on hover saying a click adds it.
+function PaletteItem({
   block,
-  disabled,
   onAdd,
+  row = false,
   children,
 }: {
   block: Block
-  disabled: boolean
   onAdd: (block: Block) => void
+  row?: boolean
   children: ReactNode
 }) {
   const onDragStart = (e: DragEvent<HTMLButtonElement>) => {
@@ -226,15 +223,19 @@ function PaletteTile({
   }
   return (
     <button
-      className={`palette-tile ${block.type}`}
-      draggable={!disabled}
-      disabled={disabled}
+      className={row ? 'palette-row' : 'palette-tile'}
+      draggable
       onDragStart={onDragStart}
       onClick={() => onAdd(block)}
       title={`${block.title}. Drag it onto the board, or click to add one in the middle.`}
     >
       {children}
       <span className="palette-label">{block.label}</span>
+      {row && (
+        <span className="palette-row-add" aria-hidden="true">
+          <PlusIcon />
+        </span>
+      )}
     </button>
   )
 }

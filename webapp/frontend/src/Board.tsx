@@ -1383,6 +1383,11 @@ export default function Board({
   const sharedRoot = structBoard
     ? nodes.find((n): n is ObjectNodeType => n.type === 'object' && isStructRoot(n.id) && Boolean(n.data.shared))
     : undefined
+  // The sidebar's blocks are for changing the board: a run's board, or a flow
+  // its viewer may not change, leaves them out, so its runs take the column.
+  // A struct's own board has nothing to add, being its one object.
+  const addsBlocks = !readOnly && !(structBoard && !objectBoard)
+  const showsRecords = structBoard && !objectBoard && sharedRoot !== undefined
 
   // Only modules and structs are reused; the flows that run stay on the main page.
   const flowBlocks = useMemo(() => (otherFlows ?? []).filter((f) => f.module).map(flowBlock), [otherFlows])
@@ -3871,65 +3876,66 @@ export default function Board({
         </div>
       )}
       <div className="workspace" style={{ '--panel-width': `${panelColumn.width}px` } as CSSProperties}>
-        <Sidebar>
-          <SidebarGroup id="blocks" title="Building blocks">
-            {!readOnly && !(structBoard && !objectBoard) && <BlocksHint />}
-            {structBoard && !objectBoard ? null : (
-              <BlockPalette
-                blocks={objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS}
-                disabled={readOnly}
-                onAdd={addAtViewportCenter}
-              />
+        {(addsBlocks || showsRecords || !structBoard) && (
+          <Sidebar>
+            {addsBlocks && (
+              <SidebarGroup id="blocks" title="Building blocks">
+                <BlocksHint />
+                <BlockPalette
+                  blocks={objectBoard ? BUILDING_BLOCKS.filter((b) => b.type === 'object' && !b.human) : BUILDING_BLOCKS}
+                  onAdd={addAtViewportCenter}
+                />
+              </SidebarGroup>
             )}
-          </SidebarGroup>
-          {!objectBoard && !structBoard && (
-            <>
-              <SidebarGroup id="connectors" title="Connectors">
-                <ConnectorPalette blocks={connectorTiles} disabled={readOnly} onAdd={addAtViewportCenter} />
+            {addsBlocks && !objectBoard && (
+              <>
+                <SidebarGroup id="connectors" title="Connectors">
+                  <ConnectorPalette blocks={connectorTiles} onAdd={addAtViewportCenter} />
+                </SidebarGroup>
+                <SidebarGroup id="flows" title="Procedures" gloss={PROCEDURE_WORDS.gloss}>
+                  <FlowPalette blocks={flowBlocks} onAdd={addAtViewportCenter} />
+                </SidebarGroup>
+                <SidebarGroup id="structs" title="Structs" gloss={STRUCT_WORDS.gloss}>
+                  <StructPalette blocks={structBlocks} onAdd={addAtViewportCenter} />
+                </SidebarGroup>
+              </>
+            )}
+            {showsRecords && sharedRoot && (
+              <SidebarGroup id="records" title="Records" fill>
+                <SharedRecords
+                  struct={flow.id}
+                  keyName={sharedRoot.data.attributes.find((a) => a.unique)?.name ?? null}
+                />
               </SidebarGroup>
-              <SidebarGroup id="flows" title="Procedures" gloss={PROCEDURE_WORDS.gloss}>
-                <FlowPalette blocks={flowBlocks} disabled={readOnly} onAdd={addAtViewportCenter} />
+            )}
+            {!structBoard && (
+              <SidebarGroup id="runs" title="Runs" fill>
+                <RunList
+                  flow={flowId}
+                  runs={listedRuns}
+                  filter={runFilter}
+                  onFilter={filterRuns}
+                  more={moreRuns}
+                  loading={loadingRuns}
+                  onMore={loadOlderRuns}
+                  selected={runId}
+                  onSelect={(id) => {
+                    // The run picked to compare with opens beside the other, in a tab of its own.
+                    if (comparing !== null) {
+                      if (id !== comparing) openTab(`#/flows/${flowId}/compare/${comparing}/${id}`)
+                      setComparing(null)
+                      return
+                    }
+                    const run = listedRuns.find((r) => r.id === id)
+                    if (run) showRun(run)
+                  }}
+                  picking={comparing}
+                  onCancelPick={() => setComparing(null)}
+                />
               </SidebarGroup>
-              <SidebarGroup id="structs" title="Structs" gloss={STRUCT_WORDS.gloss}>
-                <StructPalette blocks={structBlocks} disabled={readOnly} onAdd={addAtViewportCenter} />
-              </SidebarGroup>
-            </>
-          )}
-          {structBoard && !objectBoard && sharedRoot && (
-            <SidebarGroup id="records" title="Records" fill>
-              <SharedRecords
-                struct={flow.id}
-                keyName={sharedRoot.data.attributes.find((a) => a.unique)?.name ?? null}
-              />
-            </SidebarGroup>
-          )}
-          {!structBoard && (
-            <SidebarGroup id="runs" title="Runs" fill>
-              <RunList
-                flow={flowId}
-                runs={listedRuns}
-                filter={runFilter}
-                onFilter={filterRuns}
-                more={moreRuns}
-                loading={loadingRuns}
-                onMore={loadOlderRuns}
-                selected={runId}
-                onSelect={(id) => {
-                  // The run picked to compare with opens beside the other, in a tab of its own.
-                  if (comparing !== null) {
-                    if (id !== comparing) openTab(`#/flows/${flowId}/compare/${comparing}/${id}`)
-                    setComparing(null)
-                    return
-                  }
-                  const run = listedRuns.find((r) => r.id === id)
-                  if (run) showRun(run)
-                }}
-                picking={comparing}
-                onCancelPick={() => setComparing(null)}
-              />
-            </SidebarGroup>
-          )}
-        </Sidebar>
+            )}
+          </Sidebar>
+        )}
         <div
           className={`canvas${linkingTo ? ` linking-to-${linkingTo}` : ''}`}
           ref={wrapper}

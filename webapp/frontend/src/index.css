@@ -990,6 +990,8 @@ body {
   flex-direction: column;
   overflow-y: auto;
   background: #fff;
+  /* Its width, not the window's, decides how many blocks go to a row. */
+  container: sidebar / inline-size;
 }
 
 /* Drag the edge between the board and a column beside it, the sidebar or
@@ -1098,106 +1100,151 @@ body {
   margin: 0 6px;
 }
 
-/* Tiles dragged onto the board, as many to a row as fit. */
+/* What is dragged onto the board: the building blocks as tiles, two to a
+   row, four once the sidebar is wide enough (one in the narrowest), so
+   none is left on a row of its own; connectors, procedures and structs as
+   rows, each name taking the sidebar's width. */
 .palette {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
-  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.palette-tile {
-  width: 100%;
+.palette.blocks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+@container sidebar (min-width: 420px) {
+  .palette.blocks {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container sidebar (max-width: 211px) {
+  .palette.blocks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.palette.rows {
   display: flex;
   flex-direction: column;
+  gap: 1px;
+}
+
+.palette-tile,
+.palette-row {
+  width: 100%;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 6px 8px;
+  gap: 8px;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  text-align: left;
   color: #1f2328;
-  background: #f6f8fa;
-  border: 1px solid #d0d7de;
-  border-radius: 8px;
   cursor: grab;
 }
 
-.palette-tile:hover:not(:disabled) {
+/* Two to a row in the sidebar's default width, so kept tight enough for
+   "Process" to show whole beside its badge. */
+.palette-tile {
+  gap: 6px;
+  padding: 6px 7px;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+}
+
+.palette-tile:hover {
   background: #fff;
   border-color: #8c959f;
   box-shadow: 0 1px 3px rgb(31 35 40 / 0.12);
 }
 
-.palette-tile:active:not(:disabled) {
+.palette-row {
+  padding: 4px 6px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+}
+
+.palette-row:hover {
+  background: #f6f8fa;
+}
+
+.palette-tile:active,
+.palette-row:active {
   cursor: grabbing;
 }
 
-.palette-tile:focus-visible {
+.palette-tile:focus-visible,
+.palette-row:focus-visible {
   outline: 2px solid #1f6feb;
-  outline-offset: 1px;
-}
-
-.palette-tile:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  outline-offset: -1px;
 }
 
 .palette-label {
-  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* The element as the board draws it: a process round-ended, an object square. */
-.palette-shape {
-  width: 44px;
-  height: 22px;
-  background: #fff;
-  border: 1.5px solid #8c959f;
+/* A row's +, shown on hover or focus, saying a click adds it. */
+.palette-row-add {
+  display: flex;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: #656d76;
+  opacity: 0;
 }
 
-.palette-shape.process {
-  border-radius: 11px;
+.palette-row:hover .palette-row-add,
+.palette-row:focus-visible .palette-row-add {
+  opacity: 1;
 }
 
-.palette-shape.object {
-  border-radius: 2px;
-}
-
-/* A person: an object drawn with a thicker edge, as OPM draws physical ones. */
-.palette-shape.object.human {
-  border-width: 3px;
-}
-
-/* A note: a square of its colour, its corner folded. */
-.palette-shape.note {
-  width: 30px;
-  height: 26px;
-  border-color: #d4a72c;
-  background: linear-gradient(225deg, transparent 6px, var(--note-yellow) 6px);
-  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
-}
-
-/* A connector shows its service's logo. */
-.palette-logo {
+/* The badge each block's node has on the board, at the size of a
+   connector's logo in its row: a process's round, an object's square. */
+.palette-badge {
+  flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
   color: #fff;
   background: #1f2328;
 }
 
-.palette-logo.subflow {
+.palette-badge svg {
+  width: 13px;
+  height: 13px;
+}
+
+.palette-badge.process {
+  border-radius: 50%;
+  background: #8250df;
+}
+
+.palette-badge.object {
+  background: #1a7f37;
+}
+
+.palette-badge.subflow {
   background: #1b7c83;
 }
 
-.palette-logo.struct {
-  background: #1a7f37;
+/* A note: a square of its colour, its corner folded. */
+.palette-badge.note {
+  width: 20px;
+  height: 22px;
+  border: 1.5px solid #d4a72c;
+  border-radius: 2px;
+  background: linear-gradient(225deg, transparent 5px, var(--note-yellow) 5px);
+  clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
 }
 
 .run-list {
@@ -3733,10 +3780,17 @@ body {
   background: #fff;
 }
 
+.run-search-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
 .run-search input {
   flex: 1;
   min-width: 0;
-  padding: 4px 8px;
+  padding: 4px 26px 4px 8px;
   font: inherit;
   font-size: 13px;
   border: 1px solid #d0d7de;
@@ -3746,6 +3800,31 @@ body {
 .run-search input:focus {
   outline: 2px solid #1f6feb;
   outline-offset: -1px;
+}
+
+/* The arrow at the end of the search box: searching opens the Data page. */
+.run-search-go {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  display: flex;
+  padding: 3px;
+  color: #656d76;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.run-search-go:hover {
+  color: #1f2328;
+  background: #f6f8fa;
+}
+
+.run-search-go:focus-visible {
+  outline: 2px solid #1f6feb;
+  outline-offset: -2px;
 }
 
 .run-filter-button {
@@ -7150,7 +7229,7 @@ select.flow-owner:disabled {
 }
 
 .palette .service-logo {
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .directory-description {

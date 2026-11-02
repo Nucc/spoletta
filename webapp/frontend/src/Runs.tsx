@@ -23,7 +23,7 @@ import {
   type StepStatus,
   type StepUsage,
 } from './api'
-import { ClockIcon, TerminalIcon } from './icons'
+import { ClockIcon, ExternalIcon, TerminalIcon } from './icons'
 import StepTerminal, { formatLogTime, useStepLogs } from './StepTerminal'
 import { elapsedText, formatSpan } from './timeline'
 import { atDefault, changedSummary, type SettingGroup } from './stepSettings'
@@ -220,15 +220,22 @@ export function RunList({
 
   return (
     <div className="run-finder" onKeyDown={(e) => e.key === 'Escape' && picking !== null && onCancelPick()}>
+      {/* The search goes to the Data page, unlike Filter beside it, which
+          narrows the list in place; the arrow in the box says so. */}
       <form className="run-search" role="search" onSubmit={search}>
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search what runs held…"
-          aria-label="Search the flow's runs on its Data page"
-          title="Opens the flow's Data page with this search, e.g. status:failed -@Bug.state:fixed timeout"
-        />
+        <span className="run-search-field">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search what runs held…"
+            aria-label="Search the flow's runs on its Data page"
+            title="Opens the flow's Data page with this search, e.g. status:failed -@Bug.state:fixed timeout"
+          />
+          <button type="submit" className="run-search-go" aria-label="Search on the Data page" title="Search on the Data page">
+            <ExternalIcon />
+          </button>
+        </span>
         <button
           type="button"
           className={`run-filter-button${filtering ? ' open' : ''}${filtered ? ' active' : ''}`}

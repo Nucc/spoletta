@@ -256,7 +256,11 @@ func TestPlayingATaskBoard(t *testing.T) {
 	}
 
 	// The newest bug first, as the column sorts, and only it while it goes.
-	b = waitBoard(a, b.ID, "B-2 to be triaged", func(b playBoard) bool { return b.Running == 1 })
+	// The run counts as going as it starts, its step a moment later.
+	b = waitBoard(a, b.ID, "B-2 to be triaged", func(b playBoard) bool {
+		_, run := playCardRun(b, "B-2")
+		return b.Running == 1 && len(run.Steps) > 0
+	})
 	if col, status, _ := playCard(b, s, "B-2"); col != "New" || status != "running" {
 		t.Fatalf("B-2 shows in %q %q", col, status)
 	}
@@ -472,7 +476,10 @@ func TestTaskBoardNamesOnlyFlowsSeen(t *testing.T) {
 	ps.set(func(ps *playScripts) { ps.hold["T-1"] = release })
 	recordAdd(a, tickets, "T-1", "open")
 	a.call("POST", fmt.Sprintf("/api/taskboards/%d/play", b.ID), nil, http.StatusOK, nil)
-	b = waitBoard(a, b.ID, "T-1 going", func(b playBoard) bool { return b.Running == 1 })
+	b = waitBoard(a, b.ID, "T-1 going", func(b playBoard) bool {
+		_, run := playCardRun(b, "T-1")
+		return b.Running == 1 && len(run.Steps) > 0
+	})
 	if _, run := playCardRun(b, "T-1"); run.FlowName != "Implement bugs" || !slices.Equal(run.Steps, []string{"Implement"}) {
 		t.Errorf("Bob sees T-1's run as %+v, want Implement bugs at Implement", run)
 	}

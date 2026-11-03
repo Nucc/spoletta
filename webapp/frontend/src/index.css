@@ -12342,3 +12342,56 @@ select.flow-owner:not([multiple]):not([size]):disabled {
 .home-row:is(:hover, :focus-within) .home-owner select.flow-owner:not([multiple]):not([size]):not(:disabled) {
   background-image: var(--select-arrow);
 }
+
+/* A selected node's links and connections, in the selection's blue above
+   the rest: outgoing ones moving towards what they lead to, incoming ones
+   still; what they reach is outlined and everything else fades (Board.tsx). */
+:root {
+  --link-focus: #1f6feb;
+  --link-focus-halo: rgba(31, 111, 235, 0.18);
+}
+.react-flow__edge.focus-out .react-flow__edge-path,
+.react-flow__edge.focus-in .react-flow__edge-path {
+  stroke: var(--link-focus);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 3px var(--link-focus-halo));
+}
+.react-flow__edge.focus-out.diff-added .react-flow__edge-path,
+.react-flow__edge.focus-in.diff-added .react-flow__edge-path {
+  stroke: #2da44e;
+}
+.react-flow__edge.focus-out.diff-changed .react-flow__edge-path,
+.react-flow__edge.focus-in.diff-changed .react-flow__edge-path {
+  stroke: #d4a72c;
+}
+.react-flow__edge.focus-out .react-flow__edge-path {
+  stroke-dasharray: 8 4;
+  animation: link-focus-flow 0.6s linear infinite;
+}
+@keyframes link-focus-flow {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.focus-out .react-flow__edge-path {
+    animation: none;
+  }
+}
+.react-flow__edge.focus-out .react-flow__edge-text,
+.react-flow__edge.focus-in .react-flow__edge-text,
+.react-flow__edge.focus-out .link-label,
+.react-flow__edge.focus-in .link-label {
+  font-weight: 600;
+}
+.react-flow__edge.focus-dim,
+.react-flow__node.focus-dim {
+  opacity: 0.25;
+  transition: opacity 0.12s;
+}
+.react-flow__node.focus-near > * {
+  box-shadow: 0 0 0 2px var(--link-focus-halo);
+}
+.edge-label-dim {
+  opacity: 0.25;
+}

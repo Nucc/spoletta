@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { EdgeLabelRenderer, Position, useNodesData } from '@xyflow/react'
+import { Position, useNodesData } from '@xyflow/react'
+import EdgeLabel from './EdgeLabel'
 import { useBoardActions } from './actions'
 import type { ObjectNodeType } from './ObjectNode'
 import { quantityText, quantityWords } from './quantity'
@@ -20,7 +21,7 @@ export default function QuantityLabel({ objectId, x, y, side }: { objectId: stri
   const words = quantityWords(quantity)
   const at = beside(x, y, side)
   return (
-    <EdgeLabelRenderer>
+    <EdgeLabel>
       <div className="quantity-label nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${at.x}px, ${at.y}px)` }}>
         {editing ? (
           <QuantityInput
@@ -40,7 +41,7 @@ export default function QuantityLabel({ objectId, x, y, side }: { objectId: stri
           </button>
         )}
       </div>
-    </EdgeLabelRenderer>
+    </EdgeLabel>
   )
 }
 

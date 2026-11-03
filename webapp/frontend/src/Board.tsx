@@ -3580,27 +3580,55 @@ export default function Board({
   // What finding found is outlined too, the match gone to most.
   const found = useMemo(() => new Set(matches.map((m) => m.node)), [matches])
   const foundAt = finding?.at != null ? matches[finding.at]?.node : undefined
+  // What the selected processes, objects, start and end connect to, so a
+  // busy board shows where a node leads and what leads to it: their links
+  // and connections drawn in the focus colour above the rest, outgoing ones
+  // moving, and what they reach outlined, while everything else fades.
+  const focus = useMemo(() => {
+    const selected = new Set(nodes.flatMap((n) => (n.selected && n.type !== 'note' ? [n.id] : [])))
+    if (selected.size === 0) return null
+    const edgeClass = new Map<string, string>()
+    const near = new Set(selected)
+    for (const e of edges) {
+      if (e.type === 'note') continue
+      const out = selected.has(e.source)
+      const into = selected.has(e.target)
+      if (!out && !into) continue
+      edgeClass.set(e.id, out ? 'focus-out' : 'focus-in')
+      near.add(e.source)
+      near.add(e.target)
+    }
+    if (edgeClass.size === 0) return null
+    return { edgeClass, near, selected }
+  }, [nodes, edges])
   const shownNodes = useMemo(
     () =>
-      highlights.nodes.size === 0 && found.size === 0
+      highlights.nodes.size === 0 && found.size === 0 && !focus
         ? nodes
         : nodes.map((n) => {
             const change = highlights.nodes.get(n.id)
             const match = found.has(n.id) ? (n.id === foundAt ? 'find-current' : 'find-match') : undefined
-            if (!change && !match) return n
-            return { ...n, className: [n.className, change && `diff-${change}`, match].filter(Boolean).join(' ') }
+            const focused = focus && n.type !== 'note'
+              ? focus.selected.has(n.id) ? undefined : focus.near.has(n.id) ? 'focus-near' : 'focus-dim'
+              : undefined
+            if (!change && !match && !focused) return n
+            return { ...n, className: [n.className, change && `diff-${change}`, match, focused].filter(Boolean).join(' ') }
           }),
-    [nodes, highlights, found, foundAt],
+    [nodes, highlights, found, foundAt, focus],
   )
   const shownEdges = useMemo(
     () =>
-      highlights.edges.size === 0
+      highlights.edges.size === 0 && !focus
         ? edges
         : edges.map((e) => {
             const change = highlights.edges.get(e.id)
-            return change ? { ...e, className: `${e.className ?? ''} diff-${change}`.trim() } : e
+            const focused = focus ? (focus.edgeClass.get(e.id) ?? 'focus-dim') : undefined
+            if (!change && !focused) return e
+            const className = [e.className, change && `diff-${change}`, focused].filter(Boolean).join(' ')
+            if (focused === 'focus-dim') return { ...e, className, data: { ...e.data, dim: true } } as FlowEdge
+            return focused ? { ...e, className, zIndex: 1000 } : { ...e, className }
           }),
-    [edges, highlights],
+    [edges, highlights, focus],
   )
 
   // The toolbar keeps saving, publishing and running in reach, and the

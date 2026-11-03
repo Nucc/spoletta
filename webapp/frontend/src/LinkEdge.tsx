@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { BaseEdge, EdgeLabelRenderer, Position, useEdges, useNodesData, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react'
+import { BaseEdge, Position, useEdges, useNodesData, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { Link, LinkRole } from './api'
 import { PlusIcon } from './icons'
 import QuantityLabel from './QuantityLabel'
+import EdgeLabel, { EdgeDimmed } from './EdgeLabel'
 import type { ObjectNodeType } from './ObjectNode'
 import type { ProcessNodeType } from './ProcessNode'
 import { lanesOf, moveSegment, roundedPath, routePoints, segments, type End, type Lanes } from './route'
@@ -22,6 +23,8 @@ export type LinkEdgeData = {
   // board keeps routes of links and the start edge, not of direct connections.
   route?: Lanes | null
   routable?: boolean
+  // Faded, while another node's links are in focus (Board.tsx).
+  dim?: boolean
   // A failure connection, which runs its target once its source fails.
   failure?: boolean
 }
@@ -123,12 +126,12 @@ export default function LinkEdge({
   }
 
   return (
-    <>
+    <EdgeDimmed.Provider value={Boolean(data?.dim)}>
       <BaseEdge id={id} path={path} markerEnd={agent || role === 'instrument' ? undefined : markerEnd} style={style} />
       {agent && <circle className="agent-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
       {role === 'instrument' && <circle className="instrument-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
       {role !== undefined && ((selected && actions.editable) || role === 'consumption' || data?.link?.condition || data?.link?.query) && (
-        <EdgeLabelRenderer>
+        <EdgeLabel>
           <div className="link-role nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${roleAt(targetX, targetY, targetPosition)})` }}>
             {selected && actions.editable ? (
               <>
@@ -175,10 +178,10 @@ export default function LinkEdge({
               </>
             )}
           </div>
-        </EdgeLabelRenderer>
+        </EdgeLabel>
       )}
       {selected && data?.routable && actions.editable && (
-        <EdgeLabelRenderer>
+        <EdgeLabel>
           {segments(points, { x: labelX, y: labelY }).map((seg) => (
             <div
               key={seg.index}
@@ -189,7 +192,7 @@ export default function LinkEdge({
               onDoubleClick={() => actions.setRoute(id, null, true)}
             />
           ))}
-        </EdgeLabelRenderer>
+        </EdgeLabel>
       )}
       {counted && objectId && (
         <QuantityLabel
@@ -200,7 +203,7 @@ export default function LinkEdge({
         />
       )}
       {(data?.decision || agentDecision) && data?.link && (
-        <EdgeLabelRenderer>
+        <EdgeLabel>
           <DecisionStates
             edgeId={id}
             processId={sourceId}
@@ -209,10 +212,10 @@ export default function LinkEdge({
             chosen={data.link.states}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           />
-        </EdgeLabelRenderer>
+        </EdgeLabel>
       )}
       {data?.failure && (
-        <EdgeLabelRenderer>
+        <EdgeLabel>
           <div
             className="failure-label nodrag nopan"
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
@@ -220,10 +223,10 @@ export default function LinkEdge({
           >
             on failure
           </div>
-        </EdgeLabelRenderer>
+        </EdgeLabel>
       )}
       {insertable && (
-        <EdgeLabelRenderer>
+        <EdgeLabel>
           <button
             className="edge-insert nodrag nopan"
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
@@ -233,9 +236,9 @@ export default function LinkEdge({
           >
             <PlusIcon />
           </button>
-        </EdgeLabelRenderer>
+        </EdgeLabel>
       )}
-    </>
+    </EdgeDimmed.Provider>
   )
 }
 

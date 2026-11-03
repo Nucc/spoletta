@@ -50,7 +50,7 @@ import {
   ZoomInIcon,
 } from './icons'
 import { RANK_GAP, tidy } from './layout'
-import LinkEdge, { type LinkEdgeData, type LinkEdgeType } from './LinkEdge'
+import LinkEdge, { LinkRoutes, useLinkRoutes, type LinkEdgeData, type LinkEdgeType } from './LinkEdge'
 import ObjectNode, {
   stateSourceHandle,
   stateTargetHandle,
@@ -1663,7 +1663,7 @@ export default function Board({
   // Lays the whole board out from the top, and keeps that layout. Routes
   // drawn by hand were for the old layout, so links go back to the default.
   // The end goes last even when nothing leads into it, as if what leads
-  // nowhere led into it.
+  // nowhere led into it, or below everything when everything leads somewhere.
   const onTidy = () => {
     if (objectBoard) {
       tidyObject()
@@ -1677,7 +1677,7 @@ export default function Board({
       : nodes
           .filter((n) => n.id !== START_ID && n.id !== END_ID && !links.some((e) => e.source === n.id))
           .map((n) => ({ id: `${BOUNDARY_PREFIX}${n.id}-${END_ID}`, source: n.id, target: END_ID }))
-    const laid = tidy(nodes, [...links, ...leads])
+    const laid = tidy(nodes, [...links, ...leads], END_ID)
     for (const e of edges) {
       const note = getNode(e.source)
       const was = getNode(e.target)?.position
@@ -3616,6 +3616,8 @@ export default function Board({
           }),
     [nodes, highlights, found, foundAt, focus],
   )
+  // Where links run by default, clear of the nodes and of each other.
+  const linkRoutes = useLinkRoutes(edges)
   const shownEdges = useMemo(
     () =>
       highlights.edges.size === 0 && !focus
@@ -4004,41 +4006,43 @@ export default function Board({
           {!emptyBoard && <BoardTips tip={boardTip} />}
           <BoardActionsContext.Provider value={actions}>
             <StructFlowsContext.Provider value={structFlows}>
-              <ReactFlow
-                nodes={shownNodes}
-                edges={shownEdges}
-                nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                onConnectStart={onConnectStart}
-                onConnectEnd={onConnectEnd}
-                onEdgesDelete={onEdgesDelete}
-                isValidConnection={isValidConnection}
-                onNodeClick={onNodeClick}
-                onNodeDoubleClick={onNodeDoubleClick}
-                onNodeContextMenu={onNodeContextMenu}
-                onPaneContextMenu={(e) => {
-                  e.preventDefault()
-                  if (!readOnly && !objectBoard && !structBoard) setPaneMenu({ x: e.clientX, y: e.clientY })
-                }}
-                onEdgeDoubleClick={(_, edge) => !readOnly && edge.data?.route && setRoute(edge.id, null, true)}
-                onPaneClick={() => setPanelId(null)}
-                onNodeDragStart={() => (dragging.current = true)}
-                onNodeDragStop={onNodeDragStop}
-                onMoveEnd={() => keepTabView(tab, viewOf.current())}
-                defaultViewport={savedView ?? undefined}
-                onDoubleClick={onPaneDoubleClick}
-                zoomOnDoubleClick={false}
-                nodesDraggable={!readOnly}
-                nodesConnectable={!readOnly && !objectBoard}
-                // Deleting goes through the board's shortcuts.
-                deleteKeyCode={null}
-              >
-                <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
-                <Controls fitViewOptions={FIT_VIEW} />
-              </ReactFlow>
+              <LinkRoutes.Provider value={linkRoutes}>
+                <ReactFlow
+                  nodes={shownNodes}
+                  edges={shownEdges}
+                  nodeTypes={nodeTypes}
+                  edgeTypes={edgeTypes}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onConnect={onConnect}
+                  onConnectStart={onConnectStart}
+                  onConnectEnd={onConnectEnd}
+                  onEdgesDelete={onEdgesDelete}
+                  isValidConnection={isValidConnection}
+                  onNodeClick={onNodeClick}
+                  onNodeDoubleClick={onNodeDoubleClick}
+                  onNodeContextMenu={onNodeContextMenu}
+                  onPaneContextMenu={(e) => {
+                    e.preventDefault()
+                    if (!readOnly && !objectBoard && !structBoard) setPaneMenu({ x: e.clientX, y: e.clientY })
+                  }}
+                  onEdgeDoubleClick={(_, edge) => !readOnly && edge.data?.route && setRoute(edge.id, null, true)}
+                  onPaneClick={() => setPanelId(null)}
+                  onNodeDragStart={() => (dragging.current = true)}
+                  onNodeDragStop={onNodeDragStop}
+                  onMoveEnd={() => keepTabView(tab, viewOf.current())}
+                  defaultViewport={savedView ?? undefined}
+                  onDoubleClick={onPaneDoubleClick}
+                  zoomOnDoubleClick={false}
+                  nodesDraggable={!readOnly}
+                  nodesConnectable={!readOnly && !objectBoard}
+                  // Deleting goes through the board's shortcuts.
+                  deleteKeyCode={null}
+                >
+                  <Background variant={BackgroundVariant.Dots} gap={18} size={1.5} />
+                  <Controls fitViewOptions={FIT_VIEW} />
+                </ReactFlow>
+              </LinkRoutes.Provider>
             </StructFlowsContext.Provider>
           </BoardActionsContext.Provider>
           {changedBy && (

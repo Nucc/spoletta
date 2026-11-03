@@ -1,6 +1,25 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { createPortal } from 'react-dom'
-import { BaseEdge, Position, useEdges, useNodesData, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react'
+import {
+  BaseEdge,
+  Position,
+  useEdges,
+  useNodesData,
+  useReactFlow,
+  useStore,
+  type Edge,
+  type EdgeProps,
+  type ReactFlowState,
+} from '@xyflow/react'
 import { useBoardActions } from './actions'
 import type { Link, LinkRole } from './api'
 import { PlusIcon } from './icons'
@@ -8,7 +27,20 @@ import QuantityLabel from './QuantityLabel'
 import EdgeLabel, { EdgeDimmed } from './EdgeLabel'
 import type { ObjectNodeType } from './ObjectNode'
 import type { ProcessNodeType } from './ProcessNode'
-import { lanesOf, moveSegment, roundedPath, routePoints, segments, type End, type Lanes } from './route'
+import {
+  lanesOf,
+  moveSegment,
+  roundedPath,
+  routeLinks,
+  routePoints,
+  segments,
+  shifted,
+  type Box,
+  type End,
+  type Lanes,
+  type LinkEnds,
+  type LinkRoute,
+} from './route'
 import { CONDITION_WORDS, EVENT_WORDS, ROLE_WORDS } from './words'
 
 export type LinkEdgeData = {
@@ -33,6 +65,93 @@ export type LinkEdgeType = Edge<LinkEdgeData, 'link'>
 
 // The radius of the filled circle an agent link ends in.
 const AGENT_DOT_RADIUS = 5
+
+// Where the board's links run when nobody moved them by hand, worked out for
+// the whole board at once from where its nodes are (routeLinks in route.ts),
+// so each keeps clear of the nodes and of the others, and the ends sharing a
+// side spread along it; each link reads its own. The board provides it from
+// useLinkRoutes.
+export const LinkRoutes = createContext<Map<string, LinkRoute>>(new Map())
+
+// A handle and where a link's end on it goes.
+type HandleEnd = { id: string | null; end: End }
+
+// What routing the links depends on of the nodes: the boxes of all but
+// notes, their handles' ends, and those being dragged, with a key that
+// changes when any does.
+type Geometry = {
+  key: string
+  boxes: Box[]
+  handles: Map<string, { source: HandleEnd[]; target: HandleEnd[] }>
+  moving: string[]
+}
+
+// Where React Flow puts a link's end on a handle: the middle of its outer side.
+function handleEnd(x: number, y: number, h: { x: number; y: number; width: number; height: number; position: Position }): End {
+  const [left, top] = [x + h.x, y + h.y]
+  switch (h.position) {
+    case Position.Top:
+      return { x: left + h.width / 2, y: top, position: h.position }
+    case Position.Right:
+      return { x: left + h.width, y: top + h.height / 2, position: h.position }
+    case Position.Bottom:
+      return { x: left + h.width / 2, y: top + h.height, position: h.position }
+    default:
+      return { x: left, y: top + h.height / 2, position: h.position }
+  }
+}
+
+function geometryOf(s: ReactFlowState): Geometry {
+  const boxes: Box[] = []
+  const handles: Geometry['handles'] = new Map()
+  const moving: string[] = []
+  for (const node of s.nodeLookup.values()) {
+    const { width = 0, height = 0 } = node.measured
+    if (node.type === 'note' || node.hidden || width === 0 || height === 0) continue
+    const { x, y } = node.internals.positionAbsolute
+    boxes.push({ id: node.id, x, y, width, height })
+    type Bounds = { id?: string | null; x: number; y: number; width: number; height: number; position: Position }[]
+    const ends = (bounds: Bounds | null | undefined) => (bounds ?? []).map((h) => ({ id: h.id ?? null, end: handleEnd(x, y, h) }))
+    handles.set(node.id, { source: ends(node.internals.handleBounds?.source), target: ends(node.internals.handleBounds?.target) })
+    if (node.dragging) moving.push(node.id)
+  }
+  return { key: JSON.stringify([boxes, [...handles], moving]), boxes, handles, moving }
+}
+
+// Routes the board's links, again whenever its nodes move or change size or
+// its links change.
+export function useLinkRoutes(edges: Edge[]): Map<string, LinkRoute> {
+  const geometry = useStore(geometryOf, (a, b) => a.key === b.key)
+  const links = edges
+    .filter((e) => e.type === 'link')
+    .map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle ?? null,
+      targetHandle: e.targetHandle ?? null,
+      route: (e.data as LinkEdgeData | undefined)?.route ?? null,
+    }))
+  const linksKey = JSON.stringify(links)
+  const before = useRef(new Map<string, LinkRoute>())
+  return useMemo(() => {
+    const handle = (node: string, type: 'source' | 'target', id: string | null) => {
+      const all = geometry.handles.get(node)?.[type] ?? []
+      return (id === null ? all[0] : all.find((h) => h.id === id))?.end
+    }
+    const ends: LinkEnds[] = links.flatMap((l) => {
+      const from = handle(l.source, 'source', l.sourceHandle)
+      const to = handle(l.target, 'target', l.targetHandle)
+      if (!from || !to) return []
+      const { id, source, target, route: stored } = l
+      return [{ id, source, target, from, to, spreadFrom: l.sourceHandle === null, spreadTo: l.targetHandle === null, stored }]
+    })
+    const dragging = geometry.moving.length > 0 ? { moving: new Set(geometry.moving), before: before.current } : undefined
+    before.current = routeLinks(geometry.boxes, ends, dragging)
+    return before.current
+    // The links are as their key says.
+  }, [geometry, linksKey])
+}
 
 // How an input link's process takes the object, as the picker names them:
 // in plain words, OPM's after; see words.ts.
@@ -79,9 +198,12 @@ export default function LinkEdge({
     !object.data.boundary &&
     !object.data.human &&
     (object.data.many || (selected && actions.editable))
-  const source: End = { x: sourceX, y: sourceY, position: sourcePosition }
-  const end: End = { x: targetX, y: targetY, position: targetPosition }
-  const points = routePoints(source, end, data?.route)
+  // The board's route for the link, and its ends moved along their sides
+  // apart from the others there.
+  const auto = useContext(LinkRoutes).get(id)
+  const source = shifted({ x: sourceX, y: sourceY, position: sourcePosition }, auto?.fromShift ?? 0)
+  const end = shifted({ x: targetX, y: targetY, position: targetPosition }, auto?.toShift ?? 0)
+  const points = routePoints(source, end, data?.route, auto?.lanes)
   const {
     path,
     label: { x: labelX, y: labelY },
@@ -104,7 +226,7 @@ export default function LinkEdge({
   const onGripDown = (e: ReactPointerEvent<HTMLDivElement>, index: number, vertical: boolean) => {
     e.stopPropagation()
     e.preventDefault()
-    const lanes = lanesOf(source, end, data?.route)
+    const lanes = lanesOf(source, end, data?.route, auto?.lanes)
     const start = { x: e.clientX, y: e.clientY }
     // A click without a drag, as in a double-click, leaves the route alone.
     let moved = false
@@ -128,11 +250,11 @@ export default function LinkEdge({
   return (
     <EdgeDimmed.Provider value={Boolean(data?.dim)}>
       <BaseEdge id={id} path={path} markerEnd={agent || role === 'instrument' ? undefined : markerEnd} style={style} />
-      {agent && <circle className="agent-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
-      {role === 'instrument' && <circle className="instrument-dot" r={AGENT_DOT_RADIUS} {...dotCenter(targetX, targetY, targetPosition)} />}
+      {agent && <circle className="agent-dot" r={AGENT_DOT_RADIUS} {...dotCenter(end.x, end.y, targetPosition)} />}
+      {role === 'instrument' && <circle className="instrument-dot" r={AGENT_DOT_RADIUS} {...dotCenter(end.x, end.y, targetPosition)} />}
       {role !== undefined && ((selected && actions.editable) || role === 'consumption' || data?.link?.condition || data?.link?.query) && (
         <EdgeLabel>
-          <div className="link-role nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${roleAt(targetX, targetY, targetPosition)})` }}>
+          <div className="link-role nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${roleAt(end.x, end.y, targetPosition)})` }}>
             {selected && actions.editable ? (
               <>
                 <select
@@ -197,8 +319,8 @@ export default function LinkEdge({
       {counted && objectId && (
         <QuantityLabel
           objectId={objectId}
-          x={objectAtSource ? sourceX : targetX}
-          y={objectAtSource ? sourceY : targetY}
+          x={objectAtSource ? source.x : end.x}
+          y={objectAtSource ? source.y : end.y}
           side={objectAtSource ? sourcePosition : targetPosition}
         />
       )}

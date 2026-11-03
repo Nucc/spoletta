@@ -2007,10 +2007,17 @@ export default function Board({
   // went point at nothing.
   const removeNodes = async (ids: string[], confirmed?: () => void, links = 0) => {
     let chosen = ids.filter(removable).map((id) => getNode(id)!)
-    // What an object deleted is made of goes with it.
+    // What an object deleted is made of goes with it, so of those chosen
+    // only the ones no other chosen object owns are deleted (ownersOf ends
+    // with the object itself).
     if (objectBoard) {
       const all = new Set(chosen.map((n) => n.id))
-      chosen = chosen.filter((n) => !ownersOf(contents?.objects ?? [], objectIdOf(n.id)).some((o) => all.has(objectNodeId(o.id))))
+      chosen = chosen.filter(
+        (n) =>
+          !ownersOf(contents?.objects ?? [], objectIdOf(n.id))
+            .slice(0, -1)
+            .some((o) => all.has(objectNodeId(o.id))),
+      )
     }
     if (chosen.length === 0) return
     const shapes = chosen.filter((n) => n.type === 'process' || n.type === 'object')

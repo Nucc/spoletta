@@ -206,6 +206,31 @@ func refValue(content, field string) string {
 	return ""
 }
 
+// The values a record's field holds as references: one, or each of a list
+// of them, such as the tickets a pull request closes; empty ones left out.
+func refValues(content, field string) []string {
+	fields, err := jsonObject(content)
+	if err != nil {
+		return nil
+	}
+	raw, ok := fields[field]
+	if !ok {
+		return nil
+	}
+	var list []json.RawMessage
+	if json.Unmarshal(raw, &list) != nil {
+		list = []json.RawMessage{raw}
+	}
+	var out []string
+	for _, item := range list {
+		one, _ := json.Marshal(map[string]json.RawMessage{"v": item})
+		if v := refValue(string(one), "v"); v != "" && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // The record of store a reference names: the one holding value as one of
 // its unique values; 0 if none does.
 func referredRecord(ctx context.Context, db rowQuerier, store int64, value string, lock bool) (int64, error) {
@@ -276,20 +301,18 @@ func danglingRefs(ctx context.Context, db rowQuerier, store int64, content strin
 		return "", err
 	}
 	for _, f := range fields {
-		v := refValue(content, f.name)
-		if v == "" {
-			continue
-		}
-		record, err := referredRecord(ctx, db, f.store, v, false)
-		if err != nil {
-			return "", err
-		}
-		if record == 0 {
-			var name string
-			if err := db.QueryRowContext(ctx, "SELECT name FROM objects WHERE id = ?", f.store).Scan(&name); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		for _, v := range refValues(content, f.name) {
+			record, err := referredRecord(ctx, db, f.store, v, false)
+			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("%s names %s, but no %s record holds it", f.name, quote(v), quote(name)), nil
+			if record == 0 {
+				var name string
+				if err := db.QueryRowContext(ctx, "SELECT name FROM objects WHERE id = ?", f.store).Scan(&name); err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return "", err
+				}
+				return fmt.Sprintf("%s names %s, but no %s record holds it", f.name, quote(v), quote(name)), nil
+			}
 		}
 	}
 	return "", nil
@@ -345,7 +368,14 @@ func followRecords(ctx context.Context, tx *sql.Tx, nr *pendingRun, picked map[i
 				of = p.Name
 			}
 		}
-		key := refValue(content, o.Follows.Attribute)
+		keys := refValues(content, o.Follows.Attribute)
+		if len(keys) > 1 {
+			return &nothingToTake{msg: fmt.Sprintf("the %s record this run works on names %d %s records in %s, so the run can't follow one", quote(of), len(keys), quote(o.Name), o.Follows.Attribute)}
+		}
+		key := ""
+		if len(keys) == 1 {
+			key = keys[0]
+		}
 		if key == "" {
 			return noFollowed(o.Name, of, o.Follows, key)
 		}
@@ -447,12 +477,15 @@ func referringRecords(ctx context.Context, db *sql.DB, u *user, store, record in
 				EXISTS (SELECT 1 FROM runs r WHERE r.record_id = sr.id AND r.status = ?)
 				OR EXISTS (SELECT 1 FROM taken_records t JOIN runs r ON r.id = t.run_id WHERE t.record_id = sr.id AND NOT t.followed AND r.status = ?)
 			FROM shared_records sr WHERE sr.object_id = ? AND sr.deleted_at IS NULL AND JSON_VALID(sr.content)
-				AND CAST(JSON_UNQUOTE(JSON_EXTRACT(sr.content, ?)) AS CHAR) IN ` + in + `
+				AND (CAST(JSON_UNQUOTE(JSON_EXTRACT(sr.content, ?)) AS CHAR) IN ` + in + `
+					OR (JSON_TYPE(JSON_EXTRACT(sr.content, ?)) = 'ARRAY' AND JSON_OVERLAPS(JSON_EXTRACT(sr.content, ?), CAST(? AS JSON))))
 			ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?`
 		qargs := []any{runRunning, runRunning, x.object, path}
 		for _, k := range keys {
 			qargs = append(qargs, k)
 		}
+		list, _ := json.Marshal(keys)
+		qargs = append(qargs, path, path, string(list))
 		qargs = append(qargs, referringShown+1)
 		err := scanAll(ctx, db, q, func(rows *sql.Rows) error {
 			var rr referringRecord
@@ -664,27 +697,35 @@ func countReferring(ctx context.Context, db *sql.DB, u *user, store int64) (*ref
 	}
 	for _, x := range fields {
 		g := referringCountGroup{name: x.name, attribute: x.attr, byKey: map[string]*referringCount{}}
-		err := scanAll(ctx, db, `SELECT k, state, COUNT(*) FROM (
-				SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(content, ?)) AS CHAR) AS k, state FROM shared_records
-				WHERE object_id = ? AND deleted_at IS NULL AND JSON_VALID(content)) refs
-			WHERE k IS NOT NULL AND k <> '' GROUP BY k, state ORDER BY k, state`, func(rows *sql.Rows) error {
-			var key, state string
-			var n int
-			if err := rows.Scan(&key, &state, &n); err != nil {
+		// Read whole, as a field may hold a list of references.
+		err := scanAll(ctx, db, `SELECT JSON_EXTRACT(content, ?), state FROM shared_records
+			WHERE object_id = ? AND deleted_at IS NULL AND JSON_VALID(content) AND JSON_EXTRACT(content, ?) IS NOT NULL`, func(rows *sql.Rows) error {
+			var raw, state string
+			if err := rows.Scan(&raw, &state); err != nil {
 				return err
 			}
-			key = strings.TrimSpace(key)
-			c := g.byKey[key]
-			if c == nil {
-				c = &referringCount{Name: x.name, Attribute: x.attr, States: []stateCount{}}
-				g.byKey[key] = c
+			one, _ := json.Marshal(map[string]json.RawMessage{"v": json.RawMessage(raw)})
+			for _, key := range refValues(string(one), "v") {
+				c := g.byKey[key]
+				if c == nil {
+					c = &referringCount{Name: x.name, Attribute: x.attr, States: []stateCount{}}
+					g.byKey[key] = c
+				}
+				c.Total++
+				at := slices.IndexFunc(c.States, func(sc stateCount) bool { return sc.State == state })
+				if at < 0 {
+					c.States = append(c.States, stateCount{State: state})
+					at = len(c.States) - 1
+				}
+				c.States[at].Count++
 			}
-			c.Total += n
-			c.States = append(c.States, stateCount{State: state, Count: n})
 			return nil
-		}, "$."+strconv.Quote(x.attr), x.object)
+		}, "$."+strconv.Quote(x.attr), x.object, "$."+strconv.Quote(x.attr))
 		if err != nil {
 			return nil, err
+		}
+		for _, c := range g.byKey {
+			slices.SortFunc(c.States, func(a, b stateCount) int { return strings.Compare(a.State, b.State) })
 		}
 		rc.groups = append(rc.groups, g)
 	}

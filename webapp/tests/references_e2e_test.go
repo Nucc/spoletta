@@ -195,6 +195,29 @@ func TestRecordReferences(t *testing.T) {
 		t.Errorf("cards counting references: %v, want T-1's alone", board.Columns[0].Cards.Referring)
 	}
 
+	// A reference may hold a list, each of which must name a record; the
+	// records it names each list it, and a search reaches through each.
+	a.refused("POST", fmt.Sprintf("/api/structs/%d/records", prs.ID),
+		map[string]any{"content": map[string]any{"id": "PR-4", "ticket": []string{"T-1", "T-9"}}, "state": "merged"}, http.StatusBadRequest, `ticket names "T-9"`)
+	a.call("POST", fmt.Sprintf("/api/structs/%d/records", prs.ID),
+		map[string]any{"content": map[string]any{"id": "PR-4", "ticket": []string{"T-1", "T-2"}}, "state": "merged"}, http.StatusCreated, nil)
+	t2 := sharedRecords(a, tickets.ID)["T-2"].ID
+	a.call("GET", fmt.Sprintf("/api/structs/%d/records/%d/references", tickets.ID, t2), nil, http.StatusOK, &groups)
+	if len(groups) != 1 || len(groups[0].Records) != 1 || !strings.Contains(string(groups[0].Records[0].Content), "PR-4") {
+		t.Errorf("T-2's references = %+v, want PR-4", groups)
+	}
+	var found struct {
+		Records []sharedRecord `json:"records"`
+	}
+	a.call("GET", fmt.Sprintf("/api/structs/%d/records?q=%s", prs.ID, url.QueryEscape("@ticket.state:open")), nil, http.StatusOK, &found)
+	if len(found.Records) != 1 {
+		t.Errorf("pull requests with an open ticket: %d, want PR-4 alone, through T-2", len(found.Records))
+	}
+	a.call("GET", fmt.Sprintf("/api/taskboards/%d", board.ID), nil, http.StatusOK, &board)
+	if counts := board.Columns[0].Cards.Referring[fmt.Sprint(t1)]; len(counts) != 1 || counts[0].Total != 3 {
+		t.Errorf("T-1's card counts %+v, want 3 pull requests with PR-4", counts)
+	}
+
 	// A pull request naming no ticket starts no run.
 	refMerge(a, prs.ID, pr1, "PR-1", "T-1")
 	refMerge(a, prs.ID, pr2, "PR-2", "T-1")

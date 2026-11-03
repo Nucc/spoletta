@@ -721,7 +721,7 @@ function AttributeRow({
           <select
             value={attribute.ref ?? 0}
             disabled={!editable || attribute.unique}
-            title={attribute.unique ? 'A unique attribute is the record’s own key, so it refers to none' : 'Holds the key of a record of another shared struct'}
+            title={attribute.unique ? 'A unique attribute is the record’s own key, so it refers to none' : 'Holds the key of a record of another shared struct, or a list of keys'}
             onChange={(e) => onUpdate({ ref: Number(e.target.value) })}
           >
             <option value={0}>Nothing</option>

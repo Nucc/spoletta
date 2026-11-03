@@ -6067,6 +6067,12 @@ kbd {
   white-space: nowrap;
 }
 
+.record-refs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 /* The records referring to one, in its dialog. */
 .record-references {
   display: flex;

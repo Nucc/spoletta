@@ -550,21 +550,26 @@ func readRecordTable(ctx context.Context, db *sql.DB, root int64) (*recordTable,
 					row[field(f)] = scalars(fields[f])
 				}
 			}
+			// A list of references matches through each record it names.
 			for _, r := range refs {
-				to, ok := r.records[refValue(content, r.field)]
-				if !ok {
-					continue
-				}
-				row[refFacet(r, "")] = scalars(to.state)
-				names := make([]string, 0, len(to.fields))
-				for f := range to.fields {
-					names = append(names, f)
-				}
-				sort.Strings(names)
-				for _, f := range names {
-					// The record's state goes by state; a field of that name doesn't.
-					if slug(f) != "state" {
-						row[refFacet(r, f)] = scalars(to.fields[f])
+				for _, v := range refValues(content, r.field) {
+					to, ok := r.records[v]
+					if !ok {
+						continue
+					}
+					at := refFacet(r, "")
+					row[at] = append(row[at], scalars(to.state)...)
+					names := make([]string, 0, len(to.fields))
+					for f := range to.fields {
+						names = append(names, f)
+					}
+					sort.Strings(names)
+					for _, f := range names {
+						// The record's state goes by state; a field of that name doesn't.
+						if slug(f) != "state" {
+							at := refFacet(r, f)
+							row[at] = append(row[at], scalars(to.fields[f])...)
+						}
 					}
 				}
 			}

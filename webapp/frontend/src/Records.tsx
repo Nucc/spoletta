@@ -463,16 +463,23 @@ function Cell({
   onOpen: (o: Opened) => void
 }) {
   if (value === undefined || value === null || value === '') return <td className="data-cell empty" style={width} />
-  if (refTo !== undefined && (typeof value === 'string' || typeof value === 'number'))
+  // A reference, or a list of them, links to each record it names.
+  const refs = refTo === undefined ? null : (Array.isArray(value) ? value : [value]).filter((v) => typeof v === 'string' || typeof v === 'number')
+  if (refs && refs.length > 0)
     return (
       <td className="data-cell" style={width}>
-        <a
-          className="record-ref"
-          href={`#/flows/${refTo}/records?q=${encodeURIComponent(JSON.stringify(String(value)))}`}
-          title="Show the record it refers to"
-        >
-          {String(value)}
-        </a>
+        <span className="record-refs">
+          {refs.map((v) => (
+            <a
+              key={String(v)}
+              className="record-ref"
+              href={`#/flows/${refTo}/records?q=${encodeURIComponent(JSON.stringify(String(v)))}`}
+              title="Show the record it refers to"
+            >
+              {String(v)}
+            </a>
+          ))}
+        </span>
       </td>
     )
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)

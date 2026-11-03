@@ -498,7 +498,9 @@ repositories:
     nothing.
   - One struct's records can **refer** to another's: an attribute with
     `ref: Ticket` (the shared struct's name) holds the unique value of the
-    record it means, such as a pull request's `ticket: PROJ-12`. A record
+    record it means, such as a pull request's `ticket: PROJ-12`, or a
+    list of them (`ticket: [PROJ-12, PROJ-14]`), each of which must name a
+    record; a run follows only a reference naming one. A record
     naming a value no Ticket record holds isn't written: the step writing it
     fails, a person's edit is refused; an empty value refers to nothing. A
     reference isn't `unique` too. A record's dialog lists the records

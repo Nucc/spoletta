@@ -38,7 +38,8 @@ import (
 // write that record.
 //
 // People correct records by hand as well, adding, changing and deleting
-// them (records.go).
+// them (records.go). A record keeps only its latest self; every change of it,
+// by a run's step or a person, is kept in its history (record_changes.go).
 //
 // Whether a struct's object is shared is its own, and each copy follows it,
 // as with what else it has (see modules.go): the copy's store is the
@@ -113,7 +114,15 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 		}
 	}
 	objects = kept
+	if len(objects) == 0 {
+		return nil
+	}
 	slices.SortStableFunc(objects, func(x, y generated) int { return cmp.Compare(x.store, y.store) })
+	// The change each record written has in its history; see record_changes.go.
+	by, err := stepChanger(ctx, tx, stepID)
+	if err != nil {
+		return err
+	}
 	for _, g := range objects {
 		attrs, err := uniqueAttributes(ctx, tx, g.store)
 		if err != nil {
@@ -127,7 +136,7 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 				return err
 			}
 			if ok {
-				if err := writeTaken(ctx, tx, b, t, g.object, runID, stepID, attrs, stripFence(g.content), g.state); err != nil {
+				if err := writeTaken(ctx, tx, b, t, g.object, by, attrs, stripFence(g.content), g.state); err != nil {
 					return err
 				}
 				continue
@@ -144,7 +153,7 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 			}
 		}
 		for _, item := range items {
-			if err := writeRecord(ctx, tx, g.store, runID, stepID, attrs, item, g.state, g.affects); err != nil {
+			if err := writeRecord(ctx, tx, g.store, by, attrs, item, g.state, g.affects); err != nil {
 				return err
 			}
 		}
@@ -152,11 +161,11 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 	return nil
 }
 
-// Writes one record of a store: the record holding one of its unique
-// values, or a new one. A step that took the object moves the record into
-// state and makes it the step's, so the state the step comes out in later
-// reaches it too; see recordState.
-func writeRecord(ctx context.Context, tx *sql.Tx, store, runID, stepID int64, attrs []attribute, content, state string, affects bool) error {
+// Writes one record of a store, as the step by changes it: the record
+// holding one of its unique values, or a new one. A step that took the
+// object moves the record into state and makes it the step's, so the state
+// the step comes out in later reaches it too; see recordState.
+func writeRecord(ctx context.Context, tx *sql.Tx, store int64, by recordChanger, attrs []attribute, content, state string, affects bool) error {
 	// Another step adding the same new record first makes this one find it.
 	for attempt := 1; ; attempt++ {
 		record, err := recordHolding(ctx, tx, store, attrs, content)
@@ -164,12 +173,12 @@ func writeRecord(ctx context.Context, tx *sql.Tx, store, runID, stepID int64, at
 			return err
 		}
 		if record != 0 {
-			return updateRecord(ctx, tx, store, record, runID, stepID, attrs, content, state, affects)
+			return updateRecord(ctx, tx, store, record, by, attrs, content, state, affects)
 		}
 		if _, err := tx.ExecContext(ctx, "SAVEPOINT shared_record"); err != nil {
 			return err
 		}
-		err = insertRecord(ctx, tx, store, runID, stepID, attrs, content, state)
+		err = insertRecord(ctx, tx, store, by, attrs, content, state)
 		if !mysqlErrorIs(err, mysqlErrDuplicate) || attempt == 2 {
 			return err
 		}
@@ -215,9 +224,9 @@ func recordHolding(ctx context.Context, tx *sql.Tx, store int64, attrs []attribu
 	return 0, nil
 }
 
-func insertRecord(ctx context.Context, tx *sql.Tx, store, runID, stepID int64, attrs []attribute, content, state string) error {
+func insertRecord(ctx context.Context, tx *sql.Tx, store int64, by recordChanger, attrs []attribute, content, state string) error {
 	res, err := tx.ExecContext(ctx, "INSERT INTO shared_records (object_id, content, state, run_id, step_id) VALUES (?, ?, ?, ?, ?)",
-		store, content, state, runID, stepID)
+		store, content, state, by.run, by.step)
 	if err != nil {
 		return err
 	}
@@ -233,12 +242,12 @@ func insertRecord(ctx context.Context, tx *sql.Tx, store, runID, stepID int64, a
 			}
 		}
 	}
-	return nil
+	return noteRecordChange(ctx, tx, record, by, changeAdded)
 }
 
 // Refreshes a record with the fields content has, keeping those it leaves
 // out, and with affects moves it into state, unless that is none.
-func updateRecord(ctx context.Context, tx *sql.Tx, store, record, runID, stepID int64, attrs []attribute, content, state string, affects bool) error {
+func updateRecord(ctx context.Context, tx *sql.Tx, store, record int64, by recordChanger, attrs []attribute, content, state string, affects bool) error {
 	var old string
 	if err := tx.QueryRowContext(ctx, "SELECT content FROM shared_records WHERE id = ? FOR UPDATE", record).Scan(&old); err != nil {
 		return err
@@ -249,7 +258,7 @@ func updateRecord(ctx context.Context, tx *sql.Tx, store, record, runID, stepID 
 	if affects {
 		q = `UPDATE shared_records SET content = ?, state = IF(? = '', state, ?), run_id = ?, step_id = ?, edited_by = NULL, edited_at = NULL,
 			updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?`
-		args = []any{content, state, state, runID, stepID, record}
+		args = []any{content, state, state, by.run, by.step, record}
 	}
 	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
 		return err
@@ -264,7 +273,7 @@ func updateRecord(ctx context.Context, tx *sql.Tx, store, record, runID, stepID 
 			return err
 		}
 	}
-	return nil
+	return noteRecordChange(ctx, tx, record, by, changeWritten)
 }
 
 // A record's fields with those of content over them; content itself
@@ -289,13 +298,41 @@ func mergeFields(old, content string) string {
 }
 
 // Moves the records of store the step made its own into the state it came
-// out in.
+// out in, as the step's change of each it noted already; see
+// record_changes.go.
 func recordSharedState(ctx context.Context, db *sql.DB, step, store int64, state string) error {
 	if state == "" || store == 0 {
 		return nil
 	}
-	_, err := db.ExecContext(ctx, "UPDATE shared_records SET state = ? WHERE step_id = ? AND object_id = ?", state, step, store)
-	return err
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var records []int64
+	err = scanAll(ctx, tx, "SELECT id FROM shared_records WHERE step_id = ? AND object_id = ? AND deleted_at IS NULL ORDER BY id FOR UPDATE",
+		func(rows *sql.Rows) error {
+			var id int64
+			err := rows.Scan(&id)
+			records = append(records, id)
+			return err
+		}, step, store)
+	if err != nil || len(records) == 0 {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE shared_records SET state = ? WHERE id IN "+placeholders(len(records)), append([]any{state}, int64Args(records)...)...); err != nil {
+		return err
+	}
+	by, err := stepChanger(ctx, tx, step)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if err := noteRecordChange(ctx, tx, record, by, changeWritten); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // The store an object reads and writes, 0 if it isn't shared.
@@ -326,7 +363,7 @@ func querySharedRecords(ctx context.Context, db *sql.DB, store int64, q *linkQue
 		args = append(args, q.State)
 	}
 	rows, err := db.QueryContext(ctx,
-		"SELECT content FROM shared_records WHERE object_id = ?"+state+" ORDER BY updated_at "+order+", id "+order, args...)
+		"SELECT content FROM shared_records WHERE object_id = ? AND deleted_at IS NULL"+state+" ORDER BY updated_at "+order+", id "+order, args...)
 	if err != nil {
 		return "", err
 	}
@@ -464,7 +501,7 @@ func readRecordTable(ctx context.Context, db *sql.DB, root int64) (*recordTable,
 	for _, f := range rt.fields {
 		field(f)
 	}
-	err = scanAll(ctx, db, "SELECT "+sharedRecordColumns+" WHERE sr.object_id = ? ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?",
+	err = scanAll(ctx, db, "SELECT "+sharedRecordColumns+" WHERE sr.object_id = ? AND sr.deleted_at IS NULL ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?",
 		func(rows *sql.Rows) error {
 			rec, content, err := sharedRecordFrom(rows)
 			if err != nil {

@@ -46,7 +46,7 @@ func (fr *flowRun) pinnedRecord(ctx context.Context, db *sql.DB, object int64) (
 	}
 	var of int64
 	var content string
-	err := db.QueryRowContext(ctx, "SELECT object_id, content FROM shared_records WHERE id = ?", fr.record).Scan(&of, &content)
+	err := db.QueryRowContext(ctx, "SELECT object_id, content FROM shared_records WHERE id = ? AND deleted_at IS NULL", fr.record).Scan(&of, &content)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, fmt.Errorf("record %d, which the run was started on, was deleted", fr.record)
 	}
@@ -337,11 +337,11 @@ func recordsGoing(ctx context.Context, db *sql.DB, store int64, records []int64)
 		args = append(args, runRunning)
 	}
 	err := scanAll(ctx, db, `SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN runs r ON r.record_id = sr.id
-			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND r.status = ?
+			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND sr.deleted_at IS NULL AND r.status = ?
 		UNION SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN runs r ON r.id = sr.run_id
-			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND r.status = ?
+			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND sr.deleted_at IS NULL AND r.status = ?
 		UNION SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN taken_records t ON t.record_id = sr.id JOIN runs r ON r.id = t.run_id
-			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND r.status = ?
+			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND sr.deleted_at IS NULL AND r.status = ?
 		ORDER BY 1, 2`, func(rows *sql.Rows) error {
 		var record int64
 		var rr recordRun
@@ -366,7 +366,7 @@ func storeRecords(ctx context.Context, db *sql.DB, store int64, ids []int64) (ma
 	for _, i := range ids {
 		args = append(args, i)
 	}
-	err := scanAll(ctx, db, "SELECT id, content, state FROM shared_records WHERE object_id = ? AND id IN (?"+strings.Repeat(", ?", len(ids)-1)+")",
+	err := scanAll(ctx, db, "SELECT id, content, state FROM shared_records WHERE object_id = ? AND deleted_at IS NULL AND id IN (?"+strings.Repeat(", ?", len(ids)-1)+")",
 		func(rows *sql.Rows) error {
 			var id int64
 			var content, state string

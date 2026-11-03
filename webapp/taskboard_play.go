@@ -345,11 +345,11 @@ func storeGoing(ctx context.Context, db *sql.DB, store int64) (map[int64][]going
 	going := map[int64][]goingRun{}
 	waiting := "EXISTS (SELECT 1 FROM run_steps ws WHERE ws.run_id = r.id AND ws.status = 'waiting')"
 	err := scanAll(ctx, db, `SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN shared_records sr ON sr.id = r.record_id
-			WHERE r.status = ? AND sr.object_id = ?
+			WHERE r.status = ? AND sr.object_id = ? AND sr.deleted_at IS NULL
 		UNION SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN shared_records sr ON sr.run_id = r.id
-			WHERE r.status = ? AND sr.object_id = ?
+			WHERE r.status = ? AND sr.object_id = ? AND sr.deleted_at IS NULL
 		UNION SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN taken_records t ON t.run_id = r.id JOIN shared_records sr ON sr.id = t.record_id
-			WHERE r.status = ? AND sr.object_id = ?
+			WHERE r.status = ? AND sr.object_id = ? AND sr.deleted_at IS NULL
 		ORDER BY 1, 2`, func(rows *sql.Rows) error {
 		var record int64
 		var g goingRun
@@ -685,7 +685,7 @@ func startBoardRun(ctx context.Context, db *sql.DB, eng *engine, board int64, f 
 		return false, false, nil
 	}
 	var content, now string
-	err = tx.QueryRowContext(ctx, "SELECT content, state FROM shared_records WHERE id = ? AND object_id = ? FOR UPDATE", record, store).Scan(&content, &now)
+	err = tx.QueryRowContext(ctx, "SELECT content, state FROM shared_records WHERE id = ? AND object_id = ? AND deleted_at IS NULL FOR UPDATE", record, store).Scan(&content, &now)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, true, nil
 	}

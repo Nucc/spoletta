@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { SharedRecord } from './api'
 import { useConfirm } from './Confirm'
+import { RecordHistory } from './RecordHistory'
 
 // A record of a shared struct written by hand: a new one, or one a flow
 // wrote corrected, its state and each of its fields, those the struct has
 // and any other, which can be added and taken out. Text stays text; a
 // number, a yes or no, a list or anything with fields is written as JSON.
+// A record there is has its history beside, in a tab of its own; one that
+// isn't fields, which the form would write over, shows its history alone.
+
+type Tab = 'fields' | 'history'
 
 type Field = {
   key: number
@@ -36,8 +41,12 @@ function draftOf(fields: string[], record: SharedRecord | null): Field[] {
   })
 }
 
+const isFields = (v: unknown) => v !== null && typeof v === 'object' && !Array.isArray(v)
+
 export function RecordDialog({
   title,
+  struct,
+  tab: initialTab = 'fields',
   fields,
   states,
   record,
@@ -47,6 +56,10 @@ export function RecordDialog({
   onClose,
 }: {
   title: string
+  // The struct the record is of, to show its history; none shows the form alone.
+  struct?: number
+  // The tab it opens on.
+  tab?: Tab
   // The struct's own fields, in the board's order.
   fields: string[]
   states: string[]
@@ -65,6 +78,25 @@ export function RecordDialog({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [confirm, confirmDialog] = useConfirm()
+  // Whether it has a history to show, and the form to correct it; the
+  // history is asked for once its tab first shows, and kept.
+  const history = record !== null && struct !== undefined
+  const editable = record === null || isFields(record.content) || !history
+  const [tab, setTab] = useState<Tab>(editable ? initialTab : 'history')
+  const [historySeen, setHistorySeen] = useState(tab === 'history')
+  const show = (t: Tab) => {
+    setTab(t)
+    if (t === 'history') setHistorySeen(true)
+  }
+  const tabs = history && editable
+  // Left and Right go between the tabs, as tabs do.
+  const tabKeys = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    const next: Tab = tab === 'fields' ? 'history' : 'fields'
+    show(next)
+    e.currentTarget.querySelector<HTMLButtonElement>(`[data-tab="${next}"]`)?.focus()
+  }
 
   useEffect(() => {
     const dialog = ref.current
@@ -108,6 +140,25 @@ export function RecordDialog({
     run(() => onSave(content, state))
   }
 
+  // Deleting it, under its form, or its history when it shows that alone.
+  const deleteButton = onDelete && (
+    <button
+      type="button"
+      className="record-delete"
+      disabled={saving}
+      onClick={async () => {
+        const yes = await confirm({
+          title: 'Delete this record?',
+          message: <p>Flows using the struct no longer find it. This can't be undone.</p>,
+          confirm: 'Delete',
+        })
+        if (yes) run(onDelete)
+      }}
+    >
+      Delete
+    </button>
+  )
+
   return (
     <dialog ref={ref} className="review-dialog record-dialog" aria-label={title} onClose={onClose} onKeyDown={(e) => e.stopPropagation()}>
       <header className="panel-header">
@@ -116,91 +167,116 @@ export function RecordDialog({
           ×
         </button>
       </header>
-      <form className="record-form" onSubmit={save}>
-        <label className="panel-field">
-          State
-          <select value={state} onChange={(e) => setState(e.target.value)}>
-            <option value="">No state</option>
-            {states.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-            {state !== '' && !states.includes(state) && <option value={state}>{state}</option>}
-          </select>
-        </label>
-        <div className="record-fields">
-          {draft.map((f) => (
-            <div key={f.key} className="record-field">
-              <div className="record-field-head">
-                {f.own ? (
-                  <span className="record-field-name">{f.name}</span>
-                ) : (
-                  <input
-                    className="record-field-name"
-                    value={f.name}
-                    placeholder="Field name"
-                    aria-label="Field name"
-                    autoFocus={f.name === ''}
-                    onChange={(e) => change(f.key, { name: e.target.value })}
-                  />
-                )}
-                <label className="record-field-json" title="Write the value as JSON: a number, true or false, a list or fields">
-                  <input type="checkbox" checked={f.json} onChange={(e) => change(f.key, { json: e.target.checked })} /> JSON
-                </label>
-                <button
-                  type="button"
-                  className="link-button danger"
-                  title={f.own ? 'Leave this field empty' : 'Take this field out of the record'}
-                  onClick={() => (f.own ? change(f.key, { text: '' }) : setDraft((d) => d.filter((x) => x.key !== f.key)))}
-                >
-                  {f.own ? 'Clear' : 'Remove'}
-                </button>
-              </div>
-              <textarea
-                value={f.text}
-                rows={Math.min(8, Math.max(1, f.text.split('\n').length))}
-                spellCheck={false}
-                aria-label={f.name || 'Field value'}
-                onChange={(e) => change(f.key, { text: e.target.value })}
-              />
-            </div>
+      {tabs && (
+        <div className="record-tabs segmented" role="tablist" aria-label="The record" onKeyDown={tabKeys}>
+          {(
+            [
+              ['fields', 'Fields', 'record-fields-tab'],
+              ['history', 'History', 'record-history'],
+            ] as const
+          ).map(([t, label, panel]) => (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              data-tab={t}
+              aria-selected={tab === t}
+              aria-controls={panel}
+              tabIndex={tab === t ? 0 : -1}
+              className={tab === t ? 'selected' : ''}
+              onClick={() => show(t)}
+            >
+              {label}
+            </button>
           ))}
         </div>
-        <button
-          type="button"
-          className="link-button record-add-field"
-          onClick={() => setDraft((d) => [...d, { key: nextKey++, name: '', text: '', json: false, own: false }])}
+      )}
+      {history && historySeen && (
+        <RecordHistory struct={struct} record={record.id} state={record.state} hidden={tab !== 'history'} onNavigate={onClose} />
+      )}
+      {editable && (
+        <form
+          id="record-fields-tab"
+          className="record-form"
+          onSubmit={save}
+          hidden={tab !== 'fields'}
+          role={tabs ? 'tabpanel' : undefined}
         >
-          + Add a field
-        </button>
-        {error && <p className="panel-warning">{error}</p>}
-        <div className="review-actions">
-          {onDelete && (
-            <button
-              type="button"
-              className="record-delete"
-              disabled={saving}
-              onClick={async () => {
-                const yes = await confirm({
-                  title: 'Delete this record?',
-                  message: <p>Flows using the struct no longer find it. This can't be undone.</p>,
-                  confirm: 'Delete',
-                })
-                if (yes) run(onDelete)
-              }}
-            >
-              Delete
+          <label className="panel-field">
+            State
+            <select value={state} onChange={(e) => setState(e.target.value)}>
+              <option value="">No state</option>
+              {states.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+              {state !== '' && !states.includes(state) && <option value={state}>{state}</option>}
+            </select>
+          </label>
+          <div className="record-fields">
+            {draft.map((f) => (
+              <div key={f.key} className="record-field">
+                <div className="record-field-head">
+                  {f.own ? (
+                    <span className="record-field-name">{f.name}</span>
+                  ) : (
+                    <input
+                      className="record-field-name"
+                      value={f.name}
+                      placeholder="Field name"
+                      aria-label="Field name"
+                      autoFocus={f.name === ''}
+                      onChange={(e) => change(f.key, { name: e.target.value })}
+                    />
+                  )}
+                  <label className="record-field-json" title="Write the value as JSON: a number, true or false, a list or fields">
+                    <input type="checkbox" checked={f.json} onChange={(e) => change(f.key, { json: e.target.checked })} /> JSON
+                  </label>
+                  <button
+                    type="button"
+                    className="link-button danger"
+                    title={f.own ? 'Leave this field empty' : 'Take this field out of the record'}
+                    onClick={() => (f.own ? change(f.key, { text: '' }) : setDraft((d) => d.filter((x) => x.key !== f.key)))}
+                  >
+                    {f.own ? 'Clear' : 'Remove'}
+                  </button>
+                </div>
+                <textarea
+                  value={f.text}
+                  rows={Math.min(8, Math.max(1, f.text.split('\n').length))}
+                  spellCheck={false}
+                  aria-label={f.name || 'Field value'}
+                  onChange={(e) => change(f.key, { text: e.target.value })}
+                />
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="link-button record-add-field"
+            onClick={() => setDraft((d) => [...d, { key: nextKey++, name: '', text: '', json: false, own: false }])}
+          >
+            + Add a field
+          </button>
+          {error && <p className="panel-warning">{error}</p>}
+          <div className="review-actions">
+            {deleteButton}
+            <button type="button" onClick={onClose}>
+              Cancel
             </button>
-          )}
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" disabled={saving}>
-            {record ? 'Save' : 'Add'}
-          </button>
-        </div>
-      </form>
+            <button type="submit" disabled={saving}>
+              {record ? 'Save' : 'Add'}
+            </button>
+          </div>
+        </form>
+      )}
+      {!editable && deleteButton && (
+        <>
+          {error && <p className="panel-warning">{error}</p>}
+          <div className="review-actions">{deleteButton}</div>
+        </>
+      )}
       {confirmDialog}
     </dialog>
   )

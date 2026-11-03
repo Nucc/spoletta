@@ -13,7 +13,7 @@ import {
   type SharedRecords as Records,
 } from './api'
 import { HeaderResizer, useColumnWidths } from './HeaderResizer'
-import { FlowBuilderIcon, PlayIcon, TableIcon } from './icons'
+import { FlowBuilderIcon, HistoryIcon, PlayIcon, TableIcon } from './icons'
 import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { RecordDialog } from './RecordDialog'
 import { RecordRunDialog } from './RecordRunDialog'
@@ -125,6 +125,8 @@ export default function RecordsPage({ id }: { id: number }) {
   const [opened, setOpened] = useState<Opened | null>(null)
   // The record being written by hand: one corrected, or a new one.
   const [editing, setEditing] = useState<SharedRecord | 'new' | null>(null)
+  // The tab the record opened opens on: its fields, or its history.
+  const [editTab, setEditTab] = useState<'fields' | 'history'>('fields')
   // The records a flow is being started on, a run on each.
   const [running, setRunning] = useState<number[] | null>(null)
   const [ticked, setTicked] = useState<Set<number>>(new Set())
@@ -332,7 +334,11 @@ export default function RecordsPage({ id }: { id: number }) {
                                     {r.id}
                                   </button>
                                   {isFields(content) && (
-                                    <button className="link-button records-edit" title="Correct this record" onClick={() => setEditing(r)}>
+                                    <button
+                                      className="link-button records-edit"
+                                      title="Correct this record"
+                                      onClick={() => (setEditTab('fields'), setEditing(r))}
+                                    >
                                       Edit
                                     </button>
                                   )}
@@ -360,7 +366,15 @@ export default function RecordsPage({ id }: { id: number }) {
                             <td style={columns.style('run')}>
                               {columns.fit(
                                 'run',
-                                <>
+                                <span className="records-run-cell">
+                                  <button
+                                    className="icon-button records-history"
+                                    aria-label={`History of record ${r.id}`}
+                                    title="Show how this record got here"
+                                    onClick={() => (setEditTab('history'), setEditing(r))}
+                                  >
+                                    <HistoryIcon />
+                                  </button>
                                   {r.run !== null &&
                                     (r.runFlow !== null ? (
                                       <a href={`#/flows/${r.runFlow}/runs/${r.run}`} title="Open the run on its flow's board">
@@ -375,7 +389,7 @@ export default function RecordsPage({ id }: { id: number }) {
                                       {r.editedBy && ` by ${r.editedBy}`}
                                     </span>
                                   )}
-                                </>,
+                                </span>,
                               )}
                             </td>
                           </tr>
@@ -400,6 +414,8 @@ export default function RecordsPage({ id }: { id: number }) {
       {editing !== null && records && (
         <RecordDialog
           title={editing === 'new' ? `Add a record to ${name}` : `${name} · record ${editing.id}`}
+          struct={id}
+          tab={editTab}
           fields={records.fields}
           states={records.states}
           record={editing === 'new' ? null : editing}

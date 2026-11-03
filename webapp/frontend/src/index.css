@@ -5967,6 +5967,17 @@ kbd {
   color: #656d76;
 }
 
+/* The record's history, then the run that last moved it on. */
+.records-run-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.records-history {
+  padding: 2px;
+}
+
 .data-table tbody tr.ticked td {
   background: #ddf4ff;
 }
@@ -5990,6 +6001,267 @@ kbd {
   gap: 12px;
   min-height: 0;
   overflow: auto;
+}
+
+.record-form[hidden],
+.record-history-now[hidden],
+.record-history-scroll[hidden] {
+  display: none;
+}
+
+/* A record's history, its own tab in the record's dialog: where it stands
+   over the list, which alone scrolls, newest first along a line, each
+   change's dot on it. See RecordHistory.tsx. */
+.record-history-now {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #57606a;
+}
+
+.record-history-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 14px;
+  border-top: 1px solid #eaeef2;
+}
+
+.record-history-status {
+  margin: 0;
+  font-size: 13px;
+  color: #656d76;
+}
+
+.record-history-status.panel-warning {
+  color: #82071e;
+}
+
+.record-history {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 4px;
+}
+
+.record-history-entry {
+  position: relative;
+  display: flex;
+  gap: 12px;
+}
+
+.record-history-entry::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 16px;
+  bottom: 0;
+  width: 2px;
+  background: #d8dee4;
+}
+
+.record-history-entry:last-child::before {
+  display: none;
+}
+
+.record-history-dot {
+  position: relative;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  margin: 6px 1px 0;
+  border-radius: 50%;
+  background: #8c959f;
+  box-shadow: 0 0 0 3px #fff;
+}
+
+.record-history-dot.latest {
+  background: #1f2328;
+}
+
+.record-history-dot.added,
+.record-history-dot.found {
+  background: #fff;
+  border: 2px solid #8c959f;
+}
+
+.record-history-dot.found {
+  border-style: dashed;
+}
+
+.record-history-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 18px;
+}
+
+.record-history-entry:last-child .record-history-body {
+  padding-bottom: 4px;
+}
+
+.record-history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.record-history-moved {
+  font-size: 12.5px;
+  color: #656d76;
+}
+
+.record-history-head time {
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #656d76;
+}
+
+.record-history-origin {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.record-history-origin svg {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: #656d76;
+}
+
+.record-history-origin strong {
+  font-weight: 600;
+}
+
+/* Each field changed: its name, before, an arrow and after. */
+.record-history-fields {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) 16px minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: start;
+  font-size: 12.5px;
+}
+
+.record-history-fields .record-history-field,
+.record-history-values .record-history-field {
+  display: contents;
+}
+
+.record-history-name {
+  overflow-wrap: anywhere;
+  color: #656d76;
+}
+
+.record-history-fields .record-history-name,
+.record-history-arrow {
+  padding-top: 2px;
+}
+
+.record-history-arrow {
+  color: #656d76;
+}
+
+.record-history-none {
+  color: #656d76;
+}
+
+.record-history-fields .record-history-none {
+  padding: 2px 6px;
+}
+
+.record-history-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.record-history-value,
+.record-history-plain {
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.record-history-value {
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.record-history-value.before {
+  background: #ffebe9;
+}
+
+.record-history-value.after {
+  background: #dafbe1;
+}
+
+.record-history-value.clamped,
+.record-history-plain.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.record-history-more {
+  padding-left: 6px;
+  font-size: 12px;
+}
+
+.record-history-values .record-history-more {
+  padding-left: 0;
+}
+
+/* Fields as they came, or the whole record as a change left it, boxed. */
+.record-history-values {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 4px 8px;
+  font-size: 12.5px;
+}
+
+.record-history-values dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.record-history-values.boxed {
+  padding: 8px 10px;
+  background: #f6f8fa;
+  border: 1px solid #eaeef2;
+  border-radius: 6px;
+}
+
+.record-history-then {
+  align-self: flex-start;
+  font-size: 12.5px;
+}
+
+/* Words for screen readers alone, such as "changed from" before a value. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .record-fields {
@@ -11469,7 +11741,7 @@ button.panel-help:focus-visible {
   flex-direction: column;
   gap: 3px;
   width: 100%;
-  padding: 10px 36px 8px 12px;
+  padding: 10px 12px 8px 12px;
   border: none;
   background: none;
   color: inherit;
@@ -11492,6 +11764,11 @@ button.panel-help:focus-visible {
   color: #656d76;
 }
 
+/* The ID's line keeps clear of the buttons in the card's corner. */
+.task-card-open .task-card-key {
+  padding-right: 52px;
+}
+
 /* An ID linked to the record's own page, outside the button opening the
    record, where the button's first line would be. */
 .task-card-link {
@@ -11499,8 +11776,8 @@ button.panel-help:focus-visible {
   align-items: center;
   gap: 4px;
   width: fit-content;
-  max-width: calc(100% - 48px);
-  margin: 10px 36px 0 12px;
+  max-width: calc(100% - 76px);
+  margin: 10px 64px 0 12px;
   color: #0969da;
   text-decoration: none;
 }
@@ -11565,29 +11842,51 @@ button.panel-help:focus-visible {
   text-decoration: underline;
 }
 
-.task-card-state {
+/* A shared record's state, on its card and, larger, in its history. Record
+   states aren't run statuses, so none has a colour of its own. */
+.record-state {
   padding: 0 7px;
   line-height: 18px;
+  white-space: nowrap;
   border: 1px solid #d8dee4;
   border-radius: 9px;
   background: #f6f8fa;
   color: #57606a;
 }
 
-.task-card-run {
-  position: absolute;
-  top: 6px;
-  right: 6px;
+.record-state.large {
+  padding: 0 8px;
+  line-height: 20px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #1f2328;
 }
 
-/* Where there is a pointer, Run shows as it comes over the card. */
+/* The record's history and running a flow on it, side by side in the
+   card's corner, beside its ID, which alone makes room for them. */
+.task-card-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+}
+
+.task-card-actions .icon-button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+/* Where there is a pointer, they show as it comes over the card. */
 @media (hover: hover) {
-  .task-card-run {
+  .task-card-actions {
     opacity: 0;
   }
 
-  .task-card:hover .task-card-run,
-  .task-card-run:focus-visible {
+  .task-card:hover .task-card-actions,
+  .task-card-actions:focus-within {
     opacity: 1;
   }
 }

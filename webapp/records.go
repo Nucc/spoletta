@@ -14,13 +14,17 @@ import (
 // A shared struct's records are written by the flows using it, and
 // corrected by hand: a person adds a record a flow missed, changes what an
 // agent got wrong, its state too, adds a field or takes one out, and
-// deletes records, one or many at once. What they write replaces the
+// deletes records, one or many at once. A record deleted is kept, with its
+// history, but every flow, query, pick, task board and the Records page
+// leave it out, and its unique values are free for another record; nothing
+// brings it back. What they write replaces the
 // record whole, so a field taken out stays out, and stays told apart by
 // the struct's unique attributes: a unique value another record holds is
 // refused rather than merged, as a run would. A record edited is no longer
 // the step's that last moved it, so the state that step comes out in
 // doesn't undo the correction (recordSharedState); it keeps its run, and
-// who edited it and when, until a run moves it on again.
+// who edited it and when, until a run moves it on again. Each correction is
+// a change in the record's history, by whoever made it (record_changes.go).
 
 // What a person writes of a record: its fields, as a JSON object, and its
 // state, one of the object's or none.
@@ -168,14 +172,14 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 		} else {
 			res, err := tx.ExecContext(ctx, `UPDATE shared_records SET content = ?, state = ?, step_id = NULL, edited_by = ?,
 					edited_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
-				WHERE id = ? AND object_id = ?`, string(e.Content), e.State, requestUserID(r), record, store)
+				WHERE id = ? AND object_id = ? AND deleted_at IS NULL`, string(e.Content), e.State, requestUserID(r), record, store)
 			if err != nil {
 				serverError(w, err)
 				return
 			}
 			if n, _ := res.RowsAffected(); n == 0 {
 				var exists bool
-				err := tx.QueryRowContext(ctx, "SELECT TRUE FROM shared_records WHERE id = ? AND object_id = ?", record, store).Scan(&exists)
+				err := tx.QueryRowContext(ctx, "SELECT TRUE FROM shared_records WHERE id = ? AND object_id = ? AND deleted_at IS NULL", record, store).Scan(&exists)
 				if errors.Is(err, sql.ErrNoRows) {
 					http.Error(w, "no such record", http.StatusNotFound)
 					return
@@ -196,6 +200,18 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		} else if msg != "" {
 			http.Error(w, msg, http.StatusConflict)
+			return
+		}
+		// The person's change in the record's history; see record_changes.go.
+		by, kind := recordChanger{}, changeEdited
+		if id := requestUserID(r); id != nil {
+			by.user = *id
+		}
+		if status == http.StatusCreated {
+			kind = changeAdded
+		}
+		if err := noteRecordChange(ctx, tx, record, by, kind); err != nil {
+			serverError(w, err)
 			return
 		}
 		if err := tx.Commit(); err != nil {
@@ -227,8 +243,8 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 	})
 
-	// Deletes the records named, one or many; their unique values are free
-	// for others then. Records another struct keeps stay.
+	// Deletes the records named, one or many, as deleteRecords does. Records
+	// another struct keeps stay.
 	mux.HandleFunc("POST /api/structs/{id}/records/delete", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
@@ -259,16 +275,47 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		args := []any{store}
-		for _, i := range body.IDs {
-			args = append(args, i)
-		}
-		res, err := db.ExecContext(r.Context(), "DELETE FROM shared_records WHERE object_id = ? AND id IN (?"+strings.Repeat(", ?", len(body.IDs)-1)+")", args...)
+		n, err := deleteRecords(r.Context(), db, store, body.IDs, requestUserID(r))
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		n, _ := res.RowsAffected()
-		writeJSON(w, http.StatusOK, map[string]int64{"deleted": n})
+		writeJSON(w, http.StatusOK, map[string]int{"deleted": n})
 	})
+}
+
+// Deletes the records of store named that aren't deleted already, as the
+// person user does, saying how many: each is kept, marked deleted, with its
+// history, which notes it, and its unique values are freed for others.
+func deleteRecords(ctx context.Context, db *sql.DB, store int64, ids []int64, user *int64) (int, error) {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var live []int64
+	err = scanAll(ctx, tx, "SELECT id FROM shared_records WHERE object_id = ? AND deleted_at IS NULL AND id IN "+placeholders(len(ids))+" ORDER BY id FOR UPDATE",
+		func(rows *sql.Rows) error {
+			var id int64
+			err := rows.Scan(&id)
+			live = append(live, id)
+			return err
+		}, append([]any{store}, int64Args(ids)...)...)
+	if err != nil || len(live) == 0 {
+		return 0, err
+	}
+	in, args := placeholders(len(live)), int64Args(live)
+	if _, err := tx.ExecContext(ctx, "UPDATE shared_records SET deleted_at = CURRENT_TIMESTAMP(3), deleted_by = ? WHERE id IN "+in,
+		append([]any{user}, args...)...); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM shared_keys WHERE record_id IN "+in, args...); err != nil {
+		return 0, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO record_changes (record_id, content, state, kind, user_id)
+		SELECT id, content, state, ?, ? FROM shared_records WHERE id IN `+in, append([]any{changeDeleted, user}, args...)...)
+	if err != nil {
+		return 0, err
+	}
+	return len(live), tx.Commit()
 }

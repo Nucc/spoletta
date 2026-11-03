@@ -764,6 +764,50 @@ export function deleteSharedRecords(struct: number, ids: number[]): Promise<{ de
   return request(`/api/structs/${struct}/records/delete`, { method: 'POST', body: JSON.stringify({ ids }) })
 }
 
+// A field a change of a record changed: its value before, absent if the
+// record didn't have it, and after, absent if the change took it out. A
+// record that isn't fields changes as a whole, a field with no name.
+export type FieldChange = { name: string; before?: unknown; after?: unknown }
+
+// A change of a shared record, as its history lists it (record_changes.go):
+// added by a step or a person, written by a step, edited by hand, or found
+// as it stood when its history began; the state it came out in and the one
+// it was in before, null for its first; the fields that changed, all for
+// its first; and the record as it stood after it.
+export type RecordChange = {
+  id: number
+  at: string
+  kind: 'added' | 'written' | 'edited' | 'found'
+  state: string
+  from: string | null
+  changed: FieldChange[]
+  content: unknown
+  // The run that changed it, the one a person, schedule, board or the API
+  // started, and its flow, null once gone or when not seen (hidden); a
+  // subflow's or item's run inside it the step went in, with its flow.
+  run: number | null
+  flow: number | null
+  flowName: string
+  hidden: boolean
+  inner: number | null
+  innerFlow: number | null
+  innerFlowName: string
+  // The step's process and kind, empty when its flow isn't seen.
+  process: string
+  processKind: string
+  // The person who edited it or decided the step, empty without sign-in.
+  by: string
+}
+
+// A record's history: the record as it stands, its struct's fields in the
+// board's order, and its changes, the latest first; more are kept.
+export type RecordChanges = { record: SharedRecord; fields: string[]; changes: RecordChange[]; more: boolean }
+
+// The record's history, the latest change first.
+export function getRecordChanges(struct: number, record: number): Promise<RecordChanges> {
+  return request(`/api/structs/${struct}/records/${record}/changes`)
+}
+
 // A task board: shared structs' records in columns, each column a struct
 // and a query of its records as the Records page searches them, owned as a
 // flow is; see taskboards.go.

@@ -28,6 +28,7 @@ import {
   ExternalIcon,
   FlowBuilderIcon,
   GearIcon,
+  HistoryIcon,
   PauseIcon,
   PencilIcon,
   PlayIcon,
@@ -123,8 +124,9 @@ export default function TaskBoardPage({ id }: { id: number }) {
   const [actionError, setActionError] = useState<string | null>(null)
   // The column being changed, by its place, or a new one.
   const [editing, setEditing] = useState<number | 'new' | null>(null)
-  // The record opened, of a column by its place, or a new one added to it.
-  const [opened, setOpened] = useState<{ column: number; record: SharedRecord | null } | null>(null)
+  // The record opened, of a column by its place, or a new one added to it,
+  // on its fields or its history.
+  const [opened, setOpened] = useState<{ column: number; record: SharedRecord | null; tab?: 'fields' | 'history' } | null>(null)
   // The record a flow is being started on.
   const [running, setRunning] = useState<{ struct: number; name: string; record: number } | null>(null)
   // Whether the board's settings are open.
@@ -447,7 +449,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
                     column={c}
                     card={c.cards ? cardOf(board, c, c.cards) : null}
                     onEdit={() => setEditing(i)}
-                    onOpen={(record) => setOpened({ column: i, record })}
+                    onOpen={(record, tab) => setOpened({ column: i, record, tab })}
                     onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
                     onRetry={retry}
                   />
@@ -501,6 +503,8 @@ export default function TaskBoardPage({ id }: { id: number }) {
       {opened !== null && column?.cards && struct !== null && (
         <RecordDialog
           title={opened.record ? `${column.structName} · ${keyOf(opened.record, column.cards)}` : `Add a record to ${column.structName}`}
+          struct={struct}
+          tab={opened.tab}
           fields={column.cards.fields}
           states={column.cards.states}
           record={opened.record}
@@ -699,8 +703,8 @@ function Column({
   // What the board's cards of its struct show, while it shows its records.
   card: TaskCard | null
   onEdit: () => void
-  // Opens a record of it, or a new one for none.
-  onOpen: (record: SharedRecord | null) => void
+  // Opens a record of it, or a new one for none, on its fields or history.
+  onOpen: (record: SharedRecord | null, tab?: 'fields' | 'history') => void
   onRun: (record: number) => void
   onRetry: (records: number[]) => void
 }) {
@@ -752,6 +756,7 @@ function Column({
                     card={card ?? defaultCard(cards.fields, cards.key)}
                     run={cards.runs[r.id]}
                     onOpen={() => onOpen(r)}
+                    onHistory={() => onOpen(r, 'history')}
                     onRun={() => onRun(r.id)}
                     onRetry={() => onRetry([r.id])}
                   />
@@ -840,13 +845,15 @@ function CardWork({ run, onRetry }: { run: CardRun; onRetry: () => void }) {
 // title and the rest under it, each named, those it has no value for left
 // out; then its state, when it was last written, and the run that last
 // moved it on, linked to it; and the run going on it, or why the board
-// skips it as stuck.
+// skips it as stuck. Its history and running a flow on it are buttons in
+// its corner, beside its ID.
 function Card({
   record,
   cards,
   card,
   run: work,
   onOpen,
+  onHistory,
   onRun,
   onRetry,
 }: {
@@ -855,6 +862,7 @@ function Card({
   card: TaskCard
   run?: CardRun
   onOpen: () => void
+  onHistory: () => void
   onRun: () => void
   onRetry: () => void
 }) {
@@ -888,7 +896,7 @@ function Card({
       </button>
       {(card.state || card.updated || run) && (
         <div className="task-card-meta">
-          {card.state && <span className="task-card-state">{record.state || 'no state'}</span>}
+          {card.state && <span className="record-state">{record.state || 'no state'}</span>}
           {card.updated && (
             <time dateTime={record.updated} title={`Last written ${formatTime(record.updated)}`}>
               {timeAgo(record.updated, Date.now())}
@@ -908,9 +916,14 @@ function Card({
         </div>
       )}
       {work && <CardWork run={work} onRetry={onRetry} />}
-      <button className="icon-button task-card-run" aria-label={`Run a flow on ${id}`} title="Run a flow on this record" onClick={onRun}>
-        <PlayIcon />
-      </button>
+      <div className="task-card-actions">
+        <button className="icon-button" aria-label={`Show how ${id} got here`} title="Show how this record got here" onClick={onHistory}>
+          <HistoryIcon />
+        </button>
+        <button className="icon-button" aria-label={`Run a flow on ${id}`} title="Run a flow on this record" onClick={onRun}>
+          <PlayIcon />
+        </button>
+      </div>
     </li>
   )
 }

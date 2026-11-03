@@ -272,7 +272,7 @@ func takeRecord(ctx context.Context, tx *sql.Tx, on int64, o snapshotObject) (in
 	if on != 0 {
 		var of int64
 		var state, content string
-		err := tx.QueryRowContext(ctx, "SELECT object_id, state, content FROM shared_records WHERE id = ? FOR UPDATE", on).Scan(&of, &state, &content)
+		err := tx.QueryRowContext(ctx, "SELECT object_id, state, content FROM shared_records WHERE id = ? AND deleted_at IS NULL FOR UPDATE", on).Scan(&of, &state, &content)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, "", "", fmt.Errorf("record %d, which the run was started on, was deleted", on)
 		}
@@ -291,7 +291,7 @@ func takeRecord(ctx context.Context, tx *sql.Tx, on int64, o snapshotObject) (in
 	if o.Pick.Oldest {
 		order = "ASC"
 	}
-	q := "SELECT id, content FROM shared_records WHERE object_id = ?"
+	q := "SELECT id, content FROM shared_records WHERE object_id = ? AND deleted_at IS NULL"
 	args := []any{store}
 	if o.Pick.State != "" {
 		q += " AND state = ?"
@@ -329,7 +329,7 @@ func takeRecord(ctx context.Context, tx *sql.Tx, on int64, o snapshotObject) (in
 			continue
 		}
 		var state, content string
-		err := tx.QueryRowContext(ctx, "SELECT state, content FROM shared_records WHERE id = ? FOR UPDATE", id).Scan(&state, &content)
+		err := tx.QueryRowContext(ctx, "SELECT state, content FROM shared_records WHERE id = ? AND deleted_at IS NULL FOR UPDATE", id).Scan(&state, &content)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -401,11 +401,11 @@ func (c *recordConflict) Error() string { return c.msg }
 // now, so another's edit to the others stays, moving it into state unless
 // that is none. A *recordConflict if the record was deleted, or is no longer
 // in the state the run last left it in.
-func writeTaken(ctx context.Context, tx *sql.Tx, b *runBoard, t takenRecord, object, runID, stepID int64, attrs []attribute, content, state string) error {
+func writeTaken(ctx context.Context, tx *sql.Tx, b *runBoard, t takenRecord, object int64, by recordChanger, attrs []attribute, content, state string) error {
 	name := quote(b.objects[object].Name)
 	store := b.store(object)
 	var now, at string
-	err := tx.QueryRowContext(ctx, "SELECT content, state FROM shared_records WHERE id = ? AND object_id = ? FOR UPDATE", t.record, store).Scan(&now, &at)
+	err := tx.QueryRowContext(ctx, "SELECT content, state FROM shared_records WHERE id = ? AND object_id = ? AND deleted_at IS NULL FOR UPDATE", t.record, store).Scan(&now, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return &recordConflict{fmt.Sprintf("The %s record this run works on (#%d) was deleted meanwhile, so what the step changed of it wasn't written.", name, t.record)}
 	}
@@ -418,7 +418,7 @@ func writeTaken(ctx context.Context, tx *sql.Tx, b *runBoard, t takenRecord, obj
 	}
 	var handed string
 	var inputs []byte
-	if err := tx.QueryRowContext(ctx, "SELECT inputs FROM run_steps WHERE id = ?", stepID).Scan(&inputs); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT inputs FROM run_steps WHERE id = ?", by.step).Scan(&inputs); err != nil {
 		return err
 	}
 	var ins []runInput
@@ -429,7 +429,7 @@ func writeTaken(ctx context.Context, tx *sql.Tx, b *runBoard, t takenRecord, obj
 			}
 		}
 	}
-	if err := updateRecord(ctx, tx, store, t.record, runID, stepID, attrs, changedFields(handed, now, content), state, true); err != nil {
+	if err := updateRecord(ctx, tx, store, t.record, by, attrs, changedFields(handed, now, content), state, true); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, "UPDATE taken_records t JOIN shared_records sr ON sr.id = t.record_id SET t.state = sr.state WHERE t.run_id = ? AND t.object_ref = ?",
@@ -474,18 +474,33 @@ func changedFields(handed, now, content string) string {
 }
 
 // Moves the record the step's run took for the object, if it took one, into
-// state, as a person decided; see recordDecision.
+// state, as a person decided, noting it as the step's change of it, by
+// whoever decided; see recordDecision and record_changes.go.
 func moveTaken(ctx context.Context, db *sql.DB, run, step, object int64, state string) error {
 	t, ok, err := takenBy(ctx, db, run, object)
 	if err != nil || !ok || state == "" {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE shared_records SET state = ?, run_id = ?, step_id = ?, edited_by = NULL, edited_at = NULL,
-		updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?`, state, run, step, t.record); err != nil {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, "UPDATE taken_records SET state = ? WHERE run_id = ? AND object_ref = ?", state, t.run, object)
-	return err
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE shared_records SET state = ?, run_id = ?, step_id = ?, edited_by = NULL, edited_at = NULL,
+		updated_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND deleted_at IS NULL`, state, run, step, t.record); err != nil {
+		return err
+	}
+	by, err := stepChanger(ctx, tx, step)
+	if err != nil {
+		return err
+	}
+	if err := noteRecordChange(ctx, tx, t.record, by, changeWritten); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE taken_records SET state = ? WHERE run_id = ? AND object_ref = ?", state, t.run, object); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Keeps the state the step left the record its run took for the object in,

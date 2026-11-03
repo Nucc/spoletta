@@ -888,7 +888,7 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 		if err != nil {
 			return err
 		}
-		out := attribute{ID: id, Object: bo.id, Name: name, Definition: a.Definition, Unique: a.Unique, File: a.File}
+		out := attribute{ID: id, Object: bo.id, Name: name, Definition: a.Definition, Unique: a.Unique, File: a.File, Type: a.Type, Pattern: a.Pattern}
 		if a.Ref != "" {
 			ref, err := b.refSource(a.Ref)
 			if err != nil {
@@ -898,6 +898,9 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 				return problemf("%s: attribute %s refers to records, so it can't be unique too", at, quote(name))
 			}
 			out.Ref = &ref
+		}
+		if msg := checkAttributeType(&out); msg != "" {
+			return problemf("%s: attribute %s: %s", at, quote(name), msg)
 		}
 		b.out.Attributes = append(b.out.Attributes, out)
 	}

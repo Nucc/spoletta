@@ -208,7 +208,7 @@ func fieldsSchema(fs []field) map[string]any {
 		if len(f.fields) > 0 {
 			p = fieldsSchema(f.fields)
 		} else {
-			p = map[string]any{}
+			p = typeSchema(f.kind, f.pattern)
 		}
 		if f.many {
 			p = listSchema(p, f.quantity)

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { listTaskStructs, type FlowObject, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation, type TaskStruct } from './api'
+import { useEffect, useId, useRef, useState } from 'react'
+import { listTaskStructs, type AttributePatch, type AttributeType, type FlowObject, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation, type TaskStruct } from './api'
 import { Data } from './Data'
 import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TableIcon, TrashIcon, ZoomInIcon } from './icons'
 import { pickText } from './ObjectNode'
@@ -12,10 +12,10 @@ import { Hint, useHelp } from './Hints'
 const SAVE_DELAY_MS = 500
 
 // Edits one object and the attributes it exhibits; mount with key={id} so
-// switching objects resets the form. Names save when the field is left, so
-// a half-typed one never takes another attribute's name; definitions save
-// shortly after typing stops. What else it is made of, the objects it owns,
-// is edited on its own board, once unfolded.
+// switching objects resets the form. Each attribute is a line, opened to edit
+// it, so the object's shape reads at a glance however many it has; one opens
+// at a time, and one just added opens. What else it is made of, the objects
+// it owns, is edited on its own board, once unfolded.
 export default function ObjectPanel({
   id,
   flow,
@@ -102,8 +102,9 @@ export default function ObjectPanel({
   onUnfold?: () => void
   // Shows one of the objects it is made of unfolded.
   onUnfoldPart: (id: number) => void
-  onAdd: (name: string) => Promise<boolean>
-  onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean; file?: boolean; ref?: number }) => Promise<boolean>
+  // Resolves to the new attribute's id, or null if the server refused it.
+  onAdd: (name: string) => Promise<number | null>
+  onUpdate: (id: number, patch: AttributePatch) => Promise<boolean>
   onRemove: (id: number) => Promise<boolean>
   // Sets a state's rule; resolves to whether the server took it.
   onStateRule: (id: number, rule: string) => Promise<boolean>
@@ -134,16 +135,23 @@ export default function ObjectPanel({
   // struct's own object, or a plain one on a job flow's top board, whose
   // reference a run given it can follow.
   const refers = structRoot || (jobFlow && !owner && !human && !shared && object?.parent === null && !quantity.many)
-  // The shared structs an attribute may refer to.
+  // The shared structs an attribute may refer to, which also name the one
+  // an attribute refers to on a copy of a struct, where it can't be changed.
+  const named = refers || attributes.some((a) => a.ref)
   const [structs, setStructs] = useState<TaskStruct[]>([])
   useEffect(() => {
-    if (!refers) return
+    if (!named) return
     let live = true
     listTaskStructs().then((ss) => live && setStructs(ss), () => {})
     return () => {
       live = false
     }
-  }, [refers])
+  }, [named])
+  // Unique only matters while the object is stored: persistent, or a
+  // struct's, whose records may be shared.
+  const stored = (persistent || structRoot || shared) && !owner
+  // The attribute opened to edit, if any.
+  const [openId, setOpenId] = useState<number | null>(null)
 
   // Saves the name unless it is empty or unchanged; also when the panel
   // closes, since a removed field may never blur.
@@ -167,7 +175,11 @@ export default function ObjectPanel({
     const trimmed = newName.trim()
     if (trimmed === '') return
     if (taken().includes(trimmed)) return
-    if (await onAdd(trimmed)) setNewName('')
+    // It opens, to be defined, while the focus stays here for the next.
+    const added = await onAdd(trimmed)
+    if (added === null) return
+    setNewName('')
+    setOpenId(added)
   }
   const duplicate = taken().includes(newName.trim())
 
@@ -488,6 +500,7 @@ export default function ObjectPanel({
         <div className="attributes-title">
           <ExhibitionIcon size={14} />
           <span>Attributes</span>
+          {attributes.length > 0 && <span className="attributes-count">{attributes.length}</span>}
           {help.button('attributes', 'Attributes')}
         </div>
         {help.note(
@@ -509,18 +522,25 @@ export default function ObjectPanel({
             ))}
           </ul>
         )}
-        {attributes.map((a) => (
-          <AttributeRow
-            key={a.id}
-            attribute={a}
-            editable={own}
-            persistent={(persistent || structRoot) && !owner}
-            taken={taken(a.id)}
-            structs={refers ? structs : undefined}
-            onUpdate={(patch) => onUpdate(a.id, patch)}
-            onRemove={() => onRemove(a.id)}
-          />
-        ))}
+        {attributes.length > 0 && (
+          <div className="attribute-list">
+            {attributes.map((a) => (
+              <AttributeRow
+                key={a.id}
+                attribute={a}
+                open={openId === a.id}
+                onToggle={() => setOpenId((o) => (o === a.id ? null : a.id))}
+                editable={own}
+                stored={stored}
+                taken={taken(a.id)}
+                refers={refers}
+                structs={structs}
+                onUpdate={(patch) => onUpdate(a.id, patch)}
+                onRemove={() => onRemove(a.id)}
+              />
+            ))}
+          </div>
+        )}
         <div className="attribute-add">
           <input
             value={newName}
@@ -617,26 +637,38 @@ function StateRuleRow({ state, editable, onSave }: { state: ObjectState; editabl
   )
 }
 
+// An attribute folded to a line: its name, what it is set to beyond holding
+// a plain value, and its definition's start; opened, it edits them. It stays
+// mounted folded, so its line shows what was just typed. Names save when the
+// field is left, so a half-typed one never takes another attribute's name;
+// definitions save shortly after typing stops, and both when Escape folds it
+// or the panel closes.
 function AttributeRow({
   attribute,
+  open,
+  onToggle,
   editable,
-  persistent,
+  stored,
   taken,
+  refers,
   structs,
   onUpdate,
   onRemove,
 }: {
   attribute: ObjectAttribute
+  open: boolean
+  // Opens it, or folds it while open.
+  onToggle: () => void
   editable: boolean
-  // Unique only matters while the object is persistent, or a struct's,
-  // whose records may be shared.
-  persistent: boolean
+  // Whether the object is stored, which unique needs.
+  stored: boolean
   // The names of the object's other attributes.
   taken: string[]
-  // On a struct's own object, the shared structs it may refer to the
-  // records of; see references.go.
-  structs?: TaskStruct[]
-  onUpdate: (patch: { name?: string; definition?: string; unique?: boolean; file?: boolean; ref?: number }) => Promise<boolean>
+  // Whether it may refer to a shared struct's records; see references.go.
+  refers: boolean
+  // The shared structs the person sees, which name what it refers to.
+  structs: TaskStruct[]
+  onUpdate: (patch: AttributePatch) => Promise<boolean>
   onRemove: () => Promise<boolean>
 }) {
   const [name, setName] = useState(attribute.name)
@@ -647,6 +679,9 @@ function AttributeRow({
   update.current = onUpdate
   // Set while the attribute is being deleted, when there's nothing left to save to.
   const removing = useRef(false)
+  const help = useHelp()
+  const editor = useId()
+  const summary = useRef<HTMLButtonElement>(null)
 
   const flush = (value: string) => {
     window.clearTimeout(timer.current)
@@ -676,18 +711,57 @@ function AttributeRow({
   latestCommit.current = commitName
   useEffect(() => () => void latestCommit.current(), [])
 
+  // A text's pattern, saved as the name is; one the server refuses, such as
+  // one that isn't a regular expression, goes back to what it was.
+  const [pattern, setPattern] = useState(attribute.pattern ?? '')
+  const savedPattern = useRef(attribute.pattern ?? '')
+  useEffect(() => {
+    savedPattern.current = attribute.pattern ?? ''
+    setPattern(savedPattern.current)
+  }, [attribute.pattern])
+  const commitPattern = async () => {
+    const p = pattern.trim()
+    if (removing.current || p === savedPattern.current) return
+    if (await onUpdate({ pattern: p })) savedPattern.current = p
+    else setPattern(savedPattern.current)
+  }
+  const latestPattern = useRef(commitPattern)
+  latestPattern.current = commitPattern
+  useEffect(() => () => void latestPattern.current(), [])
+
+  // A file holds a path, and a reference keys, so neither has a type.
+  const typeable = !attribute.file && !attribute.ref
+  const typed = attribute.type !== undefined
+
+  const chips = attributeChips(attribute, stored, structs)
+  const described = definition.trim()
+
   return (
-    <div className="attribute">
-      <div className="attribute-head">
-        <input
-          className="attribute-name"
-          value={name}
-          disabled={!editable}
-          aria-label="Attribute name"
-          onChange={(e) => setName(e.target.value)}
-          onBlur={commitName}
-          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-        />
+    <div className={open ? 'attribute open' : 'attribute'}>
+      <div className="attribute-summary-row">
+        <button
+          ref={summary}
+          type="button"
+          className="attribute-summary"
+          aria-expanded={open}
+          aria-controls={open ? editor : undefined}
+          onClick={onToggle}
+        >
+          <span className="attribute-line">
+            <span className="attribute-summary-name">{trimmed || attribute.name}</span>
+            {chips.map((c) => (
+              <span key={c.text} className={['attribute-chip', c.muted && 'muted', c.mono && 'mono'].filter(Boolean).join(' ')} title={c.title}>
+                {c.text}
+              </span>
+            ))}
+          </span>
+          {/* Open, the definition shows in full beneath instead. */}
+          {!open && (
+            <span className={described ? 'attribute-summary-definition' : 'attribute-summary-definition empty'}>
+              {described || 'No definition; agents go by its name'}
+            </span>
+          )}
+        </button>
         <button
           className="attribute-remove"
           title="Delete attribute"
@@ -701,69 +775,244 @@ function AttributeRow({
           <TrashIcon />
         </button>
       </div>
-      {clash && <small className="panel-warning">Another attribute has that name.</small>}
-      <div className="attribute-flags">
-        <label
-          className="panel-check"
-          title={persistent ? undefined : 'Store what runs generate to make an attribute unique'}
+      {open && (
+        <div
+          id={editor}
+          className="attribute-editor"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return
+            // Folds the row rather than closing the panel; the focus leaving
+            // the field first saves it.
+            e.stopPropagation()
+            summary.current?.focus()
+            onToggle()
+          }}
         >
+          <label htmlFor={`${editor}-name`}>Name</label>
           <input
-            type="checkbox"
-            checked={attribute.unique}
-            disabled={!editable || !persistent}
-            onChange={(e) => onUpdate({ unique: e.target.checked })}
-          />
-          <span>Unique</span>
-        </label>
-        <label className="panel-check" title="Holds the path of a file the process wrote, which must exist">
-          <input
-            type="checkbox"
-            checked={attribute.file}
+            id={`${editor}-name`}
+            className="attribute-name"
+            value={name}
             disabled={!editable}
-            onChange={(e) => onUpdate({ file: e.target.checked })}
+            spellCheck={false}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
           />
-          <span>File</span>
-        </label>
-      </div>
-      {structs && (
-        <label className="attribute-ref">
-          <span>Refers to</span>
-          <select
-            value={attribute.ref ?? 0}
-            disabled={!editable || attribute.unique}
-            title={attribute.unique ? 'A unique attribute is the record’s own key, so it refers to none' : 'Holds the key of a record of another shared struct, or a list of keys'}
-            onChange={(e) => onUpdate({ ref: Number(e.target.value) })}
-          >
-            <option value={0}>Nothing</option>
-            {structs.map((st) => (
-              <option key={st.object} value={st.object}>
-                a {st.name} record
-              </option>
-            ))}
-            {attribute.ref && !structs.some((st) => st.object === attribute.ref) && <option value={attribute.ref}>a struct you don’t see</option>}
-          </select>
-        </label>
+          {clash && <small className="panel-warning">Another attribute has that name.</small>}
+          <label htmlFor={`${editor}-definition`} className="attribute-editor-top">
+            Definition
+          </label>
+          <textarea
+            id={`${editor}-definition`}
+            value={definition}
+            rows={3}
+            disabled={!editable}
+            placeholder="What it holds"
+            onChange={(e) => setDefinition(e.target.value)}
+            onBlur={() => flush(definition)}
+          />
+          {typeable && (
+            <>
+              <span className="help-head">
+                <label htmlFor={`${editor}-type`}>Type</label>
+                {help.button('type', 'its type')}
+              </span>
+              <select
+                id={`${editor}-type`}
+                value={attribute.type ?? ''}
+                disabled={!editable}
+                onChange={(e) => onUpdate({ type: e.target.value as AttributeType | '' })}
+              >
+                <option value="">Any value</option>
+                {ATTRIBUTE_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {TYPE_NAMES[t]}
+                  </option>
+                ))}
+              </select>
+              {help.note(
+                'type',
+                <>
+                  What each of its values must be. A process handing in another is told what is wrong: an agent fixes it, a
+                  script's step fails; a person entering one, a request starting a run and a hand edit of a record are
+                  refused. Integer and Number are JSON numbers, Yes or no is true or false, and Date and time a date such as
+                  2026-11-03, or a date and time such as 2026-11-03T09:00:00Z. Any value takes whatever fits its definition.
+                  A file or an attribute referring to records has no type.
+                </>,
+              )}
+            </>
+          )}
+          {attribute.type === 'text' && (
+            <>
+              <span className="help-head">
+                <label htmlFor={`${editor}-pattern`}>Pattern</label>
+                {help.button('pattern', 'its pattern')}
+              </span>
+              <input
+                id={`${editor}-pattern`}
+                className="attribute-pattern"
+                value={pattern}
+                disabled={!editable}
+                spellCheck={false}
+                placeholder="Any text"
+                onChange={(e) => setPattern(e.target.value)}
+                onBlur={commitPattern}
+                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+              />
+              {help.note(
+                'pattern',
+                <>
+                  A regular expression the whole of the text must match, such as <code>[A-Z]+-\d+</code> for TALK-123; empty
+                  takes any text. It is written as Go's regular expressions are, which have no lookarounds or backreferences.
+                </>,
+              )}
+            </>
+          )}
+          {refers && !typed && (!attribute.unique || attribute.ref) && (
+            <>
+              <span className="help-head">
+                <label htmlFor={`${editor}-ref`}>Refers to</label>
+                {help.button('ref', 'what it refers to')}
+              </span>
+              <select
+                id={`${editor}-ref`}
+                value={attribute.ref ?? 0}
+                disabled={!editable || attribute.unique}
+                onChange={(e) => onUpdate({ ref: Number(e.target.value) })}
+              >
+                <option value={0}>Nothing</option>
+                {structs.map((st) => (
+                  <option key={st.object} value={st.object}>
+                    a {st.name} record
+                  </option>
+                ))}
+                {attribute.ref && !structs.some((st) => st.object === attribute.ref) && (
+                  <option value={attribute.ref}>a struct you don’t see</option>
+                )}
+              </select>
+              {help.note(
+                'ref',
+                <>
+                  Holds the unique value of a record of another shared struct, such as a pull request's ticket, or a list of
+                  them, each naming a record: a step writing one no record holds fails, and a hand edit is refused. A unique
+                  attribute is its record's own key, so it refers to none.
+                </>,
+              )}
+            </>
+          )}
+          <div className="attribute-options">
+            <span className="help-head">
+              <label className="panel-check">
+                <input
+                  type="checkbox"
+                  checked={attribute.unique}
+                  disabled={!editable || !stored}
+                  onChange={(e) => onUpdate({ unique: e.target.checked })}
+                />
+                <span>Unique</span>
+              </label>
+              {help.button('unique', 'Unique')}
+            </span>
+            <span className="help-head">
+              <label className="panel-check">
+                <input
+                  type="checkbox"
+                  checked={attribute.file}
+                  disabled={!editable || typed}
+                  onChange={(e) => onUpdate({ file: e.target.checked })}
+                />
+                <span>File</span>
+              </label>
+              {help.button('file', 'File')}
+            </span>
+          </div>
+          {help.note(
+            'unique',
+            <>
+              No two stored values share it. A shared struct's records are told apart by it, so generating a value a record
+              holds refreshes that record; on an object storing what runs generate, a step generating a value another run
+              stored terminates its run, so nothing is handled twice.
+              {!stored && ' Store what runs generate to make an attribute unique.'}
+            </>,
+          )}
+          {help.note(
+            'file',
+            <>
+              Holds the path of a file the step wrote, which must exist, rather than what it holds. A script writes it in
+              $OUTPUTS.{typed && ' A file has no type, so set Type to Any value first.'}
+            </>,
+          )}
+        </div>
       )}
-      <textarea
-        value={definition}
-        rows={2}
-        disabled={!editable}
-        aria-label={`Definition of ${attribute.name}`}
-        placeholder="What it holds, e.g. the ticket's number as a string"
-        onChange={(e) => setDefinition(e.target.value)}
-        onBlur={() => flush(definition)}
-      />
     </div>
   )
 }
 
+// The types an attribute can have, beside any value, as they are named.
+const ATTRIBUTE_TYPES: AttributeType[] = ['text', 'integer', 'number', 'boolean', 'datetime']
+const TYPE_NAMES: Record<AttributeType, string> = {
+  text: 'Text',
+  integer: 'Integer',
+  number: 'Number',
+  boolean: 'Yes or no',
+  datetime: 'Date and time',
+}
+
+type Chip = { text: string; title: string; muted?: boolean; mono?: boolean }
+
+// What an attribute is set to beyond holding any value, a word each, as its
+// folded line shows it: unique, its type, or for text its pattern, a file,
+// the struct it refers to. Unique on an object that isn't stored is muted,
+// as it changes nothing there.
+function attributeChips(a: ObjectAttribute, stored: boolean, structs: TaskStruct[]): Chip[] {
+  const chips: Chip[] = []
+  if (a.unique)
+    chips.push(
+      stored
+        ? { text: 'unique', title: 'No two stored values share it' }
+        : { text: 'unique', title: 'Unique only once what runs generate is stored', muted: true },
+    )
+  if (a.type === 'text' && a.pattern) chips.push({ text: `/${a.pattern}/`, title: `Text the whole of which matches ${a.pattern}`, mono: true })
+  else if (a.type) chips.push({ text: TYPE_NAMES[a.type].toLowerCase(), title: `Each value is ${TYPE_WORDS[a.type]}` })
+  if (a.file) chips.push({ text: 'file', title: 'Holds the path of a file the step wrote' })
+  if (a.ref) {
+    const st = structs.find((s) => s.object === a.ref)
+    chips.push(
+      st
+        ? { text: `→ ${st.name}`, title: `Holds the key of a ${st.name} record, or a list of them` }
+        : { text: '→ a record', title: 'Holds the key of a record of a struct you don’t see' },
+    )
+  }
+  return chips
+}
+
+// What a value of each type is, in words and as an example.
+const TYPE_WORDS: Record<AttributeType, string> = {
+  text: 'text',
+  integer: 'a whole number',
+  number: 'a number',
+  boolean: 'true or false',
+  datetime: 'a date, or a date and time',
+}
+const TYPE_EXAMPLES: Record<AttributeType, string> = {
+  text: '"…"',
+  integer: '3',
+  number: '0.8',
+  boolean: 'true',
+  datetime: '"2026-11-03T09:00:00Z"',
+}
+
 // What a process hands in, keys in order: {"data": …} without fields, an
-// array of such objects for a list; the objects it is made of nest theirs.
+// array of such objects for a list; the objects it is made of nest theirs,
+// and a typed attribute shows a value of its type.
 function example(fields: Field[], many: boolean): string {
-  const value = (fs: Field[], indent: string): string =>
+  const value = (fs: Field[], indent: string, type?: AttributeType): string =>
     fs.length === 0
-      ? '…'
-      : `{\n${fs.map((f) => `${indent}  ${JSON.stringify(f.name)}: ${f.many ? `[${value(f.fields, indent + '  ')}]` : value(f.fields, indent + '  ')}`).join(',\n')}\n${indent}}`
+      ? type
+        ? TYPE_EXAMPLES[type]
+        : '…'
+      : `{\n${fs.map((f) => `${indent}  ${JSON.stringify(f.name)}: ${f.many ? `[${value(f.fields, indent + '  ')}]` : value(f.fields, indent + '  ', f.attribute?.type)}`).join(',\n')}\n${indent}}`
   const object = (indent: string) => value(fields.length > 0 ? fields : [{ name: 'data', definition: '', file: false, many: false, min: 0, max: null, fields: [], inherited: false }], indent)
   return many ? `[\n  ${object('  ')}\n]` : object('')
 }

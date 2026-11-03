@@ -224,11 +224,11 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.source_id, a.ref_id, COALESCE(rf.name, '') FROM object_attributes a
+	err = scanAll(ctx, tx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.source_id, a.ref_id, COALESCE(rf.name, ''), a.value_type, a.value_pattern FROM object_attributes a
 		JOIN objects o ON o.id = a.object_id LEFT JOIN objects ro ON ro.id = a.ref_id LEFT JOIN flows rf ON rf.id = ro.flow_id
 		WHERE o.flow_id = ? ORDER BY a.id`, func(rows *sql.Rows) error {
 		var a attribute
-		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source, &a.Ref, &a.RefName)
+		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source, &a.Ref, &a.RefName, &a.Type, &a.Pattern)
 		s.Attributes = append(s.Attributes, a)
 		return err
 	}, flow)
@@ -474,8 +474,8 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		}
 	}
 	for _, a := range s.Attributes {
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (id, object_id, name, definition, is_unique, is_file, source_id, ref_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-			a.ID, a.Object, a.Name, a.Definition, a.Unique, a.File, a.Source, a.Ref)
+		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (id, object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			a.ID, a.Object, a.Name, a.Definition, a.Unique, a.File, a.Source, a.Ref, a.Type, a.Pattern)
 		if err != nil {
 			return err
 		}

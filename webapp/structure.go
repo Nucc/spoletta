@@ -65,7 +65,7 @@ func loadStructure(ctx context.Context, db rowsQuerier, flow int64) (structure, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = db.QueryContext(ctx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.ref_id
+	rows, err = db.QueryContext(ctx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.ref_id, a.value_type, a.value_pattern
 		FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ? ORDER BY a.id`, flow)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func loadStructure(ctx context.Context, db rowsQuerier, flow int64) (structure, 
 	defer rows.Close()
 	for rows.Next() {
 		var a attribute
-		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Ref); err != nil {
+		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Ref, &a.Type, &a.Pattern); err != nil {
 			return nil, err
 		}
 		if o := s[a.Object]; o != nil {
@@ -117,6 +117,9 @@ type field struct {
 	name       string
 	definition string
 	file       bool
+	// An attribute's type, and for text its pattern; see attribute_types.go.
+	kind    string
+	pattern string
 	// An owned object: a list of its items, each holding fields, as many
 	// as quantity says.
 	many     bool
@@ -179,7 +182,7 @@ func (s structure) fieldsOf(id int64, seen map[int64]bool) ([]field, error) {
 		fs = append(fs, inherited...)
 	}
 	for _, a := range o.attrs {
-		fs = append(fs, field{name: a.Name, definition: a.Definition, file: a.File})
+		fs = append(fs, field{name: a.Name, definition: a.Definition, file: a.File, kind: a.Type, pattern: a.Pattern})
 	}
 	for _, c := range s.owned(id) {
 		inner, err := s.fieldsOf(c.id, seen)

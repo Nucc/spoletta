@@ -400,11 +400,11 @@ func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) e
 	}
 	for _, a := range attrs {
 		if here := pairs[a.ID]; here != 0 {
-			_, err = tx.ExecContext(ctx, "UPDATE object_attributes SET name = ?, definition = ?, is_unique = ?, is_file = ?, source_id = ?, ref_id = ? WHERE id = ?",
-				a.Name, a.Definition, a.Unique, a.File, a.ID, a.Ref, here)
+			_, err = tx.ExecContext(ctx, "UPDATE object_attributes SET name = ?, definition = ?, is_unique = ?, is_file = ?, source_id = ?, ref_id = ?, value_type = ?, value_pattern = ? WHERE id = ?",
+				a.Name, a.Definition, a.Unique, a.File, a.ID, a.Ref, a.Type, a.Pattern, here)
 		} else {
-			_, err = tx.ExecContext(ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-				dup, a.Name, a.Definition, a.Unique, a.File, a.ID, a.Ref)
+			_, err = tx.ExecContext(ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				dup, a.Name, a.Definition, a.Unique, a.File, a.ID, a.Ref, a.Type, a.Pattern)
 		}
 		if err != nil {
 			return err

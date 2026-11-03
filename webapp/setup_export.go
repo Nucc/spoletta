@@ -510,7 +510,7 @@ func (x exporter) object(o snapshotObject) setupObject {
 	}
 	for _, a := range x.e.s.Attributes {
 		if a.Object == o.ID {
-			sa := setupAttribute{Name: a.Name, Definition: a.Definition, Unique: a.Unique, File: a.File}
+			sa := setupAttribute{Name: a.Name, Definition: a.Definition, Unique: a.Unique, File: a.File, Type: a.Type, Pattern: a.Pattern}
 			if a.Ref != nil {
 				if src := x.objectFlow[*a.Ref]; src != nil {
 					sa.Ref = src.name

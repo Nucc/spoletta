@@ -165,6 +165,10 @@ type attribute struct {
 	File bool `json:"file"`
 	// The attribute of a module's object it is a copy of; see modules.go.
 	Source *int64 `json:"source,omitempty"`
+	// What each of its values must be, and for text a pattern the whole of
+	// it matches; see attribute_types.go.
+	Type    string `json:"type,omitempty"`
+	Pattern string `json:"pattern,omitempty"`
 }
 
 // Where a board ends.

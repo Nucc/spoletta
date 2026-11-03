@@ -1109,23 +1109,34 @@ function RolesSetting({
 }
 
 // What the person typed for one object: the text of an object without
-// fields, or its fields, each the text typed for it, the fields of an object
-// it is made of, or for a list one such value per item. It is sent as it is.
+// fields, or its fields, each the text typed for it (a number for a number,
+// true or false for a yes or no), the fields of an object it is made of, or
+// for a list one such value per item. It is sent as it is.
 type Draft = EntryValue
 
 // One item of a field: its fields, or the text typed for it.
 const emptyOne = (fields: Field[]): Draft => (fields.length === 0 ? '' : Object.fromEntries(fields.map((f) => [f.name, emptyValue(f)])))
 // A list starts with as many items as it holds at least, and one if it may
-// have none.
-const emptyValue = (f: Pick<Field, 'fields' | 'many' | 'min'>): Draft =>
-  f.many ? Array.from({ length: Math.max(f.min, 1) }, () => emptyOne(f.fields)) : emptyOne(f.fields)
+// have none; a yes or no starts as no.
+const emptyValue = (f: Pick<Field, 'fields' | 'many' | 'min' | 'attribute'>): Draft =>
+  f.many
+    ? Array.from({ length: Math.max(f.min, 1) }, () => emptyOne(f.fields))
+    : f.fields.length === 0 && f.attribute?.type === 'boolean'
+      ? false
+      : emptyOne(f.fields)
 const emptyDraft = (o: EntryObject): Draft => (o.fields.length === 0 ? '' : emptyValue(o))
 
 // Every field is needed: the objects are what the run goes on from. A list
 // may have no items, unless it holds at least some; the form keeps it within
 // how many it holds.
 const filled = (d: Draft): boolean =>
-  typeof d === 'string' ? d.trim() !== '' : Array.isArray(d) ? d.every(filled) : Object.values(d).every(filled)
+  typeof d === 'string'
+    ? d.trim() !== ''
+    : typeof d === 'number' || typeof d === 'boolean'
+      ? true
+      : Array.isArray(d)
+        ? d.every(filled)
+        : Object.values(d).every(filled)
 
 export function ReviewForm({ review }: { review: Review }) {
   if (review.loop) return <LoopForm review={review} loop={review.loop} />
@@ -1421,19 +1432,47 @@ function EntryItem({ fields, value, onChange }: { fields: Field[]; value: Draft;
             <EntryValueFields fields={f.fields} quantity={f} value={item[f.name] ?? emptyValue(f)} onChange={(v) => set(f.name, v)} />
           </fieldset>
         ) : (
-          <label key={f.name} className="panel-field">
-            <span>{f.name}</span>
-            <input
-              value={typeof item[f.name] === 'string' ? (item[f.name] as string) : ''}
-              disabled={f.file}
-              placeholder={f.file ? "A file; can't be filled in by hand" : f.definition || undefined}
-              title={f.definition || undefined}
-              onChange={(e) => set(f.name, e.target.value)}
-            />
-          </label>
+          <EntryInput key={f.name} field={f} value={item[f.name]} onChange={(v) => set(f.name, v)} />
         ),
       )}
     </>
+  )
+}
+
+// One field the person types, as its type has it: a number in a number box,
+// a yes or no a checkbox, a date and time or a text matching a pattern as
+// text, the pattern or the form a date takes showing until something is.
+function EntryInput({ field: f, value, onChange }: { field: Field; value: Draft | undefined; onChange: (v: Draft) => void }) {
+  const type = f.attribute?.type
+  if (type === 'boolean')
+    return (
+      <label className="panel-check" title={f.definition || undefined}>
+        <input type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
+        <span>{f.name}</span>
+      </label>
+    )
+  const number = type === 'integer' || type === 'number'
+  const shown = typeof value === 'string' || typeof value === 'number' ? value : ''
+  const hint =
+    type === 'datetime'
+      ? '2026-11-03, or 2026-11-03T09:00:00Z'
+      : type === 'text' && f.attribute?.pattern
+        ? `Matching ${f.attribute.pattern}`
+        : undefined
+  return (
+    <label className="panel-field">
+      <span>{f.name}</span>
+      <input
+        type={number ? 'number' : 'text'}
+        step={type === 'integer' ? 1 : number ? 'any' : undefined}
+        value={shown}
+        disabled={f.file}
+        placeholder={f.file ? "A file; can't be filled in by hand" : f.definition || hint}
+        title={[f.definition, hint].filter(Boolean).join('. ') || undefined}
+        // A number is sent as one, and nothing typed as nothing.
+        onChange={(e) => onChange(number && e.target.value !== '' ? Number(e.target.value) : e.target.value)}
+      />
+    </label>
   )
 }
 

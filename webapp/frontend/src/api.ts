@@ -202,7 +202,14 @@ export type ObjectAttribute = {
   // The shared struct's object whose records it refers to, by their unique
   // value, such as a pull request's ticket; see references.go.
   ref?: number
+  // What each of its values must be; absent for any JSON value. Text may
+  // have a pattern, a regular expression the whole of it matches. See
+  // attribute_types.go.
+  type?: AttributeType
+  pattern?: string
 }
+
+export type AttributeType = 'text' | 'integer' | 'number' | 'boolean' | 'datetime'
 
 // A situation an object can be in, such as approved or changes requested.
 export type ObjectState = {
@@ -1425,8 +1432,11 @@ export function createAttribute(object: number, a: { name: string; definition: s
   return request(`/api/objects/${object}/attributes`, { method: 'POST', body: JSON.stringify(a) })
 }
 
-// ref 0 makes it refer to no records.
-export function updateAttribute(id: number, patch: Partial<Pick<ObjectAttribute, 'name' | 'definition' | 'unique' | 'file' | 'ref'>>): Promise<ObjectAttribute> {
+// ref 0 makes it refer to no records; type '' lets it hold any value, and a
+// type other than text drops its pattern.
+export type AttributePatch = Partial<Pick<ObjectAttribute, 'name' | 'definition' | 'unique' | 'file' | 'ref' | 'pattern'>> & { type?: AttributeType | '' }
+
+export function updateAttribute(id: number, patch: AttributePatch): Promise<ObjectAttribute> {
   return request(`/api/attributes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -2163,7 +2173,7 @@ export async function clearAssistant(flow: number): Promise<void> {
 // such objects; otherwise the text entered.
 // What a person entered for each object, by object id: the text of one
 // without fields, or a JSON value with its fields, nested as they are.
-export type EntryValue = string | EntryValue[] | { [name: string]: EntryValue }
+export type EntryValue = string | number | boolean | EntryValue[] | { [name: string]: EntryValue }
 export type Entries = Record<string, EntryValue>
 
 export async function decideStep(

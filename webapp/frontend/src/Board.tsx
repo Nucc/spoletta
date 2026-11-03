@@ -117,6 +117,7 @@ import {
   listTeams,
   setFlowOwner,
   type Team,
+  type AttributePatch,
   createAttribute,
   createConnection,
   createLink,
@@ -2238,16 +2239,17 @@ export default function Board({
   // up of it too, so the board loads again once it changed.
   const restructured = () => reload.current().catch(report)
 
+  // Resolves to the new attribute's id, which the object's panel opens.
   const addAttribute = async (objectId: string, name: string) => {
-    if (readOnly) return false
+    if (readOnly) return null
     try {
       const attribute = await createAttribute(objectIdOf(objectId), { name, definition: '' })
       setAttributes(objectId, (as) => [...as, attribute])
       restructured()
-      return true
+      return attribute.id
     } catch (err) {
       report(err)
-      return false
+      return null
     }
   }
 
@@ -2351,15 +2353,11 @@ export default function Board({
     }
   }
 
-  const changeAttribute = async (
-    objectId: string,
-    id: number,
-    patch: { name?: string; definition?: string; unique?: boolean; file?: boolean; ref?: number },
-  ) => {
+  const changeAttribute = async (objectId: string, id: number, patch: AttributePatch) => {
     try {
       const attribute = await updateAttribute(id, patch)
       setAttributes(objectId, (as) => as.map((a) => (a.id === id ? attribute : a)))
-      if (patch.name !== undefined || patch.file !== undefined) restructured()
+      if (patch.name !== undefined || patch.file !== undefined || patch.type !== undefined || patch.pattern !== undefined) restructured()
       return true
     } catch (err) {
       report(err)

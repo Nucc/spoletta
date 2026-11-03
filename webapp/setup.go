@@ -306,6 +306,10 @@ type setupAttribute struct {
 	// The shared struct whose records it refers to, by name; see
 	// references.go.
 	Ref string `yaml:"ref,omitempty"`
+	// What it holds, and for text a pattern the whole of it matches, which
+	// alone makes it text; see attribute_types.go.
+	Type    string `yaml:"type,omitempty"`
+	Pattern string `yaml:"pattern,omitempty"`
 }
 
 func (l setupLink) MarshalYAML() (any, error) {

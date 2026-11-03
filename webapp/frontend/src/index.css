@@ -1775,24 +1775,6 @@ body {
   font-size: 13px;
 }
 
-.attribute-flags {
-  display: flex;
-  gap: 16px;
-}
-
-/* The struct whose records an attribute refers to; see references.go. */
-.attribute-ref {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.attribute-ref select {
-  flex: 1;
-  min-width: 0;
-}
-
 /* Muted as notes are, still readable while a run holds the board. */
 .panel-check:has(input:disabled) {
   color: #656d76;
@@ -3129,45 +3111,202 @@ body {
   font-weight: 600;
 }
 
-.attribute {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+.attributes-count {
+  font-weight: 400;
+  color: #656d76;
+}
+
+/* An object's attributes, a line each: its name, what it is set to beyond
+   holding a plain value, and its definition's start, so its shape reads at
+   a glance; the one opened edits them beneath. */
+.attribute-list {
   border: 1px solid #d8dee4;
   border-radius: 6px;
 }
 
-.attribute-head {
+.attribute + .attribute {
+  border-top: 1px solid #d8dee4;
+}
+
+.attribute.open {
+  background: #f6f8fa;
+}
+
+.attribute-summary-row {
+  display: flex;
+  align-items: flex-start;
+}
+
+.attribute-summary {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 4px 6px 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.attribute-summary:hover .attribute-summary-name {
+  color: #0969da;
+}
+
+.attribute-summary:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: -2px;
+}
+
+.attribute-line {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
-.attribute input,
-.attribute textarea,
+.attribute-line::before {
+  flex: none;
+  width: 10px;
+  content: '▸';
+  font-size: 12px;
+  color: #656d76;
+}
+
+.attribute-summary[aria-expanded='true'] .attribute-line::before {
+  content: '▾';
+}
+
+.attribute-summary-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What an attribute is set to, such as unique or the struct it refers to;
+   dashed while it changes nothing, as unique on an object not stored. */
+.attribute-chip {
+  flex: none;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #57606a;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 999px;
+}
+
+.attribute-chip.muted {
+  color: #656d76;
+  border-style: dashed;
+}
+
+/* A text's pattern, cut short when long; its title holds it whole. */
+.attribute-chip.mono {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attribute-summary-definition {
+  padding-left: 16px;
+  overflow: hidden;
+  font-size: 12px;
+  color: #59636e;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attribute-summary-definition.empty {
+  font-style: italic;
+  color: #656d76;
+}
+
+/* An attribute opened: a label beside each setting, notes and options
+   across, so a setting more is a line more. */
+.attribute-editor {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+  padding: 2px 10px 12px 24px;
+  font-size: 12px;
+}
+
+.attribute-editor > label,
+.attribute-editor > .help-head > label {
+  font-weight: 600;
+  color: #59636e;
+}
+
+.attribute-editor > .attribute-editor-top {
+  align-self: start;
+  padding-top: 7px;
+}
+
+.attribute-editor > .panel-note,
+.attribute-editor > .panel-warning,
+.attribute-options {
+  grid-column: 1 / -1;
+}
+
+.attribute-editor > .panel-note {
+  font-size: 12px;
+}
+
+.attribute-options {
+  display: flex;
+  gap: 16px;
+}
+
+.attribute-options .panel-check {
+  font-weight: 400;
+  color: #1f2328;
+}
+
+.attribute-editor input:not([type='checkbox']),
+.attribute-editor textarea,
+.attribute-editor select,
 .attribute-add input {
   min-width: 0;
   padding: 6px 8px;
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  background-color: #fff;
   border: 1px solid #d8dee4;
   border-radius: 6px;
 }
 
 .attribute-name {
-  flex: 1;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
   font-weight: 600;
 }
 
-.attribute textarea {
+.attribute-pattern {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+}
+
+.attribute-editor textarea {
   resize: vertical;
   line-height: 1.4;
 }
 
 .attribute-remove {
+  flex: none;
   display: flex;
+  margin: 3px 3px 0 0;
   padding: 6px;
   color: #656d76;
   background: none;
@@ -3193,7 +3332,7 @@ body {
 .attribute-add button {
   padding: 6px 14px;
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   color: #1f2328;
   background: #fff;
   border: 1px solid #d0d7de;

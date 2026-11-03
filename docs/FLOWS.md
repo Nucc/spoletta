@@ -177,6 +177,20 @@ Other object flags:
 - `file: true` on an attribute means it holds the path of a file the step
   wrote. A script writes the file in `$OUTPUTS`; an agent writes it in its
   step's files directory. A person can't enter a file by hand.
+- `type:` on an attribute says what each of its values must be: `text` (a
+  JSON string), `integer` (a whole JSON number, such as `3`), `number`
+  (such as `0.8`), `boolean` (`true` or `false`) or `datetime` (a date such
+  as `"2026-11-03"`, or a date and time in RFC 3339 such as
+  `"2026-11-03T09:00:00Z"`). Without one it holds any JSON value. Text may
+  have a `pattern:`, a regular expression in Go's syntax (RE2) that the
+  **whole** of it must match: `pattern: "[A-Z]+-\\d+"` takes `TALK-123` but not
+  `TALK-123 again`. A pattern without a type makes the attribute text. A
+  value of another type is refused wherever one is handed in: an agent is
+  told what is wrong and fixes it, a script's step fails, and what a person
+  enters, a run is given (by hand, the API or a webhook) or a record is
+  corrected to by hand is refused. A hand edit may leave a typed field
+  empty. Values stored before a type was set stay as they were. A file, or
+  an attribute with `ref:`, has no type.
 - `human: true` makes it a **person**, such as `Editor` or `Requester`. A
   person is only ever taken by a human process (OPM's agent link: "Editor
   handles Review"). A person is never an instrument, never consumed, and

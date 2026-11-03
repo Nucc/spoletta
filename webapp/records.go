@@ -56,11 +56,30 @@ func structStore(ctx context.Context, db querier, flow int64) (int64, string, er
 }
 
 // Checks what a person wrote of a record of the store, giving it back with
-// its content compacted, or says what is wrong with it.
-func checkRecordEdit(ctx context.Context, db querier, store int64, e recordEdit) (recordEdit, string, error) {
+// its content compacted, or says what is wrong with it. A typed field it
+// holds must be of its type; one left empty is fine, as hand edits go.
+func checkRecordEdit(ctx context.Context, db rowQuerier, store int64, e recordEdit) (recordEdit, string, error) {
 	fields, err := jsonObject(string(e.Content))
 	if err != nil {
 		return e, "a record holds its fields as a JSON object", nil
+	}
+	var flow int64
+	if err := db.QueryRowContext(ctx, "SELECT flow_id FROM objects WHERE id = ?", store).Scan(&flow); err != nil {
+		return e, "", err
+	}
+	s, err := loadStructure(ctx, db, flow)
+	if err != nil {
+		return e, "", err
+	}
+	fs, err := s.fields(store)
+	if err != nil {
+		return e, "", err
+	}
+	if msg, asJSON := typedProblems(fs, fields); msg != "" {
+		if asJSON {
+			msg += "; tick JSON beside it to write one"
+		}
+		return e, msg, nil
 	}
 	b, err := json.Marshal(fields)
 	if err != nil {

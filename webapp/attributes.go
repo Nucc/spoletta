@@ -30,6 +30,10 @@ type attribute struct {
 	// Holds the path of a file the process wrote in its step's files
 	// directory, which must exist.
 	File bool `json:"file"`
+	// What it holds, none for any JSON value, and for text a pattern the
+	// whole of it matches; see attribute_types.go.
+	Type    string `json:"type,omitempty"`
+	Pattern string `json:"pattern,omitempty"`
 	// The attribute of a module's object it is a copy of; see modules.go.
 	Source *int64 `json:"source,omitempty"`
 	// The shared struct's object whose records it refers to, by their
@@ -91,8 +95,12 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, ref_id) VALUES (?, ?, ?, ?, ?, ?)",
-			a.Object, a.Name, a.Definition, a.Unique, a.File, a.Ref)
+		if msg := checkAttributeType(&a); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		res, err := db.ExecContext(r.Context(), "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, ref_id, value_type, value_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			a.Object, a.Name, a.Definition, a.Unique, a.File, a.Ref, a.Type, a.Pattern)
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "the object already has an attribute named "+a.Name, http.StatusConflict)
@@ -127,6 +135,9 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			File       *bool   `json:"file"`
 			// A struct's object id, or 0 for none; absent keeps it.
 			Ref *int64 `json:"ref"`
+			// "" for any value; a type other than text drops the pattern.
+			Type    *string `json:"type"`
+			Pattern *string `json:"pattern"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -192,6 +203,41 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		// Its type as it will be, checked against whether it will hold a
+		// file or refer to records.
+		var typed attribute
+		err = db.QueryRowContext(r.Context(), "SELECT is_file, ref_id, value_type, value_pattern FROM object_attributes WHERE id = ?", id).
+			Scan(&typed.File, &typed.Ref, &typed.Type, &typed.Pattern)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "attribute not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if patch.File != nil {
+			typed.File = *patch.File
+		}
+		if patch.Ref != nil {
+			typed.Ref = nil
+			if *patch.Ref != 0 {
+				typed.Ref = patch.Ref
+			}
+		}
+		if patch.Type != nil {
+			typed.Type = *patch.Type
+			if typed.Type != typeText {
+				typed.Pattern = ""
+			}
+		}
+		if patch.Pattern != nil {
+			typed.Pattern = *patch.Pattern
+		}
+		if msg := checkAttributeType(&typed); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		if patch.Ref != nil {
 			var unique bool
 			if err := db.QueryRowContext(r.Context(), "SELECT is_unique FROM object_attributes WHERE id = ?", id).Scan(&unique); err != nil {
@@ -218,8 +264,8 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		_, err = db.ExecContext(r.Context(),
-			"UPDATE object_attributes SET name = COALESCE(?, name), definition = COALESCE(?, definition), is_unique = COALESCE(?, is_unique), is_file = COALESCE(?, is_file) WHERE id = ?",
-			patch.Name, patch.Definition, patch.Unique, patch.File, id)
+			"UPDATE object_attributes SET name = COALESCE(?, name), definition = COALESCE(?, definition), is_unique = COALESCE(?, is_unique), is_file = COALESCE(?, is_file), value_type = ?, value_pattern = ? WHERE id = ?",
+			patch.Name, patch.Definition, patch.Unique, patch.File, typed.Type, typed.Pattern, id)
 		if mysqlErrorIs(err, mysqlErrDuplicate) {
 			http.Error(w, "the object already has an attribute named "+*patch.Name, http.StatusConflict)
 			return
@@ -233,8 +279,8 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var a attribute
-		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name, definition, is_unique, is_file, ref_id FROM object_attributes WHERE id = ?", id).
-			Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Ref)
+		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name, definition, is_unique, is_file, ref_id, value_type, value_pattern FROM object_attributes WHERE id = ?", id).
+			Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Ref, &a.Type, &a.Pattern)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "attribute not found", http.StatusNotFound)
 			return
@@ -287,7 +333,7 @@ func checkAttribute(ctx context.Context, db *sql.DB, object int64, change func(*
 // The attributes of every object, or of one if object isn't 0, by object id.
 func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]attribute, error) {
 	rows, err := db.QueryContext(ctx,
-		"SELECT id, object_id, name, definition, is_unique, is_file, source_id, ref_id FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
+		"SELECT id, object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +341,7 @@ func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]
 	attrs := map[int64][]attribute{}
 	for rows.Next() {
 		var a attribute
-		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source, &a.Ref); err != nil {
+		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source, &a.Ref, &a.Type, &a.Pattern); err != nil {
 			return nil, err
 		}
 		attrs[a.Object] = append(attrs[a.Object], a)
@@ -397,13 +443,16 @@ type specObject struct {
 // An attribute, or an object the object is made of: a JSON object with
 // its own attributes, or for a list an array of them.
 type specAttribute struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	File        bool            `json:"file"`
-	Many        bool            `json:"many,omitempty"`
-	MinItems    int             `json:"minItems,omitempty"`
-	MaxItems    *int            `json:"maxItems,omitempty"`
-	Attributes  []specAttribute `json:"attributes,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	File        bool   `json:"file"`
+	// Its type, and for text the pattern the whole of it matches, anchored.
+	Type       string          `json:"type,omitempty"`
+	Pattern    string          `json:"pattern,omitempty"`
+	Many       bool            `json:"many,omitempty"`
+	MinItems   int             `json:"minItems,omitempty"`
+	MaxItems   *int            `json:"maxItems,omitempty"`
+	Attributes []specAttribute `json:"attributes,omitempty"`
 }
 
 // Tool arguments must be a JSON object, so a single list goes under items.
@@ -442,7 +491,14 @@ func (c *outputContract) specFields(fs []field) []specAttribute {
 		if f.file {
 			desc = strings.TrimSpace("The path of a file you wrote in " + c.filesDir + ". " + desc)
 		}
-		as = append(as, specAttribute{Name: f.name, Description: desc, File: f.file, Many: f.many, MinItems: f.quantity.min, MaxItems: f.quantity.max, Attributes: c.specFields(f.fields)})
+		sa := specAttribute{Name: f.name, Description: desc, File: f.file, Type: f.kind, Many: f.many, MinItems: f.quantity.min, MaxItems: f.quantity.max, Attributes: c.specFields(f.fields)}
+		if w := typeWords(f.kind, f.pattern); w != "" {
+			sa.Description = strings.TrimSpace(strings.ToUpper(w[:1]) + w[1:] + ". " + desc)
+		}
+		if f.pattern != "" {
+			sa.Pattern = anchored(f.pattern)
+		}
+		as = append(as, sa)
 	}
 	return as
 }
@@ -525,7 +581,7 @@ func (c *outputContract) withContract(prompt string) string {
 	if c.hasFiles() {
 		fmt.Fprintf(&b, "\nWrite the files you generate in %s, and give their paths.\n", c.filesDir)
 	}
-	b.WriteString("Keys not listed are not allowed, at any depth. Each value without keys of its own can be any JSON value that fits its definition.\n</output_format>\n")
+	b.WriteString("Keys not listed are not allowed, at any depth. Each value without keys of its own can be any JSON value that fits its definition, unless a type is given first: then it must be of that type.\n</output_format>\n")
 	return b.String()
 }
 
@@ -535,6 +591,9 @@ func writeFields(b *strings.Builder, fs []field, indent string) {
 		def := strings.TrimSpace(f.definition)
 		if f.file {
 			def = strings.TrimSpace("the path of a file you wrote. " + def)
+		}
+		if w := typeWords(f.kind, f.pattern); w != "" {
+			def = strings.TrimSpace(w + ". " + def)
 		}
 		switch {
 		case len(f.fields) > 0 && f.many:
@@ -757,6 +816,9 @@ func (c *outputContract) shapeItem(f field, v json.RawMessage, whole bool) (json
 		out, err := c.shape(fields, f.fields)
 		return json.RawMessage(out), err
 	default:
+		if err := checkTyped(f.kind, f.pattern, v); err != nil {
+			return nil, err
+		}
 		return v, nil
 	}
 }

@@ -9,7 +9,10 @@
 // has none; a list is an array of them. An attribute that is an object of its
 // own, or a part, holds a JSON object with its attributes in turn, or for a
 // list an array of them. A file attribute holds the path of a file the agent
-// wrote in the run's files directory.
+// wrote in the run's files directory. A typed attribute holds a value of its
+// type: an integer, number or yes or no as the parameters say, text matching
+// its pattern and a date or date and time as the call is checked, so the
+// agent fixes it there; the webapp checks them all again.
 //
 // An agent deciding the state of objects hands in its output under output,
 // next to decisions: for each object it decides on, the state, one of those
@@ -26,7 +29,17 @@ type Bounds = { minItems?: number; maxItems?: number };
 
 // With attributes of its own, it holds a JSON object of them, or for many
 // an array of such objects; without, any JSON value, or for many an array.
-type Attribute = Bounds & { name: string; description: string; file: boolean; many?: boolean; attributes?: Attribute[] };
+type Attribute = Bounds & {
+	name: string;
+	description: string;
+	file: boolean;
+	// What it holds, if typed: text, integer, number, boolean or datetime;
+	// for text, maybe a pattern, anchored, that the whole of it matches.
+	type?: string;
+	pattern?: string;
+	many?: boolean;
+	attributes?: Attribute[];
+};
 type OutputObject = Bounds & { name: string; many: boolean; attributes: Attribute[] };
 
 // An object whose state the agent decides; one it reviews keeps what it holds.
@@ -64,7 +77,19 @@ function attributeSchema(a: Attribute): TSchema {
 			? Type.Array(fieldsSchema(a.attributes), { description, ...bounds(a) })
 			: fieldsSchema(a.attributes, { description });
 	}
-	return a.many ? Type.Array(Type.Any(), { description, ...bounds(a) }) : Type.Any({ description });
+	if (a.many) return Type.Array(Type.Any(), { description, ...bounds(a) });
+	switch (a.type) {
+		case "text":
+		case "datetime":
+			return Type.String({ description });
+		case "integer":
+			return Type.Integer({ description });
+		case "number":
+			return Type.Number({ description });
+		case "boolean":
+			return Type.Boolean({ description });
+	}
+	return Type.Any({ description });
 }
 
 const objectSchema = (o: OutputObject) => fieldsSchema(o.attributes);
@@ -138,6 +163,45 @@ function parts(spec: Spec, args: Record<string, unknown>): [OutputObject, unknow
 	return spec.objects.map((o) => [o, o.many ? (params[o.name] as unknown[]) : [params[o.name]]]);
 }
 
+// A date, or a date and time in RFC 3339, as the webapp takes them.
+const datetime = /^\d{4}-\d{2}-\d{2}([Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2}))?$/;
+
+// The pattern as JavaScript reads it, or null if it can't: the webapp's is
+// Go's, which mostly reads the same; one it can't is left to the webapp.
+function regExp(pattern: string): RegExp | null {
+	try {
+		return new RegExp(pattern);
+	} catch {
+		return null;
+	}
+}
+
+// Says what is wrong with each text attribute not matching its pattern and
+// each date and time not written as one, at any depth.
+function typeProblems(spec: Spec, params: Record<string, unknown>): string[] {
+	const problems: string[] = [];
+	const check = (attributes: Attribute[], items: unknown[], at: string, many: boolean) => {
+		for (const a of attributes) {
+			items.forEach((item, i) => {
+				const where = `${at}${many ? ` item ${i + 1}` : ""} "${a.name}"`;
+				const value = (item as Record<string, unknown>)?.[a.name];
+				if (a.attributes?.length) {
+					if (value !== undefined) check(a.attributes, a.many ? (Array.isArray(value) ? value : []) : [value], where, Boolean(a.many));
+					return;
+				}
+				if (typeof value !== "string") return;
+				if (a.type === "datetime" && !datetime.test(value)) {
+					problems.push(`${where} must be a date such as 2026-11-03, or a date and time in RFC 3339 such as 2026-11-03T09:00:00Z`);
+				} else if (a.type === "text" && a.pattern && regExp(a.pattern)?.test(value) === false) {
+					problems.push(`${where}: ${JSON.stringify(value)} doesn't match the regular expression ${a.pattern}`);
+				}
+			});
+		}
+	};
+	for (const [o, items] of parts(spec, params)) check(o.attributes, items, o.name, o.many);
+	return problems;
+}
+
 // Says what is wrong with each file attribute that doesn't name a file in
 // the files directory, at any depth, and makes the paths of those that do
 // absolute.
@@ -200,7 +264,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: toolParameters(spec),
 		async execute(_toolCallId, params) {
 			const args = params as Record<string, unknown>;
-			const problems = fileProblems(spec, args);
+			const problems = [...fileProblems(spec, args), ...typeProblems(spec, args)];
 			if (problems.length > 0) throw new Error(problems.join("\n"));
 			writeFileSync(spec.resultFile, JSON.stringify(output(spec, args)));
 			return {

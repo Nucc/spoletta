@@ -602,8 +602,8 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 	}
 	attrs = append(attrs, p.attrs[o.ID]...)
 	for _, a := range attrs {
-		_, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			id, a.Name, a.Definition, a.Unique && unique, a.File, sourceOf(a.Source), a.Ref)
+		_, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id, a.Name, a.Definition, a.Unique && unique, a.File, sourceOf(a.Source), a.Ref, a.Type, a.Pattern)
 		if err != nil {
 			return 0, err
 		}

@@ -756,6 +756,8 @@ func (d *boardDiff) diffAttributes(a, b snapshot, m diffMatch) {
 		fs.add("definition", w.Definition, at.Definition)
 		fs.add("unique", yesNo(w.Unique), yesNo(at.Unique))
 		fs.add("file", yesNo(w.File), yesNo(at.File))
+		fs.add("type", typeLabel(w.Type), typeLabel(at.Type))
+		fs.add("pattern", w.Pattern, at.Pattern)
 		// Changed when it refers to another struct, not when that is renamed.
 		if (w.Ref == nil) != (at.Ref == nil) || (w.Ref != nil && *w.Ref != *at.Ref) {
 			fs.add("refers to records of", refText(w), refText(at))

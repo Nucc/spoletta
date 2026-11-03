@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -144,6 +145,17 @@ func TestRecordReferences(t *testing.T) {
 	}
 	if r := sharedRecords(a, tickets.ID)["T-1"]; r.State != "review" || !strings.Contains(string(r.Content), "in review") {
 		t.Errorf("T-1 = %s in %s, want it in review", r.Content, r.State)
+	}
+	// The pull requests are searched through their ticket: its state and
+	// its fields.
+	for q, want := range map[string]int{"@ticket.state:review": 2, "@ticket.state:open": 0, `@ticket.status:"in review"`: 2, "-@ticket.state:review": 0} {
+		var found struct {
+			Records []sharedRecord `json:"records"`
+		}
+		a.call("GET", fmt.Sprintf("/api/structs/%d/records?q=%s", prs.ID, url.QueryEscape(q)), nil, http.StatusOK, &found)
+		if len(found.Records) != want {
+			t.Errorf("searching the pull requests for %s found %d, want %d", q, len(found.Records), want)
+		}
 	}
 	close(release)
 	d2 := a.finish(rn2.ID)

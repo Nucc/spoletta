@@ -508,6 +508,21 @@ func readRecordTable(ctx context.Context, db *sql.DB, root int64) (*recordTable,
 	for _, f := range rt.fields {
 		field(f)
 	}
+	// A field referring to another struct's records is searched through
+	// too: the record it names, its state and fields; see references.go.
+	refs, err := referredTables(ctx, db, root)
+	if err != nil {
+		return nil, err
+	}
+	refFacet := func(r referredTable, f string) int {
+		if f == "" {
+			return t.facet("@"+r.field+">state", facet{Key: "@" + slug(r.field) + ".state", Label: r.field + " · state", Group: "Through " + r.field})
+		}
+		return t.facet("@"+r.field+">."+f, facet{Key: "@" + slug(r.field) + "." + slug(f), Label: r.field + " · " + f, Group: "Through " + r.field})
+	}
+	for _, r := range refs {
+		refFacet(r, "")
+	}
 	err = scanAll(ctx, db, "SELECT "+sharedRecordColumns+" WHERE sr.object_id = ? AND sr.deleted_at IS NULL ORDER BY sr.updated_at DESC, sr.id DESC LIMIT ?",
 		func(rows *sql.Rows) error {
 			rec, content, err := sharedRecordFrom(rows)
@@ -533,6 +548,24 @@ func readRecordTable(ctx context.Context, db *sql.DB, root int64) (*recordTable,
 				sort.Strings(names)
 				for _, f := range names {
 					row[field(f)] = scalars(fields[f])
+				}
+			}
+			for _, r := range refs {
+				to, ok := r.records[refValue(content, r.field)]
+				if !ok {
+					continue
+				}
+				row[refFacet(r, "")] = scalars(to.state)
+				names := make([]string, 0, len(to.fields))
+				for f := range to.fields {
+					names = append(names, f)
+				}
+				sort.Strings(names)
+				for _, f := range names {
+					// The record's state goes by state; a field of that name doesn't.
+					if slug(f) != "state" {
+						row[refFacet(r, f)] = scalars(to.fields[f])
+					}
 				}
 			}
 			return nil

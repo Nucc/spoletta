@@ -503,7 +503,10 @@ repositories:
     fails, a person's edit is refused; an empty value refers to nothing. A
     reference isn't `unique` too. A record's dialog lists the records
     referring to it, and the Records page links each reference to its
-    record.
+    record. The Records page's search reaches through it:
+    `@ticket.state:open` finds the pull requests whose ticket is open, and
+    `@ticket.<field>:…` searches the ticket's fields; a task board column's
+    query can say so too.
   - A copy of the referred struct on the same top board as an object
     picking a record can **follow** the reference: `follows: {object: Pull
     Request, attribute: ticket}` (and no `pick`). As each run takes the

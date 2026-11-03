@@ -558,3 +558,52 @@ func refStructs(ctx context.Context, db rowQuerier, store int64) (map[string]int
 	}, store)
 	return refs, err
 }
+
+// The records a field refers to, by each of their unique values, for a
+// search to reach through it.
+type referredTable struct {
+	field   string
+	records map[string]referred
+}
+
+type referred struct {
+	state  string
+	fields map[string]any
+}
+
+// The tables of records the fields of store refer to, read once per field.
+func referredTables(ctx context.Context, db *sql.DB, store int64) ([]referredTable, error) {
+	fields, err := refFields(ctx, db, store)
+	if err != nil {
+		return nil, err
+	}
+	var out []referredTable
+	for _, f := range fields {
+		attrs, err := uniqueAttributes(ctx, db, f.store)
+		if err != nil {
+			return nil, err
+		}
+		rt := referredTable{field: f.name, records: map[string]referred{}}
+		err = scanAll(ctx, db, "SELECT content, state FROM shared_records WHERE object_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?",
+			func(rows *sql.Rows) error {
+				var content, state string
+				if err := rows.Scan(&content, &state); err != nil {
+					return err
+				}
+				fields, _ := contentValue(content).(map[string]any)
+				for _, a := range attrs {
+					if v := refValue(content, a.Name); v != "" {
+						if _, seen := rt.records[v]; !seen {
+							rt.records[v] = referred{state: state, fields: fields}
+						}
+					}
+				}
+				return nil
+			}, f.store, searchedRows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rt)
+	}
+	return out, nil
+}

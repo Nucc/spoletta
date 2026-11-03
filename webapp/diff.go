@@ -477,17 +477,21 @@ func (d *boardDiff) diffObjects(a, b snapshot, m diffMatch) {
 	}
 }
 
-// Which record a pick takes, in a few words, such as "the earliest in
-// open"; empty for none.
-// The struct's object an attribute refers to the records of, as a diff
-// names it.
-func refText(ref *int64) string {
-	if ref == nil {
+// The struct an attribute refers to the records of, by the name it had as
+// its version was saved, else its object's id, as in versions from before
+// they kept it; empty for none.
+func refText(a attribute) string {
+	switch {
+	case a.Ref == nil:
 		return ""
+	case a.RefName != "":
+		return a.RefName
 	}
-	return "struct object #" + strconv.FormatInt(*ref, 10)
+	return "struct object #" + strconv.FormatInt(*a.Ref, 10)
 }
 
+// Which record a pick takes, in a few words, such as "the earliest in
+// open"; empty for none.
 func pickText(p *objectPick) string {
 	if p == nil {
 		return ""
@@ -752,7 +756,10 @@ func (d *boardDiff) diffAttributes(a, b snapshot, m diffMatch) {
 		fs.add("definition", w.Definition, at.Definition)
 		fs.add("unique", yesNo(w.Unique), yesNo(at.Unique))
 		fs.add("file", yesNo(w.File), yesNo(at.File))
-		fs.add("refers to records of", refText(w.Ref), refText(at.Ref))
+		// Changed when it refers to another struct, not when that is renamed.
+		if (w.Ref == nil) != (at.Ref == nil) || (w.Ref != nil && *w.Ref != *at.Ref) {
+			fs.add("refers to records of", refText(w), refText(at))
+		}
 		if len(fs) > 0 {
 			it := item(b, diffChanged, at)
 			it.Fields = fs

@@ -377,3 +377,21 @@ func TestDiffNotes(t *testing.T) {
 		t.Errorf("a long note is named %q", got)
 	}
 }
+
+// An attribute made to refer to another struct's records is changed, named
+// by the struct; a struct renamed since isn't a change.
+func TestDiffOfReferences(t *testing.T) {
+	ref, other := int64(500), int64(600)
+	was := cloneBoard(t, diffBoard())
+	was.Attributes[0].Ref, was.Attributes[0].RefName = &ref, "Ticket"
+	b := cloneBoard(t, was)
+	b.Attributes[0].RefName = "Jira Ticket"
+	if d := diffSnapshots(was, b); d.changed() {
+		t.Errorf("renaming the struct referred to changed the board: %+v", d.Attributes)
+	}
+	b.Attributes[0].Ref, b.Attributes[0].RefName = &other, "Pull Request"
+	d := diffSnapshots(was, b)
+	if len(d.Attributes) != 1 || len(d.Attributes[0].Fields) != 1 || d.Attributes[0].Fields[0].Before != "Ticket" || d.Attributes[0].Fields[0].After != "Pull Request" {
+		t.Errorf("referring to another struct = %+v, want it from Ticket to Pull Request", d.Attributes)
+	}
+}

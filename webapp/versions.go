@@ -224,10 +224,11 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.source_id, a.ref_id FROM object_attributes a
-		JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ? ORDER BY a.id`, func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.source_id, a.ref_id, COALESCE(rf.name, '') FROM object_attributes a
+		JOIN objects o ON o.id = a.object_id LEFT JOIN objects ro ON ro.id = a.ref_id LEFT JOIN flows rf ON rf.id = ro.flow_id
+		WHERE o.flow_id = ? ORDER BY a.id`, func(rows *sql.Rows) error {
 		var a attribute
-		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source, &a.Ref)
+		err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source, &a.Ref, &a.RefName)
 		s.Attributes = append(s.Attributes, a)
 		return err
 	}, flow)

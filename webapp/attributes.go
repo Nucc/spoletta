@@ -35,6 +35,8 @@ type attribute struct {
 	// The shared struct's object whose records it refers to, by their
 	// unique value; see references.go.
 	Ref *int64 `json:"ref,omitempty"`
+	// That struct's name as a version was saved, which its diff shows.
+	RefName string `json:"refName,omitempty"`
 }
 
 func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {

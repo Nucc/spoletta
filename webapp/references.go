@@ -157,19 +157,27 @@ func checkFollow(ctx context.Context, db querier, object int64, f *objectFollow)
 		return "an object follows a reference another object holds", nil
 	}
 	var ofFlow int64
-	var ofTop, ofPicks bool
-	err = db.QueryRowContext(ctx, "SELECT flow_id, parent_id IS NULL AND owner_id IS NULL, pick IS NOT NULL, store_id FROM objects WHERE id = ?", f.Object).
-		Scan(&ofFlow, &ofTop, &ofPicks, &pick)
+	var ofTop, ofPicks, ofPlain bool
+	err = db.QueryRowContext(ctx, `SELECT flow_id, parent_id IS NULL AND owner_id IS NULL, pick IS NOT NULL, store_id,
+		store_id IS NULL AND NOT human AND NOT many FROM objects WHERE id = ?`, f.Object).
+		Scan(&ofFlow, &ofTop, &ofPicks, &pick, &ofPlain)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && ofFlow != flow) {
 		return "the object holding the reference isn't on the flow's board", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	if !ofTop || !ofPicks {
-		return "follow a reference of an object picking the record each run works on", nil
+	// The reference is an attribute of the picked record's struct, or of
+	// the object a run is given itself.
+	holder := f.Object
+	switch {
+	case ofTop && ofPicks:
+		holder = pick.Int64
+	case ofTop && ofPlain:
+	default:
+		return "follow a reference of an object picking the record each run works on, or of one a run is given as it starts", nil
 	}
-	_, ref, err := refAttribute(ctx, db, pick.Int64, f.Attribute)
+	_, ref, err := refAttribute(ctx, db, holder, f.Attribute)
 	if err != nil {
 		return "", err
 	}
@@ -300,6 +308,45 @@ func danglingRefs(ctx context.Context, db rowQuerier, store int64, content strin
 	if err != nil || len(fields) == 0 {
 		return "", err
 	}
+	return danglingIn(ctx, db, fields, content)
+}
+
+// The attributes of an object on the board, not a shared struct's, that
+// refer to records, such as the key of the ticket a run is given.
+func boardRefFields(s snapshot, object int64) []refField {
+	var fields []refField
+	for _, a := range s.Attributes {
+		if a.Object == object && a.Ref != nil {
+			fields = append(fields, refField{name: a.Name, store: *a.Ref})
+		}
+	}
+	return fields
+}
+
+// Why what the object holds, one value or each of a list, can't be: a
+// reference in it names no record; "" when each names one or is empty.
+func danglingValue(ctx context.Context, db rowQuerier, fields []refField, content string) (string, error) {
+	if len(fields) == 0 {
+		return "", nil
+	}
+	content = stripFence(content)
+	items := []string{content}
+	if raw, err := jsonArray(content); err == nil {
+		items = items[:0]
+		for _, r := range raw {
+			items = append(items, string(r))
+		}
+	}
+	for _, item := range items {
+		if msg, err := danglingIn(ctx, db, fields, item); err != nil || msg != "" {
+			return msg, err
+		}
+	}
+	return "", nil
+}
+
+// Why content can't be held, if a reference among fields names no record.
+func danglingIn(ctx context.Context, db rowQuerier, fields []refField, content string) (string, error) {
 	for _, f := range fields {
 		for _, v := range refValues(content, f.name) {
 			record, err := referredRecord(ctx, db, f.store, v, false)
@@ -340,13 +387,64 @@ func refusedRefs(ctx context.Context, db rowQuerier, store int64, content string
 	return nil
 }
 
-// A followed reference that names no record a run can take: empty, or
-// naming a record the store doesn't hold.
-func noFollowed(object, of string, f *objectFollow, value string) error {
-	if value == "" {
-		return &nothingToTake{msg: fmt.Sprintf("the %s record this run works on names no %s in %s, so %s has no record to follow", quote(of), quote(object), f.Attribute, quote(object))}
+// A *recordConflict failing the step if what it generated of an object on
+// the board, not a shared struct's, holds a reference naming no record.
+func refusedOutputs(ctx context.Context, tx *sql.Tx, b *runBoard, stepID int64) error {
+	type out struct {
+		object  int64
+		content string
 	}
-	return &nothingToTake{msg: fmt.Sprintf("the %s record this run works on names %s in %s, which no %s record holds", quote(of), quote(value), f.Attribute, quote(object))}
+	var outs []out
+	err := scanAll(ctx, tx, "SELECT object_ref, content FROM run_objects WHERE step_id = ? ORDER BY id", func(rows *sql.Rows) error {
+		var o out
+		err := rows.Scan(&o.object, &o.content)
+		outs = append(outs, o)
+		return err
+	}, stepID)
+	if err != nil {
+		return err
+	}
+	for _, o := range outs {
+		if b.store(o.object) != 0 {
+			continue
+		}
+		msg, err := danglingValue(ctx, tx, boardRefFields(b.snapshot, o.object), o.content)
+		if err != nil {
+			return err
+		}
+		if msg != "" {
+			return &recordConflict{fmt.Sprintf("The step's %s wasn't kept: %s.", quote(b.objects[o.object].Name), msg)}
+		}
+	}
+	return nil
+}
+
+// Why what a run is given can't be, if a reference in it names no record.
+func refusedGiven(ctx context.Context, db rowQuerier, s snapshot, in []givenObject, given map[int64]value) (string, error) {
+	for _, g := range in {
+		v, ok := given[g.id]
+		if !ok {
+			continue
+		}
+		msg, err := danglingValue(ctx, db, boardRefFields(s, g.id), v.content)
+		if err != nil || msg != "" {
+			if msg != "" {
+				msg = quote(g.name) + ": " + msg
+			}
+			return msg, err
+		}
+	}
+	return "", nil
+}
+
+// A followed reference that names no record a run can take: empty, or
+// naming a record the store doesn't hold. Source says where the reference
+// came from, such as the "Pull Request" record this run works on.
+func noFollowed(object, source string, f *objectFollow, value string) error {
+	if value == "" {
+		return &nothingToTake{msg: fmt.Sprintf("%s names no %s in %s, so %s has no record to follow", source, quote(object), f.Attribute, quote(object))}
+	}
+	return &nothingToTake{msg: fmt.Sprintf("%s names %s in %s, which no %s record holds", source, quote(value), f.Attribute, quote(object))}
 }
 
 // Takes the records the objects following a reference stand for, once the
@@ -358,33 +456,38 @@ func followRecords(ctx context.Context, tx *sql.Tx, nr *pendingRun, picked map[i
 		if !followsRecord(o) {
 			continue
 		}
-		content, ok := picked[o.Follows.Object]
-		if !ok {
-			return &nothingToTake{msg: fmt.Sprintf("%s follows a reference of an object that picks no record, so the run has none to follow", quote(o.Name))}
-		}
 		var of string
 		for _, p := range nr.board.Objects {
 			if p.ID == o.Follows.Object {
 				of = p.Name
 			}
 		}
+		source := fmt.Sprintf("the %s record this run works on", quote(of))
+		content, ok := picked[o.Follows.Object]
+		if !ok {
+			g, given := nr.given[o.Follows.Object]
+			if !given {
+				return &nothingToTake{msg: fmt.Sprintf("%s follows a reference of %s, which this run neither picked a record for nor was given, so it has none to follow", quote(o.Name), quote(of))}
+			}
+			content, source = stripFence(g.content), fmt.Sprintf("the %s this run was given", quote(of))
+		}
 		keys := refValues(content, o.Follows.Attribute)
 		if len(keys) > 1 {
-			return &nothingToTake{msg: fmt.Sprintf("the %s record this run works on names %d %s records in %s, so the run can't follow one", quote(of), len(keys), quote(o.Name), o.Follows.Attribute)}
+			return &nothingToTake{msg: fmt.Sprintf("%s names %d %s records in %s, so the run can't follow one", source, len(keys), quote(o.Name), o.Follows.Attribute)}
 		}
 		key := ""
 		if len(keys) == 1 {
 			key = keys[0]
 		}
 		if key == "" {
-			return noFollowed(o.Name, of, o.Follows, key)
+			return noFollowed(o.Name, source, o.Follows, key)
 		}
 		record, err := referredRecord(ctx, tx, *o.Store, key, true)
 		if err != nil {
 			return err
 		}
 		if record == 0 {
-			return noFollowed(o.Name, of, o.Follows, key)
+			return noFollowed(o.Name, source, o.Follows, key)
 		}
 		var state, got string
 		if err := tx.QueryRowContext(ctx, "SELECT state, content FROM shared_records WHERE id = ?", record).Scan(&state, &got); err != nil {

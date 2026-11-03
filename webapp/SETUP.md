@@ -245,7 +245,7 @@ objects:
 
 A copy has the name, states, attributes and parts of what it copies, and follows it as that changes. So a copy lists none of them, and its name may be left out. If given, the name must be the source's. Links name the copy's states as the source names them.
 
-A shared struct's copy on a job flow's top board may stand for one record in each run: `pick: {state: open, oldest: true, where: <rule>}` picks it from the store, or `follows: {object: Pull Request, attribute: ticket}` takes the record that attribute of the record another object there picks refers to (the attribute must have `ref:` naming this struct). An object doesn't both pick and follow.
+A shared struct's copy on a job flow's top board may stand for one record in each run: `pick: {state: open, oldest: true, where: <rule>}` picks it from the store, or `follows: {object: Pull Request, attribute: ticket}` takes the record that attribute of the record another object there picks refers to, or that attribute of an object runs are given as they start (the attribute must have `ref:` naming this struct; a job flow's own object may have such an attribute too). An object doesn't both pick and follow.
 
 ### Subflows
 

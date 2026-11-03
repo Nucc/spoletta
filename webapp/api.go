@@ -503,6 +503,12 @@ func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src
 			return 0, false, nil, err
 		}
 	}
+	if msg, err := refusedGiven(ctx, tx, nr.board, in, given); err != nil {
+		return 0, false, nil, err
+	} else if msg != "" {
+		return 0, false, &apiRefusal{http.StatusUnprocessableEntity, msg}, nil
+	}
+	nr.given = given
 	var none *nothingToTake
 	if err := takeRecords(ctx, tx, flow, &nr); errors.As(err, &none) {
 		return 0, false, &apiRefusal{http.StatusConflict, "nothing to run on: " + none.Error()}, nil

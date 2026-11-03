@@ -4252,6 +4252,7 @@ export default function Board({
             editable={!readOnly}
             module={moduleOf(objectIdOf(objectPanelNode.id))}
             structRoot={isStructRoot(objectPanelNode.id)}
+            jobFlow={!flow.module && !flow.struct}
             content={objectPanelNode.data.content}
             run={shownRun?.id}
             onRename={(name) => commitName(objectPanelNode.id, name)}

@@ -32,6 +32,7 @@ export default function ObjectPanel({
   editable,
   module,
   structRoot = false,
+  jobFlow = false,
   content,
   run,
   generals,
@@ -79,6 +80,8 @@ export default function ObjectPanel({
   module?: { id: number; name: string; struct: boolean }
   // The object a struct is: whether it is a person or stored is up to each copy.
   structRoot?: boolean
+  // Whether the board is a job flow's, not a procedure's or a struct's.
+  jobFlow?: boolean
   // What the object held at the end of the run the board shows, if it was
   // generated there, and which run that is.
   content?: string
@@ -120,21 +123,27 @@ export default function ObjectPanel({
   // The references whose record it can stand for: an attribute referring
   // to its struct's records, of another object on the top board picking a
   // record.
+  // Or of one runs are given as they start: a plain object on the top
+  // board, such as the ticket key a person enters.
   const references = shared && object?.source
     ? objects
-        .filter((o) => o.id !== id && o.parent === null && o.owner === null && o.pick)
+        .filter((o) => o.id !== id && o.parent === null && o.owner === null && (o.pick || (!o.shared && !o.human && !o.many)))
         .flatMap((o) => o.attributes.filter((a) => a.ref === object.source).map((a) => ({ object: o, attribute: a.name })))
     : []
-  // The shared structs an attribute of a struct's own object may refer to.
+  // Whether its attributes may refer to a shared struct's records: a
+  // struct's own object, or a plain one on a job flow's top board, whose
+  // reference a run given it can follow.
+  const refers = structRoot || (jobFlow && !owner && !human && !shared && object?.parent === null && !quantity.many)
+  // The shared structs an attribute may refer to.
   const [structs, setStructs] = useState<TaskStruct[]>([])
   useEffect(() => {
-    if (!structRoot) return
+    if (!refers) return
     let live = true
     listTaskStructs().then((ss) => live && setStructs(ss), () => {})
     return () => {
       live = false
     }
-  }, [structRoot])
+  }, [refers])
 
   // Saves the name unless it is empty or unchanged; also when the panel
   // closes, since a removed field may never blur.
@@ -381,8 +390,9 @@ export default function ObjectPanel({
           {help.note(
             'follows',
             <>
-              As each run starts and takes the record another object picks, it takes the {name} record that record's
-              reference names too, such as the ticket a pull request is for. Every process linked to {name} gets it,
+              As each run starts and takes the record another object picks, or is given what another object holds
+              (Run with inputs, the API, a webhook), it takes the {name} record that reference names too, such as
+              the ticket a pull request is for, or the one whose key a person entered. Every process linked to {name} gets it,
               and a process taking and generating {name} changes it, failing if someone else moved it on meanwhile. Other
               runs may follow the same record at once. A record naming none starts no run.
             </>,
@@ -506,7 +516,7 @@ export default function ObjectPanel({
             editable={own}
             persistent={(persistent || structRoot) && !owner}
             taken={taken(a.id)}
-            structs={structRoot ? structs : undefined}
+            structs={refers ? structs : undefined}
             onUpdate={(patch) => onUpdate(a.id, patch)}
             onRemove={() => onRemove(a.id)}
           />

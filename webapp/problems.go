@@ -993,8 +993,17 @@ func (c *problemCheck) followed() {
 				of = &c.s.Objects[i]
 			}
 		}
-		if of == nil || !picksRecord(*of) {
-			c.onObject(problemError, "follow", o, "%s follows a reference of an object that doesn't pick a record, so runs have none to follow: follow an object picking the record each run works on.", quote(o.Name))
+		// A run follows the reference of the record it picked, or of what it
+		// is given as it starts: an object on the top board no process
+		// generates.
+		givenOne := of != nil && of.Store == nil && of.Parent == nil && of.Owner == nil && !of.Human && !of.Many
+		if of == nil || !(picksRecord(*of) || givenOne) {
+			c.onObject(problemError, "follow", o, "%s follows a reference of an object that neither picks a record nor is given to runs, so runs have none to follow: follow an object picking the record each run works on, or one runs start with.", quote(o.Name))
+			continue
+		}
+		if givenOne && c.generated[of.ID] {
+			c.onObject(problemError, "follow", o, "%s follows %s's %s, but a process generates %s, and a run follows only what it starts with: give %s to runs as they start (Run with inputs, the API, a webhook) rather than generating it.",
+				quote(o.Name), quote(of.Name), quote(o.Follows.Attribute), quote(of.Name), quote(of.Name))
 			continue
 		}
 		if !slices.ContainsFunc(c.s.Attributes, func(a attribute) bool {

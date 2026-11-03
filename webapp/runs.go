@@ -374,7 +374,11 @@ func finishStepOnce(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, 
 		return nil, err
 	}
 	if dup == nil {
-		if err := storeShared(ctx, tx, b, runID, stepID); err != nil {
+		err := refusedOutputs(ctx, tx, b, stepID)
+		if err == nil {
+			err = storeShared(ctx, tx, b, runID, stepID)
+		}
+		if err != nil {
 			// A record its run took that changed meanwhile fails the step,
 			// which keeps what it generated, for the history; see picks.go.
 			var c *recordConflict
@@ -543,6 +547,9 @@ type pendingRun struct {
 	// The records it took for the objects picking one, by object; see
 	// picks.go.
 	taken map[int64]value
+	// What it is given as it starts, by object, which objects following a
+	// reference may follow it from; see references.go.
+	given map[int64]value
 }
 
 // Records a run of the flow on its board as it is, or with published on the

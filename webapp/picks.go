@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 )
 
@@ -211,13 +212,8 @@ func takeRecords(ctx context.Context, tx *sql.Tx, flow int64, nr *pendingRun) er
 			picking = append(picking, o)
 		}
 	}
-	if len(picking) == 0 {
-		// An object following a reference has nothing to follow it from.
-		for _, o := range nr.board.Objects {
-			if followsRecord(o) {
-				return &nothingToTake{msg: fmt.Sprintf("%s follows a reference, but no object on the board picks the record holding it", quote(o.Name))}
-			}
-		}
+	follows := slices.ContainsFunc(nr.board.Objects, followsRecord)
+	if len(picking) == 0 && !follows {
 		return nil
 	}
 	var module bool

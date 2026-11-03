@@ -307,3 +307,76 @@ flows:
 		t.Errorf("importing a follow of an object picking nothing = %d %s, want it refused", status, body)
 	}
 }
+
+// A plain object a run is given as it starts, such as the key of the
+// ticket a person enters, may refer to a struct's records, and a copy of the
+// struct may follow it: the run then takes the ticket the key names and the
+// process changing it writes that ticket. A key naming no ticket is refused
+// before the run starts, a run given nothing has nothing to follow, and a
+// step generating such an object naming no ticket fails.
+func TestFollowGivenReference(t *testing.T) {
+	a := newApp(t)
+	tickets, f, ticket := pickTickets(a, "Triage an entered ticket")
+	ticketRoot := modObjects(a, tickets.ID)[0]
+	pickAdd(a, tickets.ID, "T-1", "open")
+
+	entered := a.newObject(f.ID, "Entered")
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", entered.ID), map[string]any{"name": "key", "ref": ticketRoot.ID}, http.StatusCreated, nil)
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", entered.ID), map[string]any{"name": "note"}, http.StatusCreated, nil)
+	a.call("PUT", fmt.Sprintf("/api/objects/%d/follows", ticket.ID), map[string]any{"follows": map[string]any{"object": entered.ID, "attribute": "key"}}, http.StatusNoContent, nil)
+
+	triage := a.newProcess(f.ID, map[string]any{"name": "Triage", "kind": kindScript, "script": "triage"})
+	a.input(triage.ID, entered.ID)
+	a.input(triage.ID, ticket.ID)
+	a.link(map[string]any{"process": triage.ID, "object": ticket.ID, "direction": directionOutput, "state": pickState(t, ticket, "review")})
+	a.startAt(f.ID, triage.ID)
+	a.worker.onScript("Triage", func(ctx context.Context, run scriptRun) runResult {
+		fields, err := pickGiven(run)
+		if err != nil {
+			return runResult{Error: err.Error()}
+		}
+		fields["status"] = "triaged"
+		out, _ := json.Marshal(fields)
+		return runResult{OK: true, Output: string(out)}
+	})
+
+	start := func(key string) (int, string, run) {
+		t.Helper()
+		status, reply := a.do("POST", fmt.Sprintf("/api/runs?flow=%d", f.ID), map[string]any{"inputs": map[string]any{"Entered": map[string]string{"key": key, "note": "x"}}})
+		var rn run
+		if status == http.StatusCreated {
+			json.Unmarshal(reply, &rn)
+		}
+		return status, strings.TrimSpace(string(reply)), rn
+	}
+	if status, msg, _ := start("T-9"); status != http.StatusUnprocessableEntity || !strings.Contains(msg, `no "Ticket" record holds it`) {
+		t.Errorf("a run given a key naming no ticket = %d %q, want it refused", status, msg)
+	}
+	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", f.ID), nil, http.StatusConflict, "neither picked a record for nor was given")
+
+	status, msg, rn := start("T-1")
+	if status != http.StatusCreated {
+		t.Fatalf("a run given T-1 = %d %s", status, msg)
+	}
+	if d := a.finish(rn.ID); d.Status != runDone {
+		t.Fatalf("the run ended %s: %s", d.Status, describeSteps(d))
+	}
+	if r := sharedRecords(a, tickets.ID)["T-1"]; r.State != "review" || !strings.Contains(string(r.Content), "triaged") {
+		t.Errorf("T-1 = %s in %s, want it triaged in review", r.Content, r.State)
+	}
+
+	// A step generating such an object naming no ticket fails.
+	g := a.newFlow("Name a ticket")
+	named := a.newObject(g.ID, "Named")
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", named.ID), map[string]any{"name": "key", "ref": ticketRoot.ID}, http.StatusCreated, nil)
+	name := a.newProcess(g.ID, map[string]any{"name": "Name", "kind": kindScript, "script": "name"})
+	a.output(name.ID, named.ID)
+	a.startAt(g.ID, name.ID)
+	a.worker.onScript("Name", func(ctx context.Context, run scriptRun) runResult {
+		return runResult{OK: true, Output: `{"key": "T-404"}`}
+	})
+	d := a.finish(a.startRun(g.ID).ID)
+	if failed := onlyStep(t, d, "Name"); d.Status != runFailed || !strings.Contains(failed.Error, `no "Ticket" record holds it`) {
+		t.Errorf("a step naming no ticket ended the run %s, Name %q; want it failed", d.Status, failed.Error)
+	}
+}

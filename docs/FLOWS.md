@@ -520,6 +520,14 @@ repositories:
     several pull requests of one ticket go at once, and the one moving it
     second fails rather than undo the first. A picked record naming no
     ticket, or one no record holds, starts no run.
+  - A job flow's own object on its top board can refer too: an attribute
+    with `ref: Ticket`, such as the `key` of an `Entered ticket` a run is
+    given as it starts (Run with inputs, `/v1`, a webhook). A key naming
+    no Ticket record refuses the run before it starts, and a step yielding
+    such an object naming none fails. A Ticket copy may follow it,
+    `follows: {object: Entered ticket, attribute: key}`, taking that ticket
+    as the run starts. A run follows only what it starts with: following
+    an object a process yields, such as a person's form, is an error.
 
     ```yaml
     structs:

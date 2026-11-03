@@ -357,6 +357,7 @@ export default function RecordsPage({ id }: { id: number }) {
                                 facet={keyOf(f)}
                                 width={columns.style('.' + f)}
                                 whole={whole}
+                                refTo={records?.refs?.[f]}
                                 onOpen={setOpened}
                               />
                             ))}
@@ -447,6 +448,7 @@ function Cell({
   facet,
   width,
   whole,
+  refTo,
   onOpen,
 }: {
   value: Json | undefined
@@ -455,9 +457,24 @@ function Cell({
   // The width the column was dragged to, if it was.
   width: CSSProperties | undefined
   whole: Opened
+  // The struct whose records the field refers to, whose Records page the
+  // value links to, searching for it; see references.go.
+  refTo?: number
   onOpen: (o: Opened) => void
 }) {
   if (value === undefined || value === null || value === '') return <td className="data-cell empty" style={width} />
+  if (refTo !== undefined && (typeof value === 'string' || typeof value === 'number'))
+    return (
+      <td className="data-cell" style={width}>
+        <a
+          className="record-ref"
+          href={`#/flows/${refTo}/records?q=${encodeURIComponent(JSON.stringify(String(value)))}`}
+          title="Show the record it refers to"
+        >
+          {String(value)}
+        </a>
+      </td>
+    )
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
   const label = Array.isArray(value) ? `${value.length} ${value.length === 1 ? 'item' : 'items'}` : text
   return (

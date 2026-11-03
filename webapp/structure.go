@@ -65,7 +65,7 @@ func loadStructure(ctx context.Context, db rowsQuerier, flow int64) (structure, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = db.QueryContext(ctx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file
+	rows, err = db.QueryContext(ctx, `SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.ref_id
 		FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ? ORDER BY a.id`, flow)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func loadStructure(ctx context.Context, db rowsQuerier, flow int64) (structure, 
 	defer rows.Close()
 	for rows.Next() {
 		var a attribute
-		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File); err != nil {
+		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Ref); err != nil {
 			return nil, err
 		}
 		if o := s[a.Object]; o != nil {

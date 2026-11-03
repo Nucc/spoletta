@@ -32,6 +32,9 @@ type attribute struct {
 	File bool `json:"file"`
 	// The attribute of a module's object it is a copy of; see modules.go.
 	Source *int64 `json:"source,omitempty"`
+	// The shared struct's object whose records it refers to, by their
+	// unique value; see references.go.
+	Ref *int64 `json:"ref,omitempty"`
 }
 
 func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
@@ -79,8 +82,15 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 
-		res, err := db.ExecContext(r.Context(), "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file) VALUES (?, ?, ?, ?, ?)",
-			a.Object, a.Name, a.Definition, a.Unique, a.File)
+		if msg, err := checkRef(r.Context(), db, requestUser(r), a.Ref, a.Unique); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		res, err := db.ExecContext(r.Context(), "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, ref_id) VALUES (?, ?, ?, ?, ?, ?)",
+			a.Object, a.Name, a.Definition, a.Unique, a.File, a.Ref)
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "the object already has an attribute named "+a.Name, http.StatusConflict)
@@ -113,6 +123,8 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			Definition *string `json:"definition"`
 			Unique     *bool   `json:"unique"`
 			File       *bool   `json:"file"`
+			// A struct's object id, or 0 for none; absent keeps it.
+			Ref *int64 `json:"ref"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -167,6 +179,42 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 		}
+		if isTrue(patch.Unique) && patch.Ref == nil {
+			var refers bool
+			if err := db.QueryRowContext(r.Context(), "SELECT ref_id IS NOT NULL FROM object_attributes WHERE id = ?", id).Scan(&refers); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				serverError(w, err)
+				return
+			}
+			if refers {
+				http.Error(w, "an attribute referring to records can't be unique too", http.StatusBadRequest)
+				return
+			}
+		}
+		if patch.Ref != nil {
+			var unique bool
+			if err := db.QueryRowContext(r.Context(), "SELECT is_unique FROM object_attributes WHERE id = ?", id).Scan(&unique); err != nil {
+				serverError(w, err)
+				return
+			}
+			if patch.Unique != nil {
+				unique = *patch.Unique
+			}
+			ref := patch.Ref
+			if *ref == 0 {
+				ref = nil
+			}
+			if msg, err := checkRef(r.Context(), db, requestUser(r), ref, unique); err != nil {
+				serverError(w, err)
+				return
+			} else if msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
+			if _, err := db.ExecContext(r.Context(), "UPDATE object_attributes SET ref_id = ? WHERE id = ?", ref, id); err != nil {
+				serverError(w, err)
+				return
+			}
+		}
 		_, err = db.ExecContext(r.Context(),
 			"UPDATE object_attributes SET name = COALESCE(?, name), definition = COALESCE(?, definition), is_unique = COALESCE(?, is_unique), is_file = COALESCE(?, is_file) WHERE id = ?",
 			patch.Name, patch.Definition, patch.Unique, patch.File, id)
@@ -183,8 +231,8 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var a attribute
-		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name, definition, is_unique, is_file FROM object_attributes WHERE id = ?", id).
-			Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File)
+		err = db.QueryRowContext(r.Context(), "SELECT id, object_id, name, definition, is_unique, is_file, ref_id FROM object_attributes WHERE id = ?", id).
+			Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Ref)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "attribute not found", http.StatusNotFound)
 			return
@@ -237,7 +285,7 @@ func checkAttribute(ctx context.Context, db *sql.DB, object int64, change func(*
 // The attributes of every object, or of one if object isn't 0, by object id.
 func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]attribute, error) {
 	rows, err := db.QueryContext(ctx,
-		"SELECT id, object_id, name, definition, is_unique, is_file, source_id FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
+		"SELECT id, object_id, name, definition, is_unique, is_file, source_id, ref_id FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +293,7 @@ func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]
 	attrs := map[int64][]attribute{}
 	for rows.Next() {
 		var a attribute
-		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source); err != nil {
+		if err := rows.Scan(&a.ID, &a.Object, &a.Name, &a.Definition, &a.Unique, &a.File, &a.Source, &a.Ref); err != nil {
 			return nil, err
 		}
 		attrs[a.Object] = append(attrs[a.Object], a)

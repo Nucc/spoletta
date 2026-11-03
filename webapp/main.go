@@ -137,6 +137,7 @@ func main() {
 	registerObjectRoutes(mux, db)
 	registerQueryRoutes(mux, db)
 	registerPickRoutes(mux, db)
+	registerReferenceRoutes(mux, db)
 	registerStateRoutes(mux, db)
 	registerAttributeRoutes(mux, db)
 	// How many agent, script and connector steps run at once.

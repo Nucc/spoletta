@@ -534,8 +534,8 @@ func registerRerunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			nr.record = *src.Record
 		}
 		// It works on the records the run took, as they are now; see picks.go.
-		if _, err := tx.ExecContext(r.Context(), `INSERT INTO taken_records (run_id, object_ref, record_id, state)
-			SELECT ?, t.object_ref, t.record_id, sr.state FROM taken_records t JOIN shared_records sr ON sr.id = t.record_id AND sr.deleted_at IS NULL WHERE t.run_id = ?`,
+		if _, err := tx.ExecContext(r.Context(), `INSERT INTO taken_records (run_id, object_ref, record_id, state, followed)
+			SELECT ?, t.object_ref, t.record_id, sr.state, t.followed FROM taken_records t JOIN shared_records sr ON sr.id = t.record_id AND sr.deleted_at IS NULL WHERE t.run_id = ?`,
 			nr.id, src.ID); err != nil {
 			serverError(w, err)
 			return

@@ -225,6 +225,8 @@ A process taking an object and yielding it too affects it: it hands the object i
       definition: What the ticket is about
       unique: true      # no two stored values share it
       file: true        # holds the path of a file the process wrote
+    - name: ticket
+      ref: Jira Ticket  # holds the unique value of a record of that shared struct
   parts:                # objects making it up, shaped like objects
     - name: comments
       relation: aggregation   # exhibition (an attribute; default) or aggregation (a part)
@@ -242,6 +244,8 @@ objects:
 ```
 
 A copy has the name, states, attributes and parts of what it copies, and follows it as that changes. So a copy lists none of them, and its name may be left out. If given, the name must be the source's. Links name the copy's states as the source names them.
+
+A shared struct's copy on a job flow's top board may stand for one record in each run: `pick: {state: open, oldest: true, where: <rule>}` picks it from the store, or `follows: {object: Pull Request, attribute: ticket}` takes the record that attribute of the record another object there picks refers to (the attribute must have `ref:` naming this struct). An object doesn't both pick and follow.
 
 ### Subflows
 

@@ -267,6 +267,23 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 			return res, "", err
 		}
 	}
+	// An object following a reference follows it from the copy of the
+	// object it followed, when that went along; see references.go.
+	for from, to := range p.objMap {
+		o := p.objs[from]
+		if o.Follows == nil || o.Parent != nil || o.Owner != nil {
+			continue
+		}
+		of, ok := p.objMap[o.Follows.Object]
+		if !ok {
+			continue
+		}
+		f := *o.Follows
+		f.Object = of
+		if _, err := tx.ExecContext(ctx, "UPDATE objects SET follows = ? WHERE id = ?", storedFollow(&f), to); err != nil {
+			return res, "", err
+		}
+	}
 
 	links := map[int64]int64{}
 	for _, l := range s.Links {
@@ -585,8 +602,8 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 	}
 	attrs = append(attrs, p.attrs[o.ID]...)
 	for _, a := range attrs {
-		_, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id) VALUES (?, ?, ?, ?, ?, ?)",
-			id, a.Name, a.Definition, a.Unique && unique, a.File, sourceOf(a.Source))
+		_, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			id, a.Name, a.Definition, a.Unique && unique, a.File, sourceOf(a.Source), a.Ref)
 		if err != nil {
 			return 0, err
 		}

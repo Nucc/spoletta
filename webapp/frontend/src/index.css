@@ -1780,6 +1780,19 @@ body {
   gap: 16px;
 }
 
+/* The struct whose records an attribute refers to; see references.go. */
+.attribute-ref {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.attribute-ref select {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Muted as notes are, still readable while a run holds the board. */
 .panel-check:has(input:disabled) {
   color: #656d76;
@@ -6038,6 +6051,70 @@ kbd {
 
 .record-history-status.panel-warning {
   color: #82071e;
+}
+
+/* A field referring to another struct's record, linking to it. */
+.record-ref {
+  display: inline-block;
+  padding: 0 8px;
+  line-height: 20px;
+  border: 1px solid #b6cdf5;
+  border-radius: 10px;
+  background: #f0f5ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* The records referring to one, in its dialog. */
+.record-references {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+}
+
+.record-references[hidden] {
+  display: none;
+}
+
+.record-references h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.record-references ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.record-references li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eaeef2;
+  font-size: 13px;
+}
+
+.record-references-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-references-going {
+  font-size: 12px;
+  color: var(--status-running-text);
 }
 
 .record-history {

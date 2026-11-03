@@ -496,6 +496,46 @@ repositories:
     yield another copy of the struct (give it a `key`, since a copy keeps
     the struct's name). A procedure's object, a part or a list picks
     nothing.
+  - One struct's records can **refer** to another's: an attribute with
+    `ref: Ticket` (the shared struct's name) holds the unique value of the
+    record it means, such as a pull request's `ticket: PROJ-12`. A record
+    naming a value no Ticket record holds isn't written: the step writing it
+    fails, a person's edit is refused; an empty value refers to nothing. A
+    reference isn't `unique` too. A record's dialog lists the records
+    referring to it, and the Records page links each reference to its
+    record.
+  - A copy of the referred struct on the same top board as an object
+    picking a record can **follow** the reference: `follows: {object: Pull
+    Request, attribute: ticket}` (and no `pick`). As each run takes the
+    picked pull request it takes the ticket that names too, so every
+    process linked to the Ticket gets that record, and a process taking and
+    yielding it changes that record, failing if someone else moved it on
+    meanwhile, as with a picked one. A followed record isn't held: runs of
+    several pull requests of one ticket go at once, and the one moving it
+    second fails rather than undo the first. A picked record naming no
+    ticket, or one no record holds, starts no run.
+
+    ```yaml
+    structs:
+      - name: Pull Request
+        shared: true
+        states: [open, merged]
+        attributes:
+          - {name: url, unique: true}
+          - {name: ticket, ref: Ticket}
+    flows:
+      - name: Merge
+        start: {next: Move}
+        processes:
+          - name: Move
+            takes: [{object: Pull Request, role: instrument}, Ticket]
+            yields: [{object: Ticket, state: review}]
+        objects:
+          - copyOf: {flow: Pull Request}
+            pick: {state: open}
+          - copyOf: {flow: Ticket}
+            follows: {object: Pull Request, attribute: ticket}
+    ```
   - Records stay once the step writing them is done, whatever its run does
     later. A query claims no record, so two runs querying the same state at
     once may take the same one; pick the record instead, or don't let the

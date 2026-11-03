@@ -216,6 +216,11 @@ func referredFrom(e *exportedFlow, byID map[int64]*exportedFlow, objectFlow map[
 				visit(objectFlow[*o.Source])
 			}
 		}
+		for _, a := range e.s.Attributes {
+			if a.Ref != nil {
+				visit(objectFlow[*a.Ref])
+			}
+		}
 	}
 	visit(e)
 	var flows []*exportedFlow
@@ -473,6 +478,11 @@ func (x exporter) object(o snapshotObject) setupObject {
 		Name: o.Name, Key: setupKeyOf(o.Name, id), Persistent: o.Persistent, Shared: o.Store != nil && *o.Store == o.ID, Many: o.Many, Min: o.Min, Max: o.Max,
 		Human: o.Human, End: o.End, X: addrOf(o.X), Y: addrOf(o.Y), Width: o.Width, Pick: o.Pick,
 	}
+	if o.Follows != nil {
+		if of := x.e.objIDs[o.Follows.Object]; of != "" {
+			so.Follows = &setupFollow{Object: of, Attribute: o.Follows.Attribute}
+		}
+	}
 	if o.Owner != nil {
 		so.Relation = o.Relation
 		if so.Relation == relationExhibition {
@@ -500,7 +510,13 @@ func (x exporter) object(o snapshotObject) setupObject {
 	}
 	for _, a := range x.e.s.Attributes {
 		if a.Object == o.ID {
-			so.Attributes = append(so.Attributes, setupAttribute{Name: a.Name, Definition: a.Definition, Unique: a.Unique, File: a.File})
+			sa := setupAttribute{Name: a.Name, Definition: a.Definition, Unique: a.Unique, File: a.File}
+			if a.Ref != nil {
+				if src := x.objectFlow[*a.Ref]; src != nil {
+					sa.Ref = src.name
+				}
+			}
+			so.Attributes = append(so.Attributes, sa)
 		}
 	}
 	for _, part := range x.e.s.Objects {

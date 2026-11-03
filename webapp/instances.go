@@ -149,7 +149,7 @@ func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64,
 // The object's unique attributes as the board has them now, its generals'
 // first, since it has those too; a shared object's store keeps to its
 // struct's as they are.
-func uniqueAttributes(ctx context.Context, tx *sql.Tx, object int64) ([]attribute, error) {
+func uniqueAttributes(ctx context.Context, tx rowQuerier, object int64) ([]attribute, error) {
 	var attrs []attribute
 	for seen := map[int64]bool{}; !seen[object]; {
 		seen[object] = true

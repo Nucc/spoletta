@@ -143,6 +143,10 @@ export type FlowObject = {
   // For a shared struct's copy on a job flow's top board: the record each
   // run works on; see picks.go.
   pick: ObjectPick | null
+  // For a shared struct's copy on a job flow's top board: the reference,
+  // held by an object picking a record, whose record it stands for in each
+  // run; see references.go.
+  follows: ObjectFollow | null
   // A list of items: an agent generating it replies with a list, and a flow
   // process taking it runs once per item. Inside that flow process, it is
   // the item.
@@ -195,6 +199,9 @@ export type ObjectAttribute = {
   // Holds the path of a file the process wrote in its step's files
   // directory, which must exist.
   file: boolean
+  // The shared struct's object whose records it refers to, by their unique
+  // value, such as a pull request's ticket; see references.go.
+  ref?: number
 }
 
 // A situation an object can be in, such as approved or changes requested.
@@ -737,7 +744,9 @@ export function getAuditLog(search?: Search): Promise<AuditLog> {
 
 // A shared struct's records, the latest written first or as sorted, with
 // the fields its object has in the board's order. more: more than these match.
-export type SharedRecords = { fields: string[]; states: string[]; records: SharedRecord[]; more: boolean } & SearchResult
+// refs names the fields referring to another struct's records, with that
+// struct's id; see references.go.
+export type SharedRecords = { fields: string[]; states: string[]; records: SharedRecord[]; more: boolean; refs?: Record<string, number> } & SearchResult
 
 // What a person writes of a record: all its fields, replacing what it held,
 // and its state, one of the object's or none.
@@ -936,7 +945,8 @@ export type TaskColumnEdit = {
 
 // A shared struct a column can hold the records of, with the fields they
 // have, in the board's order, the one naming them, and its states in order.
-export type TaskStruct = { id: number; name: string; fields: string[]; key: string; states: string[] }
+// object is the struct's object, which an attribute refers to the records of.
+export type TaskStruct = { id: number; name: string; object: number; fields: string[]; key: string; states: string[] }
 
 // The task boards whoever asks sees, by name, without their records.
 export function listTaskBoards(): Promise<TaskBoard[]> {
@@ -1252,6 +1262,7 @@ export function createObject(
     | 'persistent'
     | 'shared'
     | 'pick'
+    | 'follows'
     | 'source'
     | 'sourceFlow'
     | 'many'
@@ -1346,6 +1357,35 @@ export function setObjectPick(id: number, pick: ObjectPick | null): Promise<void
   return request(`/api/objects/${id}/pick`, { method: 'PUT', body: JSON.stringify({ pick }) })
 }
 
+// The record an object stands for in each run: the one the attribute of the
+// record another object picks names; see references.go.
+export type ObjectFollow = {
+  object: number
+  attribute: string
+}
+
+// Has the object stand for the record the reference names, or with null
+// stop following it.
+export function setObjectFollows(id: number, follows: ObjectFollow | null): Promise<void> {
+  return request(`/api/objects/${id}/follows`, { method: 'PUT', body: JSON.stringify({ follows }) })
+}
+
+// The records of one struct referring to a record by one attribute.
+export type ReferringGroup = {
+  struct: number
+  name: string
+  attribute: string
+  // The value they hold naming the record, to search for them by.
+  key: string
+  records: { id: number; content: unknown; state: string; going: boolean }[]
+  more: boolean
+}
+
+// The records referring to a record, by struct and attribute.
+export function getRecordReferences(struct: number, record: number): Promise<ReferringGroup[]> {
+  return request(`/api/structs/${struct}/records/${record}/references`)
+}
+
 export function setLinkRole(id: number, role: LinkRole): Promise<void> {
   return request(`/api/links/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) })
 }
@@ -1380,7 +1420,8 @@ export function createAttribute(object: number, a: { name: string; definition: s
   return request(`/api/objects/${object}/attributes`, { method: 'POST', body: JSON.stringify(a) })
 }
 
-export function updateAttribute(id: number, patch: Partial<Pick<ObjectAttribute, 'name' | 'definition' | 'unique' | 'file'>>): Promise<ObjectAttribute> {
+// ref 0 makes it refer to no records.
+export function updateAttribute(id: number, patch: Partial<Pick<ObjectAttribute, 'name' | 'definition' | 'unique' | 'file' | 'ref'>>): Promise<ObjectAttribute> {
   return request(`/api/attributes/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -2387,8 +2428,8 @@ type Snapshot = {
   // source is left out for an object that isn't a copy, and sourceFlow is
   // never kept. Rather than whether it is shared, it keeps the store of
   // records it reads and writes, left out when it has none.
-  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'sourceFlow' | 'shared' | 'pick'> &
-    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'pick'>> & { store?: number })[]
+  objects: (Omit<FlowObject, 'flow' | 'states' | 'attributes' | 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'sourceFlow' | 'shared' | 'pick' | 'follows'> &
+    Partial<Pick<FlowObject, 'parent' | 'many' | 'min' | 'max' | 'human' | 'end' | 'owner' | 'relation' | 'general' | 'source' | 'pick' | 'follows'>> & { store?: number })[]
   states: ObjectState[]
   attributes: ObjectAttribute[]
   // state is 0 when the link names none; versions from before boundary
@@ -2428,6 +2469,7 @@ export async function getVersionBoard(flow: number, id: number): Promise<BoardCo
       flow,
       shared: store != null,
       pick: o.pick ?? null,
+      follows: o.follows ?? null,
       parent: o.parent ?? null,
       many: o.many ?? false,
       min: o.min ?? 0,

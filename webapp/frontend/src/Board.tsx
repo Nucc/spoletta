@@ -177,6 +177,7 @@ import {
   setLinkCondition,
   setLinkQuery,
   setObjectPick,
+  setObjectFollows,
   setStateRule,
   setLinkRole,
   setLinkStates,
@@ -214,6 +215,7 @@ import {
   type Link,
   type LinkQuery,
   type ObjectPick,
+  type ObjectFollow,
   type LinkRole,
   type Models,
   type Note,
@@ -742,6 +744,7 @@ export default function Board({
         persistent: o.persistent,
         shared: o.shared,
         pick: o.pick,
+        follows: o.follows,
         many: o.many,
         min: o.min,
         max: o.max,
@@ -2317,6 +2320,18 @@ export default function Board({
     }
   }
 
+  const setFollows = async (objectId: string, follows: ObjectFollow | null) => {
+    if (readOnly) return false
+    try {
+      await setObjectFollows(objectIdOf(objectId), follows)
+      updateObjectData(objectId, { follows })
+      return true
+    } catch (err) {
+      report(err)
+      return false
+    }
+  }
+
   const setShared = async (objectId: string, shared: boolean) => {
     if (readOnly) return false
     try {
@@ -2332,7 +2347,7 @@ export default function Board({
   const changeAttribute = async (
     objectId: string,
     id: number,
-    patch: { name?: string; definition?: string; unique?: boolean; file?: boolean },
+    patch: { name?: string; definition?: string; unique?: boolean; file?: boolean; ref?: number },
   ) => {
     try {
       const attribute = await updateAttribute(id, patch)
@@ -4221,6 +4236,8 @@ export default function Board({
             onSharedChange={(shared) => setShared(objectPanelNode.id, shared)}
             pick={objectPanelNode.data.pick ?? null}
             onPickChange={(pick) => setPick(objectPanelNode.id, pick)}
+            follows={objectPanelNode.data.follows ?? null}
+            onFollowsChange={(follows) => setFollows(objectPanelNode.id, follows)}
             quantity={objectPanelNode.data}
             onQuantityChange={(quantity) => setQuantity(objectPanelNode.id, quantity)}
             human={objectPanelNode.data.human}

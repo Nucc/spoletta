@@ -456,6 +456,13 @@ func (d *boardDiff) diffObjects(a, b snapshot, m diffMatch) {
 		fs.add("person", yesNo(w.Human), yesNo(o.Human))
 		fs.add("outcome", yesNo(w.End), yesNo(o.End))
 		fs.add("each run works on", pickText(w.Pick), pickText(o.Pick))
+		follows := func(s snapshot, f *objectFollow) string {
+			if f == nil {
+				return ""
+			}
+			return named(s, &f.Object) + "'s " + f.Attribute
+		}
+		fs.add("follows", follows(a, w.Follows), follows(b, o.Follows))
 		if w.X != o.X || w.Y != o.Y || !sameFloat(w.Width, o.Width) {
 			d.Layout = true
 		}
@@ -472,6 +479,15 @@ func (d *boardDiff) diffObjects(a, b snapshot, m diffMatch) {
 
 // Which record a pick takes, in a few words, such as "the earliest in
 // open"; empty for none.
+// The struct's object an attribute refers to the records of, as a diff
+// names it.
+func refText(ref *int64) string {
+	if ref == nil {
+		return ""
+	}
+	return "struct object #" + strconv.FormatInt(*ref, 10)
+}
+
 func pickText(p *objectPick) string {
 	if p == nil {
 		return ""
@@ -736,6 +752,7 @@ func (d *boardDiff) diffAttributes(a, b snapshot, m diffMatch) {
 		fs.add("definition", w.Definition, at.Definition)
 		fs.add("unique", yesNo(w.Unique), yesNo(at.Unique))
 		fs.add("file", yesNo(w.File), yesNo(at.File))
+		fs.add("refers to records of", refText(w.Ref), refText(at.Ref))
 		if len(fs) > 0 {
 			it := item(b, diffChanged, at)
 			it.Fields = fs

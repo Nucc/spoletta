@@ -195,6 +195,13 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
+		if msg, err := danglingRefs(ctx, tx, store, string(e.Content)); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		if msg, err := keyRecord(ctx, tx, store, record, attrs, string(e.Content)); err != nil {
 			serverError(w, err)
 			return

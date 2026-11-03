@@ -550,7 +550,9 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			Fields []string `json:"fields"`
 			Key    string   `json:"key"`
 			States []string `json:"states"`
-			root   int64
+			// The struct's object, which an attribute refers to the records
+			// of; see references.go.
+			Root int64 `json:"object"`
 		}
 		out := []option{}
 		err := scanAll(ctx, db, `SELECT f.id, f.name, o.id FROM flows f
@@ -558,7 +560,7 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			WHERE f.is_struct AND o.store_id = o.id AND `+cond+` ORDER BY f.name, f.id`,
 			func(rows *sql.Rows) error {
 				var o option
-				err := rows.Scan(&o.ID, &o.Name, &o.root)
+				err := rows.Scan(&o.ID, &o.Name, &o.Root)
 				out = append(out, o)
 				return err
 			}, args...)
@@ -566,8 +568,8 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			if err != nil {
 				break
 			}
-			if out[i].Fields, err = recordFields(ctx, db, out[i].root); err == nil {
-				out[i].Key, err = recordKey(ctx, db, out[i].root)
+			if out[i].Fields, err = recordFields(ctx, db, out[i].Root); err == nil {
+				out[i].Key, err = recordKey(ctx, db, out[i].Root)
 			}
 			out[i].States = []string{}
 			if err == nil {
@@ -576,7 +578,7 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 					err := rows.Scan(&name)
 					out[i].States = append(out[i].States, name)
 					return err
-				}, out[i].root)
+				}, out[i].Root)
 			}
 		}
 		if err != nil {

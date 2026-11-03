@@ -29,6 +29,9 @@ type object struct {
 	// The record each run of the flow works on, for a shared struct's copy
 	// on a job flow's top board; see picks.go.
 	Pick *objectPick `json:"pick"`
+	// The reference another object's attribute holds, whose record it
+	// stands for in a run; see references.go.
+	Follows *objectFollow `json:"follows"`
 	// A list of items: an agent generating it replies with a list, and a
 	// flow process taking it runs once per item; see items.go.
 	Many bool `json:"many"`
@@ -130,7 +133,7 @@ const (
 // copyReason.
 const objectColumns = "id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, " +
 	"IF(EXISTS (SELECT 1 FROM objects src JOIN flows f ON f.id = src.flow_id WHERE src.id = objects.source_id AND f.deleted_at IS NOT NULL), NULL, source_id), " +
-	"(SELECT src.flow_id FROM objects src JOIN flows f ON f.id = src.flow_id AND " + liveFlows + " WHERE src.id = objects.source_id), store_id IS NOT NULL, pick"
+	"(SELECT src.flow_id FROM objects src JOIN flows f ON f.id = src.flow_id AND " + liveFlows + " WHERE src.id = objects.source_id), store_id IS NOT NULL, pick, follows"
 
 // Whether an object is on a board of processes, rather than owned by
 // another object.
@@ -138,12 +141,15 @@ const onProcessBoard = "owner_id IS NULL"
 
 func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	o := object{States: []objectState{}, Attributes: []attribute{}}
-	var pick []byte
-	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow, &o.Shared, &pick)
+	var pick, follows []byte
+	err := db.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM objects WHERE id = ?", id).Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow, &o.Shared, &pick, &follows)
 	if err != nil {
 		return o, err
 	}
 	if o.Pick, err = pickOf(pick); err != nil {
+		return o, err
+	}
+	if o.Follows, err = followOf(follows); err != nil {
 		return o, err
 	}
 	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name, COALESCE(rule, ''), source_id FROM object_states WHERE object_id = ? ORDER BY id", id)
@@ -187,13 +193,17 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		objs := []object{}
 		for rows.Next() {
 			var o object
-			var pick []byte
-			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow, &o.Shared, &pick); err != nil {
+			var pick, follows []byte
+			if err := rows.Scan(&o.ID, &o.Flow, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.SourceFlow, &o.Shared, &pick, &follows); err != nil {
 				serverError(w, err)
 				return
 			}
 			var err error
 			if o.Pick, err = pickOf(pick); err != nil {
+				serverError(w, err)
+				return
+			}
+			if o.Follows, err = followOf(follows); err != nil {
 				serverError(w, err)
 				return
 			}

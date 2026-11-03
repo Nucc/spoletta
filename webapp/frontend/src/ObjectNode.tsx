@@ -1,7 +1,7 @@
 import { useContext, useEffect, useState } from 'react'
 import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
 import { StructFlowsContext, useBoardActions } from './actions'
-import type { ObjectAttribute, ObjectPick, ObjectState, Relation } from './api'
+import type { ObjectAttribute, ObjectFollow, ObjectPick, ObjectState, Relation } from './api'
 import { AggregationIcon, DatabaseIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
 import { AppendButton, NameInput, Subtitle } from './ProcessNode'
 import { quantityText, type Quantity } from './quantity'
@@ -32,6 +32,8 @@ export type ObjectNodeData = {
   shared: boolean
   // The record each run works on; see FlowObject.
   pick?: ObjectPick | null
+  // The reference whose record it stands for in each run; see FlowObject.
+  follows?: ObjectFollow | null
   // A list of items on its own board; inside a flow process taking it, the
   // item. Its links write how many items it holds at its end.
   many: boolean
@@ -133,7 +135,7 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
                   data.human
                     ? 'Person'
                     : data.copied && !data.owned
-                      ? `${data.many && !data.boundary ? 'List · ' : ''}From a ${structs.has(data.sourceFlow ?? 0) ? 'struct' : 'procedure'}${data.pick ? ` · each run: ${pickText(data.pick)}` : ''}`
+                      ? `${data.many && !data.boundary ? 'List · ' : ''}From a ${structs.has(data.sourceFlow ?? 0) ? 'struct' : 'procedure'}${data.pick ? ` · each run: ${pickText(data.pick)}` : ''}${data.follows ? ` · each run: the record its ${data.follows.attribute} names` : ''}`
                       : data.general
                       ? `${data.many && !data.boundary ? 'List of ' : ''}${data.general}`
                       : !data.many

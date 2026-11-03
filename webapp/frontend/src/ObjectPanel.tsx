@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FlowObject, ObjectAttribute, ObjectPick, ObjectState, Relation } from './api'
+import { listTaskStructs, type FlowObject, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation, type TaskStruct } from './api'
 import { Data } from './Data'
 import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TableIcon, TrashIcon, ZoomInIcon } from './icons'
 import { pickText } from './ObjectNode'
@@ -26,6 +26,7 @@ export default function ObjectPanel({
   persistent,
   shared,
   pick,
+  follows,
   quantity,
   human,
   editable,
@@ -37,6 +38,7 @@ export default function ObjectPanel({
   onPersistentChange,
   onSharedChange,
   onPickChange,
+  onFollowsChange,
   onQuantityChange,
   onHumanChange,
   onRelationChange,
@@ -65,6 +67,9 @@ export default function ObjectPanel({
   // For a shared struct's copy on the top board: the record each run works
   // on; see picks.go.
   pick: ObjectPick | null
+  // For a shared struct's copy on the top board: the reference whose record
+  // it stands for in each run; see references.go.
+  follows: ObjectFollow | null
   quantity: Quantity
   human: boolean
   // False while a run is in progress.
@@ -85,6 +90,7 @@ export default function ObjectPanel({
   onPersistentChange: (persistent: boolean) => Promise<boolean>
   onSharedChange: (shared: boolean) => Promise<boolean>
   onPickChange: (pick: ObjectPick | null) => Promise<boolean>
+  onFollowsChange: (follows: ObjectFollow | null) => Promise<boolean>
   onQuantityChange: (quantity: Quantity) => Promise<boolean>
   onHumanChange: (human: boolean) => Promise<boolean>
   onRelationChange: (relation: Relation) => Promise<boolean>
@@ -94,7 +100,7 @@ export default function ObjectPanel({
   // Shows one of the objects it is made of unfolded.
   onUnfoldPart: (id: number) => void
   onAdd: (name: string) => Promise<boolean>
-  onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean; file?: boolean }) => Promise<boolean>
+  onUpdate: (id: number, patch: { name?: string; definition?: string; unique?: boolean; file?: boolean; ref?: number }) => Promise<boolean>
   onRemove: (id: number) => Promise<boolean>
   // Sets a state's rule; resolves to whether the server took it.
   onStateRule: (id: number, rule: string) => Promise<boolean>
@@ -111,6 +117,24 @@ export default function ObjectPanel({
   const inherited = fields.filter((f) => f.inherited)
   const parts = ownedBy(objects, id)
   const help = useHelp()
+  // The references whose record it can stand for: an attribute referring
+  // to its struct's records, of another object on the top board picking a
+  // record.
+  const references = shared && object?.source
+    ? objects
+        .filter((o) => o.id !== id && o.parent === null && o.owner === null && o.pick)
+        .flatMap((o) => o.attributes.filter((a) => a.ref === object.source).map((a) => ({ object: o, attribute: a.name })))
+    : []
+  // The shared structs an attribute of a struct's own object may refer to.
+  const [structs, setStructs] = useState<TaskStruct[]>([])
+  useEffect(() => {
+    if (!structRoot) return
+    let live = true
+    listTaskStructs().then((ss) => live && setStructs(ss), () => {})
+    return () => {
+      live = false
+    }
+  }, [structRoot])
 
   // Saves the name unless it is empty or unchanged; also when the panel
   // closes, since a removed field may never blur.
@@ -346,6 +370,46 @@ export default function ObjectPanel({
           {pick && <PickFields pick={pick} states={states} editable={editable} onChange={onPickChange} />}
         </>
       )}
+      {!owner && !human && !structRoot && shared && object?.parent === null && !quantity.many && !pick && (references.length > 0 || follows) && (
+        <>
+          <div className="help-head">
+            <label className="panel-field-label" htmlFor={`follows-${id}`}>
+              Each run works on the record a reference names
+            </label>
+            {help.button('follows', 'following a reference')}
+          </div>
+          {help.note(
+            'follows',
+            <>
+              As each run starts and takes the record another object picks, it takes the {name} record that record's
+              reference names too, such as the ticket a pull request is for. Every process linked to {name} gets it,
+              and a process taking and generating {name} changes it, failing if someone else moved it on meanwhile. Other
+              runs may follow the same record at once. A record naming none starts no run.
+            </>,
+          )}
+          <select
+            id={`follows-${id}`}
+            value={follows ? `${follows.object}:${follows.attribute}` : ''}
+            disabled={!editable}
+            onChange={(e) => {
+              const [o, ...a] = e.target.value.split(':')
+              void onFollowsChange(e.target.value === '' ? null : { object: Number(o), attribute: a.join(':') })
+            }}
+          >
+            <option value="">None</option>
+            {references.map((r) => (
+              <option key={`${r.object.id}:${r.attribute}`} value={`${r.object.id}:${r.attribute}`}>
+                {r.object.name} · {r.attribute}
+              </option>
+            ))}
+            {follows && !references.some((r) => r.object.id === follows.object && r.attribute === follows.attribute) && (
+              <option value={`${follows.object}:${follows.attribute}`}>
+                {objects.find((o) => o.id === follows.object)?.name ?? 'Gone'} · {follows.attribute} (no longer a reference)
+              </option>
+            )}
+          </select>
+        </>
+      )}
       {!owner && !human && !structRoot && !shared && (
         <>
           <div className="help-head">
@@ -442,6 +506,7 @@ export default function ObjectPanel({
             editable={own}
             persistent={(persistent || structRoot) && !owner}
             taken={taken(a.id)}
+            structs={structRoot ? structs : undefined}
             onUpdate={(patch) => onUpdate(a.id, patch)}
             onRemove={() => onRemove(a.id)}
           />
@@ -547,6 +612,7 @@ function AttributeRow({
   editable,
   persistent,
   taken,
+  structs,
   onUpdate,
   onRemove,
 }: {
@@ -557,7 +623,10 @@ function AttributeRow({
   persistent: boolean
   // The names of the object's other attributes.
   taken: string[]
-  onUpdate: (patch: { name?: string; definition?: string; unique?: boolean; file?: boolean }) => Promise<boolean>
+  // On a struct's own object, the shared structs it may refer to the
+  // records of; see references.go.
+  structs?: TaskStruct[]
+  onUpdate: (patch: { name?: string; definition?: string; unique?: boolean; file?: boolean; ref?: number }) => Promise<boolean>
   onRemove: () => Promise<boolean>
 }) {
   const [name, setName] = useState(attribute.name)
@@ -646,6 +715,25 @@ function AttributeRow({
           <span>File</span>
         </label>
       </div>
+      {structs && (
+        <label className="attribute-ref">
+          <span>Refers to</span>
+          <select
+            value={attribute.ref ?? 0}
+            disabled={!editable || attribute.unique}
+            title={attribute.unique ? 'A unique attribute is the record’s own key, so it refers to none' : 'Holds the key of a record of another shared struct'}
+            onChange={(e) => onUpdate({ ref: Number(e.target.value) })}
+          >
+            <option value={0}>Nothing</option>
+            {structs.map((st) => (
+              <option key={st.object} value={st.object}>
+                a {st.name} record
+              </option>
+            ))}
+            {attribute.ref && !structs.some((st) => st.object === attribute.ref) && <option value={attribute.ref}>a struct you don’t see</option>}
+          </select>
+        </label>
+      )}
       <textarea
         value={definition}
         rows={2}

@@ -293,6 +293,11 @@ func objectUses(o *setupObject, uses func(name string, runs bool)) {
 	if o.CopyOf != nil {
 		uses(o.CopyOf.Flow, false)
 	}
+	for _, a := range o.Attributes {
+		if a.Ref != "" {
+			uses(a.Ref, false)
+		}
+	}
 	for i := range o.Parts {
 		objectUses(&o.Parts[i], uses)
 	}
@@ -883,7 +888,18 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 		if err != nil {
 			return err
 		}
-		b.out.Attributes = append(b.out.Attributes, attribute{ID: id, Object: bo.id, Name: name, Definition: a.Definition, Unique: a.Unique, File: a.File})
+		out := attribute{ID: id, Object: bo.id, Name: name, Definition: a.Definition, Unique: a.Unique, File: a.File}
+		if a.Ref != "" {
+			ref, err := b.refSource(a.Ref)
+			if err != nil {
+				return problemf("%s: attribute %s: %v", at, quote(name), err)
+			}
+			if a.Unique {
+				return problemf("%s: attribute %s refers to records, so it can't be unique too", at, quote(name))
+			}
+			out.Ref = &ref
+		}
+		b.out.Attributes = append(b.out.Attributes, out)
 	}
 	for i := range o.Parts {
 		if err := b.walkObject(&o.Parts[i], nil, &bo.id, at); err != nil {
@@ -1024,6 +1040,21 @@ func (b *builder) copySource(c *setupSource) (int64, string, error) {
 	var name string
 	err = b.tx.QueryRowContext(b.ctx, "SELECT name FROM objects WHERE id = ?", source).Scan(&name)
 	return source, name, err
+}
+
+// The object of the shared struct named, which an attribute refers to the
+// records of; see references.go.
+func (b *builder) refSource(name string) (int64, error) {
+	src, err := b.importer.flow(name)
+	if err != nil {
+		return 0, err
+	}
+	if !src.isStruct {
+		return 0, fmt.Errorf("%s isn't a struct, so it keeps no records to refer to", quote(name))
+	}
+	// Whether it is shared is the board's problem to say, as it may be
+	// shared later in the same import; see problems.go.
+	return structRoot(b.ctx, b.tx, src.id)
 }
 
 // Where the board's processes and objects go when neither the file nor the
@@ -1496,6 +1527,20 @@ func (b *builder) resolveObject(bo *bobj) error {
 		Min: o.Min, Max: o.Max, Human: o.Human, End: o.End, Parent: bo.parent, Owner: bo.owner, Relation: o.Relation, Source: bo.source, Pick: o.Pick}
 	if o.Shared {
 		so.Store = &bo.id
+	}
+	if f := o.Follows; f != nil {
+		of := b.objs[f.Object]
+		switch {
+		case !b.shared(bo) || b.isStruct || bo.parent != nil || bo.owner != nil || o.Many:
+			return problemf("%s: only a shared struct's copy on a job flow's top board follows a reference", at)
+		case o.Pick != nil:
+			return problemf("%s: an object picking a record follows no reference too", at)
+		case strings.TrimSpace(f.Attribute) == "":
+			return problemf("%s: name the attribute it follows", at)
+		case of == nil || of == bo || of.parent != nil || of.owner != nil || of.o.Pick == nil:
+			return problemf("%s: it follows %s, which isn't an object on the top board picking a record", at, quote(f.Object))
+		}
+		so.Follows = &objectFollow{Object: of.id, Attribute: f.Attribute}
 	}
 	if o.Specializes != "" {
 		g := b.objs[o.Specializes]

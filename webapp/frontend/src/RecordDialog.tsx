@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import type { SharedRecord } from './api'
+import { getRecordReferences, type ReferringGroup, type SharedRecord } from './api'
 import { useConfirm } from './Confirm'
 import { RecordHistory } from './RecordHistory'
+import { RecordReferences, referencesTabLabel } from './RecordReferences'
 
 // A record of a shared struct written by hand: a new one, or one a flow
 // wrote corrected, its state and each of its fields, those the struct has
@@ -9,8 +10,10 @@ import { RecordHistory } from './RecordHistory'
 // number, a yes or no, a list or anything with fields is written as JSON.
 // A record there is has its history beside, in a tab of its own; one that
 // isn't fields, which the form would write over, shows its history alone.
+// Records of other structs referring to it have a tab too; see
+// RecordReferences.tsx.
 
-type Tab = 'fields' | 'history'
+type Tab = 'fields' | 'history' | 'references'
 
 type Field = {
   key: number
@@ -88,12 +91,29 @@ export function RecordDialog({
     setTab(t)
     if (t === 'history') setHistorySeen(true)
   }
-  const tabs = history && editable
+  // What refers to it, asked for once as it opens; a struct nothing refers
+  // to has no tab for it.
+  const [references, setReferences] = useState<ReferringGroup[]>([])
+  useEffect(() => {
+    if (!history) return
+    let live = true
+    getRecordReferences(struct, record.id).then((gs) => live && setReferences(gs), () => {})
+    return () => {
+      live = false
+    }
+  }, [history, struct, record?.id])
+  const shown: [Tab, string, string][] = [
+    ...(editable ? [['fields', 'Fields', 'record-fields-tab'] as [Tab, string, string]] : []),
+    ['history', 'History', 'record-history'],
+    ...(references.length > 0 ? [['references', referencesTabLabel(references), 'record-references'] as [Tab, string, string]] : []),
+  ]
+  const tabs = history && shown.length > 1
   // Left and Right go between the tabs, as tabs do.
   const tabKeys = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     e.preventDefault()
-    const next: Tab = tab === 'fields' ? 'history' : 'fields'
+    const at = shown.findIndex(([t]) => t === tab)
+    const next = shown[(at + (e.key === 'ArrowRight' ? 1 : shown.length - 1)) % shown.length][0]
     show(next)
     e.currentTarget.querySelector<HTMLButtonElement>(`[data-tab="${next}"]`)?.focus()
   }
@@ -169,12 +189,7 @@ export function RecordDialog({
       </header>
       {tabs && (
         <div className="record-tabs segmented" role="tablist" aria-label="The record" onKeyDown={tabKeys}>
-          {(
-            [
-              ['fields', 'Fields', 'record-fields-tab'],
-              ['history', 'History', 'record-history'],
-            ] as const
-          ).map(([t, label, panel]) => (
+          {shown.map(([t, label, panel]) => (
             <button
               key={t}
               type="button"
@@ -194,6 +209,7 @@ export function RecordDialog({
       {history && historySeen && (
         <RecordHistory struct={struct} record={record.id} state={record.state} hidden={tab !== 'history'} onNavigate={onClose} />
       )}
+      {history && references.length > 0 && <RecordReferences groups={references} hidden={tab !== 'references'} onNavigate={onClose} />}
       {editable && (
         <form
           id="record-fields-tab"

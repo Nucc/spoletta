@@ -101,6 +101,7 @@ func boardProblems(s snapshot, f problemFacts) []problem {
 	c.processes()
 	c.objects()
 	c.picked()
+	c.followed()
 	c.unreached()
 	out := []problem{}
 	for _, level := range []string{problemError, problemWarning} {
@@ -167,7 +168,7 @@ func newProblemCheck(s snapshot, f problemFacts) *problemCheck {
 	// An object picking a record holds the one its run took from the
 	// start; see picks.go.
 	for _, o := range s.Objects {
-		if picksRecord(o) && !f.module {
+		if holdsRecord(o) && !f.module {
 			c.generated[o.ID] = true
 		}
 	}
@@ -664,7 +665,7 @@ func (c *problemCheck) reach(inputs bool) (reached, given map[int64]bool) {
 		seeds = append(seeds, c.topStarts()...)
 		// What takes a record the run took starts with it.
 		for _, o := range c.s.Objects {
-			if picksRecord(o) && !c.f.module {
+			if holdsRecord(o) && !c.f.module {
 				for _, t := range c.takers[o.ID] {
 					if c.procs[t].Parent == nil {
 						seeds = append(seeds, t)
@@ -971,4 +972,57 @@ func registerProblemRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
+}
+
+// What is wrong with the objects following a reference (see references.go):
+// one that can't follow, or follows what no picked record holds, gets no
+// record, so what takes it never runs; a process generating it without
+// taking it would write over the record blind.
+func (c *problemCheck) followed() {
+	for _, o := range c.s.Objects {
+		if o.Follows == nil {
+			continue
+		}
+		if !followsRecord(o) || c.f.module {
+			c.onObject(problemError, "follow", o, "%s follows a reference, but only a shared struct's copy on a job flow's top board that isn't a list or picking a record follows one: stop it following.", quote(o.Name))
+			continue
+		}
+		var of *snapshotObject
+		for i := range c.s.Objects {
+			if c.s.Objects[i].ID == o.Follows.Object {
+				of = &c.s.Objects[i]
+			}
+		}
+		if of == nil || !picksRecord(*of) {
+			c.onObject(problemError, "follow", o, "%s follows a reference of an object that doesn't pick a record, so runs have none to follow: follow an object picking the record each run works on.", quote(o.Name))
+			continue
+		}
+		if !slices.ContainsFunc(c.s.Attributes, func(a attribute) bool {
+			return a.Object == of.ID && a.Name == o.Follows.Attribute && a.Ref != nil && *a.Ref == *o.Store
+		}) {
+			c.onObject(problemError, "follow", o, "%s follows %s's %s, which doesn't refer to %s's records: make it a reference to them in its struct, or follow another.",
+				quote(o.Name), quote(of.Name), quote(o.Follows.Attribute), quote(o.Name))
+			continue
+		}
+		for _, p := range c.s.Processes {
+			var takes, queries, yields bool
+			for _, l := range c.links[p.ID] {
+				if l.Object != o.ID {
+					continue
+				}
+				switch {
+				case l.Direction == directionOutput:
+					yields = true
+				case l.Query != nil:
+					queries = true
+				default:
+					takes = true
+				}
+			}
+			if yields && !takes && !queries {
+				c.onProcess(problemError, "follow-change", p, "%s generates %s without taking it, but each run follows one %s record: link %s to it so it sees what it changes.",
+					quote(p.Name), quote(o.Name), quote(o.Name), quote(o.Name))
+			}
+		}
+	}
 }

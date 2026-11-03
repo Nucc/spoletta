@@ -340,7 +340,7 @@ func recordsGoing(ctx context.Context, db *sql.DB, store int64, records []int64)
 			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND sr.deleted_at IS NULL AND r.status = ?
 		UNION SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN runs r ON r.id = sr.run_id
 			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND sr.deleted_at IS NULL AND r.status = ?
-		UNION SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN taken_records t ON t.record_id = sr.id JOIN runs r ON r.id = t.run_id
+		UNION SELECT sr.id, r.id, r.flow_id FROM shared_records sr JOIN taken_records t ON t.record_id = sr.id AND NOT t.followed JOIN runs r ON r.id = t.run_id
 			WHERE sr.object_id = ? AND sr.id IN (`+in+`) AND sr.deleted_at IS NULL AND r.status = ?
 		ORDER BY 1, 2`, func(rows *sql.Rows) error {
 		var record int64

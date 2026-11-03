@@ -128,6 +128,10 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 		if err != nil {
 			return err
 		}
+		// A reference naming no record fails the step; see references.go.
+		if err := refusedRefs(ctx, tx, g.store, stripFence(g.content)); err != nil {
+			return err
+		}
 		// The record the run took for the object is the one it changes,
 		// whatever its unique attributes say; see picks.go.
 		if g.affects {
@@ -430,6 +434,9 @@ type sharedRecords struct {
 	// The states a record can be in, in the board's order.
 	States  []string       `json:"states"`
 	Records []sharedRecord `json:"records"`
+	// The fields referring to another struct's records, each with that
+	// struct's id, whose records it links to; see references.go.
+	Refs map[string]int64 `json:"refs"`
 	// More records than these match.
 	More bool `json:"more"`
 	// The facets the records were searched by; how many records the search
@@ -568,6 +575,10 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 			out.Records = append(out.Records, rt.records[i])
 		}
 		out.More = len(matched) > maxListedRecords
+		if out.Refs, err = refStructs(ctx, db, root); err != nil {
+			serverError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, out)
 	})
 }

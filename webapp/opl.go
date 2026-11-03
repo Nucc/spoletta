@@ -174,6 +174,11 @@ func (o *oplWriter) objectSentences(ob snapshotObject, indent string) {
 	if ob.Pick != nil {
 		o.line(indent, "%s", pickPhrase(name, ob.Pick))
 	}
+	if ob.Follows != nil {
+		if _, ok := o.objects[ob.Follows.Object]; ok {
+			o.line(indent, "%s", followPhrase(name, o.object(ob.Follows.Object), ob.Follows))
+		}
+	}
 	var states []int64
 	var rules []string
 	for _, st := range o.s.States {

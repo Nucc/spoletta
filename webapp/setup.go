@@ -262,6 +262,9 @@ type setupObject struct {
 	CopyOf      *setupSource `yaml:"copyOf,omitempty"`
 	// Only a shared struct's copy on a job flow's top board; see picks.go.
 	Pick *objectPick `yaml:"pick,omitempty"`
+	// The reference it follows, from an object picking a record on the
+	// same board; see references.go.
+	Follows *setupFollow `yaml:"follows,omitempty"`
 	// Written as just the name when it has no key or rule.
 	States     []setupState     `yaml:"states,omitempty"`
 	Attributes []setupAttribute `yaml:"attributes,omitempty"`
@@ -288,11 +291,21 @@ type setupState struct {
 	Rule string `yaml:"rule,omitempty"`
 }
 
+// A reference followed: Attribute of the record Object, by its name or key,
+// picks.
+type setupFollow struct {
+	Object    string `yaml:"object"`
+	Attribute string `yaml:"attribute"`
+}
+
 type setupAttribute struct {
 	Name       string `yaml:"name"`
 	Definition string `yaml:"definition,omitempty"`
 	Unique     bool   `yaml:"unique,omitempty"`
 	File       bool   `yaml:"file,omitempty"`
+	// The shared struct whose records it refers to, by name; see
+	// references.go.
+	Ref string `yaml:"ref,omitempty"`
 }
 
 func (l setupLink) MarshalYAML() (any, error) {

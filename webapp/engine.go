@@ -785,7 +785,7 @@ func newWalk(ctx context.Context, e *engine, run int64, lr *liveRun, fr *flowRun
 	// An object picking a record holds the one its run took from the start.
 	if board == nil {
 		for _, o := range s.Objects {
-			if picksRecord(o) {
+			if holdsRecord(o) {
 				w.picked[o.ID] = true
 				w.generated[o.ID] = true
 			}

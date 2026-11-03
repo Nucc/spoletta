@@ -175,9 +175,14 @@ type nothingToTake struct {
 	object string
 	pick   *objectPick
 	held   bool
+	// What to say instead, for a reference followed; see references.go.
+	msg string
 }
 
 func (n *nothingToTake) Error() string {
+	if n.msg != "" {
+		return n.msg
+	}
 	which := quote(n.object) + " record"
 	if n.pick.State != "" {
 		which += " in " + n.pick.State
@@ -207,6 +212,12 @@ func takeRecords(ctx context.Context, tx *sql.Tx, flow int64, nr *pendingRun) er
 		}
 	}
 	if len(picking) == 0 {
+		// An object following a reference has nothing to follow it from.
+		for _, o := range nr.board.Objects {
+			if followsRecord(o) {
+				return &nothingToTake{msg: fmt.Sprintf("%s follows a reference, but no object on the board picks the record holding it", quote(o.Name))}
+			}
+		}
 		return nil
 	}
 	var module bool
@@ -238,7 +249,9 @@ func takeRecords(ctx context.Context, tx *sql.Tx, flow int64, nr *pendingRun) er
 		return err
 	}
 	nr.taken = map[int64]value{}
+	picked := map[int64]string{}
 	for _, t := range all {
+		picked[t.object.ID] = t.value
 		if _, err := tx.ExecContext(ctx, "INSERT INTO taken_records (run_id, object_ref, record_id, state) VALUES (?, ?, ?, ?)",
 			nr.id, t.object.ID, t.record, t.state); err != nil {
 			return err
@@ -254,7 +267,9 @@ func takeRecords(ctx context.Context, tx *sql.Tx, flow int64, nr *pendingRun) er
 		}
 		nr.taken[t.object.ID] = v
 	}
-	return nil
+	// The records the objects following a reference stand for; see
+	// references.go.
+	return followRecords(ctx, tx, nr, picked, step)
 }
 
 // Whether a run takes a record for the object as it starts.
@@ -356,7 +371,7 @@ func takeRecord(ctx context.Context, tx *sql.Tx, on int64, o snapshotObject) (in
 // on it.
 func recordHeld(ctx context.Context, db querier, record int64) (bool, error) {
 	var held bool
-	err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM taken_records t JOIN runs r ON r.id = t.run_id WHERE t.record_id = ? AND r.status = ?)
+	err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM taken_records t JOIN runs r ON r.id = t.run_id WHERE t.record_id = ? AND NOT t.followed AND r.status = ?)
 		OR EXISTS (SELECT 1 FROM runs WHERE record_id = ? AND status = ?)`, record, runRunning, record, runRunning).Scan(&held)
 	return held, err
 }

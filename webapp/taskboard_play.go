@@ -348,7 +348,7 @@ func storeGoing(ctx context.Context, db *sql.DB, store int64) (map[int64][]going
 			WHERE r.status = ? AND sr.object_id = ? AND sr.deleted_at IS NULL
 		UNION SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN shared_records sr ON sr.run_id = r.id
 			WHERE r.status = ? AND sr.object_id = ? AND sr.deleted_at IS NULL
-		UNION SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN taken_records t ON t.run_id = r.id JOIN shared_records sr ON sr.id = t.record_id
+		UNION SELECT sr.id, r.id, r.flow_id, `+waiting+` FROM runs r JOIN taken_records t ON t.run_id = r.id AND NOT t.followed JOIN shared_records sr ON sr.id = t.record_id
 			WHERE r.status = ? AND sr.object_id = ? AND sr.deleted_at IS NULL
 		ORDER BY 1, 2`, func(rows *sql.Rows) error {
 		var record int64
@@ -698,7 +698,7 @@ func startBoardRun(ctx context.Context, db *sql.DB, eng *engine, board int64, f 
 	var going bool
 	err = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE record_id = ? AND status = ?)
 		OR EXISTS (SELECT 1 FROM shared_records sr JOIN runs r ON r.id = sr.run_id WHERE sr.id = ? AND r.status = ?)
-		OR EXISTS (SELECT 1 FROM taken_records t JOIN runs r ON r.id = t.run_id WHERE t.record_id = ? AND r.status = ?)`,
+		OR EXISTS (SELECT 1 FROM taken_records t JOIN runs r ON r.id = t.run_id WHERE t.record_id = ? AND NOT t.followed AND r.status = ?)`,
 		record, runRunning, record, runRunning, record, runRunning).Scan(&going)
 	if err != nil || going {
 		return false, err == nil, err

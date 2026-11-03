@@ -18,6 +18,7 @@ import {
   type TaskBoard,
   type TaskCard,
   type TaskCards,
+  type ReferringCount,
   type TaskColumn,
   type TaskColumnEdit,
   type TaskStruct,
@@ -39,7 +40,7 @@ import {
 } from './icons'
 import { timeAgo } from './home'
 import { indexFacets, parse, quote, selection, type Facets } from './query'
-import { RecordDialog } from './RecordDialog'
+import { RecordDialog, type RecordTab } from './RecordDialog'
 import { RecordRunDialog } from './RecordRunDialog'
 import { formatDuration, formatTime } from './Runs'
 import { QueryBar } from './Search'
@@ -126,7 +127,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   // The record opened, of a column by its place, or a new one added to it,
   // on its fields or its history.
-  const [opened, setOpened] = useState<{ column: number; record: SharedRecord | null; tab?: 'fields' | 'history' } | null>(null)
+  const [opened, setOpened] = useState<{ column: number; record: SharedRecord | null; tab?: RecordTab } | null>(null)
   // The record a flow is being started on.
   const [running, setRunning] = useState<{ struct: number; name: string; record: number } | null>(null)
   // Whether the board's settings are open.
@@ -704,7 +705,7 @@ function Column({
   card: TaskCard | null
   onEdit: () => void
   // Opens a record of it, or a new one for none, on its fields or history.
-  onOpen: (record: SharedRecord | null, tab?: 'fields' | 'history') => void
+  onOpen: (record: SharedRecord | null, tab?: RecordTab) => void
   onRun: (record: number) => void
   onRetry: (records: number[]) => void
 }) {
@@ -757,6 +758,8 @@ function Column({
                     run={cards.runs[r.id]}
                     onOpen={() => onOpen(r)}
                     onHistory={() => onOpen(r, 'history')}
+                    referring={cards.referring?.[r.id]}
+                    onReferring={() => onOpen(r, 'references')}
                     onRun={() => onRun(r.id)}
                     onRetry={() => onRetry([r.id])}
                   />
@@ -852,8 +855,10 @@ function Card({
   cards,
   card,
   run: work,
+  referring,
   onOpen,
   onHistory,
+  onReferring,
   onRun,
   onRetry,
 }: {
@@ -861,8 +866,11 @@ function Card({
   cards: TaskCards
   card: TaskCard
   run?: CardRun
+  // What refers to it, such as a ticket's pull requests; see references.go.
+  referring?: ReferringCount[]
   onOpen: () => void
   onHistory: () => void
+  onReferring: () => void
   onRun: () => void
   onRetry: () => void
 }) {
@@ -913,6 +921,21 @@ function Card({
             ) : (
               <span>run #{record.run}</span>
             ))}
+        </div>
+      )}
+      {referring && referring.length > 0 && (
+        <div className="task-card-referring">
+          {referring.map((r) => (
+            <button
+              key={`${r.name}:${r.attribute}`}
+              className="record-ref"
+              title={`The ${r.name} records whose ${r.attribute} names it`}
+              onClick={onReferring}
+            >
+              {r.total} {r.name}
+              {r.states.length > 0 && ` · ${r.states.map((s) => `${s.count} ${s.state || 'no state'}`).join(' · ')}`}
+            </button>
+          ))}
         </div>
       )}
       {work && <CardWork run={work} onRetry={onRetry} />}

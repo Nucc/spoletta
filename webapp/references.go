@@ -607,3 +607,103 @@ func referredTables(ctx context.Context, db *sql.DB, store int64) ([]referredTab
 	}
 	return out, nil
 }
+
+// How many records of one struct refer to a record by one attribute, in
+// all and in each state, as a task board's card counts them.
+type referringCount struct {
+	Name      string       `json:"name"`
+	Attribute string       `json:"attribute"`
+	Total     int          `json:"total"`
+	States    []stateCount `json:"states"`
+}
+
+type stateCount struct {
+	State string `json:"state"`
+	Count int    `json:"count"`
+}
+
+// The records referring to those of a store, counted by the value naming
+// each, for every struct the person sees referring to it.
+type referringCounts struct {
+	// The store's unique attributes, whose values name a record.
+	keys   []string
+	groups []referringCountGroup
+}
+
+type referringCountGroup struct {
+	name, attribute string
+	byKey           map[string]*referringCount
+}
+
+// Counts what refers to the records of store, a query per struct and
+// attribute referring to it.
+func countReferring(ctx context.Context, db *sql.DB, u *user, store int64) (*referringCounts, error) {
+	rc := &referringCounts{}
+	attrs, err := uniqueAttributes(ctx, db, store)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range attrs {
+		rc.keys = append(rc.keys, a.Name)
+	}
+	see, args := visibleFlows(u)
+	type field struct {
+		object     int64
+		name, attr string
+	}
+	var fields []field
+	err = scanAll(ctx, db, `SELECT o.id, f.name, a.name FROM object_attributes a JOIN objects o ON o.id = a.object_id AND o.store_id = o.id
+		JOIN flows f ON f.id = o.flow_id AND f.is_struct WHERE a.ref_id = ? AND `+see+` ORDER BY f.name, a.id`, func(rows *sql.Rows) error {
+		var x field
+		err := rows.Scan(&x.object, &x.name, &x.attr)
+		fields = append(fields, x)
+		return err
+	}, append([]any{store}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	for _, x := range fields {
+		g := referringCountGroup{name: x.name, attribute: x.attr, byKey: map[string]*referringCount{}}
+		err := scanAll(ctx, db, `SELECT k, state, COUNT(*) FROM (
+				SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(content, ?)) AS CHAR) AS k, state FROM shared_records
+				WHERE object_id = ? AND deleted_at IS NULL AND JSON_VALID(content)) refs
+			WHERE k IS NOT NULL AND k <> '' GROUP BY k, state ORDER BY k, state`, func(rows *sql.Rows) error {
+			var key, state string
+			var n int
+			if err := rows.Scan(&key, &state, &n); err != nil {
+				return err
+			}
+			key = strings.TrimSpace(key)
+			c := g.byKey[key]
+			if c == nil {
+				c = &referringCount{Name: x.name, Attribute: x.attr, States: []stateCount{}}
+				g.byKey[key] = c
+			}
+			c.Total += n
+			c.States = append(c.States, stateCount{State: state, Count: n})
+			return nil
+		}, "$."+strconv.Quote(x.attr), x.object)
+		if err != nil {
+			return nil, err
+		}
+		rc.groups = append(rc.groups, g)
+	}
+	return rc, nil
+}
+
+// What refers to the record with content, by struct and attribute.
+func (rc *referringCounts) of(content json.RawMessage) []referringCount {
+	if rc == nil {
+		return nil
+	}
+	var out []referringCount
+	for _, g := range rc.groups {
+		for _, k := range rc.keys {
+			if c, ok := g.byKey[refValue(string(content), k)]; ok {
+				out = append(out, *c)
+				break
+			}
+		}
+	}
+	return out
+}

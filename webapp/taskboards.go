@@ -158,6 +158,9 @@ type taskCards struct {
 	// The run going on each record shown that has one, and why each the
 	// board's play skips is stuck, by record id; see taskboard_play.go.
 	Runs map[string]cardRun `json:"runs"`
+	// The records of other structs referring to each record shown that has
+	// any, by record id; see references.go.
+	Referring map[string][]referringCount `json:"referring"`
 }
 
 // How many cards a column shows at most; the Records page shows the rest.
@@ -332,9 +335,10 @@ func describeColumns(ctx context.Context, db *sql.DB, u *user, columns []taskCol
 // struct's records once however many columns hold them. Matching doesn't
 // count facets' values, as the Records page matches before it does, so a
 // query matches the same records on both.
-func fillCards(ctx context.Context, db *sql.DB, columns []taskColumn, structs map[int64]taskStruct) error {
+func fillCards(ctx context.Context, db *sql.DB, u *user, columns []taskColumn, structs map[int64]taskStruct) error {
 	tables := map[int64]*recordTable{}
 	keys := map[int64]string{}
+	referring := map[int64]*referringCounts{}
 	for i := range columns {
 		c := &columns[i]
 		if c.Problem != "" {
@@ -351,13 +355,19 @@ func fillCards(ctx context.Context, db *sql.DB, columns []taskColumn, structs ma
 			if keys[root], err = recordKey(ctx, db, root); err != nil {
 				return err
 			}
+			if referring[root], err = countReferring(ctx, db, u, root); err != nil {
+				return err
+			}
 		}
 		key, desc := sortParam(c.Sort)
 		matched := rt.table.search().run(parseSearch(c.Query), key, desc)
 		cards := &taskCards{Fields: rt.fields, States: rt.states, Key: keys[root], Records: []sharedRecord{},
-			Matched: len(matched), Truncated: rt.truncated, Runs: map[string]cardRun{}}
+			Matched: len(matched), Truncated: rt.truncated, Runs: map[string]cardRun{}, Referring: map[string][]referringCount{}}
 		for _, i := range matched[:min(len(matched), maxColumnCards)] {
 			cards.Records = append(cards.Records, rt.records[i])
+			if counts := referring[root].of(rt.records[i].Content); len(counts) > 0 {
+				cards.Referring[strconv.FormatInt(rt.records[i].ID, 10)] = counts
+			}
 		}
 		c.Cards = cards
 	}
@@ -462,7 +472,7 @@ func answerTaskBoard(w http.ResponseWriter, r *http.Request, db *sql.DB, status 
 	ctx, u := r.Context(), requestUser(r)
 	structs, err := describeColumns(ctx, db, u, b.Columns)
 	if err == nil && cards {
-		err = fillCards(ctx, db, b.Columns, structs)
+		err = fillCards(ctx, db, u, b.Columns, structs)
 	}
 	if err == nil && cards {
 		err = fillPlay(ctx, db, u, &b, structs)

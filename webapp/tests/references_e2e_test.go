@@ -163,6 +163,38 @@ func TestRecordReferences(t *testing.T) {
 		t.Errorf("second run ended %s, Move %q; want it failed on T-1 moved", d2.Status, failed.Error)
 	}
 
+	// A task board over the tickets counts each one's pull requests by
+	// state on its card.
+	var board struct {
+		ID      int64 `json:"id"`
+		Columns []struct {
+			Cards struct {
+				Records   []sharedRecord `json:"records"`
+				Referring map[string][]struct {
+					Name   string `json:"name"`
+					Total  int    `json:"total"`
+					States []struct {
+						State string `json:"state"`
+						Count int    `json:"count"`
+					} `json:"states"`
+				} `json:"referring"`
+			} `json:"cards"`
+		} `json:"columns"`
+	}
+	a.call("POST", "/api/taskboards", map[string]any{"name": "Tickets"}, http.StatusCreated, &board)
+	a.call("PUT", fmt.Sprintf("/api/taskboards/%d", board.ID), map[string]any{"name": "Tickets", "columns": []any{
+		map[string]any{"name": "All", "struct": tickets.ID, "query": ""},
+	}}, http.StatusOK, nil)
+	refMerge(a, prs.ID, pr2, "PR-2", "T-1")
+	a.call("GET", fmt.Sprintf("/api/taskboards/%d", board.ID), nil, http.StatusOK, &board)
+	counts := board.Columns[0].Cards.Referring[fmt.Sprint(t1)]
+	if len(counts) != 1 || counts[0].Name != "Pull Request" || counts[0].Total != 2 || len(counts[0].States) != 2 {
+		t.Errorf("T-1's card counts %+v, want 2 pull requests, one merged and one open", counts)
+	}
+	if len(board.Columns[0].Cards.Referring) != 1 {
+		t.Errorf("cards counting references: %v, want T-1's alone", board.Columns[0].Cards.Referring)
+	}
+
 	// A pull request naming no ticket starts no run.
 	refMerge(a, prs.ID, pr1, "PR-1", "T-1")
 	refMerge(a, prs.ID, pr2, "PR-2", "T-1")

@@ -506,7 +506,8 @@ repositories:
     record. The Records page's search reaches through it:
     `@ticket.state:open` finds the pull requests whose ticket is open, and
     `@ticket.<field>:…` searches the ticket's fields; a task board column's
-    query can say so too.
+    query can say so too. A task board's card of a ticket counts the
+    pull requests naming it, by state.
   - A copy of the referred struct on the same top board as an object
     picking a record can **follow** the reference: `follows: {object: Pull
     Request, attribute: ticket}` (and no `pick`). As each run takes the

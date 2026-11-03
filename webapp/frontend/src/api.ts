@@ -907,7 +907,12 @@ export type TaskCards = {
   // The run going on each record shown that has one, and why each the
   // board skips is stuck, by record id.
   runs: Record<string, CardRun | undefined>
+  // The records of other structs referring to each record shown that has
+  // any, by record id: how many of each struct, in all and in each state.
+  referring?: Record<string, ReferringCount[] | undefined>
 }
+
+export type ReferringCount = { name: string; attribute: string; total: number; states: { state: string; count: number }[] }
 
 // A record's run as its card shows it: one going on it, running or waiting
 // for a person, or the board's last, which left it stuck: it failed, was

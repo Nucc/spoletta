@@ -12472,3 +12472,17 @@ select.flow-owner:not([multiple]):not([size]):disabled {
 .edge-label-dim {
   opacity: 0.25;
 }
+
+/* What refers to a task board's record, such as a ticket's pull requests. */
+.task-card-referring {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.task-card-referring .record-ref {
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+}

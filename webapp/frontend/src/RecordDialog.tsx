@@ -13,7 +13,8 @@ import { RecordReferences, referencesTabLabel } from './RecordReferences'
 // Records of other structs referring to it have a tab too; see
 // RecordReferences.tsx.
 
-type Tab = 'fields' | 'history' | 'references'
+export type RecordTab = 'fields' | 'history' | 'references'
+type Tab = RecordTab
 
 type Field = {
   key: number

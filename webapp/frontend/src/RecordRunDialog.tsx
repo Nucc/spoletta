@@ -11,6 +11,7 @@ export function RecordRunDialog({
   struct,
   name,
   records,
+  taskBoard,
   onClose,
 }: {
   struct: number
@@ -18,6 +19,10 @@ export function RecordRunDialog({
   name: string
   // The records to start a run on each of, by id.
   records: number[]
+  // The task board whose card it was opened from, whose runs they are, its
+  // column counting its tries anew from them, and whether that column
+  // retries records on its own.
+  taskBoard?: { id: number; retries: boolean }
   onClose: () => void
 }) {
   const ref = useRef<HTMLDialogElement>(null)
@@ -51,7 +56,7 @@ export function RecordRunDialog({
     setStarting(true)
     setError(null)
     try {
-      setStarted(await startRecordRuns(struct, flow, records))
+      setStarted(await startRecordRuns(struct, flow, records, taskBoard?.id))
     } catch (err) {
       // The server's reason, without the request it answered.
       setError((err instanceof Error ? err.message : String(err)).replace(/^\w+ \S+: \d+ /, '').trim())
@@ -107,6 +112,7 @@ export function RecordRunDialog({
               <p className="panel-note">
                 {one ? 'The run' : 'Each run'} reads {one ? 'this record' : 'its record'} alone where the flow queries {name}, whatever its query
                 selects.
+                {taskBoard?.retries && ' Its column on the task board starts its retries anew from this run.'}
               </p>
               <fieldset className="record-run-flows">
                 <legend>Flow</legend>

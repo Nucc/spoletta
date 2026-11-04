@@ -50,6 +50,20 @@ package main
 // interrupted, stopped by a person or by a replica stopping without
 // RESUME_RUNS, leaves its record stuck as well, for a person to try again.
 //
+// A column may try its records again on its own (columnRetry), as one of
+// pull requests whose checks are still going would: a record whose run
+// failed, or ended done leaving it where it was, waits so many minutes
+// after that run ended, its card saying when, and goes again, so many times
+// in a row at most before it is stuck. Those tries are one round, so they
+// don't count toward boardRounds. A run interrupted, terminated or going
+// round too often is never tried again on its own.
+//
+// A person starting a run on a record from its card (record_runs.go with
+// the board named) starts one of the board's runs on it, by_hand: as with
+// trying it again, its rounds and its column's tries count anew, from that
+// run, so if it fails the column tries it again after its while, the first
+// of its tries, rather than the board starting it again at once.
+//
 // A board's runs are for whoever pressed Play (started_by, which runUser
 // reads), so their access, spending limits and connections apply; once
 // they are removed, the board stops playing and says why, and a column
@@ -199,10 +213,15 @@ func queryStates(n *searchNode) []string {
 }
 
 // What a card shows of a record's run: one going on it, running or waiting
-// for a person, or the board's last, which left it stuck, and why. Of one
-// going, when it started, and if its flow is one the board shows (of those
-// its runs' person may start on the records) and whoever reads the page
-// sees, its name and the processes whose steps are going or waiting.
+// for a person, or the board's last, which left it stuck, or to be tried
+// again (retrying) as its column says, and why. Of one going, when it
+// started, and if its flow is one the board shows (of those its runs'
+// person may start on the records) and whoever reads the page sees, its
+// name and the processes whose steps are going or waiting. Of one left,
+// how many times in a row its column tried the record again on its own,
+// and while it is to be tried again, how many milliseconds are left until
+// it is, by the database's clock, 0 once it is due (as the browser's clock
+// may differ from it, the card counts down from when it read this).
 type cardRun struct {
 	Run      int64      `json:"run"`
 	Flow     int64      `json:"flow"`
@@ -211,6 +230,8 @@ type cardRun struct {
 	Started  *time.Time `json:"started,omitempty"`
 	FlowName string     `json:"flowName,omitempty"`
 	Steps    []string   `json:"steps,omitempty"`
+	Retried  int        `json:"retried,omitempty"`
+	RetryIn  int64      `json:"retryIn,omitempty"`
 }
 
 // When each run started and the processes whose steps are going or
@@ -240,12 +261,14 @@ func goingRunSteps(ctx context.Context, db *sql.DB, runs []int64) (map[int64]tim
 
 // A run a board started on a record: the flow it ran, how it is or ended,
 // the state the record was in as it started, when it started and finished,
-// and when a person asked for the record to go again after it, if they did.
+// when a person asked for the record to go again after it, if they did, and
+// whether a person started it from the record's card.
 type boardPass struct {
 	run, flow         int64
 	status, state     string
 	created           time.Time
 	finished, retried *time.Time
+	byHand            bool
 }
 
 // The runs a board started on a record, oldest first, with the record's
@@ -256,39 +279,110 @@ type recordPasses struct {
 	edited *time.Time
 }
 
-// Why the record is stuck on a column whose flow is flow, and the board's
-// latest run on it; "" if it isn't. A person trying it again, or
-// correcting it, after that run ended frees it, and starts its rounds
-// anew.
-func (rp *recordPasses) stuck(flow int64) (string, boardPass) {
+// What the board makes of a record a column holds, from the runs it
+// started on it: why it skips the record, "" if it doesn't; its latest run;
+// how many times in a row the column tried it again on its own; and, when
+// the column is to try it again, how its run left it and when it does. A
+// record waiting to be tried again is skipped but not stuck, and its why
+// says how its run left it; one due to be is skipped no more.
+type recordHold struct {
+	why      string
+	last     boardPass
+	retried  int
+	retrying string
+	retryAt  *time.Time
+}
+
+// What the board makes of the record on a column whose flow is flow, which
+// tries a record again as retry says (never when nil), at now, the
+// database's time. A person trying it again, or correcting it, after its
+// latest run ended frees it, and starts its rounds and tries anew; one
+// starting a run on it from its card starts them anew from that run.
+//
+// A run that failed, or ended done leaving the record where it was, has it
+// stuck, unless the column tries it again: then it waits retry's while
+// after that run ended and goes again, so many times in a row at most. Those
+// runs from the same state by the same flow are one round, so a column
+// trying a record again more often than boardRounds isn't cut short, while
+// flows handing it back and forth still are.
+func (rp *recordPasses) stuck(flow int64, retry *columnRetry, now time.Time) recordHold {
 	p := rp.passes[len(rp.passes)-1]
 	if p.status == runRunning {
-		return "", p
+		return recordHold{last: p}
 	}
 	touched := rp.edited
-	for _, q := range rp.passes {
-		if q.retried != nil && (touched == nil || q.retried.After(*touched)) {
-			touched = q.retried
+	touch := func(at *time.Time) {
+		if at != nil && (touched == nil || at.After(*touched)) {
+			touched = at
 		}
+	}
+	for _, q := range rp.passes {
+		touch(q.retried)
+		if q.byHand {
+			touch(&q.created)
+		}
+	}
+	// A run started by hand counts, as the touch is its start.
+	since := func(q boardPass) bool { return touched == nil || !q.created.Before(*touched) }
+	// The latest runs in a row from its state by the column's flow since a
+	// person touched it: the first, then those trying it again.
+	streak := 0
+	for i := len(rp.passes) - 1; i >= 0; i-- {
+		q := rp.passes[i]
+		if q.state != rp.state || q.flow != flow || !since(q) {
+			break
+		}
+		streak++
 	}
 	rounds := 0
-	for _, q := range rp.passes {
-		if q.state == rp.state && (touched == nil || q.created.After(*touched)) {
-			rounds++
+	for i, q := range rp.passes {
+		if q.state != rp.state || !since(q) {
+			continue
 		}
+		if i > 0 {
+			if b := rp.passes[i-1]; b.state == q.state && b.flow == q.flow && since(b) {
+				// Trying it again in place.
+				continue
+			}
+		}
+		rounds++
 	}
+	h := recordHold{last: p, retried: max(streak-1, 0)}
 	switch {
 	case rounds >= boardRounds:
-		return stuckRounds, p
+		h.why = stuckRounds
+		return h
 	case touched != nil && p.finished != nil && touched.After(*p.finished):
-		return "", p
+		return h
 	case p.state != rp.state, p.flow != flow:
 		// It moved on, or the column runs another flow now.
-		return "", p
+		return h
 	case p.status == runDone:
-		return stuckUnmoved, p
+		h.why = stuckUnmoved
+	default:
+		h.why = p.status
 	}
-	return p.status, p
+	if retry == nil || h.why != stuckUnmoved && h.why != runFailed || h.retried >= retry.Times {
+		return h
+	}
+	ended := p.created
+	if p.finished != nil {
+		ended = *p.finished
+	}
+	at := ended.Add(retry.wait())
+	h.retrying, h.retryAt = h.why, &at
+	if !now.Before(at) {
+		h.why = ""
+	}
+	return h
+}
+
+// The database's time, which the board keeps when to try records again
+// by, as replicas' clocks may differ.
+func dbNow(ctx context.Context, db querier) (time.Time, error) {
+	var now time.Time
+	err := db.QueryRowContext(ctx, "SELECT CURRENT_TIMESTAMP(3)").Scan(&now)
+	return now, err
 }
 
 // The runs the board started on each of the records, by record id; a
@@ -302,7 +396,7 @@ func boardPasses(ctx context.Context, db *sql.DB, board int64, records []int64) 
 	for _, r := range records {
 		args = append(args, r)
 	}
-	err := scanAll(ctx, db, `SELECT t.record_id, t.run_id, r.flow_id, r.status, t.state, t.created_at, r.finished_at, t.retried_at, sr.state, sr.edited_at
+	err := scanAll(ctx, db, `SELECT t.record_id, t.run_id, r.flow_id, r.status, t.state, t.created_at, r.finished_at, t.retried_at, t.by_hand, sr.state, sr.edited_at
 		FROM task_board_runs t JOIN runs r ON r.id = t.run_id JOIN shared_records sr ON sr.id = t.record_id
 		WHERE t.board_id = ? AND t.record_id IN (?`+strings.Repeat(", ?", len(records)-1)+`) ORDER BY t.record_id, t.run_id`,
 		func(rows *sql.Rows) error {
@@ -310,7 +404,7 @@ func boardPasses(ctx context.Context, db *sql.DB, board int64, records []int64) 
 			var p boardPass
 			var finished, retried, edited sql.NullTime
 			var state string
-			if err := rows.Scan(&id, &p.run, &p.flow, &p.status, &p.state, &p.created, &finished, &retried, &state, &edited); err != nil {
+			if err := rows.Scan(&id, &p.run, &p.flow, &p.status, &p.state, &p.created, &finished, &retried, &p.byHand, &state, &edited); err != nil {
 				return err
 			}
 			p.finished, p.retried = nullTime(finished), nullTime(retried)
@@ -560,6 +654,10 @@ func playTurn(ctx context.Context, db *sql.DB, eng *engine, signIn bool, board i
 	if err != nil {
 		return err
 	}
+	now, err := dbNow(ctx, db)
+	if err != nil {
+		return err
+	}
 	// What each store's columns need, read once however many columns hold
 	// its records.
 	flows := map[int64][]*recordFlow{}
@@ -628,10 +726,8 @@ func playTurn(ctx context.Context, db *sql.DB, eng *engine, signIn bool, board i
 				if room == 0 {
 					break
 				}
-				if rp := passes[r.ID]; rp != nil {
-					if why, _ := rp.stuck(r.flow.ID); why != "" {
-						continue
-					}
+				if rp := passes[r.ID]; rp != nil && rp.stuck(r.flow.ID, c.Retry, now).why != "" {
+					continue
 				}
 				started, more, err := startBoardRun(ctx, db, eng, board, r.flow, root, r.ID, r.State, runner)
 				if err != nil {
@@ -781,6 +877,10 @@ func fillPlay(ctx context.Context, db *sql.DB, u *user, b *taskBoard, structs ma
 	for _, n := range mine {
 		b.Running += n
 	}
+	now, err := dbNow(ctx, db)
+	if err != nil {
+		return err
+	}
 	flows := map[int64][]*recordFlow{}
 	going := map[int64]map[int64][]goingRun{}
 	// The cards of records with runs going, filled in once every column's are
@@ -894,9 +994,18 @@ func fillPlay(ctx context.Context, db *sql.DB, u *user, b *taskBoard, structs ma
 			return err
 		}
 		for id, rp := range passes {
-			if why, p := rp.stuck(idle[id]); why != "" {
-				c.Cards.Runs[strconv.FormatInt(id, 10)] = cardRun{Run: p.run, Flow: p.flow, Status: "stuck", Why: why}
+			h := rp.stuck(idle[id], c.Retry, now)
+			cr := cardRun{Run: h.last.run, Flow: h.last.flow, Status: "stuck", Why: h.why, Retried: h.retried}
+			switch {
+			case h.retrying != "":
+				// Due, it shows as about to be tried again until its run
+				// starts, or the board plays again.
+				cr.Status, cr.Why = "retrying", h.retrying
+				cr.RetryIn = max(h.retryAt.Sub(now), 0).Milliseconds()
+			case h.why == "":
+				continue
 			}
+			c.Cards.Runs[strconv.FormatInt(id, 10)] = cr
 		}
 	}
 	started, steps, err := goingRunSteps(ctx, db, goingRuns)
@@ -957,8 +1066,9 @@ func registerTaskBoardPlayRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	// Frees the records named, {"records": [1, 2]}, which the board skips
-	// as stuck, so it starts their column's flow on them again, from its
-	// next turn, at once.
+	// as stuck or waiting to be tried again, so it starts their column's
+	// flow on them again, from its next turn, at once, their rounds and
+	// tries counted anew.
 	mux.HandleFunc("POST /api/taskboards/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
 		b, ok := taskBoardOf(w, r, db)
 		if !ok {

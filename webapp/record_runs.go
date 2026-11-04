@@ -401,8 +401,11 @@ func recordIDs(s string) ([]int64, error) {
 }
 
 // Starts a run of the flow on the record, for the user who did, on the
-// version the flow published, if any; see startRun.
-func startRecordRun(ctx context.Context, db *sql.DB, eng *engine, flow, record int64, startedBy *int64) (int64, error) {
+// version the flow published, if any; see startRun. Started from the
+// record's card on a task board, board (else 0), it is one of the board's
+// runs on it, by hand, from the state the record is in, so the board counts
+// its tries anew from it (see taskboard_play.go).
+func startRecordRun(ctx context.Context, db *sql.DB, eng *engine, flow, record, board int64, startedBy *int64) (int64, error) {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return 0, err
@@ -416,6 +419,12 @@ func startRecordRun(ctx context.Context, db *sql.DB, eng *engine, flow, record i
 		return 0, err
 	}
 	nr.record = record
+	if board != 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO task_board_runs (run_id, board_id, record_id, state, by_hand)
+			SELECT ?, ?, id, state, TRUE FROM shared_records WHERE id = ?`, nr.id, board, record); err != nil {
+			return 0, err
+		}
+	}
 	if err := takeRecords(ctx, tx, flow, &nr); err != nil {
 		return 0, err
 	}
@@ -489,15 +498,18 @@ func registerRecordRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 	})
 
 	// Starts a run of the flow on each record named, {"flow": 1, "records":
-	// [2, 3]}, returning the runs in the records' order.
+	// [2, 3]}, returning the runs in the records' order. From a record's
+	// card on a task board, "taskBoard" names the board, one whoever asks
+	// sees, whose runs on the records they are, by hand.
 	mux.HandleFunc("POST /api/structs/{id}/records/runs", func(w http.ResponseWriter, r *http.Request) {
 		store, ok := storeFor(w, r)
 		if !ok {
 			return
 		}
 		var body struct {
-			Flow    int64   `json:"flow"`
-			Records []int64 `json:"records"`
+			Flow      int64   `json:"flow"`
+			Records   []int64 `json:"records"`
+			TaskBoard int64   `json:"taskBoard"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -512,6 +524,17 @@ func registerRecordRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		ctx := r.Context()
+		if body.TaskBoard != 0 {
+			_, err := visibleTaskBoard(ctx, db, requestUser(r), body.TaskBoard)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				http.Error(w, "task board not found", http.StatusNotFound)
+				return
+			case err != nil:
+				serverError(w, err)
+				return
+			}
+		}
 		fs, err := recordFlows(ctx, db, requestUser(r), store)
 		if err != nil {
 			serverError(w, err)
@@ -539,7 +562,7 @@ func registerRecordRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 				continue
 			}
 			started = append(started, id)
-			rid, err := startRecordRun(ctx, db, eng, body.Flow, id, requestUserID(r))
+			rid, err := startRecordRun(ctx, db, eng, body.Flow, id, body.TaskBoard, requestUserID(r))
 			var none *nothingToTake
 			if errors.As(err, &none) {
 				http.Error(w, "nothing to run on: "+none.Error(), http.StatusConflict)

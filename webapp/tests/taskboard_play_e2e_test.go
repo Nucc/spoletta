@@ -5,7 +5,8 @@ package tests
 // record, as many at once as it and each column allow, the rightmost
 // columns first, until records reach a state no flow takes or a column
 // letting them rest. A record its run leaves where it was is stuck until a
-// person tries it again.
+// person tries it again, or its column tries it again on its own so many
+// times first.
 
 import (
 	"context"
@@ -33,12 +34,16 @@ type playBoard struct {
 }
 
 type playColumn struct {
-	Name        string `json:"name"`
-	Struct      *int64 `json:"struct"`
-	Query       string `json:"query"`
-	Flow        *int64 `json:"flow"`
-	FlowName    string `json:"flowName"`
-	MaxRuns     *int   `json:"maxRuns"`
+	Name     string `json:"name"`
+	Struct   *int64 `json:"struct"`
+	Query    string `json:"query"`
+	Flow     *int64 `json:"flow"`
+	FlowName string `json:"flowName"`
+	MaxRuns  *int   `json:"maxRuns"`
+	Retry    *struct {
+		Every int `json:"every"`
+		Times int `json:"times"`
+	} `json:"retry"`
 	FlowProblem string `json:"flowProblem"`
 	ByState     []struct {
 		State string `json:"state"`
@@ -63,6 +68,8 @@ type playRun struct {
 	Started  *time.Time `json:"started"`
 	FlowName string     `json:"flowName"`
 	Steps    []string   `json:"steps"`
+	Retried  int        `json:"retried"`
+	RetryIn  int64      `json:"retryIn"`
 }
 
 // The flows the column shows taking each state, as "state: flow, flow",
@@ -102,20 +109,21 @@ func movingFlow(a *app, s structFlow, name, from, to string) flow {
 }
 
 // What the board's scripts were given, in order, as "Process key", and
-// what they do: hold until released, fail, or hand back another bug than
-// the one given, by key.
+// what they do: hold until released, fail, fail so many times more, or
+// hand back another bug than the one given, by key.
 type playScripts struct {
 	mu    sync.Mutex
 	calls []string
 	hold  map[string]chan struct{}
 	fail  map[string]bool
+	flaky map[string]int
 	other map[string]bool
 	// How many are going at once at most, and now.
 	most, now int
 }
 
 func newPlayScripts(a *app, names ...string) *playScripts {
-	ps := &playScripts{hold: map[string]chan struct{}{}, fail: map[string]bool{}, other: map[string]bool{}}
+	ps := &playScripts{hold: map[string]chan struct{}{}, fail: map[string]bool{}, flaky: map[string]int{}, other: map[string]bool{}}
 	for _, name := range names {
 		a.worker.onScript(name, func(ctx context.Context, run scriptRun) runResult {
 			var records []json.RawMessage
@@ -134,6 +142,10 @@ func newPlayScripts(a *app, names ...string) *playScripts {
 			ps.now++
 			ps.most = max(ps.most, ps.now)
 			wait, fail, other := ps.hold[fields.ID], ps.fail[fields.ID], ps.other[fields.ID]
+			if ps.flaky[fields.ID] > 0 {
+				ps.flaky[fields.ID]--
+				fail = true
+			}
 			ps.mu.Unlock()
 			defer func() {
 				ps.mu.Lock()
@@ -558,5 +570,141 @@ func TestTaskBoardLimits(t *testing.T) {
 	b = waitBoard(a, b.ID, "the board", func(playBoard) bool { return true })
 	if b.Columns[1].FlowProblem != "trash" || b.Columns[0].FlowProblem != "" || !b.Playing {
 		t.Errorf("with Fix in the trash, the board is %+v", b)
+	}
+}
+
+// How many of the calls the scripts were given are of the process on the
+// record with the key.
+func (ps *playScripts) count(call string) int {
+	n := 0
+	for _, c := range ps.seen() {
+		if c == call {
+			n++
+		}
+	}
+	return n
+}
+
+// A column trying its records again on its own: one whose run fails waits
+// its while and goes again, its card saying so, until its run moves it on
+// or it was tried again as many times as the column says, more than a
+// record goes round the board's flows, and then it is stuck. A person
+// running a flow on it from its card, or trying it again, starts its tries
+// anew, the run they started being the first.
+func TestTaskBoardTriesRecordsAgain(t *testing.T) {
+	a := newApp(t)
+	s := taskStruct(a, "Pull request", nil, "id", []string{"title"}, "draft", "ready")
+	check := movingFlow(a, s, "Check", "draft", "ready")
+	ps := newPlayScripts(a, "Check")
+	var b playBoard
+	a.call("POST", "/api/taskboards", map[string]any{"name": "Pull requests"}, http.StatusCreated, &b)
+	t.Cleanup(func() { a.do("POST", fmt.Sprintf("/api/taskboards/%d/pause", b.ID), nil) })
+	path := fmt.Sprintf("/api/taskboards/%d", b.ID)
+	// Each of its minutes a second, as the tests' webapps count them.
+	draft := func(retry any) map[string]any {
+		return map[string]any{"name": "Draft", "struct": s.ID, "query": "state:draft", "retry": retry}
+	}
+	ready := map[string]any{"name": "Ready", "struct": s.ID, "query": "state:ready"}
+
+	for _, c := range []struct {
+		retry any
+		want  string
+	}{
+		{map[string]any{"every": 0, "times": 3}, "from 1 to 1440 minutes"},
+		{map[string]any{"every": 1, "times": 0}, "from 1 to 100 times"},
+		{map[string]any{"every": 1, "times": 101}, "from 1 to 100 times"},
+	} {
+		a.refused("PUT", path, map[string]any{"name": "Pull requests", "columns": []any{draft(c.retry)}}, http.StatusBadRequest, c.want)
+	}
+	resting := draft(map[string]any{"every": 1, "times": 3})
+	resting["maxRuns"] = 0
+	a.refused("PUT", path, map[string]any{"name": "Pull requests", "columns": []any{resting}}, http.StatusBadRequest, "rest, so it tries none again")
+
+	// More tries than a record may go round the board's flows.
+	const times = 5
+	a.call("PUT", path, map[string]any{"name": "Pull requests", "maxRuns": 2, "columns": []any{
+		draft(map[string]any{"every": 1, "times": times}), ready,
+	}}, http.StatusOK, &b)
+	if r := b.Columns[0].Retry; r == nil || r.Every != 1 || r.Times != times || b.Columns[1].Retry != nil {
+		t.Fatalf("saved columns retrying %+v and %+v", b.Columns[0].Retry, b.Columns[1].Retry)
+	}
+
+	ps.set(func(ps *playScripts) { ps.fail["PR-1"], ps.flaky["PR-2"] = true, 2 })
+	taskRecord(a, s.ID, map[string]any{"id": "PR-1", "title": "Checks never pass"}, "draft")
+	taskRecord(a, s.ID, map[string]any{"id": "PR-2", "title": "Checks pass at last"}, "draft")
+	a.call("POST", fmt.Sprintf("/api/taskboards/%d/play", b.ID), nil, http.StatusOK, nil)
+
+	// Its card says it is to be tried again, after its run, and when.
+	b = waitBoard(a, b.ID, "PR-1 to be tried again", func(b playBoard) bool {
+		_, run := playCardRun(b, "PR-1")
+		return run.Status == "retrying"
+	})
+	// In at most its column's while, a second here.
+	if col, run := playCardRun(b, "PR-1"); col != "Draft" || run.Why != "failed" || run.RetryIn < 0 || run.RetryIn > 1000 || run.Run == 0 {
+		t.Errorf("PR-1 shows in %q as %+v, want in Draft to be tried again within a second after its run failed", col, run)
+	}
+
+	// Failing twice, it goes on to Ready the third time.
+	waitBoard(a, b.ID, "PR-2 ready", func(b playBoard) bool {
+		col, _ := playCardRun(b, "PR-2")
+		return col == "Ready"
+	})
+	if n := ps.count("Check PR-2"); n != 3 {
+		t.Errorf("checked PR-2 %d times, want 3: twice failing, then passing", n)
+	}
+
+	// Tried again as many times as its column says, it is stuck.
+	b = waitBoard(a, b.ID, "PR-1 stuck", func(b playBoard) bool {
+		_, run := playCardRun(b, "PR-1")
+		return run.Status == "stuck"
+	})
+	if col, run := playCardRun(b, "PR-1"); col != "Draft" || run.Why != "failed" || run.Retried != times || run.RetryIn != 0 {
+		t.Errorf("PR-1 shows in %q as %+v, want stuck in Draft as failed, tried again %d times", col, run, times)
+	}
+	if n := ps.count("Check PR-1"); n != times+1 {
+		t.Errorf("checked PR-1 %d times, want %d: once, then %d times again", n, times+1, times)
+	}
+	time.Sleep(2500 * time.Millisecond)
+	if n := ps.count("Check PR-1"); n != times+1 {
+		t.Fatalf("checked PR-1 %d times; a stuck record is started no more", n)
+	}
+
+	// Run by hand from its card, that run is the first of its column's
+	// tries anew: failing, it is tried again after its while, as many
+	// times as the column says, rather than started again at once.
+	var r1 int64
+	for id, r := range sharedRecords(a, s.ID) {
+		if id == "PR-1" {
+			r1 = r.ID
+		}
+	}
+	runs := fmt.Sprintf("/api/structs/%d/records/runs", s.ID)
+	a.refused("POST", runs, map[string]any{"flow": check.ID, "records": []int64{r1}, "taskBoard": b.ID + 1000}, http.StatusNotFound, "task board not found")
+	var hand []run
+	a.call("POST", runs, map[string]any{"flow": check.ID, "records": []int64{r1}, "taskBoard": b.ID}, http.StatusCreated, &hand)
+	b = waitBoard(a, b.ID, "PR-1 to be tried again after the run by hand", func(b playBoard) bool {
+		_, run := playCardRun(b, "PR-1")
+		return run.Status == "retrying" && run.Run == hand[0].ID
+	})
+	if _, run := playCardRun(b, "PR-1"); run.Retried != 0 || ps.count("Check PR-1") != times+2 {
+		t.Errorf("after the run by hand PR-1 shows as %+v, checked %d times; want tried again none, checked %d", run, ps.count("Check PR-1"), times+2)
+	}
+	logLineWith(t, a.runLogs(hand[0].ID, 0), `from its card on the task board "Pull requests"`)
+	b = waitBoard(a, b.ID, "PR-1 stuck again", func(b playBoard) bool {
+		_, run := playCardRun(b, "PR-1")
+		return run.Status == "stuck"
+	})
+	if _, run := playCardRun(b, "PR-1"); run.Retried != times || ps.count("Check PR-1") != 2*times+2 {
+		t.Errorf("PR-1 shows as %+v, checked %d times; want stuck tried again %d times since the run by hand, checked %d", run, ps.count("Check PR-1"), times, 2*times+2)
+	}
+
+	// Tried again by a person, its column's tries start anew.
+	a.call("POST", fmt.Sprintf("/api/taskboards/%d/retry", b.ID), map[string]any{"records": []int64{r1}}, http.StatusOK, nil)
+	b = waitBoard(a, b.ID, "PR-1 to be tried again anew", func(b playBoard) bool {
+		_, run := playCardRun(b, "PR-1")
+		return run.Status == "retrying" && ps.count("Check PR-1") == 2*times+3
+	})
+	if _, run := playCardRun(b, "PR-1"); run.Retried != 0 {
+		t.Errorf("PR-1 was tried again %d times since a person did, want none", run.Retried)
 	}
 }

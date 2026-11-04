@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   addSharedRecord,
   deleteSharedRecords,
@@ -21,6 +21,7 @@ import {
   type ReferringCount,
   type TaskColumn,
   type TaskColumnEdit,
+  type ColumnRetry,
   type TaskStruct,
 } from './api'
 import { type Json } from './Data'
@@ -33,6 +34,7 @@ import {
   PencilIcon,
   PlayIcon,
   PlusIcon,
+  RerunIcon,
   SidebarIcon,
   TaskBoardIcon,
   TransitionIcon,
@@ -74,6 +76,7 @@ const editOf = (c: TaskColumn): TaskColumnEdit => ({
   sort: c.sort,
   flow: c.flow,
   maxRuns: c.maxRuns,
+  retry: c.retry,
 })
 
 // What a board's cards of a struct show unless told: the record's key as
@@ -116,8 +119,9 @@ const linkOf = (v: string | null): string | null => (v !== null && /^https?:\/\/
 // none starts. A card shows the run going on its record, its flow, the
 // steps going and for how long, asked for every couple of seconds while
 // the board plays or runs go, or that the board skips it as stuck and why,
-// to try again. Over the columns, how many records of the whole board run,
-// wait or are stuck.
+// to try again, or when its column tries it again on its own. Over the
+// columns, how many records of the whole board run, wait, are to be tried
+// again or are stuck.
 export default function TaskBoardPage({ id }: { id: number }) {
   const [board, setBoard] = useState<TaskBoard | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -128,7 +132,9 @@ export default function TaskBoardPage({ id }: { id: number }) {
   // on its fields or its history.
   const [opened, setOpened] = useState<{ column: number; record: SharedRecord | null; tab?: RecordTab } | null>(null)
   // The record a flow is being started on.
-  const [running, setRunning] = useState<{ struct: number; name: string; record: number } | null>(null)
+  // The record a flow is to be run on from its card, and whether its column
+  // retries records on its own.
+  const [running, setRunning] = useState<{ struct: number; name: string; record: number; retries: boolean } | null>(null)
   // Whether the board's settings are open.
   const [setting, setSetting] = useState(false)
   // Whether columns are being laid out from a struct's states.
@@ -188,7 +194,8 @@ export default function TaskBoardPage({ id }: { id: number }) {
 
   const busy =
     board !== null &&
-    (board.playing || board.columns.some((c) => Object.values(c.cards?.runs ?? {}).some((r) => r && r.status !== 'stuck')))
+    (board.playing ||
+      board.columns.some((c) => Object.values(c.cards?.runs ?? {}).some((r) => r && (r.status === 'running' || r.status === 'waiting'))))
   useEffect(() => {
     const timer = window.setInterval(load, busy ? BUSY_REFRESH_MS : REFRESH_MS)
     return () => window.clearInterval(timer)
@@ -252,8 +259,9 @@ export default function TaskBoardPage({ id }: { id: number }) {
     return () => observer.disconnect()
   }, [flowsShown, columnCount, railHidden])
   // Saves the flow the strip's picker picked for the column, by its place,
-  // as its dialog saves it: a column resting names no flow, and one
-  // resting no more works on as many records as the board lets it.
+  // as its dialog saves it: a column resting names no flow and tries none of
+  // its records again, and one resting no more works on as many records as
+  // the board lets it.
   const pickFlow = (at: number, choice: FlowChoice) =>
     change(() =>
       saveTaskBoard(id, {
@@ -261,7 +269,12 @@ export default function TaskBoardPage({ id }: { id: number }) {
         columns: board!.columns.map((c, i) =>
           i !== at
             ? editOf(c)
-            : { ...editOf(c), flow: choice.rest ? null : choice.flow, maxRuns: choice.rest ? 0 : c.maxRuns === 0 ? null : c.maxRuns },
+            : {
+                ...editOf(c),
+                flow: choice.rest ? null : choice.flow,
+                maxRuns: choice.rest ? 0 : c.maxRuns === 0 ? null : c.maxRuns,
+                retry: choice.rest ? null : c.retry,
+              },
         ),
       }),
     )
@@ -448,9 +461,10 @@ export default function TaskBoardPage({ id }: { id: number }) {
                     key={i}
                     column={c}
                     card={c.cards ? cardOf(board, c, c.cards) : null}
+                    playing={board.playing}
                     onEdit={() => setEditing(i)}
                     onOpen={(record, tab) => setOpened({ column: i, record, tab })}
-                    onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record })}
+                    onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record, retries: c.retry !== null })}
                     onRetry={retry}
                   />
                 ))}
@@ -532,6 +546,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
           struct={running.struct}
           name={running.name}
           records={[running.record]}
+          taskBoard={{ id, retries: running.retries }}
           onClose={() => (setRunning(null), load())}
         />
       )}
@@ -670,21 +685,23 @@ function flowProblemOf(c: TaskColumn, runner: string) {
 }
 
 // How the board's work goes, over its columns, as some may be scrolled out
-// of sight: its records running, waiting for a person and stuck, each
-// counted once though two columns hold it.
+// of sight: its records running, waiting for a person, to be tried again
+// and stuck, each counted once though two columns hold it.
 function BoardWork({ columns }: { columns: TaskColumn[] }) {
   const status = new Map<string, CardRun['status']>()
   for (const c of columns) for (const [id, r] of Object.entries(c.cards?.runs ?? {})) if (r) status.set(`${c.struct}:${id}`, r.status)
   const all = [...status.values()]
   const running = all.filter((s) => s === 'running').length
   const waiting = all.filter((s) => s === 'waiting').length
+  const retrying = all.filter((s) => s === 'retrying').length
   const stuck = all.filter((s) => s === 'stuck').length
   return (
     <p className="task-board-work">
       {running > 0 && <span className="running">{running} running</span>}
       {waiting > 0 && <span className="waiting">{waiting} waiting for a person</span>}
+      {retrying > 0 && <span className="retrying">{retrying} retrying</span>}
       {stuck > 0 && <span className="stuck">{stuck} stuck</span>}
-      {running + waiting + stuck === 0 && <span>Nothing running</span>}
+      {running + waiting + retrying + stuck === 0 && <span>Nothing running</span>}
     </p>
   )
 }
@@ -694,6 +711,7 @@ function BoardWork({ columns }: { columns: TaskColumn[] }) {
 function Column({
   column: c,
   card,
+  playing,
   onEdit,
   onOpen,
   onRun,
@@ -702,6 +720,8 @@ function Column({
   column: TaskColumn
   // What the board's cards of its struct show, while it shows its records.
   card: TaskCard | null
+  // Whether the board plays, retrying records as their columns say.
+  playing: boolean
   onEdit: () => void
   // Opens a record of it, or a new one for none, on its fields or history.
   onOpen: (record: SharedRecord | null, tab?: RecordTab) => void
@@ -755,6 +775,8 @@ function Column({
                     cards={cards}
                     card={card ?? defaultCard(cards.fields, cards.key)}
                     run={cards.runs[r.id]}
+                    retry={c.retry}
+                    playing={playing}
                     onOpen={() => onOpen(r)}
                     onHistory={() => onOpen(r, 'history')}
                     referring={cards.referring?.[r.id]}
@@ -796,15 +818,26 @@ const STUCK: Record<NonNullable<CardRun['why']>, [string, string]> = {
 }
 
 // The run going on a card's record, linked: its flow and the steps going in
-// it, if the board shows its flow, and for how long; or why the board skips
-// it as stuck, with the run that left it so and trying it again.
-function CardWork({ run, onRetry }: { run: CardRun; onRetry: () => void }) {
+// it, if the board shows its flow, and for how long; or, of the run that left
+// it, when its column retries it, counting down, or why the board skips it as
+// stuck, and starting it again at once.
+function CardWork({
+  run,
+  retry,
+  playing,
+  onRetry,
+}: {
+  run: CardRun
+  retry: ColumnRetry | null
+  playing: boolean
+  onRetry: () => void
+}) {
   const link = (
     <a href={`#/flows/${run.flow}/runs/${run.run}`} title="Open the run on its flow's board">
       run #{run.run}
     </a>
   )
-  if (run.status !== 'stuck') {
+  if (run.status === 'running' || run.status === 'waiting') {
     const steps = run.steps ?? []
     return (
       <div className={`task-card-work ${run.status}`}>
@@ -826,18 +859,102 @@ function CardWork({ run, onRetry }: { run: CardRun; onRetry: () => void }) {
     )
   }
   const [short, full] = STUCK[run.why ?? 'failed']
+  // How many times in a row its column retried it on its own.
+  const retried = run.retried ?? 0
+  if (run.status === 'retrying') {
+    return <RetryWork run={run} retry={retry} playing={playing} short={short} link={link} onRetry={onRetry} />
+  }
+  // Whether it is stuck as its column retried it as often as it may.
+  const spent = retry !== null && retried >= retry.times
+  const tried = `retried ${retried} ${retried === 1 ? 'time' : 'times'}`
   return (
     <div className="task-card-work stuck">
-      <span className="task-card-work-status" title={full}>
+      <span
+        className="task-card-work-status"
+        title={retried > 0 ? `${full} Its column ${tried}${spent ? ', as often as it may' : ''}.` : full}
+      >
         <AlertIcon />
         Stuck: {short}
       </span>
+      {retried > 0 && <span>{spent ? `no retries left (${retried} of ${retry.times})` : tried}</span>}
       {link}
       <button className="task-card-retry" onClick={onRetry} title="Start its column's flow on it again, from the board's next turn">
         Try again
       </button>
     </div>
   )
+}
+
+// A card's record its column retries: how long until it does, counting down
+// each second, and which retry it is, over how its run left it, the run and
+// retrying it at once. While the board is paused nothing is retried, so it
+// says so, and when the retry falls due. The server says how long is left
+// rather than when, as this browser's clock may differ from its own, so the
+// countdown runs from when the board was read.
+function RetryWork({
+  run,
+  retry,
+  playing,
+  short,
+  link,
+  onRetry,
+}: {
+  run: CardRun
+  retry: ColumnRetry | null
+  playing: boolean
+  short: string
+  link: ReactNode
+  onRetry: () => void
+}) {
+  // A board read anew gives a new run, so each read sets the time again.
+  const due = useMemo(() => Date.now() + (run.retryIn ?? 0), [run])
+  const at = new Date(due).toISOString()
+  const now = useTick()
+  const left = Math.max(0, due - now)
+  const clock = (
+    <time className="task-card-countdown" dateTime={at}>
+      {countdown(left)}
+    </time>
+  )
+  const which = retry ? `retry ${(run.retried ?? 0) + 1} of ${retry.times}` : ''
+  const why = run.why === 'unmoved' ? 'Its run ended done leaving the record in the state it took it in.' : 'Its run failed.'
+  const when = `Its column retries it at ${formatTime(at)}${which && `, ${which}`}${playing ? '' : ', once the board plays again'}.`
+  return (
+    <div className="task-card-work retrying">
+      <span className="task-card-work-status" title={`${why} ${when}`}>
+        <RerunIcon />
+        {playing && left > 0 && <>Retry in {clock}</>}
+        {playing && left === 0 && 'Retrying…'}
+        {!playing && left > 0 && <>Paused · retry due in {clock}</>}
+        {!playing && left === 0 && 'Paused · retry due now'}
+      </span>
+      {which && <span className="task-card-retry-count">{which}</span>}
+      <span className="task-card-work-break" aria-hidden />
+      <span>{short}</span>
+      {link}
+      <button className="task-card-retry" onClick={onRetry} title="Start its column's flow on it now, from the board's next turn">
+        Retry now
+      </button>
+    </div>
+  )
+}
+
+// The time now, again each second, for counting down.
+function useTick(): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [])
+  return now
+}
+
+// How long is left, as a countdown reads: 2:41, or 1h 05m from an hour.
+function countdown(ms: number): string {
+  const s = Math.ceil(ms / 1000)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
 // A record as a card, showing what the board picks of its struct's: the
@@ -854,6 +971,8 @@ function Card({
   cards,
   card,
   run: work,
+  retry,
+  playing,
   referring,
   onOpen,
   onHistory,
@@ -865,6 +984,10 @@ function Card({
   cards: TaskCards
   card: TaskCard
   run?: CardRun
+  // How its column tries its records again on its own, if it does, and
+  // whether the board plays, retrying them.
+  retry: ColumnRetry | null
+  playing: boolean
   // What refers to it, such as a ticket's pull requests; see references.go.
   referring?: ReferringCount[]
   onOpen: () => void
@@ -937,7 +1060,7 @@ function Card({
           ))}
         </div>
       )}
-      {work && <CardWork run={work} onRetry={onRetry} />}
+      {work && <CardWork run={work} retry={retry} playing={playing} onRetry={onRetry} />}
       <div className="task-card-actions">
         <button className="icon-button" aria-label={`Show how ${id} got here`} title="Show how this record got here" onClick={onHistory}>
           <HistoryIcon />
@@ -1183,6 +1306,11 @@ function ColumnDialog({
   // The flow it gives its records to; none for the one taking each state.
   const [flow, setFlow] = useState<number | null>(column?.flow ?? null)
   const [maxRuns, setMaxRuns] = useState<number | null>(column?.maxRuns ?? null)
+  // Whether it tries a record again on its own when its run fails or leaves
+  // it here, every so many minutes, at most so many times, as typed.
+  const [retrying, setRetrying] = useState(column?.retry != null)
+  const [every, setEvery] = useState(String(column?.retry?.every ?? RETRY.every))
+  const [times, setTimes] = useState(String(column?.retry?.times ?? RETRY.times))
   // The flows whoever changes it may start on the struct's records.
   const [flows, setFlows] = useState<RecordFlow[] | null>(null)
   const [structs, setStructs] = useState<TaskStruct[] | null>(null)
@@ -1276,7 +1404,8 @@ function ColumnDialog({
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!named || struct === null) return
-    const edit = { name: named, struct, query: query.trim(), sort, flow, maxRuns }
+    const retry = retrying && !rests ? { every: Number(every), times: Number(times) } : null
+    const edit = { name: named, struct, query: query.trim(), sort, flow, maxRuns, retry }
     run(() => onSave(edit, at))
   }
 
@@ -1369,6 +1498,46 @@ function ColumnDialog({
                 </select>
               </label>
             )}
+            {!rests && (
+              <div className="task-column-retry">
+                <label className="panel-check">
+                  <input type="checkbox" checked={retrying} onChange={(e) => setRetrying(e.target.checked)} />
+                  Try a record again when its run fails or leaves it here
+                </label>
+                {retrying && (
+                  <span className="task-column-retry-when">
+                    every
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      max={MAX_RETRY_MINUTES}
+                      step={1}
+                      value={every}
+                      aria-label="Minutes to wait after its run ended"
+                      onChange={(e) => setEvery(e.target.value)}
+                    />
+                    {Number(every) === 1 ? 'minute' : 'minutes'}, at most
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      max={MAX_RETRY_TIMES}
+                      step={1}
+                      value={times}
+                      aria-label="How many times in a row at most"
+                      onChange={(e) => setTimes(e.target.value)}
+                    />
+                    {Number(times) === 1 ? 'time' : 'times'}
+                  </span>
+                )}
+                <span className="panel-note">
+                  {retrying
+                    ? 'As a pull request whose checks are still going would: the board starts its flow on the record again that long after its run ended, then shows it stuck once it has tried that many times in a row. A run someone stopped is never tried again on its own.'
+                    : 'A record whose run fails, or ends leaving it here, is stuck until someone tries it again.'}
+                </span>
+              </div>
+            )}
             {column?.flowProblem && flow === column.flow && struct === column.struct ? (
               <p className="panel-warning">{flowProblemOf(column, runner)}</p>
             ) : (
@@ -1422,6 +1591,13 @@ function ColumnDialog({
 
 // How many runs a board, or a column, may have going at once, to pick from.
 const LIMITS = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 40, 50]
+
+// How a column tries a record again when first asked to, and at most: how
+// many minutes after its run ended, and how many times in a row, as the
+// server allows.
+const RETRY = { every: 5, times: 3 }
+const MAX_RETRY_MINUTES = 24 * 60
+const MAX_RETRY_TIMES = 100
 
 // Play, or Pause while it plays, how many of the board's runs go at once,
 // and while it plays, whose runs they are and how many are going.
@@ -1550,6 +1726,7 @@ function StatesDialog({
           sort: '',
           flow: r.rest ? null : r.flow,
           maxRuns: r.rest ? 0 : null,
+          retry: null,
         })),
       )
     } catch (err) {

@@ -893,6 +893,9 @@ export type TaskColumn = {
   // as many as the board's own limit lets it, 0 for none, its records
   // resting.
   maxRuns: number | null
+  // How it tries its records again on its own when their run failed or
+  // left them where they were; null for never, stuck at once.
+  retry: ColumnRetry | null
   problem?: TaskColumnProblem
   flowProblem?: TaskFlowProblem
   // Its records, on the board's own page.
@@ -925,18 +928,28 @@ export type ReferringCount = { name: string; attribute: string; total: number; s
 // for a person, or the board's last, which left it stuck: it failed, was
 // interrupted or terminated, ended done leaving the record where it was
 // (unmoved), or the record went round the board's flows too often without
-// a person (rounds). Of one going, when it started, and if its flow is one
-// the board shows, its name and the processes whose steps are going or
-// waiting.
+// a person (rounds); or which failed or left it where it was, its column
+// trying it again (retrying) in retryIn milliseconds by the server's clock
+// as the board was read, none once it is due and until its run starts. Of
+// one going, when it started, and if its flow is one the board shows, its
+// name and the processes whose steps are going or waiting. Of one left, how
+// many times in a row its column tried the record again on its own.
 export type CardRun = {
   run: number
   flow: number
-  status: 'running' | 'waiting' | 'stuck'
+  status: 'running' | 'waiting' | 'stuck' | 'retrying'
   why?: 'failed' | 'interrupted' | 'terminated' | 'unmoved' | 'rounds'
   started?: string
   flowName?: string
   steps?: string[]
+  retried?: number
+  retryIn?: number
 }
+
+// How a column tries a record again on its own, when its run failed or
+// ended leaving it where it was: every so many minutes after that run
+// ended, at most so many times in a row, before it is stuck.
+export type ColumnRetry = { every: number; times: number }
 
 // What a board's cards of a struct show of each record: the field heading
 // each as its ID, the struct's key unless told, and the one holding the
@@ -953,6 +966,7 @@ export type TaskColumnEdit = {
   sort: string
   flow: number | null
   maxRuns: number | null
+  retry: ColumnRetry | null
 }
 
 // A shared struct a column can hold the records of, with the fields they
@@ -996,8 +1010,8 @@ export function pauseTaskBoard(id: number): Promise<TaskBoard> {
   return request(`/api/taskboards/${id}/pause`, { method: 'POST' })
 }
 
-// Frees the records the board skips as stuck, to start their column's flow
-// on them again.
+// Frees the records the board skips as stuck, or waiting to be tried again,
+// to start their column's flow on them again, their tries counted anew.
 export function retryTaskBoardRecords(id: number, records: number[]): Promise<TaskBoard> {
   return request(`/api/taskboards/${id}/retry`, { method: 'POST', body: JSON.stringify({ records }) })
 }
@@ -1036,9 +1050,11 @@ export function listRecordFlows(
 }
 
 // Starts a run of the flow on each record, its queries of the struct's
-// records reading that one alone.
-export function startRecordRuns(struct: number, flow: number, records: number[]): Promise<FlowRun[]> {
-  return request(`/api/structs/${struct}/records/runs`, { method: 'POST', body: JSON.stringify({ flow, records }) })
+// records reading that one alone. From a record's card on a task board,
+// taskBoard names it: the runs are the board's on the records, by hand, its
+// columns counting their tries anew from them.
+export function startRecordRuns(struct: number, flow: number, records: number[], taskBoard?: number): Promise<FlowRun[]> {
+  return request(`/api/structs/${struct}/records/runs`, { method: 'POST', body: JSON.stringify({ flow, records, taskBoard }) })
 }
 
 // A module other flows run stays one.

@@ -138,10 +138,14 @@ func logRunStarted(db *sql.DB, id int64) {
 	}
 	if rn.Record != nil {
 		msg += fmt.Sprintf(", on record %d", *rn.Record)
-		// Started by a task board playing; see taskboard_play.go.
+		// Started by a task board playing, or by a person from a card of
+		// one; see taskboard_play.go.
 		var board string
-		err := db.QueryRowContext(ctx, "SELECT b.name FROM task_board_runs t JOIN task_boards b ON b.id = t.board_id WHERE t.run_id = ?", id).Scan(&board)
+		var byHand bool
+		err := db.QueryRowContext(ctx, "SELECT b.name, t.by_hand FROM task_board_runs t JOIN task_boards b ON b.id = t.board_id WHERE t.run_id = ?", id).Scan(&board, &byHand)
 		switch {
+		case err == nil && byHand:
+			msg += fmt.Sprintf(", from its card on the task board %q", board)
 		case err == nil:
 			msg += fmt.Sprintf(", as the task board %q plays", board)
 		case !errors.Is(err, sql.ErrNoRows):

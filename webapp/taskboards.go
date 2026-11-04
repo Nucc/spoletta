@@ -98,6 +98,9 @@ type taskColumn struct {
 	// as many as the board's own limit lets it, 0 for none, its records
 	// resting.
 	MaxRuns *int `json:"maxRuns"`
+	// How it tries its records again on its own, when their run failed or
+	// left them where they were; null for never, stuck at once.
+	Retry *columnRetry `json:"retry"`
 	// Why it shows no records, if it doesn't: its struct is gone, in the
 	// trash, not seen by whoever asks, or not a shared struct.
 	Problem string `json:"problem,omitempty"`
@@ -127,13 +130,44 @@ type taskCard struct {
 // How many fields a card shows at most.
 const maxCardFields = 50
 
+// How a column tries a record again on its own, when its run failed or
+// ended leaving it where it was: every so many minutes after that run
+// ended, at most so many times in a row, before it is stuck. Under
+// SCHEDULE_SECONDS, as in the tests' webapps, a minute is a second.
+type columnRetry struct {
+	Every int `json:"every"`
+	Times int `json:"times"`
+}
+
+// How long the column waits after a run ends before trying its record again.
+func (r *columnRetry) wait() time.Duration {
+	if scheduleSeconds {
+		return time.Duration(r.Every) * time.Second
+	}
+	return time.Duration(r.Every) * time.Minute
+}
+
+// How long a column waits at most before trying a record again, in
+// minutes, and how many times in a row it tries at most.
+const (
+	maxRetryMinutes = 24 * 60
+	maxRetryTimes   = 100
+)
+
 // Reads a column as stored, after the columns before it in extra.
 func scanColumn(rows *sql.Rows, c *taskColumn, extra ...any) error {
-	return rows.Scan(append(extra, &c.Name, &c.Struct, &c.Query, &c.Sort, &c.Flow, &c.MaxRuns)...)
+	var every, times sql.NullInt64
+	if err := rows.Scan(append(extra, &c.Name, &c.Struct, &c.Query, &c.Sort, &c.Flow, &c.MaxRuns, &every, &times)...); err != nil {
+		return err
+	}
+	if every.Valid && times.Valid {
+		c.Retry = &columnRetry{Every: int(every.Int64), Times: int(times.Int64)}
+	}
+	return nil
 }
 
 // The columns scanColumn reads, after those before them.
-const columnColumns = "name, struct_id, query, sort, flow_id, max_runs"
+const columnColumns = "name, struct_id, query, sort, flow_id, max_runs, retry_minutes, retry_times"
 
 // What a column shows problem says.
 const (
@@ -381,12 +415,13 @@ type taskBoardEdit struct {
 	Name    string `json:"name"`
 	MaxRuns int    `json:"maxRuns"`
 	Columns []struct {
-		Name    string `json:"name"`
-		Struct  *int64 `json:"struct"`
-		Query   string `json:"query"`
-		Sort    string `json:"sort"`
-		Flow    *int64 `json:"flow"`
-		MaxRuns *int   `json:"maxRuns"`
+		Name    string       `json:"name"`
+		Struct  *int64       `json:"struct"`
+		Query   string       `json:"query"`
+		Sort    string       `json:"sort"`
+		Flow    *int64       `json:"flow"`
+		MaxRuns *int         `json:"maxRuns"`
+		Retry   *columnRetry `json:"retry"`
 	} `json:"columns"`
 	Cards map[int64]taskCard `json:"cards"`
 }
@@ -421,6 +456,13 @@ func (e *taskBoardEdit) check() string {
 			return fmt.Sprintf("%s works on from 0 to %d records at once", c.Name, maxBoardRuns)
 		case c.MaxRuns != nil && *c.MaxRuns == 0 && c.Flow != nil:
 			return fmt.Sprintf("the records of %s rest, so it names no flow", c.Name)
+		case c.Retry == nil:
+		case c.MaxRuns != nil && *c.MaxRuns == 0:
+			return fmt.Sprintf("the records of %s rest, so it tries none again", c.Name)
+		case c.Retry.Every < 1 || c.Retry.Every > maxRetryMinutes:
+			return fmt.Sprintf("%s tries a record again from 1 to %d minutes after its run ended", c.Name, maxRetryMinutes)
+		case c.Retry.Times < 1 || c.Retry.Times > maxRetryTimes:
+			return fmt.Sprintf("%s tries a record again from 1 to %d times", c.Name, maxRetryTimes)
 		}
 	}
 	for s, card := range e.Cards {
@@ -655,7 +697,7 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 	// Saves the board's name, its limit and all its columns, in place of
 	// those it had, and what its cards of each struct show, by the struct's
 	// id: {"name", "maxRuns", "columns": [{"name", "struct", "query",
-	// "sort", "flow", "maxRuns"}], "cards": {"<struct>": {"key", "url",
+	// "sort", "flow", "maxRuns", "retry": {"every", "times"}}], "cards": {"<struct>": {"key", "url",
 	// "fields", "state", "updated", "run"}}}, without cards keeping what they
 	// show. Cards of a struct no column holds any more go. A column may keep a
 	// struct the board has that whoever saves doesn't see, or that no longer
@@ -786,8 +828,13 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		for i, c := range e.Columns {
-			_, err := tx.ExecContext(ctx, "INSERT INTO task_board_columns (board_id, position, name, struct_id, query, sort, flow_id, max_runs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-				b.ID, i, c.Name, c.Struct, c.Query, c.Sort, c.Flow, c.MaxRuns)
+			var every, times *int
+			if c.Retry != nil {
+				every, times = &c.Retry.Every, &c.Retry.Times
+			}
+			_, err := tx.ExecContext(ctx, `INSERT INTO task_board_columns (board_id, position, name, struct_id, query, sort, flow_id, max_runs, retry_minutes, retry_times)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				b.ID, i, c.Name, c.Struct, c.Query, c.Sort, c.Flow, c.MaxRuns, every, times)
 			if mysqlErrorIs(err, mysqlErrForeignKey) {
 				http.Error(w, fmt.Sprintf("the struct %s holds the records of, or its flow, isn't there", c.Name), http.StatusBadRequest)
 				return

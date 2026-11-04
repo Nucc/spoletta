@@ -616,9 +616,17 @@ repositories:
     once), and has an output link leaving the record in the next state: a run that ends done with the
     record still in the state it took it in leaves it **stuck**, as does one
     that fails or is stopped, and the board skips a stuck record until a
-    person tries it again or corrects it. A record started from the same
-    state five times with no person in between is stuck too, so two flows
-    handing a record back and forth stop. If the step makes a record of
+    person tries it again or corrects it. A column can try its records
+    again on its own first (**Try a record again when its run fails or
+    leaves it here**, every so many minutes, at most so many times): a
+    record whose run failed or left it where it was, such as a pull request
+    whose checks are still going, waits that long after its run ended, its
+    card saying when, and goes again, and is stuck only once it was tried
+    that many times in a row; a run someone stopped is never tried again on
+    its own. Someone running a flow on the record from its card starts its
+    tries anew, that run being the first. A record started from the same state five times with no person
+    in between is stuck too, so two flows handing a record back and forth
+    stop; a column's tries in a row count as one of those. If the step makes a record of
     another struct (an exception filing a ticket), it still moves the one it
     took on, such as to `ticketed`. A state waiting on the world outside,
     such as a pull request in review until someone merges it, is one no

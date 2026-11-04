@@ -9818,6 +9818,17 @@ select.flow-owner:disabled {
   width: 200px;
 }
 
+/* The search sits in the middle of the bar, whatever the title and the
+   buttons on either side take. */
+.toolbar.home-bar {
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 640px) 1fr;
+}
+
+.home-bar .home-search {
+  width: 100%;
+}
+
 /* The pages beside the rail have a bar as tall as the list's, with its
    search and buttons, so the rail stays put going between them. */
 .flows-page.home > .toolbar {
@@ -9860,7 +9871,7 @@ select.flow-owner:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
+  justify-self: end;
 }
 
 .home-bar .home-more .toolbar-menu-button {

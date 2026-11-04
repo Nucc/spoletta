@@ -123,8 +123,10 @@ root, every capability dropped, no new privileges, limits on memory, CPUs and
 processes (`SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_PIDS`) and the
 default seccomp profile. `SANDBOX_RUNTIME` picks another OCI runtime or
 runtime class, such as gVisor's `runsc`, for a kernel of its own. The image,
-`worker/sandbox.Containerfile`, holds pi, its extensions, bash, git, curl and
-jq, and nothing of the worker's.
+`worker/sandbox.Containerfile`, holds pi, its extensions and what a coding
+agent reaches for (bash, git, curl, jq, ripgrep, fd, GNU's coreutils, grep,
+sed and awk, diff and patch, archivers, make, Python with pip installing
+into the step's home), and nothing of the worker's.
 
 ## Podman and Docker
 

@@ -11,8 +11,20 @@ RUN CGO_ENABLED=0 go build -o /out/worker .
 FROM docker.io/library/node:22.23.4-alpine
 
 # git and bash give the agent's tools something to work with, and scripts
-# get curl and jq to call APIs. su-exec drops root as the worker starts.
-RUN apk add --no-cache bash curl git jq su-exec
+# get curl and jq to call APIs; the rest is what steps run as the
+# worker's own processes (SANDBOX=process) find, as in a step's container
+# (sandbox.Containerfile). su-exec drops root as the worker starts.
+RUN apk add --no-cache bash curl git jq \
+    ripgrep fd tree file less \
+    coreutils findutils grep sed gawk diffutils patch \
+    tar gzip xz zip unzip make \
+    python3 py3-pip \
+    su-exec
+# Agents call python as often as python3. Alpine marks its Python as the
+# system's, so pip installs nothing without being told; a step's packages
+# go to its home (--user), never the image.
+RUN ln -s /usr/bin/python3 /usr/local/bin/python
+ENV PIP_USER=1 PIP_BREAK_SYSTEM_PACKAGES=1
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 
 COPY --from=build /out/worker /usr/local/bin/worker

@@ -341,11 +341,11 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 
-		var owned, many bool
+		var owned, many, picks, follows bool
 		var flow int64
 		var q quantity
-		err = db.QueryRowContext(r.Context(), "SELECT owner_id IS NOT NULL, flow_id, many, min_items, max_items FROM objects WHERE id = ?", id).
-			Scan(&owned, &flow, &many, &q.min, &q.max)
+		err = db.QueryRowContext(r.Context(), "SELECT owner_id IS NOT NULL, flow_id, many, min_items, max_items, pick IS NOT NULL, follows IS NOT NULL FROM objects WHERE id = ?", id).
+			Scan(&owned, &flow, &many, &q.min, &q.max, &picks, &follows)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "object not found", http.StatusNotFound)
 			return
@@ -354,8 +354,12 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		// Where a copy goes, and what this flow does with it, are its own.
-		if (patch.Name != nil || patch.Many != nil || patch.Min != nil || len(patch.Max) > 0 || patch.Relation != nil || len(patch.General) > 0) && !ownObject(w, r, db, id) {
+		// Where a copy goes, and what this flow does with it, are its own,
+		// and how many a struct's copy is.
+		if (patch.Name != nil || patch.Relation != nil || len(patch.General) > 0) && !ownObject(w, r, db, id) {
+			return
+		}
+		if (patch.Many != nil || patch.Min != nil || len(patch.Max) > 0) && !ownQuantity(w, r, db, id) {
 			return
 		}
 		root, err := isStructRoot(r.Context(), db, id)
@@ -415,6 +419,15 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		if msg := checkQuantity(many, q); msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		// Each run works on the one record it picks or follows; see picks.go.
+		if isTrue(patch.Many) && picks {
+			http.Error(w, "it picks the record each run works on, and a list picks none: stop it picking first", http.StatusBadRequest)
+			return
+		}
+		if isTrue(patch.Many) && follows {
+			http.Error(w, "it follows a reference to the record each run works on, and a list follows none: stop it following first", http.StatusBadRequest)
 			return
 		}
 

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // A shared struct's Ticket with an id telling records apart, a title and a
@@ -366,5 +368,178 @@ func TestPickedRecordsRace(t *testing.T) {
 		if r.State != "created" {
 			t.Errorf("%s is in %s, want created", id, r.State)
 		}
+	}
+}
+
+// How many a struct's copy is, is its flow's own: a flow fetching tickets
+// yields a list of them, a record each, while another picks one per run,
+// and neither changes with the struct's own, which only starts a new copy
+// off. A copy picking a record isn't made a list, and what makes a copy up
+// still follows the struct. A setup file says how many each copy is, one if
+// it says nothing.
+func TestStructCopiesSayHowMany(t *testing.T) {
+	a := newApp(t)
+	file := `spoletta: 1
+structs:
+  - name: QTY Ticket
+    shared: true
+    states: [open, done]
+    attributes:
+      - {name: id, unique: true}
+      - {name: title}
+    parts:
+      - {name: labels, many: true}
+flows:
+  - name: QTY Fetch tickets
+    start: {next: Fetch}
+    processes:
+      - name: Fetch
+        kind: script
+        script: fetch
+        yields: [{object: QTY Ticket, state: open}]
+    objects:
+      - copyOf: {flow: QTY Ticket}
+        many: true
+        min: 1
+  - name: QTY Work a ticket
+    start: {next: Work}
+    processes:
+      - name: Work
+        kind: script
+        script: work
+        takes: [QTY Ticket]
+        yields: [{object: QTY Ticket, state: done}]
+    objects:
+      - copyOf: {flow: QTY Ticket}
+        pick: {state: open, oldest: true}
+`
+	ids := map[string]int64{}
+	for _, f := range setupImportOK(a, file).Flows {
+		ids[f.Name] = f.ID
+	}
+	s, fetch, work := ids["QTY Ticket"], ids["QTY Fetch tickets"], ids["QTY Work a ticket"]
+	if s == 0 || fetch == 0 || work == 0 {
+		t.Fatalf("imported %v, want the struct and both flows", ids)
+	}
+	copyIn := func(flow int64) modObject {
+		t.Helper()
+		return modNamed(t, modObjects(a, flow), "QTY Ticket")
+	}
+	labelsOf := func(flow, owner int64) modObject {
+		t.Helper()
+		parts := modPartsOf(modObjects(a, flow), owner)
+		if len(parts) != 1 || parts[0].Name != "labels" {
+			t.Fatalf("the parts of %d = %+v, want labels", owner, parts)
+		}
+		return parts[0]
+	}
+	root, fetched, worked := copyIn(s), copyIn(fetch), copyIn(work)
+	if root.Many || !fetched.Many || worked.Many {
+		t.Fatalf("the struct is a list %v, fetching's copy %v, working's %v; want only fetching's a list", root.Many, fetched.Many, worked.Many)
+	}
+
+	// Fetching yields two tickets in one run, a record each.
+	a.worker.onScript("Fetch", func(context.Context, scriptRun) runResult {
+		return runResult{OK: true, Output: `[{"id": "Q-1", "title": "One", "labels": []}, {"id": "Q-2", "title": "Two", "labels": ["x"]}]`}
+	})
+	if d := a.finish(a.startRun(fetch).ID); d.Status != runDone {
+		t.Fatalf("fetching ended %s: %s", d.Status, describeSteps(d))
+	}
+	if r := sharedRecords(a, s); len(r) != 2 || r["Q-1"].State != "open" || r["Q-2"].State != "open" {
+		t.Fatalf("the records = %v, want Q-1 and Q-2 open", r)
+	}
+
+	// Working takes the oldest open one alone, and moves it on.
+	var mu sync.Mutex
+	var given []string
+	a.worker.onScript("Work", func(_ context.Context, run scriptRun) runResult {
+		for _, in := range run.Inputs {
+			if in.Name == "QTY Ticket" {
+				mu.Lock()
+				given = append(given, in.Content)
+				mu.Unlock()
+				return runResult{OK: true, Output: in.Content}
+			}
+		}
+		return runResult{Error: fmt.Sprintf("given no ticket but %+v", run.Inputs)}
+	})
+	if d := a.finish(a.startRun(work).ID); d.Status != runDone {
+		t.Fatalf("working ended %s: %s", d.Status, describeSteps(d))
+	}
+	var one map[string]any
+	if len(given) != 1 || json.Unmarshal([]byte(given[0]), &one) != nil || one["id"] != "Q-1" {
+		t.Errorf("Work was given %v, want the one record Q-1", given)
+	}
+	if r := sharedRecords(a, s); r["Q-1"].State != "done" || r["Q-2"].State != "open" {
+		t.Errorf("the records = %v, want Q-1 done and Q-2 still open", r)
+	}
+
+	// Each copy says how many it is, but a picking one isn't a list, and
+	// the objects making a copy up follow the struct.
+	at := func(o int64) string { return fmt.Sprintf("/api/objects/%d", o) }
+	a.refused("PATCH", at(worked.ID), map[string]any{"many": true}, http.StatusBadRequest, "picks the record each run works on")
+	part := labelsOf(fetch, fetched.ID)
+	a.refused("PATCH", at(part.ID), map[string]any{"many": false}, http.StatusBadRequest, "comes from the struct")
+	a.call("PATCH", at(fetched.ID), map[string]any{"many": false}, http.StatusOK, nil)
+	if copyIn(fetch).Many {
+		t.Error("fetching's copy is still a list once made one")
+	}
+	a.call("PATCH", at(fetched.ID), map[string]any{"many": true, "min": 1}, http.StatusOK, nil)
+
+	// The struct's own changes none of them, only starting a new copy off,
+	// while its parts' change reaches the copies' parts.
+	a.call("PATCH", at(root.ID), map[string]any{"many": true}, http.StatusOK, nil)
+	if !copyIn(fetch).Many || copyIn(work).Many {
+		t.Errorf("the copies changed with the struct: fetching's a list %v, working's %v", copyIn(fetch).Many, copyIn(work).Many)
+	}
+	another := a.newFlow("QTY Another")
+	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", s), map[string]any{"flow": another.ID, "x": 0, "y": 0}, http.StatusCreated, nil)
+	if !copyIn(another.ID).Many {
+		t.Error("a new copy of a list struct isn't a list")
+	}
+	a.call("PATCH", at(root.ID), map[string]any{"many": false}, http.StatusOK, nil)
+	structPart := labelsOf(s, root.ID)
+	a.call("PATCH", at(structPart.ID), map[string]any{"many": false}, http.StatusOK, nil)
+	if labelsOf(fetch, fetched.ID).Many {
+		t.Error("the copy's part is still a list once the struct's isn't")
+	}
+	if !copyIn(fetch).Many || !copyIn(another.ID).Many {
+		t.Error("a copy stopped being a list with the struct")
+	}
+
+	// A flow's setup file says how many its copy is, and importing it again
+	// keeps that; a file saying nothing makes it one.
+	var setup struct {
+		Text string `json:"text"`
+	}
+	a.call("GET", fmt.Sprintf("/api/flows/%d/setup", fetch), nil, http.StatusOK, &setup)
+	var exported struct {
+		Flows []struct {
+			Name    string `yaml:"name"`
+			Objects []struct {
+				CopyOf *struct {
+					Flow string `yaml:"flow"`
+				} `yaml:"copyOf"`
+				Many bool `yaml:"many"`
+				Min  int  `yaml:"min"`
+			} `yaml:"objects"`
+		} `yaml:"flows"`
+	}
+	if err := yaml.Unmarshal([]byte(setup.Text), &exported); err != nil {
+		t.Fatalf("the export %s: %v", setup.Text, err)
+	}
+	if len(exported.Flows) != 1 || len(exported.Flows[0].Objects) != 1 {
+		t.Fatalf("the export:\n%s", setup.Text)
+	}
+	if o := exported.Flows[0].Objects[0]; o.CopyOf == nil || o.CopyOf.Flow != "QTY Ticket" || !o.Many || o.Min != 1 {
+		t.Errorf("the export writes the copy as %+v, want a list of at least one QTY Ticket:\n%s", o, setup.Text)
+	}
+	setupImportOK(a, setup.Text)
+	if !copyIn(fetch).Many {
+		t.Error("importing the export again made the copy one")
+	}
+	setupImportOK(a, strings.Replace(file, "        many: true\n        min: 1\n", "", 1))
+	if copyIn(fetch).Many {
+		t.Error("a file saying nothing of how many the copy is left it a list")
 	}
 }

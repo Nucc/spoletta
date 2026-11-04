@@ -251,19 +251,22 @@ func checkStructure(ctx context.Context, db *sql.DB, flow int64, change func(str
 // Copies an object of another flow into flow, with what makes it up: its
 // states, its attributes and the objects it owns, each copied in turn. What
 // it inherits becomes its own, since its general is in the other flow. The
-// copy keeps the object as its source, and follows it; see modules.go.
+// copy keeps the object as its source, and follows it; see modules.go. It
+// starts as many as the object is, which a struct's copy on a board may
+// change for its flow (syncCopy).
 // The copy goes at, or where the object is without it. Returns the copy's id.
 func copyStructure(ctx context.Context, tx *sql.Tx, s structure, object, flow int64, parent, owner *int64, at *point) (int64, error) {
-	if s[object] == nil {
+	o := s[object]
+	if o == nil {
 		return 0, fmt.Errorf("object %d isn't in the flow", object)
 	}
 	var x, y *float64
 	if at != nil {
 		x, y = &at.X, &at.Y
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, width, parent_id, owner_id, relation, source_id)
-		SELECT ?, name, COALESCE(?, x), COALESCE(?, y), width, ?, ?, relation, id FROM objects WHERE id = ?`,
-		flow, x, y, parent, owner, object)
+	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, width, parent_id, owner_id, relation, source_id, many, min_items, max_items)
+		SELECT ?, name, COALESCE(?, x), COALESCE(?, y), width, ?, ?, relation, id, ?, ?, ? FROM objects WHERE id = ?`,
+		flow, x, y, parent, owner, o.many, o.quantity.min, o.quantity.max, object)
 	if err != nil {
 		return 0, err
 	}

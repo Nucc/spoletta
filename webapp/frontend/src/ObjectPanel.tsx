@@ -116,6 +116,11 @@ export default function ObjectPanel({
   const [newName, setNewName] = useState('')
   const object = objects.find((o) => o.id === id)
   const owner = objects.find((o) => o.id === object?.owner)
+  // A struct's copy on a board is as many as its flow says, whatever the
+  // struct is, so one flow adds a list of records while another works on
+  // one; the objects making it up follow the struct. See syncCopy.
+  const structCopy = !!module?.struct && !owner
+  const ownQuantity = own || (editable && structCopy)
   const general = object?.general ?? null
   const fields = fieldsOf(objects, id)
   const inherited = fields.filter((f) => f.inherited)
@@ -302,7 +307,7 @@ export default function ObjectPanel({
           key={quantityText(quantity)}
           id={`object-${id}-quantity`}
           quantity={quantity}
-          disabled={!own}
+          disabled={!ownQuantity}
           onChange={onQuantityChange}
         />
       </div>
@@ -316,6 +321,13 @@ export default function ObjectPanel({
             : `A process generating a list hands in a JSON array with as many items, or is asked again, and a flow process
           taking it runs once per item, each item as this object inside it; a list it collects from its items' runs has as
           many as ran. Stored, each item's run claims its item, so an item another run took is skipped.`}
+          {structRoot &&
+            ` A copy added to a flow starts as many as this; each flow then says how many its copy is, so one may
+          generate a list while another works on one.`}
+          {structCopy &&
+            ` It is this flow's own, whatever ${module?.name} and its other copies are, so a flow adding records may
+          generate a list while another works on one at a time.`}
+          {structCopy && shared && ' Only one, not a list, picks the record each run works on.'}
         </>,
       )}
       {structRoot && (

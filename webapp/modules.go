@@ -324,16 +324,29 @@ func partsOf(s structure, object int64) []*structObject {
 }
 
 // Makes a copy match its source in the module whose structure s is: its
-// name and how many it is, whether it is shared, its states, the attributes it has (its generals'
-// too), and the objects making it up, each matched in turn. What the copy
-// has that its source no longer does goes, the links naming its states too.
+// name and how many it is (unless it is a struct's copy on a board), whether
+// it is shared, its states, the attributes it has (its generals' too), and
+// the objects making it up, each matched in turn. What the copy has that its
+// source no longer does goes, the links naming its states too.
 func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) error {
 	o := s[source]
 	if o == nil {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx, "UPDATE objects SET name = ?, many = ?, min_items = ?, max_items = ?, relation = ?, source_id = ? WHERE id = ?",
-		o.name, o.many, o.quantity.min, o.quantity.max, o.relation, source, dup)
+	_, err := tx.ExecContext(ctx, "UPDATE objects SET name = ?, relation = ?, source_id = ? WHERE id = ?",
+		o.name, o.relation, source, dup)
+	if err != nil {
+		return err
+	}
+	// How many a struct's copy on a board is, is its flow's own, as OPM
+	// writes it at the end of the copy's links rather than in the object:
+	// one flow adds a list of tickets while another works on one. The
+	// struct's starts a new copy off (copyStructure). The objects making a
+	// copy up are fields of what it holds, and a procedure's objects' copies
+	// are what its subflow processes hand across, so they follow their source.
+	_, err = tx.ExecContext(ctx, `UPDATE objects c JOIN objects src ON src.id = ? JOIN flows f ON f.id = src.flow_id
+		SET c.many = ?, c.min_items = ?, c.max_items = ? WHERE c.id = ? AND NOT (f.is_struct AND c.owner_id IS NULL)`,
+		source, o.many, o.quantity.min, o.quantity.max, dup)
 	if err != nil {
 		return err
 	}
@@ -455,6 +468,20 @@ func ownObject(w http.ResponseWriter, r *http.Request, db *sql.DB, object int64)
 		return false
 	}
 	return true
+}
+
+// Whether how many an object is may change here: where what it has may
+// (ownObject), and on a struct's copy on a board, whose flow says how many
+// it is; see syncCopy. Writes why not, or the error, when it may not.
+func ownQuantity(w http.ResponseWriter, r *http.Request, db *sql.DB, object int64) bool {
+	var free bool
+	err := db.QueryRowContext(r.Context(), `SELECT o.owner_id IS NULL AND f.is_struct FROM objects o
+		JOIN objects src ON src.id = o.source_id JOIN flows f ON f.id = src.flow_id WHERE o.id = ?`, object).Scan(&free)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		serverError(w, err)
+		return false
+	}
+	return free || ownObject(w, r, db, object)
 }
 
 // The object a state or attribute is of, 0 if it is gone.

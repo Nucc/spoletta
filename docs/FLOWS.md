@@ -498,7 +498,14 @@ repositories:
 - A **struct** is a single object under `structs:`. A flow uses it with an
   object `copyOf: {flow: <struct name>}`, which follows the struct as a
   procedure's copies do. Use a struct when several flows exchange the same
-  shape, such as a `Ticket` with `key`, `summary` and `priority`.
+  shape, such as a `Ticket` with `key`, `summary` and `priority`. How many
+  the copy is (`many`, `min`, `max`) is the flow's own, as OPM writes it at
+  the end of the copy's links: a flow fetching tickets yields a list of
+  them while another works on one. A copy added on the board starts as many
+  as the struct's object is, and changing the struct's leaves its copies as
+  they are; in a setup file, a copy is as many as it says, one if it says
+  nothing. The objects making a copy up follow the struct, as fields of
+  each item.
 - A struct's object can be **shared** (`shared: true` on it, which needs a
   `unique` attribute): every copy of it, in whatever flow, reads and writes
   one store of **records**, told apart by the unique attribute, as a table
@@ -515,6 +522,8 @@ repositories:
     [{object: Exception, state: completed}]`, a rule, or an agent's decision.
     It writes fields it leaves out as they were.
   - A list writes a record per item, all in the state the list comes out in.
+    So a flow adding many records at once makes its copy a list (`many:
+    true`), while the copies of flows working on one stay single.
   - What gets worked on, or worked on again, is up to **queries**: `takes:
     [{object: Exception, query: {state: new, limit: 1, oldest: true}}]`
     reads the records in that state, whichever flow wrote them, and a rule
@@ -1903,7 +1912,9 @@ Check them before you import.
   loop.
 - A copy's name, states, attributes and parts come from its source. Leave
   them out (a `name` other than the source's is refused); links refer to it
-  by the source's name.
+  by the source's name. A struct's copy says how many it is itself (`many`,
+  `min`, `max`, one if left out); a procedure's object's copy is as many as
+  its source.
 - A file attribute can't be filled in by a person.
 - `pick` only on a copy of a shared struct, on a job flow's top board, not a
   list; its `state` one of its states. A process yielding it must take it

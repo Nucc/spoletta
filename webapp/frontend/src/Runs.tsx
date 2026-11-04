@@ -24,7 +24,7 @@ import {
   type StepUsage,
 } from './api'
 import { ClockIcon, ExternalIcon, TerminalIcon } from './icons'
-import StepTerminal, { formatLogTime, useStepLogs } from './StepTerminal'
+import StepTerminal, { formatLogTime, StepScreen, useStepLogs } from './StepTerminal'
 import { elapsedText, formatSpan } from './timeline'
 import { atDefault, changedSummary, type SettingGroup } from './stepSettings'
 
@@ -676,6 +676,7 @@ function Step({
   const showsOutput =
     s.kind !== 'human' && s.kind !== 'flow' && s.kind !== 'subflow' && s.kind !== 'loop' && (s.status === 'done' || s.status === 'duplicate')
   const showsPrompt = s.prompt !== '' && s.kind !== 'loop'
+  const going = s.status === 'active' || s.followUps.some((f) => f.status === 'active')
   return (
     <details className={`step${focused ? ' focused' : ''}`} open={s.status !== 'done' || s.followUps.length > 0}>
       <summary>
@@ -708,10 +709,12 @@ function Step({
             Stop step
           </button>
         )}
-        {(s.kind === 'agent' || s.kind === 'script' || s.kind === 'connector') &&
-          (s.status === 'active' || s.followUps.some((f) => f.status === 'active')) && (
-            <StepActivity run={run} step={s.id} calls={s.kind === 'connector'} />
-          )}
+        {/* An agent or a script going shows its terminal, a connector the
+            requests it sends. */}
+        {going && (s.kind === 'agent' || s.kind === 'script') && s.prompt && (
+          <StepScreen run={run} step={s} onEnlarge={() => setTerminal(true)} />
+        )}
+        {going && s.kind === 'connector' && <StepActivity run={run} step={s.id} />}
         {reviewForm ??
           s.inputs.map((input, i) => (
             <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} data />
@@ -870,7 +873,9 @@ function Step({
                 <pre>{s.prompt}</pre>
               </details>
             )}
-            {s.kind === 'agent' && s.prompt && <Conversation run={run} step={s} />}
+            {!going && (s.kind === 'agent' || s.kind === 'script') && s.prompt && (
+              <ScreenFold run={run} step={s} onEnlarge={() => setTerminal(true)} />
+            )}
           </section>
         )}
         {/* Outside the step, whose details close as it ends and would hide
@@ -885,35 +890,43 @@ function Step({
   )
 }
 
-// How many of the latest lines of the worker's log a going step shows.
+// How many of the latest requests a going connector step shows.
 const ACTIVITY_LINES = 6
 
-// What the worker does of a step while it goes, the latest lines of its log
-// followed as they come: getting its workspace ready, fetching and cloning
-// with git's progress and what it waits for, then starting pi or bash.
-function StepActivity({ run, step, calls }: { run: number; step: number; calls: boolean }) {
+// The latest requests a connector step going sends, followed as they come.
+function StepActivity({ run, step }: { run: number; step: number }) {
   const { lines, error } = useStepLogs(run, step, true, true)
-  const shown = (lines ?? [])
-    .filter((l) => (calls ? l.source === 'webapp' && CALL_LINE.test(l.message) : l.source === 'worker'))
-    .slice(-ACTIVITY_LINES)
+  const shown = (lines ?? []).filter((l) => l.source === 'webapp' && CALL_LINE.test(l.message)).slice(-ACTIVITY_LINES)
   return (
     <div className="step-activity" aria-live="polite">
-      <span>{calls ? 'Calls' : 'Worker'}</span>
+      <span>Calls</span>
       {error ? (
         <p className="term-error">Its log couldn't load: {error}</p>
       ) : shown.length === 0 ? (
-        <p className="term-dim">{calls ? 'No call sent yet…' : 'Waiting for the worker…'}</p>
+        <p className="term-dim">No call sent yet…</p>
       ) : (
         shown.map((l) => (
           <div key={l.id} className={`term-log ${l.level}`}>
             <time dateTime={l.time} title={new Date(l.time).toLocaleString()}>
               {formatLogTime(l.time)}
             </time>
-            <pre>{calls ? l.message.replace(CALL_LINE, '') : l.message}</pre>
+            <pre>{l.message.replace(CALL_LINE, '')}</pre>
           </div>
         ))
       )}
     </div>
+  )
+}
+
+// What an agent or a script that ended did, its terminal folded until
+// opened, so a run's panel loads none of its steps' conversations at first.
+function ScreenFold({ run, step, onEnlarge }: { run: number; step: RunStep; onEnlarge: () => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className="step-prompt" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>{step.kind === 'script' ? 'What the script did' : 'What the agent did'}</summary>
+      {open && <StepScreen run={run} step={step} onEnlarge={onEnlarge} />}
+    </details>
   )
 }
 
@@ -1150,125 +1163,6 @@ export function useStepMessages(run: number, step: RunStep, enabled: boolean) {
   }, [enabled, going, run, step.id])
 
   return { messages, loaded, error, going }
-}
-
-// The tool an agent hands in its output with; see worker/submit-output.ts.
-const SUBMIT_OUTPUT = 'submit_output'
-
-// The id of the call that handed in the step's output: the last of
-// submit_output's that its result took, once the step shows that output.
-function handedInBy(step: RunStep, messages: StepMessage[]): string | undefined {
-  if (step.status !== 'done' && step.status !== 'duplicate') return undefined
-  const taken = new Set(
-    messages.flatMap(({ message: m }) => (m.role === 'toolResult' && m.toolCallId && !m.isError ? [m.toolCallId] : [])),
-  )
-  let call: string | undefined
-  for (const { message: m } of messages) {
-    if (m.role !== 'assistant') continue
-    for (const b of blocks(m)) if (b.type === 'toolCall' && b.name === SUBMIT_OUTPUT && taken.has(b.id)) call = b.id
-  }
-  return call
-}
-
-// What the agent did: its conversation with the model, loaded once opened.
-// The prompt the step shows above it isn't repeated, and the call handing in
-// the output it shows is a line, its arguments being that output.
-function Conversation({ run, step }: { run: number; step: RunStep }) {
-  const [open, setOpen] = useState(false)
-  const { messages, loaded, error, going } = useStepMessages(run, step, open)
-  const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
-  const handedIn = handedInBy(step, messages)
-  const shown = messages.filter(
-    ({ attempt, message: m }) =>
-      !(attempt === 1 && m.role === 'user' && textOf(m).trim() === step.prompt.trim()) &&
-      !(m.role === 'toolResult' && handedIn !== undefined && m.toolCallId === handedIn),
-  )
-
-  return (
-    <details className="step-prompt conversation" onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary>What the agent did</summary>
-      {error && <Block label="The conversation couldn't load" text={error} failed />}
-      {loaded && messages.length === 0 && (
-        <p className="panel-note">{going ? 'Nothing yet.' : 'No conversation was recorded for this step.'}</p>
-      )}
-      <ol className="messages">
-        {shown.map((m, i) => (
-          <li key={m.id}>
-            {m.attempt > 1 && shown[i - 1]?.attempt !== m.attempt && (
-              <p className="panel-note">
-                {followUpOf.has(m.attempt)
-                  ? `Follow-up, ${formatTime(followUpOf.get(m.attempt)!.startedAt)}: you messaged the agent.`
-                  : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again.`}
-              </p>
-            )}
-            <Message message={m.message} handedIn={handedIn} />
-          </li>
-        ))}
-      </ol>
-      {going && loaded && <p className="panel-note">Still going…</p>}
-    </details>
-  )
-}
-
-const blocks = (m: AgentMessage) =>
-  typeof m.content === 'string' ? [{ type: 'text' as const, text: m.content }] : (m.content ?? [])
-
-const textOf = (m: AgentMessage) =>
-  blocks(m)
-    .map((b) => (b.type === 'text' ? b.text : b.type === 'image' ? `(${b.mimeType} image)` : ''))
-    .filter(Boolean)
-    .join('\n')
-
-function Message({ message: m, handedIn }: { message: AgentMessage; handedIn?: string }) {
-  if (m.omitted !== undefined) {
-    return <p className="panel-note">A {m.role} message of {Math.round(m.omitted / 1024)} KB, too large to keep.</p>
-  }
-  switch (m.role) {
-    case 'system':
-      return (
-        <details className="message-fold">
-          <summary>System prompt</summary>
-          <pre>{m.sections ? Object.values(m.sections).filter(Boolean).join('\n\n') : textOf(m)}</pre>
-        </details>
-      )
-    case 'user':
-      return (
-        <details className="message-fold">
-          <summary>Prompt</summary>
-          <pre>{textOf(m)}</pre>
-        </details>
-      )
-    case 'toolResult':
-      return (
-        <Block label={`${m.toolName ?? 'Tool'} ${m.isError ? 'failed' : 'returned'}`} text={textOf(m) || '(nothing)'} failed={m.isError} data={!m.isError} />
-      )
-    case 'assistant':
-      return (
-        <>
-          {blocks(m).map((b, i) =>
-            b.type === 'thinking' ? (
-              <details key={i} className="message-fold">
-                <summary>Thinking</summary>
-                <pre>{b.redacted && !b.thinking ? '(redacted)' : b.thinking}</pre>
-              </details>
-            ) : b.type === 'toolCall' && b.id === handedIn ? (
-              <p key={i} className="panel-note">
-                Handed in its output, shown above.
-              </p>
-            ) : b.type === 'toolCall' ? (
-              <Block key={i} label={`Calls ${b.name}`} text={JSON.stringify(b.arguments, null, 2)} data />
-            ) : b.type === 'text' ? (
-              <Block key={i} label="Says" text={b.text} />
-            ) : null,
-          )}
-          {(m.stopReason === 'error' || m.stopReason === 'aborted') && (
-            <Block label={m.stopReason === 'error' ? 'The request failed' : 'The request was aborted'} text={m.errorMessage ?? ''} failed />
-          )}
-        </>
-      )
-    default:
-      return <Block label={m.role} text={textOf(m)} />
-  }
 }
 
 // A labelled text; data shows the fields of JSON content instead of the JSON.

@@ -9085,6 +9085,7 @@ select.flow-owner:disabled {
 }
 
 .terminal-screen pre,
+.step-screen-lines pre,
 .terminal-files pre {
   margin: 0;
   max-height: none;
@@ -9097,7 +9098,8 @@ select.flow-owner:disabled {
   padding: 0;
 }
 
-.terminal-screen p {
+.terminal-screen p,
+.step-screen-lines p {
   margin: 0 0 8px;
 }
 
@@ -12772,4 +12774,52 @@ select.flow-owner:not([multiple]):not([size]):disabled {
 
 .branch-rule .query-help {
   font-weight: 400;
+}
+
+/* An agent's or a script's terminal in its step in the run's panel, a few
+   lines high, with a button opening it in a large window. */
+.step-screen {
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0;
+  background: #0d1117;
+  color: #e6edf3;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.step-screen-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 0 10px;
+  color: #8b949e;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.step-screen-bar button {
+  display: inline-flex;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: #8b949e;
+  cursor: pointer;
+}
+
+.step-screen-bar button:hover {
+  background: #21262d;
+  color: #e6edf3;
+}
+
+.step-screen-lines {
+  max-height: 320px;
+  overflow: auto;
+  padding: 4px 10px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
 }

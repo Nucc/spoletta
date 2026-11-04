@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getRunLogs, getStepChanges, getStepOutput, type AgentMessage, type OutputChunk, type RunLogLine, type FileChange, type MessageBlock, type RepoChanges, type RunStep, type StepMessage } from './api'
 import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
+import { ExpandIcon } from './icons'
 
 // An agent step's conversation as a terminal shows it, in a large window in
 // the middle of the screen: the prompt, what the model thinks and says, each
@@ -16,19 +17,10 @@ import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
 // A script's output, an agent's conversation and each follow-up's start
 // with what the worker logged before them: getting the workspace ready,
 // git's progress and what it waited for, then how pi or bash was started.
+// The run's panel shows the same screen, smaller, in the step (StepScreen).
 export default function StepTerminal({ run, step, onClose }: { run: number; step: RunStep; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
-  const screen = useRef<HTMLDivElement>(null)
-  const atEnd = useRef(true)
-  const script = step.kind === 'script'
-  const { messages, loaded, error, going } = useStepMessages(run, step, !script)
-  const logs = useStepLogs(run, step.id, true, going)
-  const printed = useStepOutput(run, step.id, script, going)
-  const results = useMemo(() => resultsByCall(messages), [messages])
-  const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
-  const setup = useMemo(() => (script ? new Map<number, RunLogLine[]>() : setupLines(step, messages, logs.lines ?? [])), [script, step, messages, logs.lines])
-  // Follow-ups going that have said nothing yet, whose setup shows after the conversation.
-  const waiting = step.followUps.filter((f) => f.status === 'active' && !messages.some((m) => m.attempt === f.attempt))
+  const t = useTerminal(run, step)
 
   useEffect(() => {
     const dialog = ref.current
@@ -36,10 +28,6 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
     dialog.showModal()
     return () => dialog.close()
   }, [])
-
-  useEffect(() => {
-    if (atEnd.current && screen.current) screen.current.scrollTop = screen.current.scrollHeight
-  }, [messages.length, loaded, logs.lines?.length, printed.chunks?.length])
 
   return (
     <dialog
@@ -56,7 +44,7 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
           <span className="run-logs-live">
             {' '}
             · {STEP_LABELS[step.status]}
-            {going && ', following along'} · started {formatTime(step.startedAt)}
+            {t.going && ', following along'} · started {formatTime(step.startedAt)}
             {step.model && ` · ${step.model}`}
             {step.usage && ` · ${formatUsage(step.usage)}`}
           </span>
@@ -66,56 +54,106 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
         </button>
       </header>
       <div className={`terminal-body${step.branch ? ' with-files' : ''}`}>
-        <div
-          ref={screen}
-          className="terminal-screen"
-          onScroll={(e) => {
-            const el = e.currentTarget
-            atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
-          }}
-        >
-          {script ? (
-            <ScriptScreen step={step} printed={printed.chunks} logs={logs.lines} error={printed.error || logs.error} going={going} />
-          ) : (
-            <>
-              {error && <p className="term-error">The conversation couldn't load: {error}</p>}
-              {!loaded && !error && <p className="term-dim">Loading…</p>}
-              <WorkerLines lines={setup.get(1)} />
-              {loaded && messages.length === 0 && !setup.has(1) && (
-                <p className="term-dim">{going ? 'Nothing yet.' : 'No conversation was recorded for this step.'}</p>
-              )}
-              {messages.map((m, i) => (
-                <div key={m.id}>
-                  {m.attempt > 1 && messages[i - 1]?.attempt !== m.attempt && (
-                    <>
-                      <p className="term-rule">
-                        {followUpOf.has(m.attempt)
-                          ? `Follow-up · ${formatTime(followUpOf.get(m.attempt)!.startedAt)}`
-                          : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again`}
-                      </p>
-                      <WorkerLines lines={setup.get(m.attempt)} />
-                    </>
-                  )}
-                  <TerminalMessage message={m.message} results={results} going={going} />
-                </div>
-              ))}
-              {waiting.map((f) => (
-                <div key={f.id}>
-                  <p className="term-rule">Follow-up · {formatTime(f.startedAt)}</p>
-                  <WorkerLines lines={setup.get(f.attempt)} />
-                </div>
-              ))}
-              {going && loaded && (
-                <p className="term-dim">
-                  <span className="term-cursor" aria-hidden="true" /> working…
-                </p>
-              )}
-            </>
-          )}
-        </div>
-        {step.branch && <ChangedFiles run={run} step={step} messages={messages} going={going} />}
+        <Screen step={step} t={t} className="terminal-screen" />
+        {step.branch && <ChangedFiles run={run} step={step} messages={t.messages} going={t.going} />}
       </div>
     </dialog>
+  )
+}
+
+// An agent's or a script's step in the run's panel as the same terminal,
+// kept to a few lines' height and following along, with a button opening it
+// in full in StepTerminal.
+export function StepScreen({ run, step, onEnlarge }: { run: number; step: RunStep; onEnlarge: () => void }) {
+  const t = useTerminal(run, step)
+  return (
+    <div className="step-screen">
+      <div className="step-screen-bar">
+        <span>{step.kind === 'script' ? 'Script' : 'Agent'}</span>
+        <button onClick={onEnlarge} title="Open in a large window, with the files it changed beside it" aria-label="Open in a large window">
+          <ExpandIcon />
+        </button>
+      </div>
+      <Screen step={step} t={t} className="step-screen-lines" />
+    </div>
+  )
+}
+
+type Terminal = ReturnType<typeof useTerminal>
+
+// What a step's terminal shows, loaded and followed while it goes.
+function useTerminal(run: number, step: RunStep) {
+  const script = step.kind === 'script'
+  const { messages, loaded, error, going } = useStepMessages(run, step, !script)
+  const logs = useStepLogs(run, step.id, true, going)
+  const printed = useStepOutput(run, step.id, script, going)
+  const results = useMemo(() => resultsByCall(messages), [messages])
+  const setup = useMemo(() => (script ? new Map<number, RunLogLine[]>() : setupLines(step, messages, logs.lines ?? [])), [script, step, messages, logs.lines])
+  return { run, script, messages, loaded, error, going, logs, printed, results, setup }
+}
+
+// The terminal's scrolling screen, keeping the newest in view while
+// scrolled to its end.
+function Screen({ step, t, className }: { step: RunStep; t: Terminal; className: string }) {
+  const screen = useRef<HTMLDivElement>(null)
+  const atEnd = useRef(true)
+  const { script, messages, loaded, error, going, logs, printed, results, setup } = t
+  const followUpOf = new Map(step.followUps.map((f) => [f.attempt, f]))
+  // Follow-ups going that have said nothing yet, whose setup shows after the conversation.
+  const waiting = step.followUps.filter((f) => f.status === 'active' && !messages.some((m) => m.attempt === f.attempt))
+
+  useEffect(() => {
+    if (atEnd.current && screen.current) screen.current.scrollTop = screen.current.scrollHeight
+  }, [messages.length, loaded, logs.lines?.length, printed.chunks?.length])
+
+  return (
+    <div
+      ref={screen}
+      className={className}
+      onScroll={(e) => {
+        const el = e.currentTarget
+        atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+      }}
+    >
+      {script ? (
+        <ScriptScreen step={step} printed={printed.chunks} logs={logs.lines} error={printed.error || logs.error} going={going} />
+      ) : (
+        <>
+          {error && <p className="term-error">The conversation couldn't load: {error}</p>}
+          {!loaded && !error && <p className="term-dim">Loading…</p>}
+          <WorkerLines lines={setup.get(1)} />
+          {loaded && messages.length === 0 && !setup.has(1) && (
+            <p className="term-dim">{going ? 'Nothing yet.' : 'No conversation was recorded for this step.'}</p>
+          )}
+          {messages.map((m, i) => (
+            <div key={m.id}>
+              {m.attempt > 1 && messages[i - 1]?.attempt !== m.attempt && (
+                <>
+                  <p className="term-rule">
+                    {followUpOf.has(m.attempt)
+                      ? `Follow-up · ${formatTime(followUpOf.get(m.attempt)!.startedAt)}`
+                      : `Try ${m.attempt}: the agent didn't hand in its output, so it was asked again`}
+                  </p>
+                  <WorkerLines lines={setup.get(m.attempt)} />
+                </>
+              )}
+              <TerminalMessage message={m.message} results={results} going={going} />
+            </div>
+          ))}
+          {waiting.map((f) => (
+            <div key={f.id}>
+              <p className="term-rule">Follow-up · {formatTime(f.startedAt)}</p>
+              <WorkerLines lines={setup.get(f.attempt)} />
+            </div>
+          ))}
+          {going && loaded && (
+            <p className="term-dim">
+              <span className="term-cursor" aria-hidden="true" /> working…
+            </p>
+          )}
+        </>
+      )}
+    </div>
   )
 }
 

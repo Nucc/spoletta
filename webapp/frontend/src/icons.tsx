@@ -357,6 +357,13 @@ export const EndIcon = () => (
   </Icon>
 )
 
+// Arrows to two corners, for opening something in a larger window.
+export const ExpandIcon = () => (
+  <Icon>
+    <path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9" />
+  </Icon>
+)
+
 export const ZoomInIcon = () => (
   <Icon>
     <circle cx="7" cy="7" r="4.5" />

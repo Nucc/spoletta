@@ -543,3 +543,61 @@ flows:
 		t.Error("a file saying nothing of how many the copy is left it a list")
 	}
 }
+
+// A pick may name several states, taking the oldest record in any of them,
+// and Run… on a record offers the flow for each of those states alone; a
+// state the object lacks among them is refused, and a pick naming the one
+// state as picks once did still reads.
+func TestPickedRecordInStates(t *testing.T) {
+	a := newApp(t)
+	s, f, ticket := pickTickets(a, "Tickets in states")
+	pick := func(p any) (int, string) {
+		status, reply := a.do("PUT", fmt.Sprintf("/api/objects/%d/pick", ticket.ID), map[string]any{"pick": p})
+		return status, strings.TrimSpace(string(reply))
+	}
+	if status, msg := pick(map[string]any{"states": []string{"open", "closed"}}); status != http.StatusBadRequest || !strings.Contains(msg, `no state "closed"`) {
+		t.Errorf("picking a state Ticket lacks = %d %q, want it refused", status, msg)
+	}
+	if status, msg := pick(map[string]any{"states": []string{"open", "review"}, "oldest": true}); status != http.StatusNoContent {
+		t.Fatalf("picking open or review = %d %q", status, msg)
+	}
+	approve := a.newProcess(f.ID, map[string]any{"name": "Approve", "kind": kindHuman})
+	a.input(approve.ID, ticket.ID)
+	a.link(map[string]any{"process": approve.ID, "object": ticket.ID, "direction": directionOutput, "states": []int64{pickState(t, ticket, "created"), pickState(t, ticket, "review")}})
+	a.startAt(f.ID, approve.ID)
+	created := pickAdd(a, s.ID, "C-1", "created")
+	pickAdd(a, s.ID, "C-2", "review")
+	pickAdd(a, s.ID, "C-3", "open")
+
+	first := a.waitStep(a.startRun(f.ID).ID, "Approve", stepWaiting)
+	if len(first.Inputs) != 1 || !strings.Contains(first.Inputs[0].Content, "C-2") {
+		t.Fatalf("the first run gave Approve %+v, want C-2, the oldest open or in review", first.Inputs)
+	}
+	second := a.waitStep(a.startRun(f.ID).ID, "Approve", stepWaiting)
+	if len(second.Inputs) != 1 || !strings.Contains(second.Inputs[0].Content, "C-3") {
+		t.Fatalf("the second run gave Approve %+v, want C-3", second.Inputs)
+	}
+	if status, _ := a.do("POST", fmt.Sprintf("/api/runs?flow=%d", f.ID), nil); status != http.StatusConflict {
+		t.Errorf("a third run, with C-1 created and the others held, answered %d, want 409", status)
+	}
+
+	var offered struct {
+		Flows []struct {
+			ID     int64             `json:"id"`
+			States []string          `json:"states"`
+			Off    map[string]string `json:"off"`
+		} `json:"flows"`
+	}
+	a.call("GET", fmt.Sprintf("/api/structs/%d/records/flows?records=%d", s.ID, created), nil, http.StatusOK, &offered)
+	if len(offered.Flows) != 1 || offered.Flows[0].Off[fmt.Sprint(created)] == "" || strings.Join(offered.Flows[0].States, ",") != "open,review" {
+		t.Fatalf("flows offered %+v, want one taking open and review, saying its pick wouldn't select C-1", offered.Flows)
+	}
+
+	if status, msg := pick(map[string]any{"state": "created"}); status != http.StatusNoContent {
+		t.Fatalf("picking created as picks once did = %d %q", status, msg)
+	}
+	third := a.waitStep(a.startRun(f.ID).ID, "Approve", stepWaiting)
+	if len(third.Inputs) != 1 || !strings.Contains(third.Inputs[0].Content, "C-1") {
+		t.Fatalf("the third run gave Approve %+v, want C-1", third.Inputs)
+	}
+}

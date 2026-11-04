@@ -1377,9 +1377,17 @@ export function setLinkQuery(id: number, query: LinkQuery | null): Promise<void>
 // oldest) in the state (any when empty) whose fields hold the rule. The run
 // takes it as it starts and holds it while it goes; see picks.go.
 export type ObjectPick = {
+  // The states it takes a record in, any when none.
+  states?: string[]
+  // The one state picks named before they could name several.
   state?: string
   where?: string
   oldest?: boolean
+}
+
+// The states a pick takes a record in, none for any.
+export function pickStates(pick: ObjectPick): string[] {
+  return pick.states?.length ? pick.states : pick.state ? [pick.state] : []
 }
 
 // Has each run of the flow work on the record the pick selects, or with null

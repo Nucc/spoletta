@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // An object can pick a shared record: a copy of a shared struct's object on
@@ -39,12 +40,49 @@ import (
 // flow process or a subflow is the run it is in's, whose record its steps
 // change too.
 
-// How a run picks its record: in State, any when empty, whose fields hold
-// Where, the latest written first unless Oldest.
+// How a run picks its record: in one of States, any when empty, whose
+// fields hold Where, the latest written first unless Oldest. State is the
+// one state picks named before they could name several, read as States.
 type objectPick struct {
-	State  string `json:"state,omitempty" yaml:"state,omitempty"`
+	States []string `json:"states,omitempty" yaml:"states,omitempty"`
+	State  string   `json:"state,omitempty" yaml:"state,omitempty"`
 	Where  string `json:"where,omitempty" yaml:"where,omitempty"`
 	Oldest bool   `json:"oldest,omitempty" yaml:"oldest,omitempty"`
+}
+
+// The states the pick takes records in, none for any.
+func (p *objectPick) states() []string {
+	if len(p.States) == 0 && p.State != "" {
+		return []string{p.State}
+	}
+	return p.States
+}
+
+// Whether the pick takes a record in state.
+func (p *objectPick) takesState(state string) bool {
+	ss := p.states()
+	return len(ss) == 0 || slices.Contains(ss, state)
+}
+
+// The pick's states as words, such as open or todo.
+func (p *objectPick) statesWords() string {
+	return strings.Join(p.states(), " or ")
+}
+
+// The pick with its states in States alone, each once, as it is stored.
+func (p *objectPick) normal() *objectPick {
+	if p == nil {
+		return nil
+	}
+	n := *p
+	n.States = nil
+	for _, s := range p.states() {
+		if s != "" && !slices.Contains(n.States, s) {
+			n.States = append(n.States, s)
+		}
+	}
+	n.State = ""
+	return &n
 }
 
 // The pick as stored: null for none.
@@ -52,7 +90,7 @@ func storedPick(p *objectPick) any {
 	if p == nil {
 		return nil
 	}
-	b, _ := json.Marshal(p)
+	b, _ := json.Marshal(p.normal())
 	return string(b)
 }
 
@@ -65,10 +103,20 @@ func pickOf(stored []byte) (*objectPick, error) {
 	return &p, json.Unmarshal(stored, &p)
 }
 
-// The pick as a query selecting the one record it takes, so the Records
-// page, task boards and Run… on a record read it as they read queries.
-func (p *objectPick) query() linkQuery {
-	return linkQuery{State: p.State, Where: p.Where, Limit: 1, Oldest: p.Oldest}
+// The pick as queries selecting the one record it takes, one per state it
+// takes records in (one of any state for none), so the Records page, task
+// boards and Run… on a record read it as they read queries, any of which
+// selecting a record is enough.
+func (p *objectPick) queries() []linkQuery {
+	ss := p.states()
+	if len(ss) == 0 {
+		ss = []string{""}
+	}
+	qs := make([]linkQuery, 0, len(ss))
+	for _, s := range ss {
+		qs = append(qs, linkQuery{State: s, Where: p.Where, Limit: 1, Oldest: p.Oldest})
+	}
+	return qs
 }
 
 // What's wrong with the pick alone, if anything.
@@ -107,13 +155,13 @@ func checkPick(ctx context.Context, db querier, object int64, p *objectPick) (st
 	case many:
 		return "a list picks no record; each run works on one", nil
 	}
-	if p.State != "" {
+	for _, st := range p.states() {
 		var n int
-		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM object_states WHERE object_id = ? AND name = ?", object, p.State).Scan(&n); err != nil {
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM object_states WHERE object_id = ? AND name = ?", object, st).Scan(&n); err != nil {
 			return "", err
 		}
 		if n == 0 {
-			return fmt.Sprintf("the object has no state %s", quote(p.State)), nil
+			return fmt.Sprintf("the object has no state %s", quote(st)), nil
 		}
 	}
 	return "", nil
@@ -127,8 +175,8 @@ func pickPhrase(object string, p *objectPick) string {
 		which = "earliest"
 	}
 	s := fmt.Sprintf("Each run works on the %s stored record of %s", which, object)
-	if p.State != "" {
-		s += " in " + p.State
+	if len(p.states()) > 0 {
+		s += " in " + p.statesWords()
 	}
 	if p.Where != "" {
 		s += " where " + p.Where
@@ -152,6 +200,7 @@ func registerPickRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		body.Pick = body.Pick.normal()
 		if msg, err := checkPick(r.Context(), db, id, body.Pick); err != nil {
 			serverError(w, err)
 			return
@@ -185,8 +234,8 @@ func (n *nothingToTake) Error() string {
 		return n.msg
 	}
 	which := quote(n.object) + " record"
-	if n.pick.State != "" {
-		which += " in " + n.pick.State
+	if len(n.pick.states()) > 0 {
+		which += " in " + n.pick.statesWords()
 	}
 	if n.pick.Where != "" {
 		which += " where " + n.pick.Where
@@ -304,22 +353,25 @@ func takeRecord(ctx context.Context, tx *sql.Tx, on int64, o snapshotObject) (in
 	}
 	q := "SELECT id, content FROM shared_records WHERE object_id = ? AND deleted_at IS NULL"
 	args := []any{store}
-	if o.Pick.State != "" {
-		q += " AND state = ?"
-		args = append(args, o.Pick.State)
+	if ss := o.Pick.states(); len(ss) > 0 {
+		q += " AND state IN (?" + strings.Repeat(", ?", len(ss)-1) + ")"
+		for _, st := range ss {
+			args = append(args, st)
+		}
 	}
 	q += " ORDER BY updated_at " + order + ", id " + order
 	selects := func(state, content string) bool {
-		return (o.Pick.State == "" || state == o.Pick.State) && json.Valid([]byte(content)) && (len(where) == 0 || where.holds(content))
+		return o.Pick.takesState(state) && json.Valid([]byte(content)) && (len(where) == 0 || where.holds(content))
 	}
 	var candidates []int64
+	q = strings.Replace(q, "SELECT id, content", "SELECT id, state, content", 1)
 	err = scanAll(ctx, tx, q, func(rows *sql.Rows) error {
 		var id int64
-		var content string
-		if err := rows.Scan(&id, &content); err != nil {
+		var state, content string
+		if err := rows.Scan(&id, &state, &content); err != nil {
 			return err
 		}
-		if selects(o.Pick.State, content) {
+		if selects(state, content) {
 			candidates = append(candidates, id)
 		}
 		return nil

@@ -209,7 +209,7 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 			}
 			for _, o := range s.Objects {
 				if picksRecord(o) && *o.Store == store {
-					f.queries = append(f.queries, o.Pick.query())
+					f.queries = append(f.queries, o.Pick.queries()...)
 				}
 			}
 			if len(f.queries) > 0 {
@@ -235,17 +235,19 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 		if err := rows.Scan(&id, &name, &query, &pick); err != nil {
 			return err
 		}
-		var q linkQuery
+		var qs []linkQuery
 		if query != nil {
+			var q linkQuery
 			if err := json.Unmarshal(query, &q); err != nil {
 				return err
 			}
+			qs = []linkQuery{q}
 		} else {
 			p, err := pickOf(pick)
 			if err != nil {
 				return err
 			}
-			q = p.query()
+			qs = p.queries()
 		}
 		f := unpublished[id]
 		if f == nil {
@@ -253,7 +255,7 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 			unpublished[id] = f
 			fs = append(fs, f)
 		}
-		f.queries = append(f.queries, q)
+		f.queries = append(f.queries, qs...)
 		return nil
 	}, store, store)
 	if err != nil {

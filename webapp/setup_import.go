@@ -1521,6 +1521,7 @@ func (b *builder) resolveObject(bo *bobj) error {
 	if o.Persistent && b.shared(bo) {
 		return problemf("%s: it is a copy of a shared object, which every flow using it stores already; it isn't persistent too", at)
 	}
+	o.Pick = o.Pick.normal()
 	if msg, err := b.checkPick(bo, o); err != nil || msg != "" {
 		if err != nil {
 			return err

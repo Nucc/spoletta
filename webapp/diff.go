@@ -500,8 +500,8 @@ func pickText(p *objectPick) string {
 	if p.Oldest {
 		s = "the earliest"
 	}
-	if p.State != "" {
-		s += " in " + p.State
+	if len(p.states()) > 0 {
+		s += " in " + p.statesWords()
 	}
 	if p.Where != "" {
 		s += " where " + p.Where

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { listTaskStructs, type AttributePatch, type AttributeType, type FlowObject, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation, type TaskStruct } from './api'
+import { listTaskStructs, pickStates, type AttributePatch, type AttributeType, type FlowObject, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation, type TaskStruct } from './api'
 import { Data } from './Data'
 import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TableIcon, TrashIcon, ZoomInIcon } from './icons'
 import { pickText } from './ObjectNode'
@@ -382,7 +382,7 @@ export default function ObjectPanel({
                 type="checkbox"
                 checked={pick !== null}
                 disabled={!editable}
-                onChange={(e) => onPickChange(e.target.checked ? { state: states[0]?.name, oldest: true } : null)}
+                onChange={(e) => onPickChange(e.target.checked ? { states: states[0] ? [states[0].name] : undefined, oldest: true } : null)}
               />
               <span>Each run works on one of its records</span>
             </label>
@@ -1045,22 +1045,29 @@ function PickFields({
   const [where, setWhere] = useState(pick.where ?? '')
   useEffect(() => setWhere(pick.where ?? ''), [pick.where])
   const set = (patch: ObjectPick) => onChange({ ...pick, ...patch })
+  const picked = pickStates(pick)
   return (
     <div className="query-link">
+      <fieldset className="pick-states" disabled={!editable}>
+        <legend>In which states</legend>
+        {states.map((s) => (
+          <label key={s.id}>
+            <input
+              type="checkbox"
+              checked={picked.includes(s.name)}
+              onChange={(e) =>
+                set({
+                  states: e.target.checked ? [...picked, s.name] : picked.filter((n) => n !== s.name),
+                  state: undefined,
+                })
+              }
+            />
+            {s.name}
+          </label>
+        ))}
+        <small>{picked.length ? `In ${picked.join(' or ')}` : 'In any state'}</small>
+      </fieldset>
       <div className="panel-row">
-        <select
-          aria-label="In which state"
-          value={pick.state ?? ''}
-          disabled={!editable}
-          onChange={(e) => set({ state: e.target.value || undefined })}
-        >
-          <option value="">In any state</option>
-          {states.map((s) => (
-            <option key={s.id} value={s.name}>
-              In {s.name}
-            </option>
-          ))}
-        </select>
         <select
           aria-label="Which first"
           value={pick.oldest ? 'oldest' : 'latest'}

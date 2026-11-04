@@ -572,8 +572,11 @@ func (c *problemCheck) picked() {
 		case !picksRecord(o):
 			c.onObject(problemError, "pick", o, "%s picks a record for each run, but only an object on the top board that isn't a list picks one: stop it picking.", quote(o.Name))
 			continue
-		case o.Pick.State != "" && !slices.ContainsFunc(c.s.States, func(st objectState) bool { return st.Object == o.ID && st.Name == o.Pick.State }):
-			c.onObject(problemError, "pick", o, "%s picks a record in %s, but has no such state, so no run has one to work on.", quote(o.Name), quote(o.Pick.State))
+		}
+		for _, name := range o.Pick.states() {
+			if !slices.ContainsFunc(c.s.States, func(st objectState) bool { return st.Object == o.ID && st.Name == name }) {
+				c.onObject(problemError, "pick", o, "%s picks a record in %s, but has no such state, so no run has one to work on in it.", quote(o.Name), quote(name))
+			}
 		}
 		for _, p := range c.s.Processes {
 			var takes, queries, yields bool

@@ -1,7 +1,7 @@
 import { useContext, useEffect, useState } from 'react'
 import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
 import { StructFlowsContext, useBoardActions } from './actions'
-import type { ObjectAttribute, ObjectFollow, ObjectPick, ObjectState, Relation } from './api'
+import { pickStates, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation } from './api'
 import { AggregationIcon, DatabaseIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
 import { AppendButton, NameInput, Subtitle } from './ProcessNode'
 import { quantityText, type Quantity } from './quantity'
@@ -65,7 +65,8 @@ export type ObjectNodeType = Node<ObjectNodeData, 'object'>
 // oldest in open".
 export function pickText(pick: ObjectPick): string {
   let s = pick.oldest ? 'the oldest' : 'the latest'
-  if (pick.state) s += ` in ${pick.state}`
+  const states = pickStates(pick)
+  if (states.length) s += ` in ${states.join(' or ')}`
   if (pick.where) s += ` where ${pick.where}`
   return s
 }

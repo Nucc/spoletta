@@ -12823,3 +12823,27 @@ select.flow-owner:not([multiple]):not([size]):disabled {
   font-size: 12px;
   line-height: 1.45;
 }
+
+/* The states an object picking a record takes it in, ticked; none for any. */
+.pick-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 0 0 8px;
+}
+.pick-states legend {
+  font-size: 12px;
+  padding: 0 4px;
+}
+.pick-states label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pick-states small {
+  flex-basis: 100%;
+  opacity: 0.7;
+}

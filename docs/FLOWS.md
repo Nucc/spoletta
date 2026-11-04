@@ -530,11 +530,11 @@ repositories:
     on their fields narrows them, such as `attempts < 3`. To retry what
     failed, have the failure handler take it and yield it `failed`, and
     query that state too.
-  - Or the object **picks** the record each run works on: `pick: {state:
-    new, oldest: true}` (and `where:`, a rule on its fields) on the copy of
+  - Or the object **picks** the record each run works on: `pick: {states:
+    [new, reopened], oldest: true}` (and `where:`, a rule on its fields) on the copy of
     the struct on a job flow's top board. As a run starts it takes one
     record: the one it was started on (Run… on a record, a task board),
-    else the oldest (or, without `oldest`, the latest) in that state that no
+    else the oldest (or, without `oldest`, the latest) in one of those states (any, without `states`) that no
     other run holds. That record is the object's value in the run, so every
     process linked to it, plainly, gets the same one as it was then, and
     the run **holds** it until it ends: no other run picks it, and a task

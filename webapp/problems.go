@@ -1040,10 +1040,37 @@ func (c *problemCheck) followed() {
 	}
 }
 
+// Whether runs may hold a generated object as they start: one picking or
+// following a record does, and a shared struct's copy does in a run a
+// person or a task board started on one of its records, which needs the
+// flow to query its store (record_runs.go). Any other is had only once a
+// process generates it, after the branch is named.
+func (c *problemCheck) heldAtStart(o snapshotObject) bool {
+	if o.Pick != nil || o.Follows != nil {
+		return true
+	}
+	if o.Store == nil {
+		return false
+	}
+	for _, ls := range c.links {
+		for _, l := range ls {
+			if l.Query == nil {
+				continue
+			}
+			for _, q := range c.s.Objects {
+				if q.ID == l.Object && q.Store != nil && *q.Store == *o.Store {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // The flow's rule naming its runs' branches after what they work on (see
 // branch_names.go): each value must be one runs hold as they start, else
-// they work on branches of their own. A struct's copy neither picking nor
-// following a record is held only by runs started on a record, so passes.
+// they work on branches of their own: one a process generates is held
+// at the start only as heldAtStart has it.
 func (c *problemCheck) branchRule() {
 	if c.s.Settings == nil || c.s.Settings.Branch == "" || len(c.s.Settings.Repositories) == 0 {
 		return
@@ -1068,8 +1095,8 @@ func (c *problemCheck) branchRule() {
 		case o.Many:
 			c.onObject(problemWarning, "branch", *o, "The branch %s names %s, a list, which holds no one value to name it after, so runs work on branches of their own: name an object holding one.",
 				rule, quote(o.Name))
-		case o.Store == nil && c.generated[o.ID]:
-			c.onObject(problemWarning, "branch", *o, "The branch %s names %s, which a process generates, but a run's branch is named from what it starts with, so runs work on branches of their own: give %s to runs as they start (Run with inputs, the API, a webhook).",
+		case c.generated[o.ID] && !c.heldAtStart(*o):
+			c.onObject(problemWarning, "branch", *o, "The branch %s names %s, which a process generates, but a run's branch is named from what it starts with, so runs work on branches of their own: name an object runs start with instead, such as the record they pick, or give %s to runs as they start (Run with inputs, the API, a webhook).",
 				rule, quote(o.Name), quote(o.Name))
 		}
 	}

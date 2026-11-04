@@ -134,3 +134,43 @@ func TestValuesAreMadeBranchSafe(t *testing.T) {
 		t.Errorf("a long name is cut to %d characters: %q", len(got), got)
 	}
 }
+
+// A rule naming a shared struct's copy a process generates warns, as runs
+// don't hold it as they start, unless it picks or follows a record or the
+// flow queries its store, so a run can be started on one of its records.
+func TestBranchRuleOnGeneratedRecordWarns(t *testing.T) {
+	board := func() snapshot {
+		store := int64(500)
+		return snapshot{
+			Processes:  []process{{ID: 1, Name: "Implement", Kind: kindAgent, Model: "anthropic/claude", Settings: processSettings{Repositories: &[]string{"app"}}}},
+			Objects:    []snapshotObject{{ID: 10, Name: "Pull Request", Store: &store}},
+			Attributes: []attribute{{ID: 30, Object: 10, Name: "Jira Ticket Id"}},
+			Links:      []snapshotLink{{ID: 40, Process: 1, Object: 10, Direction: directionOutput}},
+			Start:      startsWith(1),
+			Settings:   &flowSettings{Branch: "{@Pull_Request.Jira_Ticket_Id}", Repositories: []repository{{Name: "app", URL: "https://example.com/app.git"}}},
+		}
+	}
+	warned := func(s snapshot) bool {
+		for _, p := range boardProblems(s, soundFacts()) {
+			if p.Rule == "branch" {
+				return true
+			}
+		}
+		return false
+	}
+	if !warned(board()) {
+		t.Error("a generated shared record isn't warned of")
+	}
+	picking := board()
+	picking.Objects[0].Pick = &objectPick{}
+	if warned(picking) {
+		t.Error("a picked record is warned of")
+	}
+	queried := board()
+	other := int64(500)
+	queried.Objects = append(queried.Objects, snapshotObject{ID: 11, Name: "Pull Request lookup", Store: &other})
+	queried.Links = append(queried.Links, snapshotLink{ID: 41, Process: 1, Object: 11, Direction: directionInput, Query: &linkQuery{}})
+	if warned(queried) {
+		t.Error("a record of a queried store is warned of")
+	}
+}

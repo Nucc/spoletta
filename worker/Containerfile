@@ -18,7 +18,7 @@ RUN apk add --no-cache bash curl git jq \
     ripgrep fd tree file less \
     coreutils findutils grep sed gawk diffutils patch \
     tar gzip xz zip unzip make \
-    python3 py3-pip \
+    python3 py3-pip github-cli \
     su-exec
 # Agents call python as often as python3. Alpine marks its Python as the
 # system's, so pip installs nothing without being told; a step's packages
@@ -31,6 +31,8 @@ COPY --from=build /out/worker /usr/local/bin/worker
 COPY worker/submit-output.ts /opt/flow/submit-output.ts
 COPY worker/mcp-servers.ts /opt/flow/mcp-servers.ts
 COPY --chmod=755 worker/git-credential.sh /opt/flow/git-credential.sh
+# gh, given the step's git token as it runs; the real one is /usr/bin/gh.
+COPY --chmod=755 worker/gh.sh /usr/local/bin/gh
 # The guide to authoring flows, which flows' assistants read.
 COPY docs/FLOWS.md /opt/flow/docs/FLOWS.md
 # Agents commit to their run's branch as this, unless GIT_AUTHOR_NAME and

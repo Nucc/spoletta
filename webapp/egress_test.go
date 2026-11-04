@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -141,5 +142,22 @@ func TestEgressProxy(t *testing.T) {
 	// Requests that aren't the proxy's go on to the webapp.
 	if resp, err := http.Get(proxy.URL + "/api/flows"); err != nil || resp.StatusCode != http.StatusNotFound {
 		t.Errorf("a request of the webapp's: %v, %v", resp, err)
+	}
+}
+
+func TestRepositoryHosts(t *testing.T) {
+	repo := func(u string) workspaceRepo { return workspaceRepo{repository: repository{URL: u}} }
+	got := repositoryHosts(&workspaceSpec{Repositories: []workspaceRepo{
+		repo("https://GitHub.com/acme/api"), repo("https://github.com/acme/web"), repo("https://git.example.com:8443/acme/x"),
+	}})
+	want := []string{"github.com:443", "api.github.com:443", "git.example.com:8443"}
+	if !slices.Equal(got, want) {
+		t.Errorf("hosts = %v, want %v", got, want)
+	}
+	if got := repositoryHosts(&workspaceSpec{Repositories: []workspaceRepo{repo("https://gitlab.com/acme/api")}}); slices.Contains(got, "api.github.com:443") {
+		t.Errorf("a repository elsewhere reached GitHub's API: %v", got)
+	}
+	if got := repositoryHosts(nil); len(got) != 0 {
+		t.Errorf("no workspace: %v", got)
 	}
 }

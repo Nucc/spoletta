@@ -2,7 +2,7 @@
 # (SANDBOX=podman; see sandbox_podman.go): pi, with the extensions the
 # worker gives it, and what a coding agent reaches for: bash, git, curl
 # and jq, ripgrep and fd to search, GNU's coreutils, grep, sed and awk in
-# place of busybox's, diff and patch, archivers, make, and Python with pip
+# place of busybox's, diff and patch, archivers, make, GitHub's gh, and Python with pip
 # (installing into the step's home, as the root is read-only). Nothing
 # of the worker's: it stays in the worker's image. Node
 # names its patch release, as in the worker's image.
@@ -12,7 +12,7 @@ RUN apk add --no-cache bash curl git jq \
     ripgrep fd tree file less \
     coreutils findutils grep sed gawk diffutils patch \
     tar gzip xz zip unzip make \
-    python3 py3-pip
+    python3 py3-pip github-cli
 # Agents call python as often as python3. Alpine marks its Python as the
 # system's, so pip installs nothing without being told; a step's packages
 # go to its home (--user), never the image.
@@ -23,6 +23,8 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 COPY worker/submit-output.ts /opt/flow/submit-output.ts
 COPY worker/mcp-servers.ts /opt/flow/mcp-servers.ts
 COPY --chmod=755 worker/git-credential.sh /opt/flow/git-credential.sh
+# gh, given the step's git token as it runs; the real one is /usr/bin/gh.
+COPY --chmod=755 worker/gh.sh /usr/local/bin/gh
 # Agents commit to their run's branch as this, unless GIT_AUTHOR_NAME and
 # the like say otherwise. The step's environment names its git token.
 RUN git config --system user.name "Flow agent" \

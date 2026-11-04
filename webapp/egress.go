@@ -99,18 +99,7 @@ func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl
 		return nil
 	}
 	g := proxyGrant{user: who, run: run, step: step}
-	reaches := egressReaches{Repos: []string{}}
-	if ws != nil {
-		for _, r := range ws.Repositories {
-			if u, err := url.Parse(r.URL); err == nil && u.Hostname() != "" {
-				port := u.Port()
-				if port == "" {
-					port = "443"
-				}
-				reaches.Repos = append(reaches.Repos, net.JoinHostPort(strings.ToLower(u.Hostname()), port))
-			}
-		}
-	}
+	reaches := egressReaches{Repos: repositoryHosts(ws)}
 	if ttl <= 0 {
 		ttl = llmDefaultTTL
 	}
@@ -204,6 +193,39 @@ func (b *egressBroker) watchTunnels(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// The hosts a step's repositories let it reach, with their ports: each
+// repository's own, which its git fetches from and pushes to, and for one
+// on github.com its API too, which gh and GitHub's tools call with the
+// same token, scoped to the run's repositories. A GitHub Enterprise
+// server's API is on its own host, so it needs nothing more.
+func repositoryHosts(ws *workspaceSpec) []string {
+	hosts := []string{}
+	if ws == nil {
+		return hosts
+	}
+	add := func(h string) {
+		if !slices.Contains(hosts, h) {
+			hosts = append(hosts, h)
+		}
+	}
+	for _, r := range ws.Repositories {
+		u, err := url.Parse(r.URL)
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		port := u.Port()
+		if port == "" {
+			port = "443"
+		}
+		host := strings.ToLower(u.Hostname())
+		add(net.JoinHostPort(host, port))
+		if host == "github.com" && port == "443" {
+			add("api.github.com:443")
+		}
+	}
+	return hosts
 }
 
 // The repositories' hosts as the audit log says them.

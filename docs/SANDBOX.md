@@ -125,8 +125,10 @@ default seccomp profile. `SANDBOX_RUNTIME` picks another OCI runtime or
 runtime class, such as gVisor's `runsc`, for a kernel of its own. The image,
 `worker/sandbox.Containerfile`, holds pi, its extensions and what a coding
 agent reaches for (bash, git, curl, jq, ripgrep, fd, GNU's coreutils, grep,
-sed and awk, diff and patch, archivers, make, Python with pip installing
-into the step's home), and nothing of the worker's.
+sed and awk, diff and patch, archivers, make, GitHub's `gh` (given the step's git token as it runs,
+`worker/gh.sh`), Python with pip installing
+into the step's home), and nothing of the worker's. A step working on a
+`github.com` repository reaches `api.github.com` too, for `gh`.
 
 ## Podman and Docker
 

@@ -27,7 +27,6 @@ import {
   ClockIcon,
   CopyIcon,
   DownloadIcon,
-  FlowBuilderIcon,
   FlowIcon,
   GridIcon,
   MoreIcon,
@@ -386,7 +385,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
     <div className="flows-page home">
       <header className="toolbar home-bar">
         <h1>
-          <FlowBuilderIcon /> Home
+          Home
         </h1>
         <label className="home-search">
           <SearchIcon />

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Data, parse, type Json } from './Data'
 import { getFlow, getFlowData, type DataCell, type DataRow, type Flow, type FlowData, type FlowRunStatus, type SearchFacet } from './api'
-import { FlowBuilderIcon, TableIcon } from './icons'
+import { TableIcon } from './icons'
 import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { formatTime, RUN_LABELS } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch, type Display } from './Search'
@@ -113,7 +113,7 @@ export default function FlowDataPage({ id }: { id: number }) {
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

@@ -27,7 +27,6 @@ import { type Json } from './Data'
 import {
   AlertIcon,
   ExternalIcon,
-  FlowBuilderIcon,
   GearIcon,
   HistoryIcon,
   PauseIcon,
@@ -353,7 +352,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

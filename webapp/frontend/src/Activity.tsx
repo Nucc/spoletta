@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { getActivity, webhookLabel, type Activity as ActivityData, type ActivityRun, type FlowActivity, type ReviewTimes } from './api'
-import { ActivityIcon, FlowBuilderIcon } from './icons'
+import { ActivityIcon } from './icons'
 import { formatTime } from './Runs'
 import { HomeFrame } from './FlowList'
 import ErrorBanner from './ErrorBanner'
@@ -70,7 +70,7 @@ export default function Activity() {
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

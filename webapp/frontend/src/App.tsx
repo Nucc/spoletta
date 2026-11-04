@@ -118,6 +118,7 @@ export default function App() {
         onSelect={select}
         onAdd={() => add('#/', true)}
         onClose={close}
+        onHome={() => openPage('#/')}
         onInbox={onInbox}
       />
       <div className="tab-page">

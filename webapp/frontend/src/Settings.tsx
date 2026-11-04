@@ -8,7 +8,6 @@ import {
   type NotificationSettings,
 } from './api'
 import { configures, useMe } from './Account'
-import { FlowBuilderIcon } from './icons'
 import { MCPServers } from './MCPSettings'
 import { DirectorySection } from './Directory'
 import { PeopleSection } from './People'
@@ -94,7 +93,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

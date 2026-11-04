@@ -39,32 +39,70 @@ body,
   scrollbar-width: none;
 }
 
+/* Spoletta's mark, first in the bar, opening the home page. */
+.tab-home {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  margin-bottom: 1px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: #1f2328;
+  cursor: pointer;
+}
+
+.tab-home:hover {
+  background: #d8dee4;
+}
+
+/* Each tab as wide as its title, between bounds, shrinking together when
+   the row is full; the inactive ones a shade darker than the bar. */
 .tab {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex: 0 1 200px;
-  min-width: 80px;
-  height: 28px;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 96px;
+  max-width: 240px;
+  height: 30px;
   margin-bottom: -1px;
-  padding: 0 4px 0 12px;
+  padding: 0 4px 0 10px;
   border: 1px solid transparent;
-  border-radius: 6px 6px 0 0;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  background: #dde2e8;
   font-size: 13px;
-  color: #57606a;
+  color: #424a53;
   cursor: pointer;
   user-select: none;
 }
 
 .tab:hover {
-  background: #f3f5f7;
+  background: #d3d9e0;
 }
 
 .tab.active {
+  height: 31px;
   background: #fff;
   border-color: #d8dee4;
-  border-bottom-color: #fff;
   color: #1f2328;
+  font-weight: 600;
+}
+
+.tab-kind {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: #57606a;
+}
+
+.tab-kind svg {
+  width: 14px;
+  height: 14px;
 }
 
 .tab-label {
@@ -73,6 +111,12 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Only the open tab and the one under the pointer show their ×, keeping
+   its room so the title doesn't move. */
+.tab:not(.active):not(:hover):not(:focus-within) .tab-close {
+  visibility: hidden;
 }
 
 .tab-close,

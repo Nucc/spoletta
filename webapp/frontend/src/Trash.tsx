@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { deleteForGood, listTrash, restoreFlow, type TrashedFlow } from './api'
-import { FlowBuilderIcon, ObjectIcon, SubflowIcon, TrashIcon } from './icons'
+import { ObjectIcon, SubflowIcon, TrashIcon } from './icons'
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
 import { HomeFrame } from './FlowList'
@@ -76,7 +76,7 @@ export default function Trash() {
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

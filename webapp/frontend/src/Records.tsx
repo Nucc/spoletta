@@ -13,7 +13,7 @@ import {
   type SharedRecords as Records,
 } from './api'
 import { HeaderResizer, useColumnWidths } from './HeaderResizer'
-import { FlowBuilderIcon, HistoryIcon, PlayIcon, TableIcon } from './icons'
+import { HistoryIcon, PlayIcon, TableIcon } from './icons'
 import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { RecordDialog } from './RecordDialog'
 import { RecordRunDialog } from './RecordRunDialog'
@@ -220,7 +220,7 @@ export default function RecordsPage({ id }: { id: number }) {
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

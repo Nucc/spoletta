@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { getFlow, getRun, runOrigin, type Flow, type FlowRunDetail, type RunInput, type RunObject, type RunStep } from './api'
 import { diffLines, fieldsOf, fieldText, outcomeOf, pairObjects, pairProcesses, pairSteps, type ObjectPair, type ProcessPair } from './compare'
-import { FlowBuilderIcon } from './icons'
 import { decisionText, formatTime, ORIGIN_LABELS, RUN_LABELS, STEP_LABELS } from './Runs'
 import { formatSpan } from './timeline'
 import ErrorBanner from './ErrorBanner'
@@ -53,7 +52,7 @@ export default function RunCompare({ flow, a: aId, b: bId }: { flow: number; a: 
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { listInbox, onInboxChanged, reviewHash, type InboxItem } from './api'
 import { useMe } from './Account'
-import { FlowBuilderIcon, InboxIcon } from './icons'
+import { InboxIcon } from './icons'
 import { formatTime } from './Runs'
 import ErrorBanner from './ErrorBanner'
 
@@ -54,7 +54,7 @@ export default function Inbox() {
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

@@ -29,7 +29,6 @@ import {
   ChevronDownIcon,
   CodeIcon,
   CopyIcon,
-  FlowBuilderIcon,
   FlowIcon,
   GearIcon,
   HistoryIcon,
@@ -3853,7 +3852,7 @@ export default function Board({
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

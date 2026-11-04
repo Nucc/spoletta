@@ -10,7 +10,7 @@ import {
   type Schedule,
   type ScheduleFields,
 } from './api'
-import { ClockIcon, FlowBuilderIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
+import { ClockIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
 import { useConfirm } from './Confirm'
 import { HomeFrame } from './FlowList'
@@ -97,7 +97,7 @@ export default function Schedules() {
       <header className="toolbar">
         <h1>
           <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            <FlowBuilderIcon /> Home
+            Home
           </a>
           <span className="crumb-separator" aria-hidden>
             /

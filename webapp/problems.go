@@ -103,6 +103,7 @@ func boardProblems(s snapshot, f problemFacts) []problem {
 	c.picked()
 	c.followed()
 	c.unreached()
+	c.branchRule()
 	out := []problem{}
 	for _, level := range []string{problemError, problemWarning} {
 		for _, p := range c.found {
@@ -1032,6 +1033,41 @@ func (c *problemCheck) followed() {
 				c.onProcess(problemError, "follow-change", p, "%s generates %s without taking it, but each run follows one %s record: link %s to it so it sees what it changes.",
 					quote(p.Name), quote(o.Name), quote(o.Name), quote(o.Name))
 			}
+		}
+	}
+}
+
+// The flow's rule naming its runs' branches after what they work on (see
+// branch_names.go): each value must be one runs hold as they start, else
+// they work on branches of their own. A struct's copy neither picking nor
+// following a record is held only by runs started on a record, so passes.
+func (c *problemCheck) branchRule() {
+	if c.s.Settings == nil || c.s.Settings.Branch == "" || len(c.s.Settings.Repositories) == 0 {
+		return
+	}
+	rule := c.s.Settings.Branch
+	parts, err := parseBranchRule(rule)
+	if err != nil {
+		return
+	}
+	for _, p := range parts {
+		if p.object == "" {
+			continue
+		}
+		o, a := ruleObject(c.s, p)
+		switch {
+		case o == nil:
+			c.add(problemWarning, "branch", nil, nil, "The branch %s names %s, which isn't an object on the top board, so runs work on branches of their own: fix it in the flow settings.",
+				rule, quote(p.object))
+		case p.attribute != "" && a == nil:
+			c.onObject(problemWarning, "branch", *o, "The branch %s names %s's %s, which it doesn't have, so runs work on branches of their own: fix it in the flow settings.",
+				rule, quote(o.Name), quote(p.attribute))
+		case o.Many:
+			c.onObject(problemWarning, "branch", *o, "The branch %s names %s, a list, which holds no one value to name it after, so runs work on branches of their own: name an object holding one.",
+				rule, quote(o.Name))
+		case o.Store == nil && c.generated[o.ID]:
+			c.onObject(problemWarning, "branch", *o, "The branch %s names %s, which a process generates, but a run's branch is named from what it starts with, so runs work on branches of their own: give %s to runs as they start (Run with inputs, the API, a webhook).",
+				rule, quote(o.Name), quote(o.Name))
 		}
 	}
 }

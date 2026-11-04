@@ -910,7 +910,7 @@ func workDir(ctx context.Context, ws *workspaceSpec, scratch string, l *stepLogg
 		for i, r := range t.repos {
 			names[i] = r.Name
 		}
-		msg := fmt.Sprintf("working in the workspace %s on the branch %s, with %s, ready in %dms", ws.ID, ws.Branch, strings.Join(names, ", "), time.Since(started).Milliseconds())
+		msg := fmt.Sprintf("working in the workspace %s on the branch %s, with %s, ready in %dms", ws.ID, ws.checkoutBranch(), strings.Join(names, ", "), time.Since(started).Milliseconds())
 		if len(t.recreated) > 0 {
 			msg += "; the checkouts of " + strings.Join(t.recreated, ", ") + " were made again from the branch"
 		}
@@ -997,7 +997,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	}
 	spec.Env = childEnv(append(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since, "PYTHONUNBUFFERED=1"), credVars...)...)
 	if run.Workspace != nil {
-		spec.Env = append(spec.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.Branch)
+		spec.Env = append(spec.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.checkoutBranch())
 	}
 	if run.FilesDir != "" {
 		spec.Env = append(spec.Env, "OUTPUTS="+run.FilesDir)

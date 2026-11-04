@@ -412,6 +412,7 @@ func (im *importer) importEntry(e *setupEntry) error {
 			settings.Repositories = append(settings.Repositories, repository(r))
 		}
 		settings.BranchPrefix = e.flow.BranchPrefix
+		settings.Branch = e.flow.Branch
 		if msg := settings.check(); msg != "" {
 			return problemf("%s: %s", quote(e.name), msg)
 		}

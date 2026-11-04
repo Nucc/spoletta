@@ -186,6 +186,7 @@ func (e *engine) start(nr pendingRun, flow int64, given map[int64]value) {
 	go func() {
 		logRunStarted(e.db, id)
 		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
+		fr.rule = nr.rule
 		fr.record = nr.record
 		fr.published = nr.published
 		// What it took of the records goes in as what it was given does.
@@ -194,7 +195,8 @@ func (e *engine) start(nr pendingRun, flow int64, given map[int64]value) {
 			maps.Copy(with, given)
 			given = with
 		}
-		w := newWalk(ctx, e, id, lr, fr, nil, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
+		named := nameBranch(e.db, id, fr, given)
+		w := newWalk(ctx, e, id, lr, fr, nil, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10), named))
 		if err := w.carry(); err != nil {
 			runLog(e.db, id, 0, logError, "the objects it carries couldn't be carried in: %v", err)
 			w.fail()
@@ -208,18 +210,26 @@ func (e *engine) start(nr pendingRun, flow int64, given map[int64]value) {
 // Executes a run re-running another from process from, as start does, but
 // on board, nil for the top board, given what came from outside, starting at
 // the process, with the objects holding values, and its branches starting
-// from the commits in starts; see reruns.go.
-func (e *engine) rerun(nr pendingRun, flow int64, board *int64, given map[int64]value, from int64, values map[int64]value, starts map[string]string) {
+// from the commits in starts, its checkouts on the branch named if the run
+// it re-runs had one; see reruns.go.
+func (e *engine) rerun(nr pendingRun, flow int64, board *int64, given map[int64]value, from int64, values map[int64]value, starts map[string]string, named string) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	lr := e.register(nr.id, func() { cancel(nil) })
 	lr.failWith = cancel
 	go func() {
 		logRunStarted(e.db, nr.id)
 		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
+		fr.rule = nr.rule
 		fr.starts = starts
 		fr.record = nr.record
 		fr.published = nr.published
-		w := newWalk(ctx, e, nr.id, lr, fr, board, given, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10)))
+		nb := keptOrUnnamed(e.db, fr, given, named, true)
+		if nb.name != "" {
+			keepBranch(e.db, nr.id, nb.name)
+		} else if nb.unnamed != "" {
+			runLog(e.db, nr.id, 0, logInfo, "works on a branch of its own, as %s", nb.unnamed)
+		}
+		w := newWalk(ctx, e, nr.id, lr, fr, board, given, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10), nb))
 		w.resume(from, values)
 		e.finish(ctx, nr.id, w)
 	}()
@@ -540,6 +550,9 @@ type flowRun struct {
 	// The flow's repositories as the run started, and its branches' prefix.
 	repos  []repository
 	prefix string
+	// What names the branch its checkouts are on after what the run works
+	// on; see branch_names.go.
+	rule string
 	// For a re-run: the commit each repository's branches start from, by
 	// name; see reruns.go.
 	starts map[string]string
@@ -570,13 +583,14 @@ func newFlowRun(flow, version int64, board snapshot, repos []repository, prefix 
 	return &flowRun{flow: flow, version: version, board: rb.snapshot, rb: rb, objects: rb.objects, repos: repos, prefix: prefix}
 }
 
-// A workspace of its own for run, named id, on the branch <prefix>/id; nil
-// when the flow has no repositories.
-func (fr *flowRun) workspace(run int64, id string) *runWorkspace {
+// A workspace of its own for run, named id, on the branch <prefix>/id, its
+// checkouts on the one the flow's rule named if it did; nil when the flow
+// has no repositories.
+func (fr *flowRun) workspace(run int64, id string, nb namedBranch) *runWorkspace {
 	if len(fr.repos) == 0 {
 		return nil
 	}
-	return &runWorkspace{id: id, run: run, branch: fr.prefix + "/" + id, repos: fr.repos, starts: fr.starts}
+	return &runWorkspace{id: id, run: run, branch: fr.prefix + "/" + id, named: nb.name, unnamed: nb.unnamed, repos: fr.repos, starts: fr.starts}
 }
 
 // A run walking a board: the top board, or a flow process's.
@@ -1496,12 +1510,18 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		if recording {
 			name = "run-" + strconv.FormatInt(run, 10)
 		}
-		ws = w.fr.workspace(run, name)
+		ws = w.fr.workspace(run, name, namedBranch{})
+	} else if recording && callee == nil && ws != nil && ws.named != "" {
+		// Its run works on this run's branch, which a re-run of it keeps.
+		keepBranch(db, run, ws.named)
 	}
-	// Another flow works on its own repositories, in a workspace of its run's.
+	// Another flow works on its own repositories, in a workspace of its
+	// run's, on the branch its flow names after what it is given if it does.
 	var inner *walk
 	if callee != nil {
-		inner = newWalk(ctx, w.e, run, lr, callee, nil, w.toCallee(callee, given), callee.workspace(run, "run-"+strconv.FormatInt(run, 10)))
+		toCallee := w.toCallee(callee, given)
+		named := nameBranch(db, run, callee, toCallee)
+		inner = newWalk(ctx, w.e, run, lr, callee, nil, toCallee, callee.workspace(run, "run-"+strconv.FormatInt(run, 10), named))
 	} else {
 		inner = newWalk(ctx, w.e, run, lr, w.fr, &id, given, ws)
 	}

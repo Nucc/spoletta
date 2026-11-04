@@ -549,6 +549,9 @@ export type FlowSettings = {
   repositories: Repository[]
   // Runs' branches are named <prefix>/run-<id>; empty uses flow/<the flow's name>.
   branchPrefix: string
+  // The branch runs' checkouts are on, named after what they work on, such
+  // as feature/{@Ticket.key}; none for a branch of each run's own.
+  branch?: string
   // The most, in dollars, a run may spend on its models; none or 0 for the
   // instance's limit, which is kept to if lower.
   runSpendLimit?: number
@@ -1717,6 +1720,9 @@ export type RunStep = {
   childRun: number | null
   // The branch it worked on in its run's workspace; empty if it worked in none.
   branch: string
+  // The branch its checkouts were on when its flow names it after what the
+  // run works on, which the worker keeps as branch.
+  named?: string
   // What it did to each repository it worked on.
   commits: RepoCommits[]
   // For an agent step that kept its session: the pi session's id, empty if

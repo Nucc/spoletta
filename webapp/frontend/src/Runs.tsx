@@ -786,8 +786,8 @@ function Step({
           </p>
         )}
         {s.branch && (
-          <p className="panel-note">
-            Worked on the branch <code>{s.branch}</code>
+          <p className="panel-note" title={s.named ? `Kept in the worker as ${s.branch}` : undefined}>
+            Worked on the branch <code>{s.named || s.branch}</code>
           </p>
         )}
         {s.commits.length > 0 && <StepCommits commits={s.commits} />}

@@ -74,8 +74,11 @@ type setupFlow struct {
 	Tags         []string          `yaml:"tags,omitempty"`
 	Repositories []setupRepository `yaml:"repositories,omitempty"`
 	BranchPrefix string            `yaml:"branchPrefix,omitempty"`
-	Schedules    []setupSchedule   `yaml:"schedules,omitempty"`
-	setupBoard   `yaml:",inline"`
+	// The branch runs' checkouts are on, named after what they work on,
+	// such as feature/{@Ticket.key}; see branch_names.go.
+	Branch     string          `yaml:"branch,omitempty"`
+	Schedules  []setupSchedule `yaml:"schedules,omitempty"`
+	setupBoard `yaml:",inline"`
 }
 
 type setupRepository struct {

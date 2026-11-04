@@ -993,6 +993,7 @@ func diffSettings(a, b *flowSettings) []diffField {
 	}
 	fs.add("repositories", repos(a), repos(b))
 	fs.add("branch prefix", a.BranchPrefix, b.BranchPrefix)
+	fs.add("branch", a.Branch, b.Branch)
 	fs.add("run spend limit", limit(a), limit(b))
 	return fs
 }

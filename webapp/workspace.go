@@ -27,6 +27,10 @@ type flowSettings struct {
 	Repositories []repository `json:"repositories"`
 	// Runs' branches are named <prefix>/run-<id>; empty uses flow/<the flow's name>.
 	BranchPrefix string `json:"branchPrefix"`
+	// The branch runs' checkouts are on, named after what they work on,
+	// such as feature/{@Ticket.key}; empty for a branch of each run's own.
+	// See branch_names.go.
+	Branch string `json:"branch,omitempty"`
 	// The most, in dollars, a run of the flow may spend on its models, 0
 	// for the instance's limit; the instance's is kept to if lower. See
 	// limits.go.
@@ -99,6 +103,9 @@ func (s *flowSettings) check() string {
 	s.BranchPrefix = strings.Trim(strings.TrimSpace(s.BranchPrefix), "/")
 	if s.BranchPrefix != "" && !validBranch(s.BranchPrefix) {
 		return "the branch prefix isn't a valid branch name"
+	}
+	if msg := checkBranchRule(&s.Branch); msg != "" {
+		return msg
 	}
 	if s.Repositories == nil {
 		s.Repositories = []repository{}
@@ -182,7 +189,10 @@ type runWorkspace struct {
 	// without a run of its own, the run the item is in.
 	run    int64
 	branch string
-	repos  []repository
+	// The branch its checkouts are on when the run's flow names it after
+	// what the run works on, or why it names none; see branch_names.go.
+	named, unnamed string
+	repos          []repository
 	// For a re-run: the commit each repository's branch starts from, by
 	// name; see reruns.go.
 	starts map[string]string
@@ -193,6 +203,14 @@ type runWorkspace struct {
 type workspaceSpec struct {
 	ID     string `json:"id"`
 	Branch string `json:"branch"`
+	// The branch its checkouts are on, and origin's they start from if it
+	// has it, when the run's flow names it after what the run works on; the
+	// worker keeps them as Branch. See branch_names.go.
+	Named string `json:"named,omitempty"`
+	// Why the run's flow names no branch for the run, such as a value it
+	// was given being blank, which the worker logs as it makes Branch
+	// instead.
+	Unnamed string `json:"unnamed,omitempty"`
 	// The run and step working in it, which the worker's commit of what the
 	// step left uncommitted names.
 	Run          int64           `json:"run,omitempty"`
@@ -222,7 +240,15 @@ func (ws *runWorkspace) forProcess(s processSettings) *workspaceSpec {
 	if len(repos) == 0 {
 		return nil
 	}
-	return &workspaceSpec{ID: ws.id, Branch: ws.branch, Run: ws.run, Repositories: repos}
+	return &workspaceSpec{ID: ws.id, Branch: ws.branch, Named: ws.named, Unnamed: ws.unnamed, Run: ws.run, Repositories: repos}
+}
+
+// The branch its checkouts are on, as the agent and scripts see it.
+func (ws *workspaceSpec) checkoutBranch() string {
+	if ws.Named != "" {
+		return ws.Named
+	}
+	return ws.Branch
 }
 
 func contains(ss []string, s string) bool {
@@ -241,16 +267,20 @@ func withWorkspace(prompt string, ws *workspaceSpec) string {
 	}
 	var b strings.Builder
 	b.WriteString(prompt)
-	fmt.Fprintf(&b, "\n\nYou work in a workspace: your working directory holds a checkout of each repository below, on the branch %q.\n", ws.Branch)
+	fmt.Fprintf(&b, "\n\nYou work in a workspace: your working directory holds a checkout of each repository below, on the branch %q.\n", ws.checkoutBranch())
 	for _, r := range ws.Repositories {
 		base := r.Base
 		if base == "" {
 			base = "its default branch"
 		}
-		if r.Start != "" {
-			base = "commit " + r.Start[:min(len(r.Start), 12)] + ", where the run this one re-runs had got to"
+		from := "branched from " + base
+		if ws.Named != "" {
+			from = fmt.Sprintf("on origin's %s as the run first checked it out, or if origin didn't have it then, branched from %s", ws.Named, base)
 		}
-		fmt.Fprintf(&b, "- %s/: %s, branched from %s\n", r.Name, r.URL, base)
+		if r.Start != "" {
+			from = "branched from commit " + r.Start[:min(len(r.Start), 12)] + ", where the run this one re-runs had got to"
+		}
+		fmt.Fprintf(&b, "- %s/: %s, %s\n", r.Name, r.URL, from)
 		if len(r.Exclude) > 0 {
 			fmt.Fprintf(&b, "  Left out of the checkout, though still in the branch: %s. They aren't deleted, so don't restore or commit them.\n", strings.Join(r.Exclude, ", "))
 		}
@@ -259,12 +289,17 @@ func withWorkspace(prompt string, ws *workspaceSpec) string {
 		"older history and tags aren't there, so don't look for them.\n")
 	// pi loads context files from the working directory up, which the checkouts are below.
 	// Only the run's branch is brought back once the step is over, so work
-	// on another would be lost; a push is the process's to ask for, as a
-	// flow's last step pushing what the run made and opening its pull request.
+	// on another would be lost. Agents may push it, as one opening a pull
+	// request must.
 	b.WriteString("Before working in a repository, read its AGENTS.md or CLAUDE.md if it has one, else its README, for how to work in it. " +
 		"Other processes of this run work on the same branch, before and after you, so what they committed is there. " +
 		"Commit your changes to this branch as you go; whatever you leave uncommitted is committed for you once you are done. " +
-		"Don't switch branches. Push only if your instructions ask you to.\n")
+		"Don't switch branches.\n")
+	if ws.Named != "" {
+		// Other runs working on the same thing push to it too.
+		fmt.Fprintf(&b, "The branch is named after what this run works on, so other runs working on it use it too, and may have pushed to it since. "+
+			"Push it with `git push origin %[1]s`, and if that is refused, `git pull --rebase origin %[1]s` first.\n", ws.Named)
+	}
 	return b.String()
 }
 

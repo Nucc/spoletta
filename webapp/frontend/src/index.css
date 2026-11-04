@@ -12761,3 +12761,15 @@ select.flow-owner:not([multiple]):not([size]):disabled {
   font-family: inherit;
   color: inherit;
 }
+
+/* The flow settings' branch rule, whose suggestions open under it as the
+   search's do; see BranchRuleField.tsx. */
+.branch-rule {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.branch-rule .query-help {
+  font-weight: 400;
+}

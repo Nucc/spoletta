@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { getGitAccess, type FlowSettings, type GitAccess, type Repository } from './api'
 import { FlowAPISection } from './APIKeys'
+import { BranchRuleField } from './BranchRuleField'
 import { FlowWebhooksSection } from './Webhooks'
 
 // What a repository is called in the workspace, from its URL: the last part
@@ -154,6 +155,7 @@ export function FlowSettingsPanel({
     if (prefix.trim() !== settings.branchPrefix) save({ ...settings, branchPrefix: prefix.trim() })
   }
 
+
   const spendLimit = spend.trim() === '' ? 0 : Number(spend)
   const spendOk = Number.isFinite(spendLimit) && spendLimit >= 0
   const saveSpend = () => {
@@ -191,8 +193,9 @@ export function FlowSettingsPanel({
       <h3 className="panel-subheading">Repositories</h3>
       <p className="panel-note">
         The repositories this flow's agents and scripts work on. Each run checks them out on a branch of its own,{' '}
-        <code>{branchPrefix}/run-&lt;id&gt;</code>, and every process of the run works on that branch. Each item of a list
-        gets a branch of its own. Pick in a process's panel which of them it works on.
+        <code>{branchPrefix}/run-&lt;id&gt;</code>, or the one named below after what it works on, and every process of
+        the run works on that branch. Each item of a list gets a branch of its own. Pick in a process's panel which of
+        them it works on.
       </p>
       {gitAccess && <GitAccessNote access={gitAccess} />}
       {settings.repositories.length === 0 ? (
@@ -333,6 +336,14 @@ export function FlowSettingsPanel({
         />
         <small className="panel-note">Runs started from now on use it; runs going on keep their branch.</small>
       </label>
+      <BranchRuleField
+        key={settings.branch ?? ''}
+        flowId={flowId}
+        rule={settings.branch ?? ''}
+        readOnly={readOnly}
+        onSave={(branch) => save({ ...settings, branch })}
+        onError={onError}
+      />
       <h3 className="panel-subheading">Spending</h3>
       <label className="panel-field">
         <span>Most a run may spend ($)</span>

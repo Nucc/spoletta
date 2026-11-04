@@ -447,7 +447,7 @@ func (e *engine) try(nr pendingRun, flow int64, board *int64, process int64, val
 	go func() {
 		logRunStarted(e.db, nr.id)
 		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
-		w := newWalk(ctx, e, nr.id, lr, fr, board, nil, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10)))
+		w := newWalk(ctx, e, nr.id, lr, fr, board, nil, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10), namedBranch{}))
 		w.try(process, values)
 		e.finish(ctx, nr.id, w)
 	}()

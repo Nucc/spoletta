@@ -89,6 +89,9 @@ Flows and procedures have the same shape:
       url: https://github.com/example/app
       base: main                # the branch runs start from; the default branch if absent
   branchPrefix: fix             # runs' branches are <prefix>/run-<id>
+  branch: feature/{@Ticket.key} # or: their checkouts are on the branch named after what
+                                # they start with (an object on the top board given or
+                                # picked, its attribute), from origin's if it has it
   schedules:
     - cron: "0 9 * * 1-5"       # or @hourly, @every 90m, ...
       timezone: Europe/London

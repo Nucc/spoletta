@@ -800,6 +800,9 @@ type step struct {
 	// and what it did to each repository there.
 	Branch  string        `json:"branch"`
 	Commits []repoCommits `json:"commits"`
+	// The branch its checkouts were on when its flow names it after what
+	// the run works on.
+	Named string `json:"named"`
 	// For an agent step that kept its session: the pi session's id, which a
 	// person can carry the conversation on in, and the follow-ups they sent;
 	// see followups.go.
@@ -854,6 +857,10 @@ type version struct {
 type workspaceSpec struct {
 	ID     string `json:"id"`
 	Branch string `json:"branch"`
+	// The branch its checkouts are on when the run's flow names it, or why
+	// it names none.
+	Named   string `json:"named"`
+	Unnamed string `json:"unnamed"`
 	// The run and step working in it, which the worker's commit of what the
 	// step left uncommitted names.
 	Run          int64        `json:"run,omitempty"`

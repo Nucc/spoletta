@@ -32,7 +32,8 @@ type scriptRun struct {
 	// Where the script writes the files it generates, which $OUTPUTS points to.
 	FilesDir string `json:"filesDir,omitempty"`
 	// The workspace it works in, its working directory, if it works on
-	// repositories; $WORKSPACE and $BRANCH say where and on which branch.
+	// repositories; $WORKSPACE and $BRANCH say where and on which branch,
+	// the one the flow names after what the run works on if it does.
 	Workspace *workspaceSpec `json:"workspace,omitempty"`
 	// The most disk the run may take, in bytes; see agentRun.
 	DiskLimit int64 `json:"diskLimit,omitempty"`

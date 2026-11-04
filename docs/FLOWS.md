@@ -436,6 +436,38 @@ checkout of each repository, all on a branch of the run's own. Every process
 of the run works on the same branch and picks up where the one before left
 off. After an agent step ends, a person can send it follow-up messages
 ("push it", "rename that function") in the same session and checkout.
+Agents may push the branch: nothing the app tells them holds them back, so a
+process that mustn't push says so in its prompt ("Don't push.").
+
+When several flows work on the same ticket or pull request, give them a
+`branch` naming the branch after it, such as `feature/{@Ticket.key}` or
+`{@Pull_request.branch}`. Each `{@Object.attribute}` (or `{@Object}` for a
+plain value) is a value the run holds as it starts: an object on the top
+board it is given (Run with inputs, the API, a webhook, a subflow process),
+or a record it picks, follows or was started on (Run… on a record, a task
+board). A value is made fit for a branch name: its spaces become `_` and
+what git doesn't take (`:`, `?`, `~`, letters outside ASCII and such) is
+left out, so a title "Fix: the login" names `Fix_the_login`. In the flow
+settings, typing `@` suggests the values runs start with. Every run on
+ticket PROJ-123 then has its checkouts on
+`feature/PROJ-123`, starting from origin's latest commit of it if origin
+has it, else from the base branch, and the agent is told to push it with
+`git push origin feature/PROJ-123`, so each flow carries on what the last
+one pushed, people's commits included; what a run didn't push stays with
+it. Two runs on the same branch at once each work on their own copy, and
+whichever pushes second pulls first. A name that is the base or the default
+branch is refused (the step fails). A run lacking the value, or whose value
+is empty or blank, works on its own `<branchPrefix>/run-<id>` branch, saying
+why in its log and as its checkouts are cloned, and the Problems list warns of a
+rule naming an object runs don't start with. Trials and items of a list
+always work on branches of their own.
+
+```yaml
+repositories:
+  - name: shop
+    url: https://github.com/acme/shop.git
+branch: feature/{@Ticket.key}
+```
 
 A repository's `exclude` lists paths in it, directories or files, that its
 checkouts leave out, such as a committed cache of gems: they aren't fetched

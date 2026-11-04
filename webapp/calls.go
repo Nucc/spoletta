@@ -132,6 +132,7 @@ func (fr *flowRun) call(ctx context.Context, db *sql.DB, flow *int64) (*flowRun,
 		return nil, "", err
 	}
 	callee := newFlowRun(*flow, version, board, settings.Repositories, settings.prefix(name))
+	callee.rule = settings.Branch
 	callee.callers = append(slices.Clone(fr.callers), fr.flow)
 	callee.published = fr.published
 	return callee, "", nil

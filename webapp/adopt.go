@@ -559,6 +559,7 @@ func flowRunOf(ctx context.Context, db *sql.DB, id int64) (*flowRun, error) {
 		return nil, err
 	}
 	fr := newFlowRun(flow, version, board, settings.Repositories, prefix)
+	fr.rule = settings.Branch
 	fr.published = published
 	return fr, nil
 }
@@ -734,7 +735,9 @@ func (e *engine) walkAgain(id int64) {
 		fr.record = *rn.Record
 	}
 	var carried, starts []byte
-	if err := e.db.QueryRowContext(ctx, "SELECT carried, starts FROM runs WHERE id = ?", id).Scan(&carried, &starts); err != nil {
+	// The branch it was named, which it works on again.
+	var named string
+	if err := e.db.QueryRowContext(ctx, "SELECT carried, starts, branch FROM runs WHERE id = ?", id).Scan(&carried, &starts, &named); err != nil {
 		fail(err)
 		return
 	}
@@ -779,7 +782,7 @@ func (e *engine) walkAgain(id int64) {
 		}
 		return
 	}
-	w := newWalk(walking, e, id, lr, fr, board, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10)))
+	w := newWalk(walking, e, id, lr, fr, board, given, fr.workspace(id, "run-"+strconv.FormatInt(id, 10), keptOrUnnamed(e.db, fr, given, named, rn.RerunOf != nil)))
 	switch {
 	case rn.RerunOf != nil && rn.RerunFrom != nil:
 		w.resume(*rn.RerunFrom, values)

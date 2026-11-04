@@ -184,7 +184,7 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 			}
 			continue
 		}
-		sf := setupFlow{Name: e.name, Tags: e.tags, BranchPrefix: e.settings.BranchPrefix, Schedules: e.schedules, setupBoard: x.board(nil)}
+		sf := setupFlow{Name: e.name, Tags: e.tags, BranchPrefix: e.settings.BranchPrefix, Branch: e.settings.Branch, Schedules: e.schedules, setupBoard: x.board(nil)}
 		for _, r := range e.settings.Repositories {
 			sf.Repositories = append(sf.Repositories, setupRepository(r))
 		}

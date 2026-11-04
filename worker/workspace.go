@@ -48,6 +48,16 @@ type workspaceSpec struct {
 	// Names the workspace's directory, such as run-42.
 	ID     string `json:"id"`
 	Branch string `json:"branch"`
+	// The branch its checkouts are on instead, when the run's flow names it
+	// after what the run works on, such as feature/PROJ-123: the run's
+	// branch starts from origin's latest commit of it if origin has it, and
+	// a push updates it there. The shared repository keeps it as Branch, so
+	// that runs on the same name never meet there.
+	Named string `json:"named,omitempty"`
+	// Why the run's flow names no branch for this run, such as a value it
+	// was given being blank, which is logged as the run's own branch is
+	// made instead.
+	Unnamed string `json:"unnamed,omitempty"`
 	// The run and step working in it, which the commits of what a step left
 	// uncommitted name; see commitLeftovers.
 	Run  int64 `json:"run,omitempty"`
@@ -70,6 +80,14 @@ type repository struct {
 	// Paths in the repository its checkouts leave out, such as a directory
 	// of big files nothing a step does needs; see sparse.
 	Exclude []string `json:"exclude,omitempty"`
+}
+
+// The branch the workspace's checkouts are on, as steps see it.
+func (ws *workspaceSpec) checkoutBranch() string {
+	if ws.Named != "" {
+		return ws.Named
+	}
+	return ws.Branch
 }
 
 // Where workspaces live, a volume of their own.
@@ -161,6 +179,11 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 	if err := gitOK(ctx, "", "check-ref-format", "--branch", ws.Branch); err != nil {
 		return nil, fmt.Errorf("invalid branch %q", ws.Branch)
 	}
+	if ws.Named != "" {
+		if err := gitOK(ctx, "", "check-ref-format", "--branch", ws.Named); err != nil || strings.HasPrefix(ws.Named, "-") {
+			return nil, fmt.Errorf("invalid branch %q", ws.Named)
+		}
+	}
 	for _, r := range ws.Repositories {
 		if !safeName.MatchString(r.Name) {
 			return nil, fmt.Errorf("invalid repository name %q", r.Name)
@@ -189,7 +212,7 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 	}
 	meta, err := readMeta(ws.ID)
 	if err == nil {
-		meta.Branch = ws.Branch
+		meta.Branch, meta.Named = ws.Branch, ws.Named
 		for _, r := range ws.Repositories {
 			meta.Repositories[r.Name] = r.URL
 		}
@@ -203,7 +226,7 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 	defer cancel()
 	t := &takenWorkspace{dir: dir, spec: ws, repos: ws.Repositories, before: map[string]string{}, release: unlock}
 	for _, r := range ws.Repositories {
-		recreated, err := checkout(pctx, l, dir, ws.Branch, r)
+		recreated, err := checkout(pctx, l, dir, ws, r)
 		if err != nil {
 			unlock()
 			return nil, fmt.Errorf("repository %s: %w", r.Name, prepareError(ctx, pctx, err))
@@ -243,7 +266,7 @@ func (t *takenWorkspace) done(res *runResult) {
 			t.log.errorf("commit what was left uncommitted in %s: %v", r.Name, err)
 		}
 		repo := sharedRepo(r.URL)
-		if err := bringBack(ctx, dest, repo, t.spec.Branch); err != nil {
+		if err := bringBack(ctx, dest, repo, t.spec.checkoutBranch(), t.spec.Branch); err != nil {
 			if _, statErr := os.Lstat(dest); statErr == nil {
 				t.log.errorf("bring back what the step did in %s: %v", r.Name, err)
 			}
@@ -313,8 +336,9 @@ fi
 	return uncommitted, err
 }
 
-// Brings the branch as the checkout has it into the shared repository, by
-// fetching from it, which runs nothing the checkout's config or hooks say.
+// Brings the branch as the checkout has it, local, into the shared
+// repository as branch, by fetching from it, which runs nothing the
+// checkout's config or hooks say.
 // The checkout and its git must be the directories they were, not links
 // leading to another's, and it may borrow no objects from elsewhere. The
 // caller isn't holding the shared repository's lock.
@@ -329,7 +353,7 @@ fi
 // sent again; but one of the repository's own commits that fails the check,
 // sent again because the shared repository lacks it, keeps the branch from
 // coming back, as a step's malformed object would.
-func bringBack(ctx context.Context, dest, repo, branch string) error {
+func bringBack(ctx context.Context, dest, repo, local, branch string) error {
 	gitDir := filepath.Join(dest, ".git")
 	for _, p := range []string{dest, gitDir, filepath.Join(gitDir, "objects"), filepath.Join(gitDir, "objects", "info")} {
 		fi, err := os.Lstat(p)
@@ -349,18 +373,22 @@ func bringBack(ctx context.Context, dest, repo, branch string) error {
 		}
 	}
 	defer lockPath(repo)()
-	return gitOK(ctx, repo, "-c", "fetch.fsckObjects=true", "fetch", "--quiet", "--no-tags", "file://"+dest, "+refs/heads/"+branch+":refs/heads/"+branch)
+	return gitOK(ctx, repo, "-c", "fetch.fsckObjects=true", "fetch", "--quiet", "--no-tags", "file://"+dest, "+refs/heads/"+local+":refs/heads/"+branch)
 }
 
 // Clones the run's branch of the repository into the workspace, unless it
 // is there. The branch starts from the base branch as just fetched, or the
 // repository's start commit if it has one, or stays as it is if it exists
 // already: then nothing is fetched, as the checkout is only made again, the
-// workspace having been released. Says whether it was. The clone is made
-// outside the workspace, which steps write, and moved in once ready, so one
-// cut short leaves nothing that looks ready. A worktree from before
-// checkouts were clones is released first, and made again as one.
-func checkout(ctx context.Context, l *stepLogger, dir, branch string, r repository) (bool, error) {
+// workspace having been released. Says whether it was. With a name, the
+// branch starts from origin's latest commit of that name instead if origin
+// has it, and the checkout is on the name (see workspaceSpec.Named); the
+// run's own branch made instead of one says why. The clone is made outside
+// the workspace, which steps write, and moved in once ready, so one cut
+// short leaves nothing that looks ready. A worktree from before checkouts
+// were clones is released first, and made again as one.
+func checkout(ctx context.Context, l *stepLogger, dir string, ws *workspaceSpec, r repository) (bool, error) {
+	branch, named := ws.Branch, ws.Named
 	dest := filepath.Join(dir, r.Name)
 	if fi, err := os.Lstat(dest); err == nil {
 		switch {
@@ -387,6 +415,9 @@ func checkout(ctx context.Context, l *stepLogger, dir, branch string, r reposito
 		exists = gitOK(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) == nil
 	}
 	if !exists {
+		if named == "" && ws.Unnamed != "" {
+			l.infof("%s: %s, so the run works on %s, a branch of its own", r.Name, ws.Unnamed, branch)
+		}
 		start := r.Start
 		if start != "" {
 			if gitOK(ctx, repo, "rev-parse", "--verify", "--quiet", r.Start+"^{commit}") != nil {
@@ -399,10 +430,22 @@ func checkout(ctx context.Context, l *stepLogger, dir, branch string, r reposito
 				unlock()
 				return false, err
 			}
+			if named != "" {
+				var fetched bool
+				if fetched, err = fetchNamed(ctx, l, r.Name, repo, r.URL, named, strings.TrimPrefix(start, "origin/"), branch); err != nil {
+					unlock()
+					return false, err
+				}
+				if fetched {
+					start = ""
+				}
+			}
 		}
-		if err := gitOK(ctx, repo, "branch", "--quiet", branch, start); err != nil {
-			unlock()
-			return false, err
+		if start != "" {
+			if err := gitOK(ctx, repo, "branch", "--quiet", branch, start); err != nil {
+				unlock()
+				return false, err
+			}
 		}
 	}
 	unlock()
@@ -414,10 +457,14 @@ func checkout(ctx context.Context, l *stepLogger, dir, branch string, r reposito
 	// What an earlier try left behind.
 	os.RemoveAll(tmp)
 	defer os.RemoveAll(tmp)
+	shown := branch
+	if named != "" {
+		shown = named
+	}
 	if exists {
-		l.infof("%s: checking out the branch %s again, its checkout having been removed to save space", r.Name, branch)
+		l.infof("%s: checking out the branch %s again, its checkout having been removed to save space", r.Name, shown)
 	} else {
-		l.infof("%s: checking out the branch %s", r.Name, branch)
+		l.infof("%s: checking out the branch %s", r.Name, shown)
 	}
 	args := []string{"clone", "--progress", "--depth=1", "--no-tags", "--single-branch", "--branch", branch}
 	if len(r.Exclude) > 0 {
@@ -438,6 +485,11 @@ func checkout(ctx context.Context, l *stepLogger, dir, branch string, r reposito
 	}
 	if err := gitOK(ctx, tmp, "remote", "set-url", "origin", r.URL); err != nil {
 		return false, err
+	}
+	if named != "" {
+		if err := onNamed(ctx, tmp, branch, named); err != nil {
+			return false, err
+		}
 	}
 	if err := ownForSandbox(tmp, true); err != nil {
 		return false, err
@@ -556,6 +608,62 @@ func fetchShared(ctx context.Context, l *stepLogger, name, repo, url, base strin
 		return "", err
 	}
 	return "origin/" + base, nil
+}
+
+// Starts the run's branch, branch, in the shared repository from origin's
+// latest commit of named, if origin has it, fetching only that commit and
+// keeping no refspec for it, as runs work on many names; says whether it
+// did, else the branch starts from the base. A name that is the base, or
+// origin's default branch, is refused: a run would push to it as to its own.
+func fetchNamed(ctx context.Context, l *stepLogger, name, repo, url, named, base, branch string) (bool, error) {
+	l.infof("%s: asking %s for the branch %s", name, shownURL(url), named)
+	// "ref: refs/heads/main\tHEAD", then each ref's commit and name.
+	out, err := gitOut(ctx, repo, "ls-remote", "--symref", "origin", "HEAD", "refs/heads/"+named)
+	if err != nil {
+		return false, err
+	}
+	found, mainline := false, named == base
+	for _, line := range strings.Split(out, "\n") {
+		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+			def, _, _ := strings.Cut(ref, "\t")
+			mainline = mainline || def == named
+			continue
+		}
+		if _, ref, ok := strings.Cut(line, "\t"); ok && ref == "refs/heads/"+named {
+			found = true
+		}
+	}
+	if mainline {
+		return false, fmt.Errorf("the run's branch would be %s, which runs start from or is the repository's default branch; name it after what the run works on, such as feature/<the ticket's key>", named)
+	}
+	if !found {
+		l.infof("%s: %s has no branch %s yet, so it starts from %s", name, shownURL(url), named, base)
+		return false, nil
+	}
+	l.infof("%s: fetching the latest commit of %s from %s", name, named, shownURL(url))
+	return true, gitLogged(ctx, l, name, repo, "fetch", "--progress", "--no-tags", "--depth=1", "origin", "+refs/heads/"+named+":refs/heads/"+branch)
+}
+
+// Puts the fresh clone dir, which no step had yet, on the name rather than
+// the run's branch: pushing it with git's own default pushes the name, and
+// fetching fetches the name, while nothing names the run's branch, which
+// origin doesn't have.
+func onNamed(ctx context.Context, dir, branch, named string) error {
+	if err := gitOK(ctx, dir, "branch", "--quiet", "-m", branch, named); err != nil {
+		return err
+	}
+	// The clone tracks the run's branch, if it set that up.
+	_ = gitOK(ctx, dir, "branch", "--quiet", "--unset-upstream", named)
+	for _, args := range [][]string{
+		{"update-ref", "-d", "refs/remotes/origin/" + branch},
+		{"config", "remote.origin.fetch", "+refs/heads/" + named + ":refs/remotes/origin/" + named},
+		{"config", "push.default", "current"},
+	} {
+		if err := gitOK(ctx, dir, args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Makes the shared repository, beside its place and moved in once ready.
@@ -728,7 +836,7 @@ func releaseWorkspace(dir string) (bool, error) {
 		}
 		_, err := commitLeftovers(ctx, wt, "Commit what was left uncommitted as the workspace was released", nil)
 		if err == nil {
-			err = bringBack(ctx, wt, sharedRepo(url), meta.Branch)
+			err = bringBack(ctx, wt, sharedRepo(url), meta.checkoutBranch(), meta.Branch)
 		}
 		if err != nil {
 			log.Printf("release %s: %v; keeping it", wt, err)
@@ -811,8 +919,19 @@ func deleteWorkspace(dir string) error {
 // What the worker keeps of a workspace, outside it: the branch its
 // checkouts are on, and each one's repository, by name.
 type workspaceMeta struct {
-	Branch       string            `json:"branch"`
+	Branch string `json:"branch"`
+	// The branch its checkouts are on, if the run names it; see
+	// workspaceSpec.Named.
+	Named        string            `json:"named,omitempty"`
 	Repositories map[string]string `json:"repositories"`
+}
+
+// The branch its checkouts are on.
+func (m workspaceMeta) checkoutBranch() string {
+	if m.Named != "" {
+		return m.Named
+	}
+	return m.Branch
 }
 
 func metaPath(id string) string {

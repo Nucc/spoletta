@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -171,6 +173,10 @@ type step struct {
 	// and what it did to each repository there.
 	Branch  string        `json:"branch"`
 	Commits []repoCommits `json:"commits"`
+	// The branch its checkouts were on when its run's flow named it after
+	// what the run works on, which the worker keeps as Branch; see
+	// branch_names.go.
+	Named string `json:"named,omitempty"`
 	// For an agent step that kept its session: the pi session's id, which a
 	// person can carry the conversation on in, and the follow-ups they sent;
 	// see followups.go.
@@ -540,6 +546,8 @@ type pendingRun struct {
 	board       snapshot
 	repos       []repository
 	prefix      string
+	// What names the branch its checkouts are on; see branch_names.go.
+	rule string
 	// The shared record it is started on, 0 for none; see record_runs.go.
 	record int64
 	// Whether it runs the version the flow published; see publish.go.
@@ -580,7 +588,7 @@ func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *in
 	if err != nil {
 		return pendingRun{}, err
 	}
-	return pendingRun{id: id, version: version, board: board, repos: settings.Repositories, prefix: settings.prefix(name), published: onPublished}, nil
+	return pendingRun{id: id, version: version, board: board, repos: settings.Repositories, prefix: settings.prefix(name), rule: settings.Branch, published: onPublished}, nil
 }
 
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
@@ -724,6 +732,11 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			serverError(w, err)
 			return
 		}
+		kept, err := keptBranch(r.Context(), db, id)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
@@ -761,6 +774,10 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 				return
 			}
 			s.CanFollowUp = s.Session != ""
+			// An item without a run of its own works on a branch of its own.
+			if s.Branch != "" && !strings.Contains(path.Base(s.Branch), "-step-") {
+				s.Named = kept
+			}
 			s.Usage = usage[s.ID]
 			if s.FollowUps = followUps[s.ID]; s.FollowUps == nil {
 				s.FollowUps = []followUp{}

@@ -574,7 +574,7 @@ func applyAssistantSetup(ctx context.Context, db *sql.DB, af assistantFlow, file
 // the rest of the app as it is: it describes the flow, by its name, as what
 // it is, and adds only the procedures, structs and MCP servers the app
 // doesn't have yet. What the app has that it repeats as it is, is dropped.
-// The flow's repositories, branch prefix, schedules and tags, which undo
+// The flow's repositories, branch prefix and branch, schedules and tags, which undo
 // doesn't bring back, stay as they are unless f gives them.
 func keepToFlow(ctx context.Context, tx *sql.Tx, af assistantFlow, f *setupFile) (string, error) {
 	section := "flows"
@@ -704,6 +704,9 @@ func keepToFlow(ctx context.Context, tx *sql.Tx, af assistantFlow, f *setupFile)
 			if sf.BranchPrefix == "" {
 				sf.BranchPrefix = af.settings.BranchPrefix
 			}
+			if sf.Branch == "" {
+				sf.Branch = af.settings.Branch
+			}
 			if sf.Schedules == nil {
 				sf.Schedules = af.schedules
 			}
@@ -742,7 +745,7 @@ To change the flow, end your reply with the whole setup file in one fenced block
 - describes the flow %[1]q in full, by that name, under %[2]s. Whatever it leaves off the flow's boards is removed, so keep what the person didn't ask to change as it is, names and keys included: renaming something makes it new and drops the old one, with what it stored;
 - leaves out positions (x, y, width, route, at) of what is new, which the app lays out, and may keep those of what is there already;
 - leaves out the other flows, procedures and structs the app has, which it refers to by name, and MCP servers the app has already. It may add new procedures, structs and MCP servers the flow needs; only %[1]q may change;
-- may leave out the flow's repositories, branchPrefix, schedules and tags, which then stay as they are.
+- may leave out the flow's repositories, branchPrefix, branch, schedules and tags, which then stay as they are.
 
 If the person only asks something, or you need to know more before you can build what they want, such as what a run starts from or how to reach the systems it works with, reply without a file and ask. Keep your reply short and plain: what you did and why, then what needs the person's hands, such as secrets the worker needs, signing in to a new MCP server in the settings, or a first run to watch.
 

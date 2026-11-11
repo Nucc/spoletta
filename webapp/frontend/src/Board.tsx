@@ -1525,6 +1525,13 @@ export default function Board({
     return node?.type === 'object' && Boolean(node.data.copied)
   }
 
+  // A copy keeps its source's name, but a struct's copy on a board, which
+  // may have one of its own; see syncCopy.
+  const nameFixed = (id: string) => {
+    const node = getNode(id)
+    return node?.type === 'object' && Boolean(node.data.copied) && (Boolean(node.data.owned) || !structFlows.has(node.data.sourceFlow ?? 0))
+  }
+
   const panelNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === panelId)
   const reviewNode = nodes.find((n): n is ProcessNodeType => n.type === 'process' && n.id === reviewId && Boolean(n.data.review))
   const objectPanelNode = nodes.find((n): n is ObjectNodeType => n.type === 'object' && n.id === panelId)
@@ -2394,7 +2401,7 @@ export default function Board({
     ...(zoomable(id) ? [{ label: isObject(id) ? 'Unfold' : 'Zoom in', icon: <ZoomInIcon />, onSelect: () => zoomIn(id) }] : []),
     {
       label: 'Rename',
-      disabled: readOnly || isCopied(id),
+      disabled: readOnly || nameFixed(id),
       icon: <PencilIcon />,
       onSelect: () => {
         // The panel holds its own copy of the name.

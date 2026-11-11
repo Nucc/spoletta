@@ -86,6 +86,10 @@ type snapshotObject struct {
 	General  *int64 `json:"general,omitempty"`
 	// The module's object it is a copy of; left out for others.
 	Source *int64 `json:"source,omitempty"`
+	// Whether a struct's copy on a board is named for itself rather than
+	// after its struct; left out when not, as in versions from before
+	// copies could be. See syncCopy.
+	OwnName bool `json:"ownName,omitempty"`
 	// The record each run works on; left out for none, as in versions from
 	// before objects picked records. See picks.go.
 	Pick *objectPick `json:"pick,omitempty"`
@@ -195,10 +199,10 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, store_id, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id, pick, follows FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, x, y, width, persistent, store_id, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, source_id, own_name, pick, follows FROM objects WHERE flow_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var o snapshotObject
 		var pick, follows []byte
-		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Store, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &pick, &follows)
+		err := rows.Scan(&o.ID, &o.Name, &o.X, &o.Y, &o.Width, &o.Persistent, &o.Store, &o.Many, &o.Min, &o.Max, &o.Human, &o.End, &o.Parent, &o.Owner, &o.Relation, &o.General, &o.Source, &o.OwnName, &pick, &follows)
 		if err != nil {
 			return err
 		}
@@ -435,12 +439,12 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 	}
 	// Generals go in once every object is there, since one may come later.
 	for _, o := range ownersFirst(s.Objects) {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, pick, follows)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) AS saved
-			ON DUPLICATE KEY UPDATE name = saved.name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, own_name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, pick, follows)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) AS saved
+			ON DUPLICATE KEY UPDATE name = saved.name, own_name = saved.own_name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
 				many = saved.many, min_items = saved.min_items, max_items = saved.max_items, human = saved.human, at_end = saved.at_end, parent_id = saved.parent_id,
 				owner_id = saved.owner_id, relation = saved.relation, general_id = NULL, pick = saved.pick, follows = saved.follows`,
-			o.ID, flow, o.Name, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation, storedPick(o.Pick), storedFollow(o.Follows))
+			o.ID, flow, o.Name, o.OwnName, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation, storedPick(o.Pick), storedFollow(o.Follows))
 		if err != nil {
 			return err
 		}

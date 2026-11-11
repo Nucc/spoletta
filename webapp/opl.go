@@ -20,9 +20,10 @@ import (
 // processSettings.DescribeFlow.
 
 // The OPL of a flow's board as a snapshot has it. flowName names the flows
-// subflow processes run.
-func opl(s snapshot, flowName func(int64) string) string {
-	o := oplWriter{s: s, flowName: flowName,
+// subflow processes run, and objectName the structs' objects copies named
+// for themselves are instances of; either may be nil.
+func opl(s snapshot, flowName, objectName func(int64) string) string {
+	o := oplWriter{s: s, flowName: flowName, objectName: objectName,
 		objects: map[int64]snapshotObject{}, processes: map[int64]process{},
 		states: map[int64]objectState{}, linkStates: map[int64][]int64{}}
 	for _, ob := range s.Objects {
@@ -44,6 +45,7 @@ func opl(s snapshot, flowName func(int64) string) string {
 type oplWriter struct {
 	s          snapshot
 	flowName   func(int64) string
+	objectName func(int64) string
 	objects    map[int64]snapshotObject
 	processes  map[int64]process
 	states     map[int64]objectState
@@ -164,6 +166,13 @@ func (o *oplWriter) objectSentences(ob snapshotObject, indent string) {
 	}
 	if ob.General != nil {
 		o.line(indent, "%s is a %s.", name, o.object(*ob.General))
+	}
+	// A struct's copy named for itself, such as one reviewer's Review
+	// Comment, says which struct it is; see syncCopy.
+	if ob.OwnName && ob.Source != nil && o.objectName != nil {
+		if of := o.objectName(*ob.Source); of != "" {
+			o.line(indent, "%s is an instance of %s.", name, strconv.Quote(of))
+		}
 	}
 	if ob.Persistent {
 		o.line(indent, "%s is stored, so each run keeps what it generated of it.", name)
@@ -393,7 +402,16 @@ func flowOPL(ctx context.Context, db *sql.DB, flow int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return opl(s, func(id int64) string { return flowNameOf(ctx, db, id) }), nil
+	return opl(s, func(id int64) string { return flowNameOf(ctx, db, id) }, func(id int64) string { return objectNameOf(ctx, db, id) }), nil
+}
+
+// The name of an object, or "" if there is none by that id.
+func objectNameOf(ctx context.Context, db *sql.DB, id int64) string {
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT name FROM objects WHERE id = ?", id).Scan(&name); err != nil {
+		return ""
+	}
+	return name
 }
 
 // The name of a flow, or "" if there is none by that id.

@@ -78,7 +78,8 @@ func renameClash(ctx context.Context, db *sql.DB, object int64, name string) (st
 	ids := []int64{object}
 	for next := ids; len(next) > 0; {
 		var copies []int64
-		err := scanAll(ctx, db, "SELECT id FROM objects WHERE source_id IN "+placeholders(len(next)),
+		// A struct's copy named for itself keeps its name; see syncCopy.
+		err := scanAll(ctx, db, "SELECT id FROM objects WHERE NOT own_name AND source_id IN "+placeholders(len(next)),
 			func(rows *sql.Rows) error {
 				var id int64
 				if err := rows.Scan(&id); err != nil {

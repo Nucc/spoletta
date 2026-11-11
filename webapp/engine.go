@@ -573,7 +573,7 @@ type flowRun struct {
 // The OPL of the board the run walks, as an agent describing the flow gets it.
 func (fr *flowRun) opl(ctx context.Context, db *sql.DB) string {
 	fr.describe.Do(func() {
-		fr.about = opl(fr.board, func(id int64) string { return flowNameOf(ctx, db, id) })
+		fr.about = opl(fr.board, func(id int64) string { return flowNameOf(ctx, db, id) }, func(id int64) string { return objectNameOf(ctx, db, id) })
 	})
 	return fr.about
 }

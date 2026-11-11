@@ -355,8 +355,11 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		// Where a copy goes, and what this flow does with it, are its own,
-		// and how many a struct's copy is.
-		if (patch.Name != nil || patch.Relation != nil || len(patch.General) > 0) && !ownObject(w, r, db, id) {
+		// and how many a struct's copy is and what it is named.
+		if (patch.Relation != nil || len(patch.General) > 0) && !ownObject(w, r, db, id) {
+			return
+		}
+		if patch.Name != nil && !ownName(w, r, db, id) {
 			return
 		}
 		if (patch.Many != nil || patch.Min != nil || len(patch.Max) > 0) && !ownQuantity(w, r, db, id) {
@@ -503,6 +506,12 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		if err != nil {
 			serverError(w, err)
 			return
+		}
+		if patch.Name != nil {
+			if err := noteOwnName(r.Context(), db, id); err != nil {
+				serverError(w, err)
+				return
+			}
 		}
 		if patch.Shared != nil {
 			if _, err := db.ExecContext(r.Context(), "UPDATE objects SET store_id = IF(?, id, NULL) WHERE id = ?", *patch.Shared, id); err != nil {

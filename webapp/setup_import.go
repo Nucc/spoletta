@@ -636,9 +636,11 @@ type bobj struct {
 	// Its states' ids by identifier.
 	states map[string]int64
 	source *int64
-	x, y   float64
-	placed bool
-	where  string
+	// A struct's copy on a board named for itself; see syncCopy.
+	ownName bool
+	x, y    float64
+	placed  bool
+	where   string
 }
 
 type blink struct {
@@ -787,8 +789,11 @@ func (b *builder) walkBoard(board *setupBoard, parent *int64, where string) erro
 func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string) error {
 	o.Name = strings.TrimSpace(o.Name)
 	var source int64
+	var ownName bool
 	if o.CopyOf != nil {
-		// A copy is named as what it copies, which may go without saying.
+		// A copy is named as what it copies, which may go without saying,
+		// but for a struct's copy on a board, which may be named for itself
+		// so a process can take several told apart; see syncCopy.
 		var name string
 		var err error
 		if source, name, err = b.copySource(o.CopyOf); err != nil {
@@ -797,7 +802,14 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 		if o.Name == "" {
 			o.Name = name
 		} else if o.Name != name {
-			return problemf("%s: object %s: a copy is named as what it copies, %s", where, quote(ident(o.Name, o.Key)), quote(name))
+			root, err := isStructRoot(b.ctx, b.tx, source)
+			if err != nil {
+				return err
+			}
+			if !root || owner != nil {
+				return problemf("%s: object %s: a copy is named as what it copies, %s; only a struct's copy on a board may be named for itself", where, quote(ident(o.Name, o.Key)), quote(name))
+			}
+			ownName = true
 		}
 	}
 	id := ident(o.Name, o.Key)
@@ -808,7 +820,7 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 	if b.objs[id] != nil {
 		return problemf("%s: two objects are %s; give one a key of its own", quote(b.name), quote(id))
 	}
-	bo := &bobj{o: o, parent: parent, owner: owner, states: map[string]int64{}, where: at}
+	bo := &bobj{o: o, parent: parent, owner: owner, states: map[string]int64{}, ownName: ownName, where: at}
 	for i, c := range b.cur.Objects {
 		if !b.used["object"][c.ID] && sameBoard(c.Parent, parent) && sameBoard(c.Owner, owner) && c.Name == o.Name {
 			bo.cur, bo.id = &b.cur.Objects[i], c.ID
@@ -1529,7 +1541,7 @@ func (b *builder) resolveObject(bo *bobj) error {
 		return problemf("%s: %s", at, msg)
 	}
 	so := snapshotObject{ID: bo.id, Name: o.Name, X: bo.x, Y: bo.y, Width: o.Width, Persistent: o.Persistent, Many: o.Many,
-		Min: o.Min, Max: o.Max, Human: o.Human, End: o.End, Parent: bo.parent, Owner: bo.owner, Relation: o.Relation, Source: bo.source, Pick: o.Pick}
+		Min: o.Min, Max: o.Max, Human: o.Human, End: o.End, Parent: bo.parent, Owner: bo.owner, Relation: o.Relation, Source: bo.source, OwnName: bo.ownName, Pick: o.Pick}
 	if o.Shared {
 		so.Store = &bo.id
 	}

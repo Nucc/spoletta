@@ -2,8 +2,9 @@ import { createContext, useContext } from 'react'
 import type { LinkRole, NoteColour } from './api'
 import type { Quantity } from './quantity'
 
-// The flows that are structs, which say where a copy of an object comes from.
-export const StructFlowsContext = createContext<ReadonlySet<number>>(new Set())
+// The flows that are structs, by id, with their names, which say where a
+// copy of an object comes from: a copy named for itself names its struct.
+export const StructFlowsContext = createContext<ReadonlyMap<number, string>>(new Map())
 
 // What nodes and edges can ask the board to do. Node ids are React Flow ids:
 // a process id, an obj- prefixed object id or a draft- prefixed draft.

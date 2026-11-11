@@ -136,7 +136,7 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
                   data.human
                     ? 'Person'
                     : data.copied && !data.owned
-                      ? `${data.many && !data.boundary ? 'List · ' : ''}From a ${structs.has(data.sourceFlow ?? 0) ? 'struct' : 'procedure'}${data.pick ? ` · each run: ${pickText(data.pick)}` : ''}${data.follows ? ` · each run: the record its ${data.follows.attribute} names` : ''}`
+                      ? `${data.many && !data.boundary ? 'List · ' : ''}${fromText(structs, data)}${data.pick ? ` · each run: ${pickText(data.pick)}` : ''}${data.follows ? ` · each run: the record its ${data.follows.attribute} names` : ''}`
                       : data.general
                       ? `${data.many && !data.boundary ? 'List of ' : ''}${data.general}`
                       : !data.many
@@ -283,4 +283,12 @@ function StatePill({
       {linkedOut && <span className="state-leader" />}
     </div>
   )
+}
+
+// Where a copy comes from: a struct or a procedure, and which struct for a
+// copy named for itself, such as one reviewer's Review Comment.
+function fromText(structs: ReadonlyMap<number, string>, data: ObjectNodeData): string {
+  const struct = structs.get(data.sourceFlow ?? 0)
+  if (struct === undefined) return 'From a procedure'
+  return struct !== data.name ? `From ${struct}` : 'From a struct'
 }

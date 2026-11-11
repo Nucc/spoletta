@@ -324,17 +324,23 @@ func partsOf(s structure, object int64) []*structObject {
 }
 
 // Makes a copy match its source in the module whose structure s is: its
-// name and how many it is (unless it is a struct's copy on a board), whether
-// it is shared, its states, the attributes it has (its generals' too), and
-// the objects making it up, each matched in turn. What the copy has that its
+// name (unless it is a struct's copy on a board named for itself) and how
+// many it is (unless it is a struct's copy on a board), whether it is
+// shared, its states, the attributes it has (its generals' too), and the
+// objects making it up, each matched in turn. What the copy has that its
 // source no longer does goes, the links naming its states too.
 func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) error {
 	o := s[source]
 	if o == nil {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx, "UPDATE objects SET name = ?, relation = ?, source_id = ? WHERE id = ?",
-		o.name, o.relation, source, dup)
+	// A struct's copy on a board may be named for itself, such as Gemini
+	// Review for a copy of Review Comment, so that one process can take
+	// several copies of a struct told apart by name (see names.go); the
+	// rest of it follows the struct still. Named as the struct is now, it
+	// follows its name again. Only renaming it sets own_name; see ownName.
+	_, err := tx.ExecContext(ctx, "UPDATE objects SET own_name = own_name AND name <> ?, name = IF(own_name, name, ?), relation = ?, source_id = ? WHERE id = ?",
+		o.name, o.name, o.relation, source, dup)
 	if err != nil {
 		return err
 	}
@@ -482,6 +488,24 @@ func ownQuantity(w http.ResponseWriter, r *http.Request, db *sql.DB, object int6
 		return false
 	}
 	return free || ownObject(w, r, db, object)
+}
+
+// Whether an object may be renamed here: where what it has may change
+// (ownObject), and a struct's copy on a board, which may be named for
+// itself; see syncCopy. A procedure's object's copy keeps its name, by
+// which a subflow process hands it across (calls.go), as do the objects
+// making a copy up, which are fields of what it holds. Writes why not, or
+// the error, when it may not.
+func ownName(w http.ResponseWriter, r *http.Request, db *sql.DB, object int64) bool {
+	return ownQuantity(w, r, db, object)
+}
+
+// Notes whether a copy is named for itself, now that it may have been
+// renamed: whether its name is other than its source's.
+func noteOwnName(ctx context.Context, db execer, object int64) error {
+	_, err := db.ExecContext(ctx, `UPDATE objects o JOIN objects src ON src.id = o.source_id JOIN flows f ON f.id = src.flow_id
+		SET o.own_name = (f.is_struct AND o.owner_id IS NULL AND o.name <> src.name) WHERE o.id = ?`, object)
+	return err
 }
 
 // The object a state or attribute is of, 0 if it is gone.

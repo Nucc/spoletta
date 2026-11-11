@@ -575,6 +575,12 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 	if err != nil {
 		return 0, err
 	}
+	// A struct's copy named for itself keeps its name; see syncCopy.
+	if source != nil {
+		if err := noteOwnName(p.ctx, p.tx, id); err != nil {
+			return 0, err
+		}
+	}
 	if mapped {
 		p.objMap[o.ID] = id
 	}

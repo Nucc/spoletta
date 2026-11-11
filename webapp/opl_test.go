@@ -28,6 +28,8 @@ func TestOPL(t *testing.T) {
 			{ID: 14, Name: "Queue", Many: true, Min: 1},
 			{ID: 15, Name: "Author", Owner: id(10), Relation: relationAggregation},
 			{ID: 16, Name: "Tag name", Parent: id(7)},
+			{ID: 17, Name: "Gemini Review", Source: id(99), OwnName: true},
+			{ID: 18, Name: "Review Comment", Source: id(99)},
 		},
 		States: []objectState{
 			{ID: 20, Object: 10, Name: "bug", Rule: `kind == "bug"`},
@@ -58,8 +60,14 @@ func TestOPL(t *testing.T) {
 			return "Deploy prod"
 		}
 		return ""
+	}, func(id int64) string {
+		if id == 99 {
+			return "Review Comment"
+		}
+		return ""
 	})
 	for _, want := range []string{
+		`"Gemini Review" is an instance of "Review Comment".`,
 		`"Ticket" is stored, so each run keeps what it generated of it.`,
 		`"Ticket" can be "bug" or "feature".`,
 		`"Ticket" is "bug" when kind == "bug".`,
@@ -94,6 +102,10 @@ func TestOPL(t *testing.T) {
 			t.Errorf("OPL lacks %q:\n%s", want, got)
 		}
 	}
+	// A copy following its struct's name says nothing of it.
+	if strings.Contains(got, `"Review Comment" is an instance`) {
+		t.Errorf("a copy named as its struct says what it is an instance of:\n%s", got)
+	}
 	// What the flow process's board has isn't said on the top board.
 	if strings.Contains(got, "\n\"Tag\" is") {
 		t.Errorf("an inner process is on the top board:\n%s", got)
@@ -115,7 +127,7 @@ func TestOPLEffect(t *testing.T) {
 			{ID: 4, Process: 1, Object: 2, Direction: directionOutput},
 		},
 	}
-	got := opl(s, nil)
+	got := opl(s, nil, nil)
 	if !strings.Contains(got, `"Edit" affects "Doc".`) || strings.Contains(got, "takes") || strings.Contains(got, "yields") {
 		t.Errorf("OPL of an effect:\n%s", got)
 	}
@@ -129,7 +141,7 @@ func TestOPLQuorumOfConditions(t *testing.T) {
 		States:    []objectState{{ID: 3, Object: 2, Name: "approved"}},
 		Links:     []snapshotLink{{ID: 4, Process: 1, Object: 2, Direction: directionInput, State: 3, Condition: true}},
 	}
-	got := opl(s, nil)
+	got := opl(s, nil, nil)
 	for _, want := range []string{`"Merge" takes "Verdict" if it is "approved".`, `is tried again up to 1 time when it fails.`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("OPL lacks %q:\n%s", want, got)

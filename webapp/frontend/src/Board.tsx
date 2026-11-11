@@ -1415,7 +1415,10 @@ export default function Board({
     () => (mcpServers === null ? null : connectorBlocks(mcpServers)),
     [mcpServers],
   )
-  const structFlows = useMemo(() => new Set((otherFlows ?? []).filter((f) => f.struct).map((f) => f.id)), [otherFlows])
+  const structFlows = useMemo(
+    () => new Map((otherFlows ?? []).filter((f) => f.struct).map((f) => [f.id, f.name])),
+    [otherFlows],
+  )
 
   const onCanvasDrop = (e: DragEvent<HTMLDivElement>) => {
     const id = e.dataTransfer.getData(BLOCK_MIME)

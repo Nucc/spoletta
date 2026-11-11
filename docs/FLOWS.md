@@ -505,7 +505,15 @@ repositories:
   as the struct's object is, and changing the struct's leaves its copies as
   they are; in a setup file, a copy is as many as it says, one if it says
   nothing. The objects making a copy up follow the struct, as fields of
-  each item.
+  each item. A struct's copy on a board may have a **name of its own**
+  (`name: Gemini Review` beside `copyOf: {flow: Review Comment}`), keeping
+  everything else of the struct; the OPL says `"Gemini Review" is an
+  instance of "Review Comment"`. A process tells what it takes apart by
+  name, so this is how several copies of one struct reach one process: three
+  reviewers each yield their own copy (`Gemini Review`, `GPT Review`,
+  `Claude Review`) and `Synthesize` takes all three, running once every one
+  came (or as many as its `quorum` says). One copy yielded by all three
+  would not do: the process taking it runs as soon as the first comes.
 - A struct's object can be **shared** (`shared: true` on it, which needs a
   `unique` attribute): every copy of it, in whatever flow, reads and writes
   one store of **records**, told apart by the unique attribute, as a table

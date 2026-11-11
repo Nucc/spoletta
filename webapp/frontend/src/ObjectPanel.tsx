@@ -222,15 +222,16 @@ export default function ObjectPanel({
           >
             {module.name}
           </a>
-          , which it follows: its
-          name, how many it is, its states, attributes and what it is made of change only there, and here with it.
+          {module.struct && !owner
+            ? ', which it follows: its states, attributes and what it is made of change only there, and here with it. Its name follows the struct unless you give it one of its own, so a process can take several copies told apart, and how many it is is this flow\'s.'
+            : ', which it follows: its name, how many it is, its states, attributes and what it is made of change only there, and here with it.'}
         </p>
       )}
       <label className="panel-field">
         <span>Name</span>
         <input
           value={objectName}
-          disabled={!own}
+          disabled={!ownQuantity}
           onChange={(e) => setObjectName(e.target.value)}
           onBlur={commitObjectName}
           onKeyDown={(e) => e.key === 'Enter' && commitObjectName()}

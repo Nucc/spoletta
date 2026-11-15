@@ -40,7 +40,11 @@ Agent processes run with pi. They may run with Claude Code instead, as a
 second coding agent, when the worker's images are built with it: it isn't
 installed unless you set `CLAUDE_CODE_VERSION` in `.env` to an exact version,
 such as `2.1.325`, and build again (`podman compose up --build`). The worker
-then offers it, and an agent process's panel says what it runs with.
+then offers it, and an agent process's panel says what it runs with. Take
+the version CI tests, which `.github/workflows/ci.yml` names in its
+`claude-code` job: it runs that Claude Code as a step runs it, against a fake
+of the model's API, so a release that takes the worker's flags or prints its
+output otherwise fails there first.
 
 Set it only if you accept Anthropic's terms for running Claude Code in a
 product. Anthropic's legal page says doing so "requires agreeing to our

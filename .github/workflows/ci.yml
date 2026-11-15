@@ -98,6 +98,32 @@ jobs:
           for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q test.log && echo "holds output: $p $(tr '\0' ' ' < $p/cmdline)"; done
           exit $rc
 
+  # Claude Code itself, at the version named here, run as a step runs it in
+  # the steps' image, with no network, against a fake of the model's API
+  # (TestRealClaudeCode in worker/claude_real_test.go): a version taking the
+  # worker's flags otherwise, or printing its stream otherwise, fails here
+  # rather than in a run. Move it with the CLAUDE_CODE_VERSION in .env.
+  claude-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLAUDE_CODE_VERSION: 2.1.325
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: worker/go.mod
+          cache: false
+      - run: docker build -f worker/sandbox.Containerfile --build-arg CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" -t spoletta-sandbox .
+      # The worker's tests built for the image, static as it is Alpine's,
+      # run there as a step's user with a read-only root and /tmp a tmpfs.
+      - working-directory: worker
+        run: |
+          CGO_ENABLED=0 GOOS=linux go test -c -o "$RUNNER_TEMP/worker.test" .
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,exec,mode=1777 \
+            -v "$RUNNER_TEMP/worker.test:/usr/local/bin/worker.test:ro" -v "$PWD:/src:ro" -w /src \
+            -e CLAUDE_CODE_TEST=real spoletta-sandbox worker.test -test.run '^TestRealClaudeCode$' -test.v
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -34,6 +34,34 @@ to compose.yaml). Admins can also add providers and their keys in the app's
 settings, under Model providers. Bedrock without a key signs in with the
 worker's AWS credentials, passed to the worker as `AWS_*`.
 
+## Claude Code
+
+Agent processes run with pi. They may run with Claude Code instead, as a
+second coding agent, when the worker's images are built with it: it isn't
+installed unless you set `CLAUDE_CODE_VERSION` in `.env` to an exact version,
+such as `2.1.325`, and build again (`podman compose up --build`). The worker
+then offers it, and an agent process's panel says what it runs with.
+
+Set it only if you accept Anthropic's terms for running Claude Code in a
+product. Anthropic's legal page says doing so "requires agreeing to our
+Commercial Terms", that "The Claude Code binary must not be modified", and
+that "Customers may not pay for, resell, or intermediate Claude usage on
+their end users' behalf"; it may not use Claude.ai (Free, Pro, Max) sign-ins
+on behalf of users. What it allows is an organisation using keys it
+provisions for its own authorised users, billed to it. So here Claude Code
+signs in only with the step's token, standing in for an API key an admin
+configured (Anthropic's, or an Anthropic-API gateway's added under Model
+providers), through the webapp's model proxy like pi; never with anyone's
+Claude.ai account. The image installs Anthropic's package as it is, its own
+install script putting the platform's binary in place. Whether a hosted
+offering serving several customers may include it is for you to settle
+with Anthropic.
+
+Claude Code takes only models of providers speaking Anthropic's Messages
+API (`anthropic`, or a provider of the API `anthropic-messages`), has no web
+search here, and runs only in steps' containers safely: it runs without
+asking permission, the sandbox holding it (see `docs/SANDBOX.md`).
+
 ## The .env file
 
 Secrets and settings go in a `.env` file next to `compose.yaml`, which is
@@ -53,6 +81,7 @@ never committed. The ones to know:
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD` | Emailing people when a review waits on them, and when their runs fail. |
 | `RESUME_RUNS` | `false` ends the runs of a webapp that stopped, rather than having another carry them on. |
 | `TRASH_KEEP` | How long the trash keeps a deleted flow, such as `30d`, the default. |
+| `CLAUDE_CODE_VERSION` | Builds the worker's and steps' images with Claude Code, at that exact version, so agent processes may run with it; empty, the default, leaves it out. See [Claude Code](#claude-code). |
 | `CHILD_ENV` | Variables of the worker's own to hand every step, comma-separated, each passed through in compose.yaml too. |
 | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | Compose's MySQL, which the webapp connects to as that user. |
 | `MYSQL_PUBLISH` | Where MySQL is published on the host, `127.0.0.1:3306` by default. |

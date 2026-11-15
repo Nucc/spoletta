@@ -132,6 +132,7 @@ A board the file gives no `notes` keeps those it has; `notes: []` leaves it none
   script: echo hi       # for script processes
   model: anthropic/claude-sonnet   # agent: provider/id; the default if absent
   thinking: low         # off, minimal, low, medium, high, xhigh or max
+  harness: claude       # agent: the coding agent it runs with, claude for Claude Code; pi if absent
   mcpServers: [jira]    # agent: the MCP servers it may use, by name
   mcpTools:             # agent: the tools it keeps to of each, by server; all of an MCP server's,
     jira: [search]      #   and a connector's that only read, for a server not named here
@@ -172,6 +173,8 @@ A board the file gives no `notes` keeps those it has; `notes: []` leaves it none
 A process's `samples` are the inputs saved to try it on alone, as its panel's *Try this process* does: a trial runs only it, on the board as it is, and stores nothing the flow's runs see. Each sample has a name of its own and gives objects the process `takes`, by name, with what they hold and, optionally, one of their states. A process the file gives no `samples` keeps those it has; `samples: []` leaves it none. Export writes them for each process that has any.
 
 A connector process's `server` names an installed connector among the `mcpServers`, whose operation it carries out. Left out, the process has none picked yet, as a process made from a template whose connector isn't installed: it keeps its `operation`, which must be one some connector has, and its `args`, for when someone picks a connector in its panel, and the board says it can't run until then. Export leaves it out for such a process, and for one whose connector was removed.
+
+An agent process's `harness` is the coding agent the worker runs it with: pi when left out, or `claude` for Claude Code, which only an agent process takes and only a worker whose images an operator built with Claude Code has. Claude Code takes only models of a provider speaking Anthropic's API: `anthropic`, or a provider added in the settings, or of the worker's own config, whose API is `anthropic-messages`, such as a gateway. Export writes `harness` only for Claude Code.
 
 A process names its credentials, never holds them: credentials are kept by admins in the settings, under Credentials, secrets and all, and never written in a file. Importing one naming a credential the app hasn't is refused; a name matches whatever its case or spacing, as `Issue tracker` and `issue  TRACKER` name the same one. Only agent and script processes take them. Each credential is reached by the step at `$CREDENTIAL_<NAME>_URL`, with `Authorization: Bearer $CREDENTIALS_TOKEN`; see [docs/FLOWS.md](../docs/FLOWS.md), section 5.3.
 

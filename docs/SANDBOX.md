@@ -16,7 +16,8 @@ Spoletta keeps that code from the instance's secrets and from other runs.
 
 ## The threat model
 
-A step's program (pi and the tools it runs, or a script's bash) is assumed
+A step's program (its coding agent, pi or Claude Code, and the tools it
+runs, or a script's bash) is assumed
 hostile. It may read anything it can reach, run anything, and leave traps in
 whatever it can write. It must not be able to:
 
@@ -37,9 +38,13 @@ The webapp holds every secret and hands out short-lived tokens instead.
   `PATH`, `HOME`, the locale, pi's settings, proxies and certificates, who
   commits. `CHILD_ENV` names more, for an instance that wants scripts to have
   a token of its own, knowing agents can read it too.
-- **No model keys.** pi reaches every provider through the webapp's model
-  proxy (`webapp/llm.go`) with a token of the step's, which the proxy swaps
-  for the real key. The token ends with the step.
+- **No model keys.** The agent reaches every provider through the webapp's
+  model proxy (`webapp/llm.go`) with a token of the step's, which the proxy
+  swaps for the real key: pi as every provider's key, Claude Code as its
+  API key (`ANTHROPIC_API_KEY`, sent as `x-api-key`). The token ends with
+  the step. Claude Code never signs in otherwise: no Claude.ai login, OAuth
+  token or person's `~/.claude` reaches it, and the step fails should it
+  report signing in with anything but the step's key.
 - **No MCP tokens.** MCP servers are reached through the webapp's MCP proxy
   (`webapp/mcp.go`) with a token of the step's, the same way.
 - **No credentials' secrets.** A service of the step's own, such as Jira, is
@@ -51,6 +56,18 @@ The webapp holds every secret and hands out short-lived tokens instead.
   the step's private directory that git finds through `GIT_CONFIG_*`.
 - **A pi agent directory of its own**, so pi's credentials and caches of one
   step are never another's.
+- **Claude Code kept to what the worker writes for it** (`worker/claude.go`):
+  it reads no user, project or local settings (`--setting-sources ""`), so a
+  repository's `.claude/settings.json` hooks never run and its `CLAUDE.md`,
+  skills and agents aren't loaded, no MCP servers but the step's
+  (`--strict-mcp-config`), no auto-memory, and sends nothing but its model
+  calls. Its tools are a list (Bash, Read, Edit, Write, WebFetch,
+  NotebookEdit, and Skill when the step has skills), with no subagents and
+  no web search. It runs with `bypassPermissions`, as nobody answers its
+  prompts: the sandbox is what holds it, as it holds pi, so run it only in
+  a container (`process` holds nothing). Its config directory, which keeps
+  its transcript and its own state and never a credential, is its
+  session's own, or without a session the step's.
 - **Private files only it reads**: its prompt, spec, skills and tokens are
   0600 in a 0700 directory, deleted when it ends.
 - **Its run's home**: `HOME` is the run's own directory, beside the
@@ -103,9 +120,10 @@ it, each a part of one of the worker's volumes, mounted at the same path:
 |---|---|---|
 | its workspace, `/data/workspaces/run-<id>` | read-write | its checkouts |
 | its private directory, `/data/steps/private-*` | read-only | prompt, spec, skills, tokens |
-| its agent directory and result, inside that | read-write | pi's state, submit_output's result |
+| its agent directory and result, inside that | read-write | pi's state (Claude Code's without a session), submit_output's result |
 | its files, `/data/files/run-<id>/step-<id>` | read-write | what it generates |
 | its session, `/data/workspaces/.sessions/<workspace>` | read-write | pi's conversation |
+| its Claude Code session, `/data/workspaces/.sessions/<workspace>/claude/<session>` | read-write | Claude Code's conversation and state |
 | its run's home, `/data/workspaces/.homes/run-<id>` | read-write | `HOME` |
 | `/tmp` | tmpfs | scratch |
 
@@ -123,7 +141,8 @@ root, every capability dropped, no new privileges, limits on memory, CPUs and
 processes (`SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_PIDS`) and the
 default seccomp profile. `SANDBOX_RUNTIME` picks another OCI runtime or
 runtime class, such as gVisor's `runsc`, for a kernel of its own. The image,
-`worker/sandbox.Containerfile`, holds pi, its extensions and what a coding
+`worker/sandbox.Containerfile`, holds pi, its extensions, Claude Code when
+built with `CLAUDE_CODE_VERSION` (see `docs/INSTALL.md`), and what a coding
 agent reaches for (bash, git, curl, jq, ripgrep, fd, GNU's coreutils, grep,
 sed and awk, diff and patch, archivers, make, GitHub's `gh` (given the step's git token as it runs,
 `worker/gh.sh`), Python with pip installing
@@ -292,7 +311,10 @@ public address behind NAT64 is dialled; Teredo's `2001::/32` is never
 dialled. Every connection goes in the run's log.
 
 So under a sandbox, a script that calls an API or installs packages needs its
-host allowed. pi's own requests go to the webapp directly. Bedrock without a
+host allowed. The agent's own requests go to the webapp directly, which
+`NO_PROXY` names: pi's and Claude Code's model calls and MCP servers. Claude
+Code's WebFetch fetches from the step, through the egress proxy; its web
+search, which would run at Anthropic outside the allowlist, is off. Bedrock without a
 key, which signs in with the worker's AWS credentials, isn't supported in a
 container; give it a Bedrock API key in the settings instead.
 
@@ -489,7 +511,7 @@ until set:
   a model without a known price at the largest models' (`webapp/spend.go`).
   A run's subflows, list items and follow-ups count toward it. Once it has
   spent its limit, the proxy refuses its calls, saying it is out of budget,
-  which pi doesn't try again, and the engine stops the run, which fails
+  which neither pi nor Claude Code tries again, and the engine stops the run, which fails
   saying what it spent. A flow may hold its runs to less in its settings.
   Calls already going when a run passes its limit finish, so a run with
   steps running at once spends a little more than its limit.

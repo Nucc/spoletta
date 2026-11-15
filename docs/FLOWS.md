@@ -240,6 +240,12 @@ by kind:
   keep, or pi's without one. `thinking`: one of
   `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, empty for the
   default.
+- `harness`: the coding agent that runs it, pi when absent, or `claude` for
+  Claude Code, which only a worker an operator built with Claude Code has.
+  Claude Code takes only models of a provider speaking Anthropic's API
+  (`anthropic/...`, or a gateway of API `anthropic-messages`), its own
+  `model` or the default; on any other the step fails. Leave it out unless
+  the person asks for Claude Code.
 - `mcpServers`: names of MCP servers configured in the app that this agent
   may use; none by default. An installed connector, such as GitHub's, is one
   of them too, its operations being its tools.
@@ -1912,6 +1918,7 @@ Check them before you import.
   `retries` from 0 to 5; `quorum` at least 1; `remindAfter` and
   `waitAtMost` from 1 to 31536000.
 - `thinking` is one of the listed levels.
+- `harness` is `pi` or `claude`, and `claude` only on an agent process.
 - `credentials` only on an agent or script process, each naming a credential
   the app has.
 

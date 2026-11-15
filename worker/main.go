@@ -1,6 +1,7 @@
-// Runs pi agent harnesses and scripts on behalf of the webapp. Each POST /run
-// spawns one non-interactive pi process and streams its conversation back as
-// it goes, ending with the outcome; each POST /script runs one bash script
+// Runs coding agents and scripts on behalf of the webapp. Each POST /run
+// spawns one non-interactive agent, of the harness the request names (pi by
+// default; see harness.go), and streams its conversation back as it goes,
+// ending with the outcome; each POST /script runs one bash script
 // and replies once it exits. Either runs in its run's workspace, a directory
 // of git checkouts on the run's branch (see workspace.go), or without one in
 // a fresh scratch directory.
@@ -55,6 +56,9 @@ type runRequest struct {
 	Prompt      string `json:"prompt"`
 	Model       string `json:"model"`
 	Thinking    string `json:"thinking"`
+	// The coding agent that runs the step: empty or "pi" for pi; see
+	// harnessFor.
+	Harness string `json:"harness,omitempty"`
 	// The objects the process generates, which the agent hands in through
 	// submit_output; see submit-output.ts. Absent when it generates none.
 	Output *outputSpec `json:"output"`
@@ -259,12 +263,6 @@ func makeStepDir(prefix string) (string, error) {
 	return os.MkdirTemp(stepsRoot, prefix)
 }
 
-// The submit_output extension, which the image puts here.
-var outputExtension = envOr("OUTPUT_EXTENSION", "/opt/flow/submit-output.ts")
-
-// The extension that registers a run's MCP servers, which the image puts here.
-var mcpExtension = envOr("MCP_EXTENSION", "/opt/flow/mcp-servers.ts")
-
 // Creates a run's files directory, which must be inside the files root.
 func makeFilesDir(dir string) error {
 	rel, err := filepath.Rel(filesRoot, filepath.Clean(dir))
@@ -359,6 +357,12 @@ func main() {
 			}
 		}
 
+		h, err := harnessFor(run)
+		if err != nil {
+			reply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
 		if run.FilesDir != "" {
 			if err := makeFilesDir(run.FilesDir); err != nil {
 				reply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -385,7 +389,7 @@ func main() {
 		l := newStepLogger(processLabel(run.ProcessID, run.ProcessName), func(line logLine) {
 			send(map[string]logLine{"log": line})
 		}).hiding(run.tokens())
-		res := runPi(r.Context(), run, limit(run.TimeoutMS, timeout), l, func(m json.RawMessage) {
+		res := runAgent(r.Context(), h, run, limit(run.TimeoutMS, timeout), l, func(m json.RawMessage) {
 			send(map[string]json.RawMessage{"message": m})
 		})
 		logRun(l, run, res, time.Since(started))
@@ -588,309 +592,6 @@ func readAgentConfig(hostDir string) (agentModels, error) {
 		}
 	}
 	return models, nil
-}
-
-// Model ids may contain slashes and colons (fireworks/accounts/..., bedrock's
-// ...-v1:0), so the provider is split off and passed separately rather than
-// letting pi parse a provider/id[:thinking] pattern.
-func modelArgs(model string) []string {
-	if model == "" {
-		return nil
-	}
-	if provider, id, ok := strings.Cut(model, "/"); ok && provider != "" {
-		return []string{"--provider", provider, "--model", id}
-	}
-	return []string{"--model", model}
-}
-
-// Returns the run outcome; a client that disconnects (ctx is cancelled) or a
-// run that exceeds the timeout kills pi. emit gets each message of the
-// conversation as it ends.
-func runPi(ctx context.Context, run runRequest, timeout time.Duration, l *stepLogger, emit func(json.RawMessage)) (res runResult) {
-	session, err := sessionArgs(run)
-	if err != nil {
-		return runResult{Error: err.Error()}
-	}
-	// The specs, the result, the git token and pi's agent directory live
-	// outside the agent's working directory, in a directory of the step's
-	// own, which only the worker's user reads, as every file in it.
-	private, err := makeStepDir("private-")
-	if err != nil {
-		return runResult{Error: "create private directory: " + err.Error()}
-	}
-	defer os.RemoveAll(private)
-	ctx, gitEnv, err := writeGitCredentials(ctx, private, run.Git)
-	if err != nil {
-		return runResult{Error: err.Error()}
-	}
-	cwd, ws, err := workDir(ctx, run.Workspace, "run-", l)
-	if err != nil {
-		return runResult{Error: err.Error()}
-	}
-	ws.process, ws.session = run.ProcessName, run.SessionID
-	// Once its work is brought back.
-	defer checkDisk(run.Run, run.DiskLimit, &res, l)
-	defer ws.done(&res)
-
-	// An empty model or thinking level leaves the choice to the pi settings.
-	// pi prints its events as JSON, so the conversation can be followed.
-	args := append(append([]string{"-p", "--mode", "json", "--no-approve"}, session...), modelArgs(run.Model)...)
-	if run.Thinking != "" {
-		args = append(args, "--thinking", run.Thinking)
-	}
-
-	var resultFile string
-	for _, p := range run.Providers {
-		if err := p.check(); err != nil {
-			return runResult{Error: err.Error()}
-		}
-	}
-	agentDir := filepath.Join(private, "agent")
-	if err := os.Mkdir(filepath.Join(private, "out"), 0o700); err != nil {
-		return runResult{Error: "create private directory: " + err.Error()}
-	}
-	if err := writeAgentDir(agentDir, run.Providers, run.LLM); err != nil {
-		return runResult{Error: err.Error()}
-	}
-	credVars, err := credentialVars(run.Credentials, run.CredentialsToken)
-	if err != nil {
-		return runResult{Error: err.Error()}
-	}
-	if len(credVars) > 0 {
-		l.infof("calling %s through the webapp's credential proxy", credentialNames(run.Credentials))
-	}
-	env := withCloudCredentials(childEnv(append(append(gitEnv, "PI_CODING_AGENT_DIR="+agentDir), credVars...)...))
-	if len(run.MCPServers) > 0 {
-		b, err := json.Marshal(map[string]any{"servers": run.MCPServers, "token": run.MCPToken})
-		if err == nil {
-			err = os.WriteFile(filepath.Join(private, "mcp.json"), b, 0o600)
-		}
-		if err != nil {
-			return runResult{Error: "write MCP servers: " + err.Error()}
-		}
-		args = append(args, "-e", mcpExtension)
-		env = append(env, "FLOW_MCP_SERVERS="+filepath.Join(private, "mcp.json"))
-	}
-	if run.Output != nil {
-		if resultFile, err = writeOutputSpec(private, run); err != nil {
-			return runResult{Error: "write output spec: " + err.Error()}
-		}
-		args = append(args, "-e", outputExtension)
-		env = append(env, "FLOW_OUTPUT_SPEC="+filepath.Join(private, "spec.json"))
-	}
-	if len(run.Skills) > 0 && !run.NoTools {
-		skills, err := writeSkills(private, run.Skills)
-		if err != nil {
-			return runResult{Error: "write skills: " + err.Error()}
-		}
-		args = append(args, skills...)
-	}
-	if len(run.MCPServers) == 0 {
-		args = append(args, "--no-mcp")
-	}
-	if run.NoTools {
-		args = append(args, "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates")
-	}
-	prompt := run.Prompt
-	if run.Resume && len(ws.recreated) > 0 {
-		prompt = recreatedNote(ws.recreated) + prompt
-	}
-	if run.Guide {
-		guide, err := os.ReadFile(flowsGuide)
-		if err != nil {
-			return runResult{Error: "read the guide to authoring flows: " + err.Error()}
-		}
-		prompt = "<flows_guide>\n" + string(guide) + "\n</flows_guide>\n\n" + prompt
-	}
-
-	// The prompt goes in on stdin: as an argument, a leading @ or - would be
-	// parsed as a file reference or an option. pi may exit before reading it,
-	// e.g. on a bad model; that's reported by its exit status.
-	promptFile := filepath.Join(private, "prompt")
-	if err := os.WriteFile(promptFile, []byte(prompt), 0o600); err != nil {
-		return runResult{Error: "write the prompt: " + err.Error()}
-	}
-	spec := sandboxSpec{
-		Cmd: append([]string{"pi"}, args...), Stdin: promptFile, Dir: cwd, Env: env, Graceful: true, Egress: run.Egress.proxy(),
-		// What the agent writes, besides its working directory: pi's agent
-		// directory, its result, its files and its session.
-		Mounts: []mount{{Path: cwd}, {Path: private, ReadOnly: true}, {Path: agentDir}, {Path: filepath.Join(private, "out")}},
-	}
-	if run.FilesDir != "" {
-		spec.Mounts = append(spec.Mounts, mount{Path: run.FilesDir})
-	}
-	if run.SessionID != "" {
-		spec.Mounts = append(spec.Mounts, mount{Path: sessionsDir(run.Workspace.ID)})
-	}
-	if err := spec.withHome(run.Run); err != nil {
-		return runResult{Error: "prepare the run's home: " + err.Error()}
-	}
-
-	timeout, short := untilTokenEnds(timeout, run.Git)
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	events := &eventStream{emit: emit}
-	var stderr bytes.Buffer
-	// The prompt goes on stdin and the token in models.json, so the
-	// arguments hold neither.
-	l.infof("pi %s", strings.Join(args, " "))
-	err = steps.run(runCtx, spec, events, &stderr)
-	if notStarted(err) && runCtx.Err() == nil {
-		return runResult{Error: "failed to start pi: " + err.Error()}
-	}
-	output, failure := events.outcome()
-	// A failure's error is what it printed to stderr already.
-	if err == nil {
-		l.stderr("pi", stderr.String())
-	}
-	switch {
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
-		return runResult{Output: output, Error: timedOut(timeout, short, run.Git)}
-	case ctx.Err() != nil:
-		return runResult{Output: output, Error: "cancelled"}
-	case err != nil:
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = "pi failed: " + err.Error()
-		}
-		return runResult{Output: output, Error: msg}
-	case failure != "":
-		// In JSON mode pi exits fine even when the model's request failed.
-		return runResult{Output: output, Error: failure}
-	}
-	if resultFile != "" {
-		// Missing if the agent never called submit_output, or the extension
-		// failed to load. The agent could have left a link to another file.
-		if b, err := readNoFollow(resultFile); err == nil {
-			return runResult{OK: true, Output: string(b), Submitted: true}
-		}
-	}
-	return runResult{OK: true, Output: output}
-}
-
-// Writes each skill as pi reads one, a directory of its name holding its
-// SKILL.md, under dir, and returns the arguments giving them to pi. The
-// frontmatter's values are JSON strings, which YAML reads as they are, so a
-// description holding a colon or a line break can't break it.
-func writeSkills(dir string, skills []skill) ([]string, error) {
-	var args []string
-	for _, s := range skills {
-		if !skillName.MatchString(s.Name) {
-			return nil, fmt.Errorf("invalid skill name %q", s.Name)
-		}
-		d := filepath.Join(dir, "skills", s.Name)
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			return nil, err
-		}
-		name, _ := json.Marshal(s.Name)
-		description, _ := json.Marshal(s.Description)
-		md := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n%s\n", name, description, s.Content)
-		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(md), 0o600); err != nil {
-			return nil, err
-		}
-		args = append(args, "--skill", d)
-	}
-	return args, nil
-}
-
-// Writes the output spec submit-output.ts reads, returning where its result goes.
-func writeOutputSpec(dir string, run runRequest) (string, error) {
-	spec := *run.Output
-	spec.FilesDir = run.FilesDir
-	spec.ResultFile = filepath.Join(dir, "out", "result.json")
-	b, err := json.Marshal(spec)
-	if err != nil {
-		return "", err
-	}
-	return spec.ResultFile, os.WriteFile(filepath.Join(dir, "spec.json"), b, 0o600)
-}
-
-// Reads pi's JSON event stream (docs/json.md in pi): a JSON record per line,
-// split on LF only. Of the events, only each message's end is kept, which
-// holds the whole message: the prompt, each reply of the model with its
-// thinking and tool calls, and each tool's result.
-type eventStream struct {
-	emit func(json.RawMessage)
-	buf  []byte
-	last piMessage
-}
-
-type piMessage struct {
-	Role    string `json:"role"`
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-	StopReason   string `json:"stopReason"`
-	ErrorMessage string `json:"errorMessage"`
-}
-
-func (s *eventStream) Write(p []byte) (int, error) {
-	s.buf = append(s.buf, p...)
-	for {
-		i := bytes.IndexByte(s.buf, '\n')
-		if i < 0 {
-			return len(p), nil
-		}
-		s.record(bytes.TrimSuffix(s.buf[:i], []byte("\r")))
-		s.buf = s.buf[i+1:]
-	}
-}
-
-func (s *eventStream) record(line []byte) {
-	var ev struct {
-		Type    string          `json:"type"`
-		Message json.RawMessage `json:"message"`
-	}
-	if json.Unmarshal(line, &ev) != nil || ev.Type != "message_end" {
-		return
-	}
-	// A user message's content can be a plain string, which doesn't fit
-	// piMessage; only the role matters then.
-	var m piMessage
-	if err := json.Unmarshal(ev.Message, &m); err != nil {
-		m = piMessage{}
-		var role struct {
-			Role string `json:"role"`
-		}
-		_ = json.Unmarshal(ev.Message, &role)
-		m.Role = role.Role
-	}
-	s.last = m
-	if s.emit != nil {
-		s.emit(ev.Message)
-	}
-}
-
-// What the run printed, as text mode would: the text of the last message if
-// the model wrote it. A failed or aborted request instead gives its error.
-func (s *eventStream) outcome() (output, failure string) {
-	m := s.last
-	if m.Role != "assistant" {
-		return "", ""
-	}
-	if m.StopReason == "error" || m.StopReason == "aborted" {
-		if m.ErrorMessage == "" {
-			return "", "Request " + m.StopReason
-		}
-		return "", m.ErrorMessage
-	}
-	var texts []string
-	for _, c := range m.Content {
-		if c.Type == "text" {
-			texts = append(texts, c.Text)
-		}
-	}
-	return strings.TrimSpace(strings.Join(texts, "\n")), ""
-}
-
-// Tells an agent carrying on its conversation that its checkouts were made
-// again since, so it doesn't count on what only the old ones held.
-func recreatedNote(repos []string) string {
-	return fmt.Sprintf("Note: since you last worked here, the checkouts of %s were removed to save space and made again from the branch. "+
-		"Everything committed is there, including what was left uncommitted, which was committed for you; "+
-		"but files git ignores, such as installed dependencies and build output, are gone, as is anything you left outside the repositories. "+
-		"Set them up again if you need them.\n\n", strings.Join(repos, ", "))
 }
 
 // The directory a step works in, and what gives it back once the step is

@@ -17,15 +17,28 @@ import { useConfirm } from './Confirm'
 import TabLink from './TabLink'
 import { SettingsEmpty } from './SettingsHead'
 
-// What pi takes as a server name; it names the tools mcp__<name>__<tool>.
+// What pi and Claude Code take as a server name; they name the tools
+// mcp__<name>__<tool>.
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
+// The name of the worker's own server, through which agents hand in what
+// their process generates, which no other may take, whatever its case.
+const RESERVED_NAME = 'flow_output'
+
+// What is wrong with a server's name, as the server says it too, or ''.
+export function serverNameProblem(name: string): string {
+  const n = name.trim()
+  if (!NAME_PATTERN.test(n)) return 'Letters, digits, - and _ only.'
+  if (n.toLowerCase() === RESERVED_NAME) return `${RESERVED_NAME} is kept for the server agents hand in their output through.`
+  return ''
+}
+
 // A name for a server from its URL: the last part of its path, such as slack
-// for https://example.com/mcps/slack, if pi takes it as a name.
+// for https://example.com/mcps/slack, if it may be a server's name.
 function nameFromURL(url: string): string {
   try {
     const last = new URL(url.trim()).pathname.split('/').filter(Boolean).pop() ?? ''
-    return NAME_PATTERN.test(last) ? last : ''
+    return serverNameProblem(last) === '' ? last : ''
   } catch {
     return ''
   }
@@ -87,7 +100,8 @@ export function MCPServers({
   const [description, setDescription] = useState('')
   const [auth, setAuth] = useState<MCPAuth>('oauth')
   const [adding, setAdding] = useState(false)
-  const nameOk = NAME_PATTERN.test(name.trim())
+  const nameProblem = serverNameProblem(name)
+  const nameOk = nameProblem === ''
   const urlOk = /^https?:\/\/\S+$/.test(url.trim())
 
   const add = async () => {
@@ -180,7 +194,7 @@ export function MCPServers({
           <label className="panel-field">
             <span>Name</span>
             <input value={name} placeholder="slack" spellCheck={false} onChange={(e) => setName(e.target.value)} />
-            {name.trim() !== '' && !nameOk && <small className="panel-warning">Letters, digits, - and _ only.</small>}
+            {name.trim() !== '' && !nameOk && <small className="panel-warning">{nameProblem}</small>}
           </label>
           <label className="panel-field">
             <span>Description</span>

@@ -3,6 +3,7 @@ import { Handle, Position, useNodeConnections, type Node, type NodeProps } from 
 import { useBoardActions } from './actions'
 import type { ProcessKind, ProcessSettings, RunInput, ThinkingLevel } from './api'
 import { AgentIcon, ConnectorIcon, FlowIcon, GearIcon, HumanIcon, PlusIcon, RerunIcon, ScriptIcon, StopIcon, SubflowIcon, TrashIcon, ZoomInIcon } from './icons'
+import { harnessOf, withHarness } from './harness'
 import { shortModel } from './models'
 import { stoppable } from './Runs'
 import WidthResizer from './WidthResizer'
@@ -66,7 +67,9 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   skipped: 'Skipped',
 }
 
-// What the card says under the name: the kind, and an agent's model.
+// What the card says under the name: the kind, and an agent's model, named
+// after Claude Code instead of the kind when that runs it, as its icon
+// already says it is an agent.
 function subtitle(data: ProcessNodeData): string {
   if (data.kind === 'flow') return data.recording ? 'Flow · recorded' : 'Flow'
   if (data.kind === 'connector') {
@@ -74,7 +77,8 @@ function subtitle(data: ProcessNodeData): string {
     return op ? `Connector · ${op.replaceAll('_', ' ')}` : 'Connector'
   }
   if (data.kind !== 'agent') return KIND_LABELS[data.kind]
-  return `Agent · ${data.model ? shortModel(data.model) : 'default model'}`
+  const model = data.model ? shortModel(data.model) : 'default model'
+  return harnessOf(data.settings.harness) === 'claude' ? withHarness('claude', model) : `Agent · ${model}`
 }
 
 // OPM process: a rounded card, its corners as round as the card is tall, with

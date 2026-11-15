@@ -27,6 +27,7 @@ import { ClockIcon, ExternalIcon, TerminalIcon } from './icons'
 import StepTerminal, { formatLogTime, StepScreen, useStepLogs } from './StepTerminal'
 import { elapsedText, formatSpan } from './timeline'
 import { atDefault, changedSummary, type SettingGroup } from './stepSettings'
+import { claudeEffort, harnessName, harnessOf, withHarness } from './harness'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
@@ -833,11 +834,14 @@ function Step({
             </header>
             {(s.kind === 'agent' || s.session) && (
               <p className="panel-note">
-                {s.kind === 'agent' && `Model: ${s.model || 'default'} · thinking: ${s.thinking || 'default'}`}
+                {s.kind === 'agent' &&
+                  (harnessOf(s.harness) === 'claude'
+                    ? withHarness(s.harness, `model: ${s.model || 'default'} · effort: ${claudeEffort(s.thinking) || 'default'}`)
+                    : `Model: ${s.model || 'default'} · thinking: ${s.thinking || 'default'}`)}
                 {s.kind === 'agent' && s.session && ' · '}
                 {s.session && (
                   <>
-                    pi session <code className="step-session">{s.session}</code>
+                    {harnessName(s.harness)} session <code className="step-session">{s.session}</code>
                   </>
                 )}
               </p>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { getRunLogs, getStepChanges, getStepOutput, type AgentMessage, type OutputChunk, type RunLogLine, type FileChange, type MessageBlock, type RepoChanges, type RunStep, type StepMessage } from './api'
 import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
 import { ExpandIcon } from './icons'
+import { harnessOf, withHarness } from './harness'
 
 // An agent step's conversation as a terminal shows it, in a large window in
 // the middle of the screen: the prompt, what the model thinks and says, each
@@ -16,7 +17,9 @@ import { ExpandIcon } from './icons'
 // was kept shows the lines the worker logged of it and its output instead.
 // A script's output, an agent's conversation and each follow-up's start
 // with what the worker logged before them: getting the workspace ready,
-// git's progress and what it waited for, then how pi or bash was started.
+// git's progress and what it waited for, then how pi, Claude Code or bash
+// was started. The worker hands Claude Code's conversation on as pi's, its
+// tools named as pi's (worker/claude_stream.go), so both read the same here.
 // The run's panel shows the same screen, smaller, in the step (StepScreen).
 export default function StepTerminal({ run, step, onClose }: { run: number; step: RunStep; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
@@ -45,7 +48,7 @@ export default function StepTerminal({ run, step, onClose }: { run: number; step
             {' '}
             · {STEP_LABELS[step.status]}
             {t.going && ', following along'} · started {formatTime(step.startedAt)}
-            {step.model && ` · ${step.model}`}
+            {step.model ? ` · ${withHarness(step.harness, step.model)}` : harnessOf(step.harness) === 'claude' && ' · Claude Code'}
             {step.usage && ` · ${formatUsage(step.usage)}`}
           </span>
         </h2>

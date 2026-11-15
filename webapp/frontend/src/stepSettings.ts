@@ -3,8 +3,10 @@
 // in a panel taking the run's place, and in a process's panel that can't be
 // changed (ProcessPanel.tsx), which also sums each group up in a line while
 // it is folded. Only what is set apart from the process's body: not its
-// model, prompt or script, nor the operation a connector carries out. A
-// setting left at its default says so. scripts/run-views.ts checks it.
+// prompt or script, nor the operation a connector carries out; an agent's
+// coding agent, model and thinking only as the first lines of a panel that
+// can't be changed (agentRows). A setting left at its default says so.
+// scripts/run-views.ts checks it.
 
 import type { ProcessKind, ProcessSettings } from './api'
 
@@ -37,6 +39,18 @@ const picked = (ids: number[] | undefined, names: Map<number, string> | null, wh
   !ids || ids.length === 0 ? 'none' : names === null ? `${ids.length} picked` : ids.map(what).join(', ')
 
 const orDefault = (value: number | undefined, fallback: string) => (value === undefined ? `${fallback} (default)` : String(value))
+
+// What an agent runs with: the coding agent, named only when it is Claude
+// Code, as pi is what agents run with unless set (see harness.ts); its
+// model, as the model picker names it; and how hard it thinks, as Claude
+// Code's effort or pi's thinking level, the default when none is set.
+export function agentRows(claude: boolean, model: string, thinking: string): [string, string][] {
+  return [
+    ...(claude ? ([['Runs with', 'Claude Code']] as [string, string][]) : []),
+    ['Model', model],
+    [claude ? 'Effort' : 'Thinking', thinking || 'the default'],
+  ]
+}
 
 // What an agent or script works with: the skills, credentials, MCP servers
 // and repositories it picks, and whether its prompt describes its flow. None

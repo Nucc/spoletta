@@ -1,7 +1,11 @@
 // What the model picker makes of models' IDs (src/models.ts): their short
-// names, and which are listed apart as not for an agent's conversation. Run
-// with `npm test`, which needs Node 22.6 or later to load TypeScript.
+// names, and which are listed apart as not for an agent's conversation; and
+// what the coding agent an agent runs with changes of its model and
+// thinking (src/harness.ts). Run with `npm test`, which needs Node 22.6 or
+// later to load TypeScript.
 
+import type { Models } from '../src/api.ts'
+import { claudeCanUse, claudeEffort, harnessName, offersClaude, switchHarness, withHarness } from '../src/harness.ts'
 import { otherModel, shortModel } from '../src/models.ts'
 
 declare const process: { exitCode?: number }
@@ -74,5 +78,54 @@ const chat = [
 ]
 check('chat models, and those unclear', chat.filter(otherModel), [])
 
-console.log(`${checked} checks of the models' names, ${failed} failed`)
+// The coding agent an agent runs with.
+{
+  const models: Models = {
+    default: 'anthropic/claude-sonnet-4-6',
+    models: ['anthropic/claude-sonnet-4-6', 'anthropic/claude-opus-5', 'gateway/claude-haiku-4-5', 'openai/gpt-5.6-luna'],
+    harnesses: ['pi', 'claude'],
+    claude: ['anthropic/claude-sonnet-4-6', 'anthropic/claude-opus-5', 'gateway/claude-haiku-4-5'],
+  }
+  const piOnly: Models = { default: 'openai/gpt-5.6-luna', models: ['openai/gpt-5.6-luna'] }
+
+  check('offered by the worker', [offersClaude(models), offersClaude(piOnly), offersClaude(null)], [true, false, false])
+  check('named, pi by name or none', ['', 'pi', 'claude'].map(harnessName), ['pi', 'pi', 'Claude Code'])
+  check(
+    'named beside the model only for Claude Code',
+    [withHarness('', 'anthropic/claude-sonnet-4-6'), withHarness('claude', 'anthropic/claude-sonnet-4-6')],
+    ['anthropic/claude-sonnet-4-6', 'Claude Code · anthropic/claude-sonnet-4-6'],
+  )
+  check(
+    'models Claude Code may use, the default for none',
+    [
+      claudeCanUse(models, 'anthropic/claude-opus-5'),
+      claudeCanUse(models, 'openai/gpt-5.6-luna'),
+      claudeCanUse(models, ''),
+      claudeCanUse(piOnly, ''),
+      claudeCanUse({ default: '', models: [], claude: [] }, ''),
+    ],
+    [true, false, true, false, false],
+  )
+  check('thinking as an effort', (['', 'off', 'minimal', 'low', 'high', 'max'] as const).map(claudeEffort), ['', 'low', 'low', 'low', 'high', 'max'])
+
+  const agent = { settings: { skills: [1] }, model: 'openai/gpt-5.6-luna', thinking: 'minimal' as const }
+  check('switching to Claude Code drops a model it can\'t use and thinks at its effort', switchHarness('claude', agent, models), {
+    settings: { skills: [1], harness: 'claude' },
+    model: '',
+    thinking: 'low',
+  })
+  check(
+    'and keeps one it can',
+    switchHarness('claude', { settings: {}, model: 'gateway/claude-haiku-4-5', thinking: 'high' }, models),
+    { settings: { harness: 'claude' }, model: 'gateway/claude-haiku-4-5', thinking: 'high' },
+  )
+  check('and the model while the models load', switchHarness('claude', agent, null).model, 'openai/gpt-5.6-luna')
+  check(
+    'switching back to pi leaves the rest as it is, the harness unset',
+    switchHarness('', { settings: { harness: 'claude', skills: [1] }, model: '', thinking: 'low' }, models),
+    { settings: { skills: [1] }, model: '', thinking: 'low' },
+  )
+}
+
+console.log(`${checked} checks of the models' names and harnesses, ${failed} failed`)
 if (failed > 0) process.exitCode = 1

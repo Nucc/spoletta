@@ -54,6 +54,9 @@ export type ProcessSettings = {
   quorum?: number
   // Whether an agent's prompt describes the flow it works in, in OPL.
   describeFlow?: boolean
+  // The coding agent an agent process runs with: 'claude' for Claude Code,
+  // pi when absent; see harness.ts.
+  harness?: string
   // How often those who may decide a human step are reminded of it while
   // it waits, and the longest it waits before it fails, so what
   // handles its failure takes over; in seconds, neither when absent.
@@ -86,7 +89,8 @@ export type Process = {
   prompt: string
   // Used when kind is 'script'.
   script: string
-  // Model (provider/id) and thinking level for agents; empty means pi's default.
+  // Model (provider/id) and thinking level for agents, an effort level for
+  // one Claude Code runs; empty means the default.
   model: string
   thinking: ThinkingLevel | ''
   x: number
@@ -1483,6 +1487,12 @@ export type Models = {
   models: string[]
   // The names of the providers added in the settings, by ID.
   providers?: Record<string, string>
+  // The coding agents the worker offers agent processes: pi, and claude
+  // when it has Claude Code; only pi when absent.
+  harnesses?: string[]
+  // The models Claude Code may use, those of providers speaking Anthropic's
+  // API, among models; none when absent.
+  claude?: string[]
 }
 
 export function listModels(): Promise<Models> {
@@ -1733,13 +1743,17 @@ export type RunStep = {
   named?: string
   // What it did to each repository it worked on.
   commits: RepoCommits[]
-  // For an agent step that kept its session: the pi session's id, empty if
-  // none; a person can carry its conversation on, and the follow-ups they sent.
+  // For an agent step: the coding agent that ran it, 'claude' for Claude
+  // Code, absent for pi; see harness.ts.
+  harness?: string
+  // For an agent step that kept its session: its agent's session id, empty
+  // if none; a person can carry its conversation on, and the follow-ups
+  // they sent.
   session: string
   canFollowUp: boolean
   followUps: FollowUp[]
-  // What an agent step's model calls used, as pi reports it; absent for
-  // other steps.
+  // What an agent step's model calls used, as the model proxy recorded
+  // them; absent for other steps.
   usage?: StepUsage
   // For an agent, script or connector step: how long it waited for its
   // slots before it started, its person's and the engine's, in

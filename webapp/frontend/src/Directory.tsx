@@ -15,11 +15,10 @@ import {
 import { ServiceLogo } from './logos'
 import { useConfirm } from './Confirm'
 import { SettingsHead } from './SettingsHead'
+import { serverNameProblem } from './MCPSettings'
 
 // The order categories show in; any other comes after them.
 const CATEGORIES = ['Code', 'Communication', 'Ticketing', 'Support', 'Docs', 'Monitoring', 'Home', 'Other']
-
-const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 // The connectors built into the webapp and the MCP servers picked to go
 // with them, each a card with its logo and category, those installed first.
@@ -303,7 +302,8 @@ function InstallQuestions({
 }) {
   const [name, setName] = useState(e.multiple ? '' : suggested)
   const [url, setUrl] = useState(e.url)
-  const ok = NAME_PATTERN.test(name.trim()) && /^https?:\/\/\S+$/.test(url.trim())
+  const nameProblem = serverNameProblem(name)
+  const ok = nameProblem === '' && /^https?:\/\/\S+$/.test(url.trim())
   return (
     <form
       className="directory-setup"
@@ -317,6 +317,7 @@ function InstallQuestions({
           <span>Name</span>
           <input value={name} spellCheck={false} placeholder="Such as billing_api" autoFocus onChange={(ev) => setName(ev.target.value)} />
           <small className="panel-note">How agents and connector processes know it: letters, digits, - and _.</small>
+          {name.trim() !== '' && nameProblem !== '' && <small className="panel-warning">{nameProblem}</small>}
         </label>
       )}
       <label className="panel-field">

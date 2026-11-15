@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { BoardDiff, BoardId, DiffField, DiffItem, LinkRole } from './api'
+import { harnessName } from './harness'
 import { ROLE_WORDS } from './words'
 
 // What changed between two boards of the flow, as the server works it out
@@ -166,11 +167,19 @@ const SHORT = 80
 // A link's role reads as the link's picker says it, in plain words first.
 const roleWord = (role: string) => ROLE_WORDS[role as LinkRole]?.label ?? role
 
+// A field as the panels word it: a link's role, and the coding agent an
+// agent runs with, pi when none is set.
+function worded(f: DiffField): DiffField {
+  if (f.field === 'role') return { ...f, before: roleWord(f.before), after: roleWord(f.after) }
+  if (f.field === 'harness' || f.field === 'runs with') return { field: 'runs with', before: harnessName(f.before), after: harnessName(f.after) }
+  return f
+}
+
 function DiffFields({ fields }: { fields: DiffField[] }) {
   return (
     <dl className="diff-fields">
       {fields.map((f) => (
-        <DiffValue key={f.field} field={f.field === 'role' ? { ...f, before: roleWord(f.before), after: roleWord(f.after) } : f} />
+        <DiffValue key={f.field} field={worded(f)} />
       ))}
     </dl>
   )

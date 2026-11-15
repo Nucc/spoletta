@@ -33,10 +33,11 @@ import { MCPServerPicker } from './MCPSettings'
 import { PromptEditor, SkillPicker } from './Skills'
 import { CredentialPicker } from './Credentials'
 import { ConnectorFields } from './ConnectorFields'
-import { Hint } from './Hints'
+import { Hint, useHelp } from './Hints'
 import { RepositoryPicker } from './FlowSettings'
-import { atDefault, canUseRows, canUseSummary, changedSummary, durationText, limitRows, waitRows, type SettingNames } from './stepSettings'
+import { agentRows, atDefault, canUseRows, canUseSummary, changedSummary, durationText, limitRows, waitRows, type SettingNames } from './stepSettings'
 import { ModelPicker, modelText } from './ModelPicker'
+import { CLAUDE_EFFORTS, claudeEffort, harnessName, harnessOf, offersClaude, switchHarness } from './harness'
 import type { RunStatus } from './ProcessNode'
 
 type Fields = {
@@ -56,6 +57,9 @@ const SCRIPT_PLACEHOLDER = `# e.g. the open bugs in Jira, through a credential t
 curl -sf -H "Authorization: Bearer $CREDENTIALS_TOKEN" \\
   "$CREDENTIAL_JIRA_URL/rest/api/2/search?jql=type=Bug+AND+status=Open" |
   jq '[.issues[] | {key, summary: .fields.summary}]'`
+
+// The coding agents an agent process runs with; see harness.ts.
+const HARNESSES: ('' | 'claude')[] = ['', 'claude']
 
 const KINDS: { value: ProcessKind; label: string }[] = [
   { value: 'agent', label: 'Agent' },
@@ -242,13 +246,31 @@ export default function ProcessPanel({
 
   useEffect(() => flush, [])
 
-  // What was typed is saved first, so undoing the switch keeps it.
+  // What was typed is saved first, so undoing the switch keeps it. Only an
+  // agent runs with Claude Code, so another kind goes back to pi with it.
   const switchKind = async (to: ProcessKind) => {
     if (to === kind) return
     flush()
     if (onKindChange && !(await onKindChange(to))) return
     setKind(to)
+    if (to !== 'agent') setSettings(({ harness: _, ...rest }) => rest)
   }
+
+  // The coding agent an agent runs with, offered while the worker has both
+  // or the process is set to one it hasn't, so it can be switched back.
+  // Switching to Claude Code drops a model it can't use and thinks at the
+  // effort it would run at, as one change; see switchHarness.
+  const harness = harnessOf(settings.harness)
+  const claude = kind === 'agent' && harness === 'claude'
+  const showsHarness = kind === 'agent' && (offersClaude(models) || claude)
+  const pickHarness = (to: '' | 'claude') => {
+    if (to === harness) return
+    const next = switchHarness(to, { settings, model, thinking }, models)
+    setSettings(next.settings)
+    setModel(next.model)
+    setThinking(next.thinking)
+  }
+  const help = useHelp()
 
   // Absent means every repository, so unpicking the last one keeps [].
   const repositoryPicker = (
@@ -328,12 +350,7 @@ export default function ProcessPanel({
           rows={[
             ['Name', name],
             ['Type', KINDS.find((k) => k.value === kind)?.label ?? kind],
-            ...(kind === 'agent'
-              ? ([
-                  ['Model', modelText(models, model)],
-                  ['Thinking', thinking || 'the default'],
-                ] as [string, string][])
-              : []),
+            ...(kind === 'agent' ? agentRows(claude, modelText(models, model, harness), claude ? claudeEffort(thinking) : thinking) : []),
           ]}
         />
       ) : (
@@ -359,17 +376,59 @@ export default function ProcessPanel({
               ))}
             </div>
           </div>
+          {showsHarness && (
+            <>
+              <div className="panel-field">
+                <span className="help-head">
+                  <span id="process-harness">Runs with</span>
+                  {help.button('harness', 'Runs with')}
+                </span>
+                <div className="segmented" role="radiogroup" aria-labelledby="process-harness">
+                  {HARNESSES.map((h) => (
+                    <button
+                      key={h}
+                      role="radio"
+                      aria-checked={harness === h}
+                      className={harness === h ? 'selected' : ''}
+                      onClick={() => pickHarness(h)}
+                    >
+                      {harnessName(h)}
+                    </button>
+                  ))}
+                </div>
+                {claude && models !== null && !offersClaude(models) && (
+                  <small className="panel-warning">The worker doesn't offer Claude Code, so this process fails until it runs with pi.</small>
+                )}
+              </div>
+              {help.note(
+                'harness',
+                <>
+                  The coding agent that carries the process out. pi runs any model offered here. Claude Code takes only
+                  models of providers speaking Anthropic's API, and an effort level rather than thinking; switching to it
+                  drops a model it can't use, for the default. It has no web search here. Both get the same prompt,
+                  inputs, repositories, skills, MCP servers and credentials, hand in what the process generates the
+                  same way, and show what they did in the step's Terminal.
+                </>,
+              )}
+            </>
+          )}
           {kind === 'agent' && (
             <div className="panel-row">
               <div className="panel-field">
                 <span id="process-model">Model</span>
-                <ModelPicker models={models} value={model} used={usedModels} labelledBy="process-model" onChange={setModel} />
+                <ModelPicker models={models} value={model} used={usedModels} harness={harness} labelledBy="process-model" onChange={setModel} />
               </div>
               <label className="panel-field">
-                <span>Thinking</span>
+                <span>{claude ? 'Effort' : 'Thinking'}</span>
                 <select value={thinking} onChange={(e) => setThinking(e.target.value as ThinkingLevel | '')}>
                   <option value="">Default</option>
-                  {THINKING_LEVELS.map((t) => (
+                  {/* A level Claude Code doesn't take, such as one imported, shows as it runs it. */}
+                  {claude && thinking !== '' && !CLAUDE_EFFORTS.includes(thinking) && (
+                    <option value={thinking}>
+                      {thinking}, run as {claudeEffort(thinking)}
+                    </option>
+                  )}
+                  {(claude ? CLAUDE_EFFORTS : THINKING_LEVELS).map((t) => (
                     <option key={t} value={t}>
                       {t}
                     </option>

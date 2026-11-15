@@ -250,7 +250,7 @@ export default function RunTimeline({
         {unrecorded
           ? 'This run is from before how long steps waited for a slot was recorded, so its waits for a slot don’t show. '
           : 'A step waiting for a slot shows once it has one. '}
-        Costs are what each agent’s models cost as pi reports them, its follow-ups included.
+        Costs are what each agent’s model calls cost as the webapp recorded them, its follow-ups included.
       </p>
     </dialog>
   )

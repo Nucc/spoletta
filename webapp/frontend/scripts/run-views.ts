@@ -8,7 +8,7 @@
 import { runMatches, runOrigin, type FlowRunDetail, type RunObject, type RunStep } from '../src/api.ts'
 import { diffLines, pairObjects, pairProcesses, pairSteps } from '../src/compare.ts'
 import { elapsedText, formatSpan, lanesOf, scaleOf, shown, stretchesOf, ticksOf, type Bar } from '../src/timeline.ts'
-import { atDefault, canUseRows, canUseSummary, changedSummary, durationText, limitRows, settingGroups, settingsRows, waitRows } from '../src/stepSettings.ts'
+import { agentRows, atDefault, canUseRows, canUseSummary, changedSummary, durationText, limitRows, settingGroups, settingsRows, waitRows } from '../src/stepSettings.ts'
 
 declare const process: { exitCode?: number }
 
@@ -264,6 +264,15 @@ check(
     ['Hand on to', 'Lead, Finance'],
   ])
   check('durations as they are written', [0, 59, 3600, 90061].map(durationText), ['0s', '59s', '1h', '1d 1h 1m 1s'])
+  check("what pi runs an agent with, as it always read", agentRows(false, 'the default, claude-sonnet-4-6', ''), [
+    ['Model', 'the default, claude-sonnet-4-6'],
+    ['Thinking', 'the default'],
+  ])
+  check('what Claude Code runs one with, named', agentRows(true, 'claude-opus-5 (Anthropic)', 'high'), [
+    ['Runs with', 'Claude Code'],
+    ['Model', 'claude-opus-5 (Anthropic)'],
+    ['Effort', 'high'],
+  ])
 
   check(
     "a step's settings under their headings, what is at its default told apart",

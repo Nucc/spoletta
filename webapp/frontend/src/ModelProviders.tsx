@@ -9,6 +9,7 @@ import {
   listModels,
   listProviderModels,
   providerCatalog,
+  setClaudeDefaultModel,
   setDefaultModel,
   setModelKey,
   updateModelProvider,
@@ -23,14 +24,16 @@ import {
 } from './api'
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
+import { claudeModels, offersClaude } from './harness'
 import { ModelPicker } from './ModelPicker'
 import { PlusIcon } from './icons'
 import { SettingsEmpty, SettingsHead } from './SettingsHead'
 
 // Where agents' models come from, which admins set up: the providers added
 // here, each with the models picked of it and its key, saved here or kept
-// in a vault that puts it in the webapp's environment; the default model;
-// and the keys of the worker's own pi config. Agents never get the keys:
+// in a vault that puts it in the webapp's environment; the default model,
+// and Claude Code's when the worker has it; and the keys of the worker's own
+// pi config. Agents never get the keys:
 // they reach their models through the webapp, which holds them.
 export function ModelProvidersSection({ onError }: { onError: (err: unknown) => void }) {
   const [providers, setProviders] = useState<ModelProviders | null>(null)
@@ -70,6 +73,13 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
       onError(err)
     }
   }
+  const pickClaudeDefault = async (model: string) => {
+    try {
+      changed(await setClaudeDefaultModel(model))
+    } catch (err) {
+      onError(err)
+    }
+  }
 
   const add = (
     <button type="button" className="settings-new" onClick={() => setEditing('new')}>
@@ -97,6 +107,28 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
           <div className="default-model">
             <ModelPicker models={models} value={models.default} forDefault labelledBy="default-model" onChange={pickDefault} />
           </div>
+          {/* Only when the worker has Claude Code, and models it may use. */}
+          {offersClaude(models) && claudeModels(models).length > 0 && (
+            <>
+              <SettingsHead
+                title="Default model for Claude Code"
+                level={3}
+                id="claude-default-model"
+                lead="What agents running with Claude Code use without a model of their own."
+                more="Claude Code takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock. Left as the same as the default, its agents take the default model, and fail when it isn't one of those."
+              />
+              <div className="default-model">
+                <ModelPicker
+                  models={models}
+                  value={models.claudeDefault ?? ''}
+                  forDefault
+                  harness="claude"
+                  labelledBy="claude-default-model"
+                  onChange={pickClaudeDefault}
+                />
+              </div>
+            </>
+          )}
         </>
       )}
       <SettingsHead title="Added here" level={3} action={providers && providers.providers.length > 0 && add} />

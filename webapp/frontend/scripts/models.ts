@@ -5,7 +5,7 @@
 // later to load TypeScript.
 
 import type { Models } from '../src/api.ts'
-import { claudeCanUse, claudeEffort, harnessName, offersClaude, switchHarness, withHarness } from '../src/harness.ts'
+import { claudeCanUse, claudeDefault, claudeEffort, harnessName, offersClaude, switchHarness, withHarness } from '../src/harness.ts'
 import { otherModel, shortModel } from '../src/models.ts'
 
 declare const process: { exitCode?: number }
@@ -105,6 +105,12 @@ check('chat models, and those unclear', chat.filter(otherModel), [])
       claudeCanUse({ default: '', models: [], claude: [] }, ''),
     ],
     [true, false, true, false, false],
+  )
+  const ownDefault: Models = { ...piOnly, models: [...piOnly.models, 'anthropic/claude-opus-5'], claude: ['anthropic/claude-opus-5'], claudeDefault: 'anthropic/claude-opus-5' }
+  check(
+    'its own default before the default',
+    [claudeDefault(ownDefault), claudeCanUse(ownDefault, ''), claudeDefault(models), claudeDefault(piOnly), claudeDefault(null)],
+    ['anthropic/claude-opus-5', true, 'anthropic/claude-sonnet-4-6', 'openai/gpt-5.6-luna', ''],
   )
   check('thinking as an effort', (['', 'off', 'minimal', 'low', 'high', 'max'] as const).map(claudeEffort), ['', 'low', 'low', 'low', 'high', 'max'])
 

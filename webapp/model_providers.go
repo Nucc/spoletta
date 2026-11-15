@@ -121,25 +121,56 @@ func defaultModel(ctx context.Context, db rowsQuerier) (string, error) {
 	return model, err
 }
 
+// The default model for agent processes running with Claude Code, kept
+// here beside the default model; "" takes the default model, when Claude
+// Code can use it.
+func claudeDefaultModel(ctx context.Context, db rowsQuerier) (string, error) {
+	var model string
+	err := scanAll(ctx, db, "SELECT claude_model FROM model_default WHERE id = 1", func(rows *sql.Rows) error {
+		return rows.Scan(&model)
+	})
+	return model, err
+}
+
 // Keeps the default model one of the providers' after they changed, removed
 // the provider removed: one of another kept, the worker's, stays; one of a
 // provider gone or no longer offering it becomes the first provider's first
-// model, as does none, once there is a provider.
+// model, as does none, once there is a provider. Claude Code's default goes
+// the same way, but is never replaced: one gone, or of a provider Claude
+// Code can no longer use, is cleared, so its processes take the default.
 func fixDefaultModel(ctx context.Context, tx *sql.Tx, removed string) error {
 	providers, err := modelProviders(ctx, tx)
 	if err != nil {
 		return err
 	}
+	kept := func(model string) bool {
+		provider, id, ok := strings.Cut(model, "/")
+		if !ok {
+			return false
+		}
+		i := slices.IndexFunc(providers, func(p modelProvider) bool { return p.ID == provider })
+		return i >= 0 && slices.Contains(providers[i].Models, id) || i < 0 && provider != removed
+	}
+	claude, err := claudeDefaultModel(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if claude != "" {
+		var host []hostProvider
+		if llm != nil {
+			host, _ = llm.hostProviders(ctx)
+		}
+		if !kept(claude) || !claudeProvidersOf(providers, host).takes(claude) {
+			if _, err := tx.ExecContext(ctx, "UPDATE model_default SET claude_model = '' WHERE id = 1"); err != nil {
+				return err
+			}
+		}
+	}
 	model, err := defaultModel(ctx, tx)
 	if err != nil {
 		return err
 	}
-	keep := false
-	if provider, id, ok := strings.Cut(model, "/"); ok {
-		i := slices.IndexFunc(providers, func(p modelProvider) bool { return p.ID == provider })
-		keep = i >= 0 && slices.Contains(providers[i].Models, id) || i < 0 && provider != removed
-	}
-	if keep {
+	if kept(model) {
 		return nil
 	}
 	model = ""
@@ -171,11 +202,17 @@ func offeredModels(ctx context.Context, db *sql.DB, workerURL string) (agentMode
 	if err != nil {
 		return models, err
 	}
+	claudeDef, err := claudeDefaultModel(ctx, db)
+	if err != nil {
+		return models, err
+	}
 	var host []hostProvider
 	if llm != nil {
 		host, _ = llm.hostProviders(ctx)
 	}
-	return offerModels(models, providers, host, def), nil
+	models = offerModels(models, providers, host, def)
+	models.ClaudeDefault = claudeDef
+	return models, nil
 }
 
 // The models offered, from what the worker said of its own (nothing when
@@ -302,16 +339,27 @@ func currentClaudeProviders(ctx context.Context, db rowsQuerier) (claudeProvider
 	return claudeProvidersOf(added, host), nil
 }
 
-// Why a step running with Claude Code can't run on the model, or "": its
-// process's own, or with own false the default it took.
-func claudeModelProblem(c claudeProviders, model string, own bool) string {
+// Where a step's model came from: its process's own, the default for Claude
+// Code, or the default model.
+type modelSource int
+
+const (
+	fromProcess modelSource = iota
+	fromClaudeDefault
+	fromDefault
+)
+
+// Why a step running with Claude Code can't run on the model, or "".
+func claudeModelProblem(c claudeProviders, model string, from modelSource) string {
 	switch {
 	case c.takes(model):
 		return ""
-	case own:
+	case from == fromProcess:
 		return fmt.Sprintf("Claude Code can't use the model %s: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another for the process", model)
+	case from == fromClaudeDefault:
+		return fmt.Sprintf("Claude Code's default model %s isn't one it can use any more; pick another in the settings, or one for the process", model)
 	}
-	return "the default model isn't one Claude Code can use; pick one for the process"
+	return "the default model isn't one Claude Code can use; pick one for the process, or a default model for Claude Code in the settings"
 }
 
 // The default model of the worker's pi config, for a process that must
@@ -516,8 +564,13 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 				providers[i].EnvSet = &set
 			}
 		}
+		claudeDef, err := claudeDefaultModel(r.Context(), db)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		workerError := ""
-		writeJSON(w, http.StatusOK, map[string]any{"providers": providers, "default": def, "workerError": workerError})
+		writeJSON(w, http.StatusOK, map[string]any{"providers": providers, "default": def, "claudeDefault": claudeDef, "workerError": workerError})
 	}
 
 	mux.HandleFunc("GET /api/model-providers", func(w http.ResponseWriter, r *http.Request) {
@@ -674,6 +727,41 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			return
 		}
 		if _, err := db.ExecContext(r.Context(), "INSERT INTO model_default (id, model) VALUES (1, ?) ON DUPLICATE KEY UPDATE model = VALUES(model)", body.Model); err != nil {
+			serverError(w, err)
+			return
+		}
+		writeProviders(w, r)
+	})
+
+	// Picks the default model for Claude Code among those it may use, or
+	// none, so its processes take the default model.
+	mux.HandleFunc("PUT /api/model-default/claude", func(w http.ResponseWriter, r *http.Request) {
+		if refuseKeys(w, r) {
+			return
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.Model != "" {
+			offered, err := offeredModels(r.Context(), db, workerURL)
+			if err != nil {
+				http.Error(w, "the worker didn't say which models it offers: "+workerMessage(err), http.StatusBadGateway)
+				return
+			}
+			switch {
+			case !slices.Contains(offered.Models, body.Model):
+				http.Error(w, "no model offered is "+body.Model, http.StatusBadRequest)
+				return
+			case !slices.Contains(offered.Claude, body.Model):
+				http.Error(w, "Claude Code can't use the model "+body.Model+": it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock", http.StatusBadRequest)
+				return
+			}
+		}
+		if _, err := db.ExecContext(r.Context(), "INSERT INTO model_default (id, model, claude_model) VALUES (1, '', ?) ON DUPLICATE KEY UPDATE claude_model = VALUES(claude_model)", body.Model); err != nil {
 			serverError(w, err)
 			return
 		}

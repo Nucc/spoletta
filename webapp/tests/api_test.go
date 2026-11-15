@@ -53,6 +53,8 @@ type agentModels struct {
 	// Claude Code may use.
 	Harnesses []string `json:"harnesses,omitempty"`
 	Claude    []string `json:"claude,omitempty"`
+	// The default model for Claude Code the settings keep, if any.
+	ClaudeDefault string `json:"claudeDefault,omitempty"`
 }
 
 // Where a step's container reaches the internet.

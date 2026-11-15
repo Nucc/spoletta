@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { Models } from './api'
-import { claudeCanUse, claudeModels, harnessOf } from './harness'
+import { claudeCanUse, claudeDefault, claudeModels, harnessOf } from './harness'
 import { otherModel, shortModel } from './models'
 import { fuzzy } from './shortcuts'
 
@@ -11,8 +11,10 @@ import { fuzzy } from './shortcuts'
 // click away, and a search finds them too. The model picked stays listed
 // even once it is no longer offered, so it isn't silently replaced. For a
 // process Claude Code runs, only the models it may use are offered, and the
-// default says whether it may use that (see harness.ts). The settings pick
-// the default itself with it too, from each provider's.
+// default says whether it may use that: its own, if the settings keep one,
+// else the default (see harness.ts). The settings pick the default itself
+// with it too, from each provider's, and Claude Code's from those it may
+// use, or none, to take the default.
 
 type Row = { value: string; name: string; detail: string; others?: boolean }
 type Group = { label: string; rows: Row[] }
@@ -22,8 +24,11 @@ type Group = { label: string; rows: Row[] }
 export function modelText(models: Models | null, model: string, harness = ''): string {
   const claude = harnessOf(harness) === 'claude'
   if (model === '') {
-    if (claude && models !== null && !claudeCanUse(models, '')) {
-      return models.default ? `the default, ${shortModel(models.default)}, which Claude Code can't use` : 'the default, none Claude Code can use'
+    if (claude && models !== null) {
+      const def = claudeDefault(models)
+      const name = models.claudeDefault ? 'Claude Code’s default' : 'the default'
+      if (def === '') return 'the default, none Claude Code can use'
+      return claudeCanUse(models, '') ? `${name}, ${shortModel(def)}` : `${name}, ${shortModel(def)}, which Claude Code can't use`
     }
     return models?.default ? `the default, ${shortModel(models.default)}` : 'the default'
   }
@@ -50,10 +55,11 @@ export function ModelPicker({
   value: string
   // The models the flow's other processes use.
   used?: string[]
-  // Picks the default itself, so there is no default to pick, nor a flow.
+  // Picks the default itself, so there is no default to pick, nor a flow;
+  // Claude Code's may be none, taking the default.
   forDefault?: boolean
-  // The coding agent the process runs with: for Claude Code, only the
-  // models it may use; see harness.ts.
+  // The coding agent the process runs with, or whose default is picked:
+  // for Claude Code, only the models it may use; see harness.ts.
   harness?: string
   labelledBy: string
   onChange: (model: string) => void
@@ -66,7 +72,7 @@ export function ModelPicker({
   const button = useRef<HTMLButtonElement>(null)
   const list = useRef<HTMLUListElement>(null)
 
-  const claude = !forDefault && harnessOf(harness) === 'claude'
+  const claude = harnessOf(harness) === 'claude'
   const all = models?.models ?? []
   const offered = claude ? claudeModels(models) : all
   const row = (m: string): Row => ({
@@ -78,19 +84,24 @@ export function ModelPicker({
         ? `${providerName(models, m)} · Claude Code can't use it`
         : `${providerName(models, m)} · no longer offered`,
   })
-  const defaultRow: Row = forDefault
+  // The default a process takes, or for Claude Code's own the default it
+  // would take instead; the default itself has none but pi's own.
+  const def = claude && !forDefault ? claudeDefault(models) : (models?.default ?? '')
+  const listsDefault = !forDefault || claude
+  const defaultRow: Row = !listsDefault
     ? { value: '', name: 'pi’s own', detail: 'none picked here' }
-    : claude && models !== null && !claudeCanUse(models, '')
-      ? {
-          value: '',
-          name: 'Default',
-          detail: models.default ? `${shortModel(models.default)} · Claude Code can't use it` : 'none Claude Code can use',
-        }
-      : {
-          value: '',
-          name: 'Default',
-          detail: models?.default ? `${shortModel(models.default)} · ${providerName(models, models.default)}` : 'pi picks one',
-        }
+    : {
+        value: '',
+        name: forDefault ? 'Same as the default' : 'Default',
+        detail:
+          def === ''
+            ? claude && models !== null
+              ? 'none Claude Code can use'
+              : 'pi picks one'
+            : claude && models !== null && !offered.includes(def)
+              ? `${shortModel(def)} · Claude Code can't use it`
+              : `${shortModel(def)} · ${providerName(models, def)}`,
+      }
   // The default picked shows under its provider, unless no longer offered.
   // For Claude Code, the flow's models it can't use are left out, but for
   // the one picked.
@@ -104,7 +115,7 @@ export function ModelPicker({
 
   let groups: Group[]
   if (query.trim()) {
-    const found = [...(forDefault ? [] : [defaultRow]), ...[...new Set([...inFlow, ...offered])].map(row)]
+    const found = [...(listsDefault ? [defaultRow] : []), ...[...new Set([...inFlow, ...offered])].map(row)]
       .map((r) => ({ r, m: fuzzy(query, r.value === '' ? `default ${r.detail}` : `${r.value} ${r.detail}`) }))
       .filter((x) => x.m !== null)
       .sort((a, b) => b.m!.score - a.m!.score)
@@ -120,7 +131,7 @@ export function ModelPicker({
       byProvider.set(p, [...(byProvider.get(p) ?? []), row(m)])
     }
     groups = [
-      { label: '', rows: forDefault ? [] : [defaultRow] },
+      { label: '', rows: listsDefault ? [defaultRow] : [] },
       { label: forDefault ? '' : 'In this flow', rows: inFlow.map(row) },
       ...[...byProvider].map(([label, rows]) => ({ label, rows })),
       showOthers

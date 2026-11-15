@@ -35,6 +35,9 @@ type agentModels struct {
 	// from before there was a choice, or one that can't be asked.
 	Harnesses []string `json:"harnesses"`
 	Claude    []string `json:"claude,omitempty"`
+	// The default model for Claude Code the settings keep, if any; without
+	// one its processes take the default.
+	ClaudeDefault string `json:"claudeDefault,omitempty"`
 }
 
 // An object a process takes as input, with the output of the process that
@@ -208,7 +211,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	flow, settings := b.flow, p.Settings
 	run.ProcessName, run.Prompt, run.Model, run.Thinking = p.Name, p.Prompt, p.Model, p.Thinking
 	run.Harness = settings.Harness
-	claude, ownModel := run.Harness == harnessClaude, run.Model != ""
+	claude, modelFrom := run.Harness == harnessClaude, fromProcess
 	contract, msg := b.contractFor(id, true)
 	run.TimeoutMS = settings.timeout().Milliseconds()
 	// The prompt couldn't tell apart two inputs of one name.
@@ -250,11 +253,22 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	}
 	started(stepID)
 	// A process without a model of its own takes the default, which its
-	// step keeps for follow-ups. Claude Code is told its model, so it takes
-	// the worker's pi default by name when the settings keep none.
+	// step keeps for follow-ups: running with Claude Code, the settings'
+	// default for it, if any, else the default model. Claude Code is told
+	// its model, so it takes the worker's pi default by name when the
+	// settings keep none.
 	if run.Model == "" {
-		if run.Model, err = defaultModel(ctx, db); err != nil {
-			return res, err
+		if claude {
+			if run.Model, err = claudeDefaultModel(ctx, db); err != nil {
+				return res, err
+			}
+			modelFrom = fromClaudeDefault
+		}
+		if run.Model == "" {
+			if run.Model, err = defaultModel(ctx, db); err != nil {
+				return res, err
+			}
+			modelFrom = fromDefault
 		}
 		if run.Model == "" && claude && res.Error == "" {
 			run.Model, res.Error = workerDefaultModel(ctx, workerURL)
@@ -273,7 +287,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		if err != nil {
 			return res, err
 		}
-		res.Error = claudeModelProblem(providers, run.Model, ownModel)
+		res.Error = claudeModelProblem(providers, run.Model, modelFrom)
 	}
 	if run.Workspace != nil {
 		run.Workspace.Step = stepID

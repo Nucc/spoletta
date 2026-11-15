@@ -1493,6 +1493,10 @@ export type Models = {
   // The models Claude Code may use, those of providers speaking Anthropic's
   // API and Claude's on Bedrock, among models; none when absent.
   claude?: string[]
+  // The default model for Claude Code the settings keep, which a process
+  // running with it without a model of its own uses; absent, it takes the
+  // default.
+  claudeDefault?: string
 }
 
 export function listModels(): Promise<Models> {
@@ -2706,7 +2710,7 @@ export type ModelProvider = {
 
 // The providers, the default model kept, and what went wrong asking the
 // worker, if anything.
-export type ModelProviders = { providers: ModelProvider[]; default: string; workerError: string }
+export type ModelProviders = { providers: ModelProvider[]; default: string; claudeDefault: string; workerError: string }
 
 // A model of pi's catalog.
 export type CatalogModel = {
@@ -2764,6 +2768,11 @@ export function deleteModelProvider(id: string): Promise<ModelProviders> {
 
 export function setDefaultModel(model: string): Promise<ModelProviders> {
   return request('/api/model-default', { method: 'PUT', body: JSON.stringify({ model }) })
+}
+
+// Picks the default model for Claude Code, or none, for the default.
+export function setClaudeDefaultModel(model: string): Promise<ModelProviders> {
+  return request('/api/model-default/claude', { method: 'PUT', body: JSON.stringify({ model }) })
 }
 
 // The models a custom provider says it serves.

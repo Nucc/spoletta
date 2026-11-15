@@ -57,19 +57,24 @@ func TestClaudeProviders(t *testing.T) {
 
 	// A step's own model it can't use is named; a default it can't use is
 	// said in the words people see on the step.
-	if msg := claudeModelProblem(c, "acme/claude-opus", true); msg != "" {
+	if msg := claudeModelProblem(c, "acme/claude-opus", fromProcess); msg != "" {
 		t.Errorf("a gateway's model: %q", msg)
 	}
-	if msg := claudeModelProblem(c, "openai/gpt-x", true); msg != "Claude Code can't use the model openai/gpt-x: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another for the process" {
+	if msg := claudeModelProblem(c, "openai/gpt-x", fromProcess); msg != "Claude Code can't use the model openai/gpt-x: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another for the process" {
 		t.Errorf("a model of OpenAI's: %q", msg)
 	}
 	for _, def := range []string{"openai/gpt-x", ""} {
-		if msg := claudeModelProblem(c, def, false); msg != "the default model isn't one Claude Code can use; pick one for the process" {
+		if msg := claudeModelProblem(c, def, fromDefault); msg != "the default model isn't one Claude Code can use; pick one for the process, or a default model for Claude Code in the settings" {
 			t.Errorf("the default %q: %q", def, msg)
 		}
 	}
-	if msg := claudeModelProblem(c, "anthropic/claude-sonnet-4-6", false); msg != "" {
-		t.Errorf("a default of Anthropic's: %q", msg)
+	if msg := claudeModelProblem(c, "openai/gpt-x", fromClaudeDefault); msg != "Claude Code's default model openai/gpt-x isn't one it can use any more; pick another in the settings, or one for the process" {
+		t.Errorf("Claude Code's default: %q", msg)
+	}
+	for _, from := range []modelSource{fromDefault, fromClaudeDefault} {
+		if msg := claudeModelProblem(c, "anthropic/claude-sonnet-4-6", from); msg != "" {
+			t.Errorf("a default of Anthropic's: %q", msg)
+		}
 	}
 }
 

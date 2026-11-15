@@ -33,9 +33,13 @@ export const offersClaude = (models: Models | null) => models?.harnesses?.includ
 // The models Claude Code may use.
 export const claudeModels = (models: Models | null) => models?.claude ?? []
 
-// Whether Claude Code may use a model, the default for none.
+// The model a process running with Claude Code without a model of its own
+// takes: the settings' default for Claude Code, else the default.
+export const claudeDefault = (models: Models | null) => models?.claudeDefault || models?.default || ''
+
+// Whether Claude Code may use a model, the default it takes for none.
 export function claudeCanUse(models: Models | null, model: string): boolean {
-  const m = model === '' ? (models?.default ?? '') : model
+  const m = model === '' ? claudeDefault(models) : model
   return m !== '' && claudeModels(models).includes(m)
 }
 

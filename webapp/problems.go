@@ -79,9 +79,11 @@ type problemFacts struct {
 	modelKnown   bool
 	// For boards with a process running with Claude Code: the coding
 	// agents the worker offers, and the providers whose models Claude Code
-	// may use; neither when the worker can't be asked.
-	harnesses []string
-	claude    claudeProviders
+	// may use; neither when the worker can't be asked. And the default model
+	// for Claude Code, if the settings keep one.
+	harnesses     []string
+	claude        claudeProviders
+	claudeDefault string
 	// The objects copies follow that are still there.
 	sources map[int64]bool
 }
@@ -467,7 +469,8 @@ func (c *problemCheck) human(p process) {
 // An agent without a model of its own uses the default; without one, it
 // has none to run on.
 func (c *problemCheck) agent(p process) {
-	if p.Model == "" && c.f.modelKnown && c.f.defaultModel == "" {
+	ownDefault := p.Settings.Harness == harnessClaude && c.f.claudeDefault != ""
+	if p.Model == "" && c.f.modelKnown && c.f.defaultModel == "" && !ownDefault {
 		c.onProcess(problemWarning, "model", p, "%s has no model, and there is no default model: pick one in its panel, or have an admin add a model provider in Settings.", quote(p.Name))
 	}
 	if p.Settings.Harness == harnessClaude && c.f.harnesses != nil {
@@ -498,7 +501,7 @@ func (c *problemCheck) agent(p process) {
 
 // An agent running with Claude Code needs a worker that has it, and a model
 // of a provider speaking Anthropic's API, or Claude's on Bedrock: its own,
-// or the default it takes.
+// or the default it takes, Claude Code's own if the settings keep one.
 func (c *problemCheck) claudeCode(p process) {
 	if !slices.Contains(c.f.harnesses, harnessClaude) {
 		c.onProcess(problemWarning, "harness", p, "%s runs with Claude Code, which the worker doesn't offer, so it fails once it runs: have an operator build the worker's images with Claude Code, or switch it to pi in its panel.", quote(p.Name))
@@ -506,8 +509,13 @@ func (c *problemCheck) claudeCode(p process) {
 	switch {
 	case p.Model != "" && !c.f.claude.takes(p.Model):
 		c.onProcess(problemWarning, "model", p, "Claude Code can't use the model %s, so %s fails once it runs: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another in its panel.", p.Model, quote(p.Name))
-	case p.Model == "" && c.f.modelKnown && c.f.defaultModel != "" && !c.f.claude.takes(c.f.defaultModel):
-		c.onProcess(problemWarning, "model", p, "The default model %s isn't one Claude Code can use, so %s fails once it runs: pick a model for it in its panel.", c.f.defaultModel, quote(p.Name))
+	case p.Model != "":
+	case c.f.claudeDefault != "":
+		if !c.f.claude.takes(c.f.claudeDefault) {
+			c.onProcess(problemWarning, "model", p, "Claude Code's default model %s isn't one it can use any more, so %s fails once it runs: an admin picks another in Settings, under Model providers, or pick a model for it in its panel.", c.f.claudeDefault, quote(p.Name))
+		}
+	case c.f.modelKnown && c.f.defaultModel != "" && !c.f.claude.takes(c.f.defaultModel):
+		c.onProcess(problemWarning, "model", p, "The default model %s isn't one Claude Code can use, so %s fails once it runs: pick a model for it in its panel, or have an admin pick a default model for Claude Code in Settings, under Model providers.", c.f.defaultModel, quote(p.Name))
 	}
 }
 
@@ -872,6 +880,11 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 	if withModel && (needsDefaultModel(boards) || claude) {
 		if f.defaultModel, err = defaultModel(ctx, db); err != nil {
 			return f, err
+		}
+		if claude {
+			if f.claudeDefault, err = claudeDefaultModel(ctx, db); err != nil {
+				return f, err
+			}
 		}
 		f.modelKnown = true
 		if f.defaultModel == "" || claude {

@@ -285,7 +285,7 @@ func TestClaudeCodeFailsOnModelsItCantUse(t *testing.T) {
 		t.Fatalf("the default is %q; a provider another test added is still there", models.Default)
 	}
 	for _, c := range []struct{ name, model, says string }{
-		{"Default", "", "the default model isn't one Claude Code can use; pick one for the process"},
+		{"Default", "", "the default model isn't one Claude Code can use; pick one for the process, or a default model for Claude Code in the settings"},
 		{"Own", "openai/gpt-x", "Claude Code can't use the model openai/gpt-x: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another for the process"},
 	} {
 		f := a.newFlow("Claude on " + c.name)
@@ -299,6 +299,103 @@ func TestClaudeCodeFailsOnModelsItCantUse(t *testing.T) {
 		if n := len(a.worker.runsOf(c.name)); n != 0 {
 			t.Errorf("%s reached the worker %d times", c.name, n)
 		}
+	}
+}
+
+// The settings keep a default model for Claude Code beside the default
+// model: one Claude Code may use, or none, for the default model. A process
+// running with Claude Code without a model of its own runs on it, as does
+// its follow-up, while pi's processes keep the default model; it goes once
+// its provider does, and the board warns of the default model again.
+func TestClaudeCodeDefaultModel(t *testing.T) {
+	a := newApp(t)
+	a.worker.quiet = true
+	addClaudeGateway(t, a, newClaudeGateway(t))
+	a.worker.mu.Lock()
+	a.worker.harnesses = []string{"pi", "claude"}
+	a.worker.mu.Unlock()
+	type settings struct {
+		Default       string `json:"default"`
+		ClaudeDefault string `json:"claudeDefault"`
+	}
+	var s settings
+	a.call("PUT", "/api/model-default", map[string]any{"model": "fake/model"}, http.StatusOK, &s)
+	if s.Default != "fake/model" || s.ClaudeDefault != "" {
+		t.Fatalf("the defaults are %+v", s)
+	}
+
+	a.refused("PUT", "/api/model-default/claude", map[string]any{"model": "fake/model"}, http.StatusBadRequest, "Claude Code can't use the model fake/model")
+	a.refused("PUT", "/api/model-default/claude", map[string]any{"model": "acme-gateway/claude-z"}, http.StatusBadRequest, "no model offered is acme-gateway/claude-z")
+	a.call("PUT", "/api/model-default/claude", map[string]any{"model": "acme-gateway/claude-opus"}, http.StatusOK, &s)
+	if s.Default != "fake/model" || s.ClaudeDefault != "acme-gateway/claude-opus" {
+		t.Fatalf("the defaults are %+v", s)
+	}
+	var models agentModels
+	a.call("GET", "/api/models", nil, http.StatusOK, &models)
+	if models.Default != "fake/model" || models.ClaudeDefault != "acme-gateway/claude-opus" {
+		t.Errorf("the models offered say %+v", models)
+	}
+
+	f := a.newFlow("Claude by default")
+	a.call("PATCH", fmt.Sprintf("/api/flows/%d", f.ID), map[string]any{"settings": map[string]any{
+		"repositories": []map[string]any{{"url": "https://github.com/acme/api"}},
+	}}, http.StatusOK, nil)
+	plan := a.newProcess(f.ID, map[string]any{"name": "Plan", "kind": "agent", "prompt": "Plan."})
+	fix := a.newProcess(f.ID, map[string]any{"name": "Fix", "kind": "agent", "prompt": "Fix.", "settings": map[string]any{"harness": "claude"}})
+	planned := a.newObject(f.ID, "Plan").ID
+	a.output(plan.ID, planned)
+	a.input(fix.ID, planned)
+	a.output(fix.ID, a.newObject(f.ID, "Diff").ID)
+	a.startAt(f.ID, plan.ID)
+	a.worker.onAgent("Plan", handsIn(data("planned")))
+	a.worker.onAgent("Fix", func(_ context.Context, run agentRun) runResult {
+		if run.Resume {
+			return runResult{OK: true, Output: "pushed"}
+		}
+		return submitted(data("fixed"))
+	})
+	if ps := prbGet(a, f.ID); len(ps.Problems) != 0 {
+		t.Errorf("problems with a default for Claude Code: %s", prbDescribe(ps.Problems))
+	}
+	d := a.finish(a.startRun(f.ID).ID)
+	if d.Status != runDone {
+		t.Fatalf("run %s; steps %s", d.Status, describeSteps(d))
+	}
+	if runs := a.worker.runsOf("Plan"); len(runs) != 1 || runs[0].Model != "fake/model" || runs[0].Harness != "" {
+		t.Errorf("pi's process was run as %+v", runs)
+	}
+	runs := a.worker.runsOf("Fix")
+	if len(runs) != 1 || runs[0].Model != "acme-gateway/claude-opus" || runs[0].Harness != "claude" {
+		t.Fatalf("Claude Code's process was run as %+v", runs)
+	}
+	step := onlyStep(t, d, "Fix")
+	waitReleased(t, a, d.ID, 1)
+	a.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/followups", d.ID, step.ID), map[string]any{"message": "Push it."}, http.StatusCreated, nil)
+	a.waitRun(d.ID, "the follow-up to end", func(d runDetail) bool {
+		s := onlyStep(t, d, "Fix")
+		return len(s.FollowUps) == 1 && s.FollowUps[0].Status == stepDone
+	})
+	runs = a.worker.runsOf("Fix")
+	if last := runs[len(runs)-1]; !last.Resume || last.Model != "acme-gateway/claude-opus" || last.Harness != "claude" {
+		t.Errorf("the follow-up was run as %+v", last)
+	}
+
+	// None again takes the default model, which Claude Code can't use.
+	a.call("PUT", "/api/model-default/claude", map[string]any{"model": ""}, http.StatusOK, &s)
+	if s.ClaudeDefault != "" {
+		t.Errorf("cleared, Claude Code's default is %q", s.ClaudeDefault)
+	}
+	a.call("PUT", "/api/model-default/claude", map[string]any{"model": "acme-gateway/claude-opus"}, http.StatusOK, &s)
+
+	// Its provider gone, it goes too, while the default model, the worker's,
+	// stays; the board warns of that again.
+	a.call("DELETE", "/api/model-providers/acme-gateway", nil, http.StatusOK, &s)
+	if s.Default != "fake/model" || s.ClaudeDefault != "" {
+		t.Errorf("with the provider gone, the defaults are %+v", s)
+	}
+	ps := prbGet(a, f.ID)
+	if !prbHas(ps.Problems, "warning", "model", fix.ID, `The default model fake/model isn't one Claude Code can use, so "Fix" fails once it runs`) {
+		t.Errorf("problems once Claude Code's default went: %s", prbDescribe(ps.Problems))
 	}
 }
 

@@ -245,8 +245,8 @@ by kind:
   Claude Code takes only models of a provider speaking Anthropic's API
   (`anthropic/...`, or a gateway of API `anthropic-messages`) and Claude's
   models on Bedrock (`amazon-bedrock/global.anthropic...`), its own `model`
-  or the default; on any other the step fails. Leave it out unless
-  the person asks for Claude Code.
+  or the default, Claude Code's own if the settings pick one; on any other
+  the step fails. Leave it out unless the person asks for Claude Code.
 - `mcpServers`: names of MCP servers configured in the app that this agent
   may use; none by default. An installed connector, such as GitHub's, is one
   of them too, its operations being its tools.

@@ -189,6 +189,10 @@ func TestBoardProblems(t *testing.T) {
 			s.Processes[2].Settings.Harness, f.defaultModel = harnessClaude, "openai/gpt-x"
 			f.harnesses, f.claude = []string{harnessPi, harnessClaude}, claudeProvidersOf(nil, nil)
 		}, level: problemWarning, rule: "model", process: 3, says: `The default model openai/gpt-x isn't one Claude Code can use, so "Fix" fails`},
+		{name: "Claude Code on its own default it can't use", change: func(s *snapshot, f *problemFacts) {
+			s.Processes[2].Settings.Harness, f.claudeDefault = harnessClaude, "openai/gpt-x"
+			f.harnesses, f.claude = []string{harnessPi, harnessClaude}, claudeProvidersOf(nil, nil)
+		}, level: problemWarning, rule: "model", process: 3, says: `Claude Code's default model openai/gpt-x isn't one it can use any more, so "Fix" fails`},
 		{name: "role nobody holds", change: func(s *snapshot, f *problemFacts) { f.roles = map[string]bool{"finance": true} },
 			level: problemWarning, rule: "role", process: 5, says: `role "Approver"`},
 		{name: "reminder at the time limit", change: func(s *snapshot, f *problemFacts) { s.Processes[4].Settings.RemindAfter = intPtr(86400) },
@@ -321,6 +325,17 @@ func TestBoardProblemsLeaveAlone(t *testing.T) {
 		f.claude = claudeProvidersOf([]modelProvider{{ID: "acme", API: anthropicMessages}}, nil)
 		if ps := boardProblems(s, f); len(ps) != 0 {
 			t.Errorf("problems:%s", describeProblems(ps))
+		}
+	})
+	t.Run("Claude Code on a default of its own", func(t *testing.T) {
+		for _, def := range []string{"openai/gpt-x", ""} {
+			s, f := soundBoard(), soundFacts()
+			s.Processes[2].Settings.Harness = harnessClaude
+			f.defaultModel, f.claudeDefault = def, "anthropic/claude-sonnet-4-6"
+			f.harnesses, f.claude = []string{harnessPi, harnessClaude}, claudeProvidersOf(nil, nil)
+			if ps := boardProblems(s, f); len(ps) != 0 {
+				t.Errorf("the default %q: problems:%s", def, describeProblems(ps))
+			}
 		}
 	})
 	t.Run("Claude Code when the worker can't say", func(t *testing.T) {

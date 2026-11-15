@@ -64,7 +64,10 @@ or a provider of the API `bedrock-converse-stream`, such as a gateway, which
 must then also serve Bedrock's InvokeModel, as Claude Code calls it, not
 only the Converse API pi calls). On Bedrock it also lists the inference
 profiles and calls two models of its own once with a token each as it
-starts, which the model proxy records and counts like any call. It has no
+starts, which the model proxy records and counts like any call. A process
+running with it without a model of its own takes the default model for
+Claude Code, which an admin picks in Settings, under Model providers, else
+the default model, failing when that isn't one Claude Code can use. It has no
 web search here, and runs only in steps' containers safely: it runs without
 asking permission, the sandbox holding it (see `docs/SANDBOX.md`).
 

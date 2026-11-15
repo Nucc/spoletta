@@ -2,7 +2,8 @@
 // did before, or Claude Code, which the worker offers only when it has it
 // installed (Models.harnesses). A process names it in its settings, absent
 // for pi; a run's step says which ran it. Claude Code takes only models of
-// providers speaking Anthropic's API (Models.claude), and an effort level
+// providers speaking Anthropic's API, and Claude's on Bedrock
+// (Models.claude), and an effort level
 // rather than pi's thinking levels, of which the worker runs off and minimal
 // as low. Where a process or step names its model, it names Claude Code
 // beside it, and pi as before not at all. scripts/models.ts checks it.

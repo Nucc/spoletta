@@ -41,8 +41,9 @@ type claudeStream struct {
 	// The last result, if any came.
 	result *claudeResult
 	// Why the step fails though Claude Code may end well: it signed in with
-	// something else than the step's key.
+	// something else than the step's key, which init says as signIn.
 	refused string
+	signIn  string
 }
 
 type claudeResult struct {
@@ -156,7 +157,7 @@ func (s *claudeStream) system(subtype string, line []byte) {
 		}
 		// Only the step's token, standing in for the instance's key, may
 		// sign it in.
-		if init.APIKeySource != "ANTHROPIC_API_KEY" {
+		if init.APIKeySource != s.signIn {
 			s.refused = fmt.Sprintf("Claude Code signed in with %q rather than the step's key, which isn't allowed", init.APIKeySource)
 			s.log.errorf("%s", s.refused)
 		}

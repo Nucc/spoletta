@@ -243,8 +243,9 @@ by kind:
 - `harness`: the coding agent that runs it, pi when absent, or `claude` for
   Claude Code, which only a worker an operator built with Claude Code has.
   Claude Code takes only models of a provider speaking Anthropic's API
-  (`anthropic/...`, or a gateway of API `anthropic-messages`), its own
-  `model` or the default; on any other the step fails. Leave it out unless
+  (`anthropic/...`, or a gateway of API `anthropic-messages`) and Claude's
+  models on Bedrock (`amazon-bedrock/global.anthropic...`), its own `model`
+  or the default; on any other the step fails. Leave it out unless
   the person asks for Claude Code.
 - `mcpServers`: names of MCP servers configured in the app that this agent
   may use; none by default. An installed connector, such as GitHub's, is one

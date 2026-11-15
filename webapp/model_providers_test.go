@@ -7,7 +7,8 @@ import (
 
 // Claude Code takes the models of Anthropic, and of providers added or of
 // the worker's own config whose API is Anthropic's, an added one going over
-// the worker's of its ID; never by what a model is called.
+// the worker's of its ID, never by what a model is called; and of Bedrock,
+// or a provider of its API, only Claude's, whose IDs name anthropic.
 func TestClaudeProviders(t *testing.T) {
 	added := []modelProvider{
 		{ID: "acme", API: anthropicMessages, BaseURL: "https://gateway.example.com"},
@@ -19,30 +20,39 @@ func TestClaudeProviders(t *testing.T) {
 		{ID: "gateway", API: anthropicMessages},
 		{ID: "house", API: anthropicMessages},
 		{ID: "openrouter"},
-		{ID: "amazon-bedrock", API: "bedrock-converse-stream"},
+		{ID: "amazon-bedrock"},
+		{ID: "bedrock-gateway", API: bedrockConverse},
 	}
 	c := claudeProvidersOf(added, host)
 	for model, want := range map[string]bool{
-		"anthropic/claude-sonnet-4-6":            true,
-		"acme/claude-opus":                       true,
-		"gateway/claude-opus":                    true,
-		"gateway/gpt-x":                          true,
-		"house/claude-opus":                      false,
-		"openai/gpt-x":                           false,
-		"openrouter/anthropic/claude-sonnet-4-6": false,
-		"amazon-bedrock/global.anthropic.claude": false,
-		"nowhere/claude-opus":                    false,
-		"claude-sonnet-4-6":                      false,
-		"anthropic/":                             false,
-		"":                                       false,
+		"anthropic/claude-sonnet-4-6":                       true,
+		"acme/claude-opus":                                  true,
+		"gateway/claude-opus":                               true,
+		"gateway/gpt-x":                                     true,
+		"house/claude-opus":                                 false,
+		"openai/gpt-x":                                      false,
+		"openrouter/anthropic/claude-sonnet-4-6":            false,
+		"amazon-bedrock/global.anthropic.claude-sonnet-5-5": true,
+		"amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0": true,
+		"amazon-bedrock/amazon.nova-pro-v1:0":                        false,
+		"amazon-bedrock/meta.llama4-maverick":                        false,
+		"bedrock-gateway/anthropic.claude-opus-5":                    true,
+		"bedrock-gateway/mistral.large":                              false,
+		"nowhere/claude-opus":                                        false,
+		"claude-sonnet-4-6":                                          false,
+		"anthropic/":                                                 false,
+		"":                                                           false,
 	} {
 		if got := c.takes(model); got != want {
 			t.Errorf("takes(%q) = %v, want %v", model, got, want)
 		}
 	}
-	// Anthropic itself, added or not.
+	// Anthropic and Bedrock themselves, added or not.
 	if !claudeProvidersOf(nil, nil).takes("anthropic/claude-sonnet-4-6") || !claudeProvidersOf([]modelProvider{{ID: "anthropic"}}, nil).takes("anthropic/claude-sonnet-4-6") {
 		t.Error("Anthropic's models aren't taken")
+	}
+	if !claudeProvidersOf(nil, nil).takes("amazon-bedrock/global.anthropic.claude-sonnet-5-5") || !claudeProvidersOf([]modelProvider{{ID: "amazon-bedrock"}}, nil).takes("amazon-bedrock/global.anthropic.claude-sonnet-5-5") {
+		t.Error("Bedrock's Claude models aren't taken")
 	}
 
 	// A step's own model it can't use is named; a default it can't use is
@@ -50,7 +60,7 @@ func TestClaudeProviders(t *testing.T) {
 	if msg := claudeModelProblem(c, "acme/claude-opus", true); msg != "" {
 		t.Errorf("a gateway's model: %q", msg)
 	}
-	if msg := claudeModelProblem(c, "openai/gpt-x", true); msg != "Claude Code can't use the model openai/gpt-x: it takes only models of a provider speaking Anthropic's API; pick another for the process" {
+	if msg := claudeModelProblem(c, "openai/gpt-x", true); msg != "Claude Code can't use the model openai/gpt-x: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another for the process" {
 		t.Errorf("a model of OpenAI's: %q", msg)
 	}
 	for _, def := range []string{"openai/gpt-x", ""} {

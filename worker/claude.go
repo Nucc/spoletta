@@ -10,8 +10,12 @@ package main
 // It reaches its model only through the webapp's proxy, with the step's
 // token standing in for an API key the instance's admin configured: never a
 // Claude.ai sign-in, an OAuth token, or a person's ~/.claude. So it takes
-// only models of a provider speaking Anthropic's Messages API that the
-// proxy reaches for the step.
+// only models of a provider the proxy reaches for the step that speaks
+// Anthropic's Messages API, the token as its API key, or Claude's models on
+// Amazon Bedrock (or a provider of Bedrock's API, such as a gateway), the
+// token as a Bedrock API key; on Bedrock it also lists the inference
+// profiles and calls two models of its own once with a token each as it
+// starts.
 //
 // What it reads of its own setup is kept to what the worker writes for the
 // step: no user, project or local settings (--setting-sources ""), so a
@@ -61,6 +65,31 @@ func findClaude() bool {
 var outputMCPServer = envOr("OUTPUT_MCP_SERVER", "/opt/flow/submit-output-mcp.ts")
 
 const outputServerName = "flow_output"
+
+// The worker's own pi config's providers, as read as it started, which say
+// the API a provider speaks when the run's added providers don't.
+var ownProviders []hostProvider
+
+// Whether Claude Code speaks Bedrock's API to the provider: Amazon Bedrock,
+// or a provider of its API; else Anthropic's.
+func claudeBedrock(run runRequest, provider string) bool {
+	api, found := "", false
+	for _, p := range run.Providers {
+		if p.ID == provider {
+			api, found = p.API, true
+		}
+	}
+	for _, p := range ownProviders {
+		if p.ID == provider && !found {
+			api = p.API
+		}
+	}
+	return api == "bedrock-converse-stream" || api == "" && provider == "amazon-bedrock"
+}
+
+// The region Claude Code is told Bedrock is in, which it needs though it
+// reaches it through the proxy.
+func bedrockRegion() string { return envOr("AWS_REGION", "us-east-1") }
 
 // What Claude Code's tools are named for MCP servers: theirs and the
 // webapp's names agree, so the proxy's tool filter holds either harness.
@@ -141,7 +170,7 @@ func (claudeHarness) session(run runRequest) ([]string, error) {
 
 func (claudeHarness) prepare(st *agentStep) (agentCommand, error) {
 	run := st.run
-	provider, id, err := claudeModel(run)
+	provider, id, bedrock, err := claudeModel(run)
 	if err != nil {
 		return agentCommand{}, err
 	}
@@ -219,11 +248,24 @@ func (claudeHarness) prepare(st *agentStep) (agentCommand, error) {
 	if m := os.Getenv("CLAUDE_SMALL_MODEL"); m != "" {
 		small = m
 	}
-	env := claudeEnv(childEnv(append(st.env,
-		"ANTHROPIC_BASE_URL="+strings.TrimSuffix(run.LLM.URL, "/")+"/"+provider,
+	base := strings.TrimSuffix(run.LLM.URL, "/") + "/" + provider
+	signIn := []string{
+		"ANTHROPIC_BASE_URL=" + base,
 		// Sent as x-api-key, which the proxy swaps in place; a bearer token
 		// (ANTHROPIC_AUTH_TOKEN) is what Anthropic's API refuses an API key as.
-		"ANTHROPIC_API_KEY="+run.LLM.Token,
+		"ANTHROPIC_API_KEY=" + run.LLM.Token,
+	}
+	if bedrock {
+		signIn = []string{
+			"CLAUDE_CODE_USE_BEDROCK=1",
+			"ANTHROPIC_BEDROCK_BASE_URL=" + base,
+			// A Bedrock API key, sent as a bearer token, which the proxy
+			// swaps in place.
+			"AWS_BEARER_TOKEN_BEDROCK=" + run.LLM.Token,
+			"AWS_REGION=" + bedrockRegion(),
+		}
+	}
+	vars := append(signIn,
 		// What it calls a small, fast model for, such as summing up, goes to
 		// the model picked, which the provider surely has and the price
 		// book knows, unless the worker says otherwise.
@@ -239,7 +281,8 @@ func (claudeHarness) prepare(st *agentStep) (agentCommand, error) {
 		// Otherwise MCP tools, submit_output among them, are only found by
 		// searching for them, which the agent may not do.
 		"ENABLE_TOOL_SEARCH=false",
-	)...))
+	)
+	env := claudeEnv(childEnv(append(slices.Clone(st.env), vars...)...), vars, bedrock)
 
 	// Claude Code reads a prompt starting with /name as one of its skills
 	// or commands. The webapp spelled out the flow's commands already, so
@@ -255,39 +298,54 @@ func (claudeHarness) prepare(st *agentStep) (agentCommand, error) {
 }
 
 func (claudeHarness) stream(st *agentStep, emit func(json.RawMessage)) agentStream {
-	return &claudeStream{emit: emit, log: st.log, prompt: strings.TrimPrefix(st.prompt, "\n"), names: map[string]string{}}
+	// It says it signed in with the API key, or on Bedrock with none of
+	// Anthropic's.
+	signIn := "ANTHROPIC_API_KEY"
+	if provider, _, _ := strings.Cut(st.run.Model, "/"); claudeBedrock(st.run, provider) {
+		signIn = "none"
+	}
+	return &claudeStream{emit: emit, log: st.log, prompt: strings.TrimPrefix(st.prompt, "\n"), names: map[string]string{}, signIn: signIn}
 }
 
 // The model's provider and its ID with that provider: a provider the
-// model proxy reaches for the step, which Claude Code's base URL points at.
-func claudeModel(run runRequest) (provider, id string, err error) {
+// model proxy reaches for the step, which Claude Code's base URL points at,
+// and whether it speaks Bedrock's API to it, on which it runs only Claude.
+func claudeModel(run runRequest) (provider, id string, bedrock bool, err error) {
 	if run.Model == "" {
-		return "", "", errors.New("Claude Code needs a model: pick one for the process")
+		return "", "", false, errors.New("Claude Code needs a model: pick one for the process")
 	}
 	provider, id, ok := strings.Cut(run.Model, "/")
 	if !ok || provider == "" || id == "" || run.LLM == nil || !slices.Contains(run.LLM.Providers, provider) {
-		return "", "", errors.New("Claude Code needs a model of a provider the model proxy reaches")
+		return "", "", false, errors.New("Claude Code needs a model of a provider the model proxy reaches")
 	}
 	if err := run.LLM.check(); err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	if strings.ContainsFunc(id, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
-		return "", "", fmt.Errorf("invalid model %q", run.Model)
+		return "", "", false, fmt.Errorf("invalid model %q", run.Model)
 	}
-	return provider, id, nil
+	bedrock = claudeBedrock(run, provider)
+	if bedrock && !strings.Contains(id, "anthropic.") {
+		return "", "", false, fmt.Errorf("Claude Code runs only Claude's models on Bedrock, which %s isn't", run.Model)
+	}
+	return provider, id, bedrock, nil
 }
 
 // The environment without what could sign Claude Code in otherwise than
 // with the step's token, should the worker's CHILD_ENV pass one on: every
-// ANTHROPIC_ and CLAUDE_ variable but those set for the step.
-func claudeEnv(env []string) []string {
-	ours := map[string]bool{
-		"ANTHROPIC_BASE_URL": true, "ANTHROPIC_API_KEY": true, "ANTHROPIC_DEFAULT_HAIKU_MODEL": true,
-		"CLAUDE_CONFIG_DIR": true, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": true, "CLAUDE_CODE_DISABLE_AUTO_MEMORY": true,
+// ANTHROPIC_ and CLAUDE_ variable but those set for the step, and on
+// Bedrock every AWS_ one too, so it signs in with the step's Bedrock API
+// key and no AWS credentials.
+func claudeEnv(env, ours []string, bedrock bool) []string {
+	set := map[string]bool{}
+	for _, kv := range ours {
+		name, _, _ := strings.Cut(kv, "=")
+		set[name] = true
 	}
 	return slices.DeleteFunc(env, func(kv string) bool {
 		name, _, _ := strings.Cut(kv, "=")
-		return (strings.HasPrefix(name, "ANTHROPIC_") || strings.HasPrefix(name, "CLAUDE_")) && !ours[name]
+		theirs := strings.HasPrefix(name, "ANTHROPIC_") || strings.HasPrefix(name, "CLAUDE_") || bedrock && strings.HasPrefix(name, "AWS_")
+		return theirs && !set[name]
 	})
 }
 

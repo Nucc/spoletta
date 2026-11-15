@@ -310,6 +310,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("worker: %v", err)
 	}
+	ownProviders = hostProviders
 
 	sweepStepDirs()
 	if steps, err = newSandbox(os.Getenv("SANDBOX")); err != nil {

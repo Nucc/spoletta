@@ -49,17 +49,23 @@ that "Customers may not pay for, resell, or intermediate Claude usage on
 their end users' behalf"; it may not use Claude.ai (Free, Pro, Max) sign-ins
 on behalf of users. What it allows is an organisation using keys it
 provisions for its own authorised users, billed to it. So here Claude Code
-signs in only with the step's token, standing in for an API key an admin
-configured (Anthropic's, or an Anthropic-API gateway's added under Model
-providers), through the webapp's model proxy like pi; never with anyone's
-Claude.ai account. The image installs Anthropic's package as it is, its own
+signs in only with the step's token, standing in for a key an admin
+configured (Anthropic's API key, an Anthropic-API gateway's added under
+Model providers, or a Bedrock API key), through the webapp's model proxy
+like pi; never with anyone's Claude.ai account. The image installs Anthropic's package as it is, its own
 install script putting the platform's binary in place. Whether a hosted
 offering serving several customers may include it is for you to settle
 with Anthropic.
 
 Claude Code takes only models of providers speaking Anthropic's Messages
-API (`anthropic`, or a provider of the API `anthropic-messages`), has no web
-search here, and runs only in steps' containers safely: it runs without
+API (`anthropic`, or a provider of the API `anthropic-messages`) and
+Claude's models on Amazon Bedrock (`amazon-bedrock` with a Bedrock API key,
+or a provider of the API `bedrock-converse-stream`, such as a gateway, which
+must then also serve Bedrock's InvokeModel, as Claude Code calls it, not
+only the Converse API pi calls). On Bedrock it also lists the inference
+profiles and calls two models of its own once with a token each as it
+starts, which the model proxy records and counts like any call. It has no
+web search here, and runs only in steps' containers safely: it runs without
 asking permission, the sandbox holding it (see `docs/SANDBOX.md`).
 
 ## The .env file

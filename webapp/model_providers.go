@@ -22,7 +22,7 @@ package main
 // providers (see the worker's providers.go), pointed at the model proxy,
 // which reaches them with their keys (see llm.go). The models offered are
 // the providers' picked ones and the worker's own of other providers, of
-// which Claude Code takes only those of Anthropic's API. The
+// which Claude Code takes only those of Anthropic's API and Claude's on Bedrock. The
 // default model, which a process without a model of its own uses, is kept
 // here once a provider is added: the first provider's first model, until
 // an admin picks another.
@@ -224,36 +224,68 @@ func offeredHarnesses(said []string) []string {
 	return said
 }
 
-// Claude Code speaks only Anthropic's Messages API, so the models it may
-// use are those of the providers that do: Anthropic's own, and those added
-// in the settings or of the worker's pi config whose API is
-// anthropic-messages, such as a company's gateway, reached through the
-// model proxy as any provider is. Nothing checks the model's name: a
-// gateway's IDs are its own.
-const anthropicMessages = "anthropic-messages"
+// Claude Code speaks Anthropic's Messages API, or Bedrock's, so the models
+// it may use are those of the providers that do: Anthropic's own and those
+// added in the settings or of the worker's pi config whose API is
+// anthropic-messages, such as a company's gateway, any model of theirs, as
+// a gateway's IDs are its own; and Amazon Bedrock, or a provider of its API
+// such as a gateway in front of it, of whose models Claude Code runs only
+// Claude's, whose IDs name anthropic (global.anthropic.claude-sonnet-5-5).
+// Either is reached through the model proxy as any provider is.
+const (
+	anthropicMessages = "anthropic-messages"
+	bedrockConverse   = "bedrock-converse-stream"
+)
 
-// The providers whose models Claude Code may use, by ID.
-type claudeProviders map[string]bool
+// What Claude Code speaks to a provider: Anthropic's API or Bedrock's.
+const (
+	claudeAnthropic = "anthropic"
+	claudeBedrock   = "bedrock"
+)
+
+// The providers whose models Claude Code may use, by ID, with the API it
+// speaks to each; "" for one it can't use.
+type claudeProviders map[string]string
+
+// The API Claude Code speaks to a provider of the ID, speaking the API
+// models.json or the settings say, empty for one pi knows; "" for none.
+func claudeAPIOf(id, api string) string {
+	switch {
+	case api == anthropicMessages, api == "" && id == "anthropic":
+		return claudeAnthropic
+	case api == bedrockConverse, api == "" && id == "amazon-bedrock":
+		return claudeBedrock
+	}
+	return ""
+}
 
 // The providers of those added and the worker's own whose models Claude
 // Code may use; one added goes over the worker's own of its ID, as the
 // proxy routes them (llm.go).
 func claudeProvidersOf(added []modelProvider, host []hostProvider) claudeProviders {
-	c := claudeProviders{}
+	c := claudeProviders{"anthropic": claudeAnthropic, "amazon-bedrock": claudeBedrock}
 	for _, p := range host {
-		c[p.ID] = p.API == anthropicMessages
+		c[p.ID] = claudeAPIOf(p.ID, p.API)
 	}
 	for _, p := range added {
-		c[p.ID] = p.API == anthropicMessages
+		c[p.ID] = claudeAPIOf(p.ID, p.API)
 	}
-	c["anthropic"] = true
 	return c
 }
 
 // Whether Claude Code may use the model, provider/id.
 func (c claudeProviders) takes(model string) bool {
 	provider, id, ok := strings.Cut(model, "/")
-	return ok && id != "" && c[provider]
+	if !ok || id == "" {
+		return false
+	}
+	switch c[provider] {
+	case claudeAnthropic:
+		return true
+	case claudeBedrock:
+		return strings.Contains(id, "anthropic.")
+	}
+	return false
 }
 
 // The providers whose models Claude Code may use now: those added, and the
@@ -277,7 +309,7 @@ func claudeModelProblem(c claudeProviders, model string, own bool) string {
 	case c.takes(model):
 		return ""
 	case own:
-		return fmt.Sprintf("Claude Code can't use the model %s: it takes only models of a provider speaking Anthropic's API; pick another for the process", model)
+		return fmt.Sprintf("Claude Code can't use the model %s: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another for the process", model)
 	}
 	return "the default model isn't one Claude Code can use; pick one for the process"
 }

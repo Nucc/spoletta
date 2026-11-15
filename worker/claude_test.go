@@ -412,7 +412,9 @@ func TestClaudeStepNeedsAProxiedModel(t *testing.T) {
 		{"no proxy", func(r *runRequest) { r.LLM = nil }, "Claude Code needs a model of a provider the model proxy reaches"},
 		{"no provider", func(r *runRequest) { r.Model = "claude-sonnet-4-6" }, "Claude Code needs a model of a provider the model proxy reaches"},
 		{"another provider", func(r *runRequest) { r.Model = "acme/claude-sonnet-4-6" }, "Claude Code needs a model of a provider the model proxy reaches"},
-		{"submit_output's server", func(r *runRequest) { r.MCPServers = []mcpServer{{Name: "Flow_Output", URL: "http://webapp:8080/mcp/4"}} }, `the MCP server "Flow_Output" can't be given to Claude Code by that name`},
+		{"submit_output's server", func(r *runRequest) {
+			r.MCPServers = []mcpServer{{Name: "Flow_Output", URL: "http://webapp:8080/mcp/4"}}
+		}, `the MCP server "Flow_Output" can't be given to Claude Code by that name`},
 	} {
 		run := claudeRun()
 		c.edit(&run)
@@ -420,5 +422,78 @@ func TestClaudeStepNeedsAProxiedModel(t *testing.T) {
 		if res.OK || res.Error != c.want {
 			t.Errorf("%s: %+v", c.name, res)
 		}
+	}
+}
+
+// On Bedrock, or a provider of its API, Claude Code signs in with the
+// step's token as a Bedrock API key, reaching Bedrock through the model
+// proxy with no AWS credentials but that, and runs only Claude's models.
+func TestClaudeStepRunsOnBedrock(t *testing.T) {
+	record := withFakeClaude(t)
+	// The recording, but signed in as Claude Code says it is on Bedrock.
+	b, err := os.ReadFile(filepath.Join("testdata", "claude_stream.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := filepath.Join(t.TempDir(), "bedrock.jsonl")
+	os.WriteFile(stream, []byte(strings.Replace(string(b), `"apiKeySource":"ANTHROPIC_API_KEY"`, `"apiKeySource":"none"`, 1)), 0o600)
+	t.Setenv("FAKE_STREAM", stream)
+	t.Setenv("CHILD_ENV", "FAKE_RECORD,FAKE_STREAM,AWS_ACCESS_KEY_ID,AWS_PROFILE,ANTHROPIC_API_KEY")
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIA-of-the-workers")
+	t.Setenv("AWS_PROFILE", "the-workers")
+	t.Setenv("ANTHROPIC_API_KEY", "a-key-of-the-workers")
+	t.Setenv("AWS_REGION", "eu-west-1")
+	ownProviders = []hostProvider{{ID: "house-bedrock", API: "bedrock-converse-stream"}}
+	t.Cleanup(func() { ownProviders = nil })
+
+	for _, c := range []struct{ name, model, base string }{
+		{"Bedrock", "amazon-bedrock/global.anthropic.claude-sonnet-5-5", "amazon-bedrock"},
+		{"a gateway of its API", "house-bedrock/us.anthropic.claude-opus-5-5", "house-bedrock"},
+	} {
+		run := claudeRun()
+		run.Model = c.model
+		run.LLM.Providers = []string{"anthropic", "amazon-bedrock", "house-bedrock"}
+		res := runAgent(context.Background(), claudeHarness{}, run, time.Minute, newStepLogger("test", nil), nil)
+		if !res.OK {
+			t.Fatalf("%s: %+v", c.name, res)
+		}
+		env := "\n" + readRecord(t, record, "env")
+		_, id, _ := strings.Cut(c.model, "/")
+		for _, w := range []string{
+			"\nCLAUDE_CODE_USE_BEDROCK=1\n",
+			"\nANTHROPIC_BEDROCK_BASE_URL=http://webapp:8080/llm/" + c.base + "\n",
+			"\nAWS_BEARER_TOKEN_BEDROCK=" + stepToken + "\n",
+			"\nAWS_REGION=eu-west-1\n",
+			"\nANTHROPIC_DEFAULT_HAIKU_MODEL=" + id + "\n",
+		} {
+			if !strings.Contains(env, w) {
+				t.Errorf("%s: no %q in the environment", c.name, strings.TrimSpace(w))
+			}
+		}
+		for _, bad := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID", "AWS_PROFILE", "a-key-of-the-workers"} {
+			if strings.Contains(env, bad) {
+				t.Errorf("%s: the environment holds %s", c.name, bad)
+			}
+		}
+		if args := readRecord(t, record, "args"); !strings.Contains(args, "\n--model\n"+id+"\n") {
+			t.Errorf("%s: %q", c.name, args)
+		}
+	}
+
+	// Claude Code runs no other model there.
+	run := claudeRun()
+	run.Model = "amazon-bedrock/amazon.nova-pro-v1:0"
+	run.LLM.Providers = []string{"amazon-bedrock"}
+	if res := runAgent(context.Background(), claudeHarness{}, run, time.Minute, newStepLogger("test", nil), nil); res.Error != "Claude Code runs only Claude's models on Bedrock, which amazon-bedrock/amazon.nova-pro-v1:0 isn't" {
+		t.Errorf("%+v", res)
+	}
+	// And says it signed in with none of Anthropic's there.
+	run = claudeRun()
+	run.Model = "amazon-bedrock/global.anthropic.claude-sonnet-5-5"
+	run.LLM.Providers = []string{"amazon-bedrock"}
+	abs, _ := filepath.Abs(filepath.Join("testdata", "claude_stream.jsonl"))
+	t.Setenv("FAKE_STREAM", abs)
+	if res := runAgent(context.Background(), claudeHarness{}, run, time.Minute, newStepLogger("test", nil), nil); res.OK || !strings.Contains(res.Error, `signed in with "ANTHROPIC_API_KEY"`) {
+		t.Errorf("signed in with an API key on Bedrock: %+v", res)
 	}
 }

@@ -497,14 +497,15 @@ func (c *problemCheck) agent(p process) {
 }
 
 // An agent running with Claude Code needs a worker that has it, and a model
-// of a provider speaking Anthropic's API: its own, or the default it takes.
+// of a provider speaking Anthropic's API, or Claude's on Bedrock: its own,
+// or the default it takes.
 func (c *problemCheck) claudeCode(p process) {
 	if !slices.Contains(c.f.harnesses, harnessClaude) {
 		c.onProcess(problemWarning, "harness", p, "%s runs with Claude Code, which the worker doesn't offer, so it fails once it runs: have an operator build the worker's images with Claude Code, or switch it to pi in its panel.", quote(p.Name))
 	}
 	switch {
 	case p.Model != "" && !c.f.claude.takes(p.Model):
-		c.onProcess(problemWarning, "model", p, "Claude Code can't use the model %s, so %s fails once it runs: it takes only models of a provider speaking Anthropic's API; pick another in its panel.", p.Model, quote(p.Name))
+		c.onProcess(problemWarning, "model", p, "Claude Code can't use the model %s, so %s fails once it runs: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another in its panel.", p.Model, quote(p.Name))
 	case p.Model == "" && c.f.modelKnown && c.f.defaultModel != "" && !c.f.claude.takes(c.f.defaultModel):
 		c.onProcess(problemWarning, "model", p, "The default model %s isn't one Claude Code can use, so %s fails once it runs: pick a model for it in its panel.", c.f.defaultModel, quote(p.Name))
 	}

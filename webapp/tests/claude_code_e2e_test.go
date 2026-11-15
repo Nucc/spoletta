@@ -286,7 +286,7 @@ func TestClaudeCodeFailsOnModelsItCantUse(t *testing.T) {
 	}
 	for _, c := range []struct{ name, model, says string }{
 		{"Default", "", "the default model isn't one Claude Code can use; pick one for the process"},
-		{"Own", "openai/gpt-x", "Claude Code can't use the model openai/gpt-x: it takes only models of a provider speaking Anthropic's API; pick another for the process"},
+		{"Own", "openai/gpt-x", "Claude Code can't use the model openai/gpt-x: it takes only models of a provider speaking Anthropic's API, or Claude's on Bedrock; pick another for the process"},
 	} {
 		f := a.newFlow("Claude on " + c.name)
 		p := a.newProcess(f.ID, map[string]any{"name": c.name, "kind": "agent", "prompt": "Go.", "model": c.model, "settings": map[string]any{"harness": "claude"}})

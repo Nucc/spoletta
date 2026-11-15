@@ -26,14 +26,17 @@ package main
 // pi sends the key as x-api-key for Anthropic's API, x-goog-api-key for
 // Google's, and as a bearer token for OpenAI's, Mistral's and the rest; the
 // proxy finds the token in whichever and puts the key there in its place.
-// Claude Code speaks only Anthropic's API, sending the token as x-api-key
-// to /llm/{provider}/v1/messages (with ?beta=true, and its anthropic-beta
+// Claude Code speaks Anthropic's API, sending the token as x-api-key to
+// /llm/{provider}/v1/messages (with ?beta=true, and its anthropic-beta
 // list, which pass on as they are), counting tokens at
 // v1/messages/count_tokens, whose answer has no usage to record, and
 // asking v1/models and api/hello as it starts, which record nothing
-// either. Bedrock with a Bedrock API key is reached so too; without one,
-// pi signs its requests with the worker's AWS credentials, which no proxy
-// can do without them, so it isn't routed here.
+// either; or Bedrock's, sending it as a Bedrock API key, a bearer token, to
+// /llm/amazon-bedrock/model/{model}/invoke-with-response-stream, listing
+// inference-profiles and calling two models of its own once with a token
+// each as it starts. Bedrock with a Bedrock API key is reached so too;
+// without one, pi signs its requests with the worker's AWS credentials,
+// which no proxy can do without them, so it isn't routed here.
 //
 // What each call took and gave, as the provider's answer says, goes in
 // llm_usage, for whom and which step, with what it cost (spend.go);
@@ -45,6 +48,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -450,7 +454,7 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		w.Header()[k] = v
 	}
 	w.WriteHeader(resp.StatusCode)
-	u := &usageReader{}
+	u := &usageReader{bedrock: strings.HasPrefix(resp.Header.Get("Content-Type"), "application/vnd.amazon.eventstream")}
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32<<10)
 	for {
@@ -515,14 +519,19 @@ func errorWithoutURL(err error) string {
 	return err.Error()
 }
 
-// The model a request asks for: its body's model, or for Google's API,
-// the path's models/<model>:<method>.
+// The model a request asks for: its body's model, or for Bedrock's API the
+// path's model/<model>/<method>, or for Google's the path's
+// models/<model>:<method>.
 func modelOf(body []byte, path string) string {
 	var req struct {
 		Model string `json:"model"`
 	}
 	if json.Unmarshal(body, &req) == nil && req.Model != "" {
 		return req.Model
+	}
+	if rest, ok := strings.CutPrefix(path, "model/"); ok {
+		m, _, _ := strings.Cut(rest, "/")
+		return m
 	}
 	if _, m, ok := strings.Cut(path, "models/"); ok {
 		m, _, _ = strings.Cut(m, ":")
@@ -542,11 +551,18 @@ type llmUsage struct {
 // streamed one, which may say part of it (Anthropic's says what it took in
 // as it starts and what it gave out as it ends), or the whole of one that
 // isn't, up to a size. Bedrock streams AWS's binary events, whose usage is
-// found by its key among them.
+// found by its key among them; its InvokeModel's, as Claude Code asks for,
+// each hold one of Anthropic's events, base64'd under "bytes", read as
+// they stream past, as a long answer's last, saying what it gave out, comes
+// past the size kept whole.
 type usageReader struct {
 	line  []byte
 	whole bytes.Buffer
 	u     llmUsage
+	// Whether the answer is AWS's event stream, and what of it is yet to be
+	// read for Anthropic's events in it.
+	bedrock bool
+	events  []byte
 }
 
 const maxUsageBody = 4 << 20
@@ -554,6 +570,9 @@ const maxUsageBody = 4 << 20
 func (r *usageReader) Write(p []byte) {
 	if r.whole.Len() < maxUsageBody {
 		r.whole.Write(p)
+	}
+	if r.bedrock {
+		r.bedrockEvents(p)
 	}
 	r.line = append(r.line, p...)
 	for {
@@ -566,6 +585,38 @@ func (r *usageReader) Write(p []byte) {
 	}
 	if len(r.line) > maxUsageBody {
 		r.line = nil
+	}
+}
+
+// The key of the base64'd event in each of Bedrock InvokeModel's.
+var bedrockEventKey = []byte(`"bytes":"`)
+
+// Reads each of Anthropic's events in Bedrock's, keeping what may be the
+// start of one that hasn't fully come yet.
+func (r *usageReader) bedrockEvents(p []byte) {
+	r.events = append(r.events, p...)
+	for {
+		at := bytes.Index(r.events, bedrockEventKey)
+		if at < 0 {
+			if n := len(r.events) - len(bedrockEventKey); n > 0 {
+				r.events = r.events[n:]
+			}
+			return
+		}
+		start := at + len(bedrockEventKey)
+		end := bytes.IndexByte(r.events[start:], '"')
+		if end < 0 {
+			r.events = r.events[at:]
+			if len(r.events) > maxUsageBody {
+				r.events = nil
+			}
+			return
+		}
+		var v map[string]any
+		if raw, err := base64.StdEncoding.DecodeString(string(r.events[start : start+end])); err == nil && json.Unmarshal(raw, &v) == nil {
+			r.u.add(usageIn(v))
+		}
+		r.events = r.events[start+end:]
 	}
 }
 

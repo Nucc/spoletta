@@ -265,8 +265,9 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 			}
 		}
 	}
-	// Claude Code takes only models of Anthropic's API, which the step
-	// fails on before the worker sees it rather than in the worker.
+	// Claude Code takes only models of Anthropic's API and Claude's on
+	// Bedrock, which the step fails on before the worker sees it rather
+	// than in the worker.
 	if claude && res.Error == "" {
 		providers, err := currentClaudeProviders(ctx, db)
 		if err != nil {

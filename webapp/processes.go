@@ -197,11 +197,11 @@ func (s processSettings) problem() string {
 // as agents always have, or Claude Code, which an operator builds the
 // worker's images with (see the worker's harness.go). Everything else about
 // its step is the same either way: its prompt, inputs and output, its
-// workspace, its models through the model proxy (llm.go), whose providers
-// Claude Code takes only those of Anthropic's API of (claudeProviders), its
-// MCP servers, skills and credentials. pi is kept as none, so a process
-// saved before there was a choice and one set to pi read the same, and a
-// diff doesn't tell them apart.
+// workspace, its models through the model proxy (llm.go), of whose
+// providers Claude Code takes only those of Anthropic's API, and Claude's
+// on Bedrock (claudeProviders), its MCP servers, skills and credentials.
+// pi is kept as none, so a process saved before there was a choice and one
+// set to pi read the same, and a diff doesn't tell them apart.
 const (
 	harnessPi     = "pi"
 	harnessClaude = "claude"

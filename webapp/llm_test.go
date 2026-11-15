@@ -2,9 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"hash/crc32"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -332,6 +338,65 @@ func TestUsageReader(t *testing.T) {
 	}
 	if m := modelOf(nil, "models/gemini-3:streamGenerateContent"); m != "gemini-3" {
 		t.Errorf("Google's model = %q", m)
+	}
+	for path, want := range map[string]string{
+		"model/global.anthropic.claude-sonnet-5-5/invoke-with-response-stream": "global.anthropic.claude-sonnet-5-5",
+		"model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke":             "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"model/amazon.nova-pro-v1:0/converse-stream":                           "amazon.nova-pro-v1:0",
+	} {
+		if m := modelOf([]byte(`{"anthropic_version":"bedrock-2023-05-31","max_tokens":1}`), path); m != want {
+			t.Errorf("Bedrock's model of %s = %q", path, m)
+		}
+	}
+}
+
+// One of AWS's binary events: its lengths, the prelude's CRC, its headers,
+// its payload and the whole's CRC.
+func awsEvent(headers map[string]string, payload []byte) []byte {
+	var hs []byte
+	for _, k := range slices.Sorted(maps.Keys(headers)) {
+		v := headers[k]
+		hs = append(hs, byte(len(k)))
+		hs = append(hs, k...)
+		hs = append(hs, 7, byte(len(v)>>8), byte(len(v)))
+		hs = append(hs, v...)
+	}
+	frame := binary.BigEndian.AppendUint32(nil, uint32(12+len(hs)+len(payload)+4))
+	frame = binary.BigEndian.AppendUint32(frame, uint32(len(hs)))
+	frame = binary.BigEndian.AppendUint32(frame, crc32.ChecksumIEEE(frame))
+	frame = append(append(frame, hs...), payload...)
+	return binary.BigEndian.AppendUint32(frame, crc32.ChecksumIEEE(frame))
+}
+
+// Bedrock's InvokeModel, as Claude Code asks for it, streams each of
+// Anthropic's events base64'd in one of AWS's; the usage is read from them
+// however the stream is cut, past what is kept of it whole too, as a long
+// answer's last event, saying what it gave out, comes after a lot.
+func TestUsageReaderReadsBedrocksInvokeStream(t *testing.T) {
+	var stream []byte
+	chunk := func(event string) {
+		payload, _ := json.Marshal(map[string]string{"bytes": base64.StdEncoding.EncodeToString([]byte(event)), "p": "abcd"})
+		stream = append(stream, awsEvent(map[string]string{":event-type": "chunk", ":content-type": "application/json", ":message-type": "event"}, payload)...)
+	}
+	chunk(`{"type":"message_start","message":{"usage":{"input_tokens":120,"cache_read_input_tokens":9000,"cache_creation_input_tokens":300,"output_tokens":1}}}`)
+	text := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + strings.Repeat("word ", 40) + `"}}`
+	for len(stream) < maxUsageBody+(1<<20) {
+		chunk(text)
+	}
+	chunk(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4242}}`)
+	chunk(`{"type":"message_stop","amazon-bedrock-invocationMetrics":{"inputTokenCount":120,"outputTokenCount":4242}}`)
+
+	r := &usageReader{bedrock: true}
+	for rest := stream; len(rest) > 0; {
+		n := min(len(rest), 7777)
+		r.Write(rest[:n])
+		rest = rest[n:]
+	}
+	if u := r.usage(); u != (llmUsage{input: 120, output: 4242, cacheRead: 9000, cacheWrite: 300}) {
+		t.Errorf("Bedrock's InvokeModel stream = %+v", u)
+	}
+	if len(r.events) > 64 {
+		t.Errorf("%d bytes of the stream were kept", len(r.events))
 	}
 }
 

@@ -1491,7 +1491,7 @@ export type Models = {
   // when it has Claude Code; only pi when absent.
   harnesses?: string[]
   // The models Claude Code may use, those of providers speaking Anthropic's
-  // API, among models; none when absent.
+  // API and Claude's on Bedrock, among models; none when absent.
   claude?: string[]
 }
 

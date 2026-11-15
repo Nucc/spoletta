@@ -404,8 +404,8 @@ export default function ProcessPanel({
                 'harness',
                 <>
                   The coding agent that carries the process out. pi runs any model offered here. Claude Code takes only
-                  models of providers speaking Anthropic's API, and an effort level rather than thinking; switching to it
-                  drops a model it can't use, for the default. It has no web search here. Both get the same prompt,
+                  models of providers speaking Anthropic's API and Claude's models on Bedrock, and an effort level rather
+                  than thinking; switching to it drops a model it can't use, for the default. It has no web search here. Both get the same prompt,
                   inputs, repositories, skills, MCP servers and credentials, hand in what the process generates the
                   same way, and show what they did in the step's Terminal.
                 </>,

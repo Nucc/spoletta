@@ -41,7 +41,9 @@ The webapp holds every secret and hands out short-lived tokens instead.
 - **No model keys.** The agent reaches every provider through the webapp's
   model proxy (`webapp/llm.go`) with a token of the step's, which the proxy
   swaps for the real key: pi as every provider's key, Claude Code as its
-  API key (`ANTHROPIC_API_KEY`, sent as `x-api-key`). The token ends with
+  API key (`ANTHROPIC_API_KEY`, sent as `x-api-key`), or on Bedrock as a
+  Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`, a bearer token, with no AWS
+  credentials of the worker's). The token ends with
   the step. Claude Code never signs in otherwise: no Claude.ai login, OAuth
   token or person's `~/.claude` reaches it, and the step fails should it
   report signing in with anything but the step's key.

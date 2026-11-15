@@ -169,6 +169,7 @@ type setupProcess struct {
 	Runs       string   `yaml:"runs,omitempty"`
 	Model      string   `yaml:"model,omitempty"`
 	Thinking   string   `yaml:"thinking,omitempty"`
+	Harness    string   `yaml:"harness,omitempty"` // claude for Claude Code; pi when absent
 	MCPServers []string `yaml:"mcpServers,omitempty"`
 	// The tools it keeps to of its MCP servers, by server name.
 	MCPTools     map[string][]string `yaml:"mcpTools,omitempty"`

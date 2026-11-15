@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -104,6 +105,34 @@ func TestTrimMessage(t *testing.T) {
 	for _, bad := range []string{`not json`, `[1, 2]`, `"text"`} {
 		if _, err := trimMessage(json.RawMessage(bad)); err == nil {
 			t.Errorf("trimMessage(%s) took it", bad)
+		}
+	}
+}
+
+// A Claude Code step's conversation, as the worker translates it into pi's
+// shape, is kept as pi's is: every message whole, tool calls with their
+// arguments and results with their patches.
+func TestTrimMessageOfClaudeCode(t *testing.T) {
+	conversation := []string{
+		`{"role":"user","content":"Fix the greeting."}`,
+		`{"role":"assistant","model":"claude-sonnet-4-6","stopReason":"toolUse","content":[{"type":"thinking","thinking":"Look first."},{"type":"text","text":"Listing the files."},{"type":"toolCall","id":"toolu_1","name":"bash","arguments":{"command":"ls"}}]}`,
+		`{"role":"toolResult","toolCallId":"toolu_1","toolName":"bash","isError":false,"content":[{"type":"text","text":"a.txt"}]}`,
+		`{"role":"assistant","model":"claude-sonnet-4-6","stopReason":"toolUse","content":[{"type":"toolCall","id":"toolu_2","name":"edit","arguments":{"path":"/data/workspaces/run-7/repo/a.txt","oldText":"hi","newText":"hello"}}]}`,
+		`{"role":"toolResult","toolCallId":"toolu_2","toolName":"edit","isError":false,"content":[{"type":"text","text":"Edited a.txt"}],"details":{"patch":"@@ -1 +1 @@\n-hi\n+hello"}}`,
+		`{"role":"assistant","content":[],"stopReason":"error","errorMessage":"API Error: 403 out of budget"}`,
+	}
+	for _, raw := range conversation {
+		out, err := trimMessage(json.RawMessage(raw))
+		if err != nil {
+			t.Fatalf("trimMessage(%s): %v", raw, err)
+		}
+		var got, want any
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+		json.Unmarshal([]byte(raw), &want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("trimMessage(%s)\n= %s", raw, out)
 		}
 	}
 }

@@ -1307,7 +1307,10 @@ func (b *builder) resolveProcess(bp *bproc) error {
 		return problemf("%s: %s", at, invalidWidthMessage)
 	}
 	s := processSettings{Repositories: p.Repositories, Rounds: p.Rounds, Loops: p.Loops, Timeout: p.Timeout, Retries: p.Retries, Quorum: p.Quorum, DescribeFlow: p.DescribeFlow,
-		RemindAfter: p.RemindAfter, WaitAtMost: p.WaitAtMost, EscalateAfter: p.EscalateAfter, EscalateTo: p.EscalateTo}
+		RemindAfter: p.RemindAfter, WaitAtMost: p.WaitAtMost, EscalateAfter: p.EscalateAfter, EscalateTo: p.EscalateTo, Harness: strings.TrimSpace(p.Harness)}
+	if msg := s.harnessProblem(p.Kind); msg != "" {
+		return problemf("%s: %s", at, msg)
+	}
 	for _, m := range p.MCPServers {
 		id, ok := b.mcp[mcpNameKey(m)]
 		if !ok {

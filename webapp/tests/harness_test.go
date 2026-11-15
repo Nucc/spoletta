@@ -623,13 +623,19 @@ type fakeWorker struct {
 	// Whether agents leave reaching their models to the test, rather than
 	// reaching every provider granted as they start.
 	quiet bool
+	// The coding agents it says it offers; none said, as a worker from
+	// before there was a choice, when nil.
+	harnesses []string
 }
 
 func newFakeWorker(t *testing.T) *fakeWorker {
 	fw := &fakeWorker{t: t, agents: map[string]func(context.Context, agentRun) runResult{}, scripts: map[string]func(context.Context, scriptRun) runResult{}, messages: map[string][]map[string]any{}, scriptOutput: map[string][][2]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, agentModels{Default: "fake/model", Models: []string{"fake/model"}})
+		fw.mu.Lock()
+		harnesses := fw.harnesses
+		fw.mu.Unlock()
+		writeJSON(w, http.StatusOK, agentModels{Default: "fake/model", Models: []string{"fake/model"}, Harnesses: harnesses})
 	})
 	// Its models read OpenAI's key and a gateway's, reached at the test
 	// provider as its models.json says.

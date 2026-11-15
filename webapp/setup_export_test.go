@@ -3,7 +3,10 @@ package main
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func exportID(id int64) *int64 { return &id }
@@ -261,5 +264,66 @@ func TestExporterObject(t *testing.T) {
 	got := x.object(snapshotObject{ID: 24, Name: "Customer", Source: exportID(70)})
 	if got.CopyOf == nil || *got.CopyOf != (setupSource{Flow: "Review", Object: "Report"}) {
 		t.Errorf("copy of a procedure's object = %+v", got.CopyOf)
+	}
+}
+
+// An agent process running with Claude Code goes out as harness: claude and
+// comes back in as it was; pi goes without saying, as does a harness on a
+// process that isn't an agent, and coming in, only an agent takes Claude
+// Code, as the API has it.
+func TestSetupHarnessRoundTrip(t *testing.T) {
+	e := &exportedFlow{id: 1, name: "Fixes", s: snapshot{Processes: []process{
+		{ID: 1, Name: "Fix", Kind: kindAgent, Model: "anthropic/claude-sonnet-4-6", Settings: processSettings{Harness: harnessClaude}},
+		{ID: 2, Name: "Review", Kind: kindAgent},
+		{ID: 3, Name: "Lint", Kind: kindScript, Script: "make lint", Settings: processSettings{Harness: harnessClaude}},
+	}}}
+	e.identify()
+	x := exporter{e: e}
+	var board setupBoard
+	for _, p := range e.s.Processes {
+		board.Processes = append(board.Processes, x.process(p))
+	}
+	body, err := yaml.Marshal(setupFile{Spoletta: setupVersion, Flows: []setupFlow{{Name: "Fixes", setupBoard: board}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "harness: claude") || strings.Count(string(body), "harness") != 1 {
+		t.Errorf("exported:\n%s", body)
+	}
+	f, err := parseSetup(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &builder{importer: &importer{}}
+	for i := range f.Flows[0].Processes {
+		p := &f.Flows[0].Processes[i]
+		if err := b.resolveProcess(&bproc{id: int64(i + 1), p: p, where: "process " + quote(p.Name)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, want := range []string{harnessClaude, "", ""} {
+		if got := b.out.Processes[i].Settings.Harness; got != want {
+			t.Errorf("%s came in running with %q, want %q", b.out.Processes[i].Name, got, want)
+		}
+	}
+
+	for _, c := range []struct {
+		kind, harness, want, problem string
+	}{
+		{kindAgent, "pi", "", ""},
+		{kindAgent, " claude ", harnessClaude, ""},
+		{kindScript, harnessClaude, "", `process "P": only an agent process runs with Claude Code`},
+		{kindAgent, "codex", "", `process "P": harness must be pi or claude`},
+	} {
+		b := &builder{importer: &importer{}}
+		err := b.resolveProcess(&bproc{id: 1, p: &setupProcess{Name: "P", Kind: c.kind, Harness: c.harness}, where: `process "P"`})
+		switch {
+		case c.problem != "" && (err == nil || err.Error() != c.problem):
+			t.Errorf("%s with harness %q: %v, want %q", c.kind, c.harness, err, c.problem)
+		case c.problem == "" && err != nil:
+			t.Errorf("%s with harness %q: %v", c.kind, c.harness, err)
+		case c.problem == "" && b.out.Processes[0].Settings.Harness != c.want:
+			t.Errorf("%s with harness %q came in as %q", c.kind, c.harness, b.out.Processes[0].Settings.Harness)
+		}
 	}
 }

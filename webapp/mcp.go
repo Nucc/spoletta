@@ -89,18 +89,26 @@ func scanMCPServer(row interface{ Scan(...any) error }, s *mcpServer) error {
 	return row.Scan(&s.ID, &s.Name, &s.URL, &s.Description, &s.Auth, &s.Connector, &s.Connected)
 }
 
-// pi names tools mcp__<server>__<tool>, and takes server names that differ
-// only in - and _ for the same server.
+// pi and Claude Code name tools mcp__<server>__<tool>, and pi takes server
+// names that differ only in - and _ for the same server.
 var mcpNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 func mcpNameKey(name string) string {
 	return strings.ToLower(strings.ReplaceAll(name, "-", "_"))
 }
 
+// The name the worker gives the MCP server a Claude Code step hands in its
+// output through, submit_output, beside the step's own servers; no server
+// here may take it, in any case or with - for _.
+const outputServerName = "flow_output"
+
 // Why the server can't be saved, or "".
 func (s mcpServer) problem() string {
 	if !mcpNamePattern.MatchString(s.Name) {
 		return "the name may only have letters, digits, - and _, up to 64"
+	}
+	if mcpNameKey(s.Name) == outputServerName {
+		return outputServerName + " is kept for the server agents hand in their output through."
 	}
 	if s.Connector != "" && findConnector(s.Connector) == nil {
 		return fmt.Sprintf("there is no connector named %s", quote(s.Connector))

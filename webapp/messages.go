@@ -13,7 +13,8 @@ import (
 // An agent step records its conversation as pi has it, a message at a time
 // while it goes: the prompt, each reply of the model with its thinking and
 // tool calls, and each tool's result. The messages are pi's own (see
-// docs/message-types.md in pi), trimmed to what is worth keeping.
+// docs/message-types.md in pi), trimmed to what is worth keeping; a Claude
+// Code step's come in the same shape, the worker translating them.
 type stepMessage struct {
 	ID int64 `json:"id"`
 	// Which try of the step it belongs to, from 1; an agent that didn't hand

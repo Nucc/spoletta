@@ -56,6 +56,13 @@ func TestMCPServerProblem(t *testing.T) {
 		{mcpServer{Name: "gh", Connector: "github", URL: "https://ghe.example.com/api/v3"}, ""},
 		{mcpServer{Name: "gh", Connector: "github", Auth: authOAuth}, "takes a token"},
 		{mcpServer{Name: "gh", Connector: "gitlab"}, "no connector"},
+		// The worker's own server a Claude Code step hands in its output
+		// through has this name, in whatever case or with - for _; a
+		// connector can't take it either.
+		{mcpServer{Name: "flow_output", URL: "https://x.io"}, "flow_output is kept for the server agents hand in their output through."},
+		{mcpServer{Name: "Flow-Output", URL: "https://x.io"}, "is kept for the server"},
+		{mcpServer{Name: "FLOW_OUTPUT", Connector: "github"}, "is kept for the server"},
+		{mcpServer{Name: "flow_outputs", URL: "https://x.io"}, ""},
 	} {
 		c.s.defaults()
 		msg := c.s.problem()

@@ -24,7 +24,8 @@ type process struct {
 	Kind   string `json:"kind"`
 	Prompt string `json:"prompt"`
 	Script string `json:"script"`
-	// Model ("provider/id") and thinking level for agent processes; empty uses the pi default.
+	// Model ("provider/id") and thinking level for agent processes; empty
+	// uses the default model (model_providers.go).
 	Model    string  `json:"model"`
 	Thinking string  `json:"thinking"`
 	X        float64 `json:"x"`
@@ -78,6 +79,9 @@ type processSettings struct {
 	Quorum *int `json:"quorum,omitempty"`
 	// Whether an agent's prompt describes the flow it works in, in OPL; see opl.go.
 	DescribeFlow bool `json:"describeFlow,omitempty"`
+	// The coding agent an agent process runs with: none for pi, or
+	// harnessClaude for Claude Code. See harnessProblem.
+	Harness string `json:"harness,omitempty"`
 	// How often those who may decide a human step are reminded of it while
 	// it waits, and the longest it waits before it fails, as a
 	// step running past its timeout does, so what handles its failure
@@ -183,7 +187,51 @@ func (s processSettings) problem() string {
 			return msg
 		}
 	}
+	if !validHarness(s.Harness) {
+		return "harness must be pi or claude"
+	}
 	return ""
+}
+
+// An agent process runs with one of two coding agents in the worker: pi,
+// as agents always have, or Claude Code, which an operator builds the
+// worker's images with (see the worker's harness.go). Everything else about
+// its step is the same either way: its prompt, inputs and output, its
+// workspace, its models through the model proxy (llm.go), whose providers
+// Claude Code takes only those of Anthropic's API of (claudeProviders), its
+// MCP servers, skills and credentials. pi is kept as none, so a process
+// saved before there was a choice and one set to pi read the same, and a
+// diff doesn't tell them apart.
+const (
+	harnessPi     = "pi"
+	harnessClaude = "claude"
+)
+
+func validHarness(h string) bool {
+	return h == "" || h == harnessPi || h == harnessClaude
+}
+
+// Keeps pi's harness as none, and says why a process of the kind can't run
+// with the settings' harness, or "": only an agent runs with Claude Code.
+func (s *processSettings) harnessProblem(kind string) string {
+	if !validHarness(s.Harness) {
+		return "harness must be pi or claude"
+	}
+	if s.Harness == harnessPi {
+		s.Harness = ""
+	}
+	if s.Harness == harnessClaude && kind != kindAgent {
+		return "only an agent process runs with Claude Code"
+	}
+	return ""
+}
+
+// What the harness is called where people read it.
+func harnessName(h string) string {
+	if h == harnessClaude {
+		return "Claude Code"
+	}
+	return "pi"
 }
 
 // Stored as JSON; processes from before settings have none.
@@ -266,7 +314,7 @@ func validWidth(w *float64) bool {
 	return w == nil || (*w >= minWidth && *w <= maxWidth)
 }
 
-// Model ids are passed to pi as arguments; a leading dash would read as an option.
+// Model ids are passed to the agent as arguments; a leading dash would read as an option.
 func validModel(m string) bool {
 	return !strings.HasPrefix(m, "-") && len(m) <= 255
 }
@@ -368,6 +416,10 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if msg := p.Settings.problem(); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if msg := p.Settings.harnessProblem(p.Kind); msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
@@ -493,6 +545,23 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			kind, settings := oldKind, oldSettings
 			if patch.Kind != nil {
 				kind = *patch.Kind
+			}
+			// The harness is judged as the process will be. Only an agent
+			// runs with Claude Code, so an agent becoming another kind,
+			// its settings left as they are, goes back to pi; settings
+			// sent saying Claude Code for another kind are refused.
+			if patch.Settings == nil && kind != "agent" && settings.Harness != "" {
+				back := settings
+				back.Harness = ""
+				patch.Settings = &back
+			}
+			target := &settings
+			if patch.Settings != nil {
+				target = patch.Settings
+			}
+			if msg := target.harnessProblem(kind); msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
 			}
 			if patch.Settings != nil {
 				settings = *patch.Settings

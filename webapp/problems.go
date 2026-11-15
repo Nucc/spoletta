@@ -12,10 +12,11 @@ package main
 // errors, listing them. A warning is what a run may well get past, or what
 // depends on what is set up outside the board and can change before the
 // step runs, which the step itself checks: an object nothing generates, a
-// process nothing leads to, an agent with no model to use, a review whose
-// role nobody holds, a reminder that never comes, a repository the flow
-// doesn't have, and skills, MCP servers, credentials and tokens the flow
-// may not or can't use. Schedules, the API and runs on records run the
+// process nothing leads to, an agent with no model to use, one running with
+// Claude Code where the worker hasn't it or on a model it can't use, a
+// review whose role nobody holds, a reminder that never comes, a
+// repository the flow doesn't have, and skills, MCP servers, credentials
+// and tokens the flow may not or can't use. Schedules, the API and runs on records run the
 // version published without asking (see publish.go), so the board also says
 // whether that version has errors.
 
@@ -76,6 +77,11 @@ type problemFacts struct {
 	// known: not when the worker can't be asked.
 	defaultModel string
 	modelKnown   bool
+	// For boards with a process running with Claude Code: the coding
+	// agents the worker offers, and the providers whose models Claude Code
+	// may use; neither when the worker can't be asked.
+	harnesses []string
+	claude    claudeProviders
 	// The objects copies follow that are still there.
 	sources map[int64]bool
 }
@@ -464,6 +470,9 @@ func (c *problemCheck) agent(p process) {
 	if p.Model == "" && c.f.modelKnown && c.f.defaultModel == "" {
 		c.onProcess(problemWarning, "model", p, "%s has no model, and there is no default model: pick one in its panel, or have an admin add a model provider in Settings.", quote(p.Name))
 	}
+	if p.Settings.Harness == harnessClaude && c.f.harnesses != nil {
+		c.claudeCode(p)
+	}
 	for _, id := range p.Settings.MCPServers {
 		server, ok := c.f.servers[id]
 		switch {
@@ -484,6 +493,20 @@ func (c *problemCheck) agent(p process) {
 		case !skill.usable:
 			c.onProcess(problemWarning, "skill", p, "The skill %s isn't one this flow may use, so %s fails once it runs: share it with the flow's owner, or pick another.", skill.name, quote(p.Name))
 		}
+	}
+}
+
+// An agent running with Claude Code needs a worker that has it, and a model
+// of a provider speaking Anthropic's API: its own, or the default it takes.
+func (c *problemCheck) claudeCode(p process) {
+	if !slices.Contains(c.f.harnesses, harnessClaude) {
+		c.onProcess(problemWarning, "harness", p, "%s runs with Claude Code, which the worker doesn't offer, so it fails once it runs: have an operator build the worker's images with Claude Code, or switch it to pi in its panel.", quote(p.Name))
+	}
+	switch {
+	case p.Model != "" && !c.f.claude.takes(p.Model):
+		c.onProcess(problemWarning, "model", p, "Claude Code can't use the model %s, so %s fails once it runs: it takes only models of a provider speaking Anthropic's API; pick another in its panel.", p.Model, quote(p.Name))
+	case p.Model == "" && c.f.modelKnown && c.f.defaultModel != "" && !c.f.claude.takes(c.f.defaultModel):
+		c.onProcess(problemWarning, "model", p, "The default model %s isn't one Claude Code can use, so %s fails once it runs: pick a model for it in its panel.", c.f.defaultModel, quote(p.Name))
 	}
 }
 
@@ -844,19 +867,36 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 			return f, err
 		}
 	}
-	if withModel && needsDefaultModel(boards) {
+	claude := withModel && runsClaude(boards)
+	if withModel && (needsDefaultModel(boards) || claude) {
 		if f.defaultModel, err = defaultModel(ctx, db); err != nil {
 			return f, err
 		}
 		f.modelKnown = true
-		if f.defaultModel == "" {
-			// The worker's pi config may have one; not asked, nothing is said.
+		if f.defaultModel == "" || claude {
+			// The worker's pi config may have a default, and the worker
+			// says which coding agents it offers; not asked, nothing is
+			// said of either.
 			var models agentModels
 			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
 			if callWorker(wctx, http.MethodGet, workerURL+"/models", nil, &models) == nil {
-				f.defaultModel = models.Default
-			} else {
+				if f.defaultModel == "" {
+					f.defaultModel = models.Default
+				}
+				if claude {
+					f.harnesses = offeredHarnesses(models.Harnesses)
+					added, err := modelProviders(ctx, db)
+					if err != nil {
+						return f, err
+					}
+					var host []hostProvider
+					if llm != nil {
+						host, _ = llm.hostProviders(wctx)
+					}
+					f.claude = claudeProvidersOf(added, host)
+				}
+			} else if f.defaultModel == "" {
 				f.modelKnown = false
 			}
 		}
@@ -868,6 +908,16 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 func needsDefaultModel(boards []snapshot) bool {
 	for _, b := range boards {
 		if slices.ContainsFunc(b.Processes, func(p process) bool { return p.Kind == kindAgent && p.Model == "" }) {
+			return true
+		}
+	}
+	return false
+}
+
+// Whether an agent process of the boards runs with Claude Code.
+func runsClaude(boards []snapshot) bool {
+	for _, b := range boards {
+		if slices.ContainsFunc(b.Processes, func(p process) bool { return p.Kind == kindAgent && p.Settings.Harness == harnessClaude }) {
 			return true
 		}
 	}

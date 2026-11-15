@@ -108,6 +108,44 @@ func TestValidThinking(t *testing.T) {
 	}
 }
 
+// An agent process runs with pi, kept as none however it is said, or with
+// Claude Code, which no other kind does; nothing else is a harness.
+func TestHarnessProblem(t *testing.T) {
+	for _, c := range []struct {
+		harness, kind string
+		want, problem string
+	}{
+		{"", kindAgent, "", ""},
+		{harnessPi, kindAgent, "", ""},
+		{harnessClaude, kindAgent, harnessClaude, ""},
+		{"", kindScript, "", ""},
+		{harnessPi, kindHuman, "", ""},
+		{harnessClaude, kindScript, harnessClaude, "only an agent process runs with Claude Code"},
+		{harnessClaude, kindConnector, harnessClaude, "only an agent process"},
+		{harnessClaude, kindFlow, harnessClaude, "only an agent process"},
+		{"codex", kindAgent, "codex", "harness must be pi or claude"},
+		{"Claude", kindAgent, "Claude", "harness must be pi or claude"},
+	} {
+		s := processSettings{Harness: c.harness}
+		msg := s.harnessProblem(c.kind)
+		if (c.problem == "") != (msg == "") || !strings.Contains(msg, c.problem) || s.Harness != c.want {
+			t.Errorf("harnessProblem(%q on %s) = %q, kept %q; want %q, kept %q", c.harness, c.kind, msg, s.Harness, c.problem, c.want)
+		}
+	}
+	// Whatever the kind, a value that isn't a harness can't be saved.
+	if msg := (processSettings{Harness: "gpt"}).problem(); msg != "harness must be pi or claude" {
+		t.Errorf("problem() of a made-up harness = %q", msg)
+	}
+	for _, h := range []string{"", harnessPi, harnessClaude} {
+		if msg := (processSettings{Harness: h}).problem(); msg != "" {
+			t.Errorf("problem() of %q = %q", h, msg)
+		}
+	}
+	if harnessName("") != "pi" || harnessName(harnessClaude) != "Claude Code" {
+		t.Errorf("harnesses are called %q and %q", harnessName(""), harnessName(harnessClaude))
+	}
+}
+
 func TestValidWidth(t *testing.T) {
 	width := func(w float64) *float64 { return &w }
 	for _, c := range []struct {
@@ -129,7 +167,7 @@ func TestValidWidth(t *testing.T) {
 	}
 }
 
-// Model ids go to pi as arguments, so none may read as an option.
+// Model ids go to the agent as arguments, so none may read as an option.
 func TestValidModel(t *testing.T) {
 	for m, ok := range map[string]bool{
 		"":                          true,

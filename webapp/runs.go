@@ -177,12 +177,16 @@ type step struct {
 	// what the run works on, which the worker keeps as Branch; see
 	// branch_names.go.
 	Named string `json:"named,omitempty"`
-	// For an agent step that kept its session: the pi session's id, which a
-	// person can carry the conversation on in, and the follow-ups they sent;
-	// see followups.go.
+	// For an agent step that kept its session: the agent's session's id,
+	// which a person can carry the conversation on in, and the follow-ups
+	// they sent; see followups.go.
 	Session     string     `json:"session"`
 	CanFollowUp bool       `json:"canFollowUp"`
 	FollowUps   []followUp `json:"followUps"`
+	// For an agent step, the coding agent it ran with: harnessClaude for
+	// Claude Code, none for pi. Its session's, else what its process was set
+	// to in the run's version.
+	Harness string `json:"harness,omitempty"`
 	// What an agent step's model calls used, follow-ups included, as pi
 	// reports it; absent for other steps.
 	Usage *stepUsage `json:"usage,omitempty"`
@@ -740,7 +744,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT id, COALESCE(process_ref, process_id), process_name, kind, model, thinking, prompt, inputs, change_request,
-				status, output, error, outcome, instructions, `+userLabelColumn("decided_by")+`, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''), slot_wait_ms, try, started_at, finished_at, escalated
+				status, output, error, outcome, instructions, `+userLabelColumn("decided_by")+`, child_run_id, branch, commits, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.id')), ''),
+				COALESCE(JSON_UNQUOTE(JSON_EXTRACT(session, '$.harness')), ''), slot_wait_ms, try, started_at, finished_at, escalated
 			FROM run_steps WHERE run_id = ? ORDER BY id`, id)
 		if err != nil {
 			serverError(w, err)
@@ -769,7 +774,8 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			var inputs []byte
 			var cr, commits []byte
 			if err := rows.Scan(&s.ID, &s.Process, &s.ProcessName, &s.Kind, &s.Model, &s.Thinking, &s.Prompt, &inputs, &cr,
-				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.DecidedBy, &s.ChildRun, &s.Branch, &commits, &s.Session, &s.SlotWaitMS, &s.Try, &s.StartedAt, &s.FinishedAt, &s.Escalated); err != nil {
+				&s.Status, &s.Output, &s.Error, &s.Outcome, &s.Instructions, &s.DecidedBy, &s.ChildRun, &s.Branch, &commits, &s.Session,
+				&s.Harness, &s.SlotWaitMS, &s.Try, &s.StartedAt, &s.FinishedAt, &s.Escalated); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -819,6 +825,20 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		for i, s := range detail.Steps {
+			// An agent step without a session ran with what its process was
+			// set to in the run's version; one with a session says so itself.
+			if s.Kind == kindAgent && s.Session == "" && s.Process != nil {
+				if b == nil {
+					if b, err = runBoardOf(r.Context(), db, id); err != nil {
+						serverError(w, err)
+						return
+					}
+				}
+				if p, err := b.process(*s.Process); err == nil {
+					detail.Steps[i].Harness = p.Settings.Harness
+				}
+				continue
+			}
 			if s.Kind != kindHuman && s.Kind != kindLoop {
 				continue
 			}

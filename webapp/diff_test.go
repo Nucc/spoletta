@@ -137,6 +137,30 @@ func TestDiffOfProcesses(t *testing.T) {
 	}
 }
 
+// Switching the coding agent a process runs with is a field of its own,
+// said by the agents' names; pi, said or not, is the same.
+func TestDiffOfHarness(t *testing.T) {
+	b := cloneBoard(t, diffBoard())
+	b.Processes[0].Settings.Harness = harnessClaude
+	b.Processes[0].Settings.Timeout = count(60)
+	d := diffSnapshots(diffBoard(), b)
+	if len(d.Processes) != 1 || !reflect.DeepEqual(fieldNames(d.Processes[0]), []string{"runs with", "timeout"}) {
+		t.Fatalf("processes = %+v", d.Processes)
+	}
+	if f := d.Processes[0].Fields[0]; f.Before != "pi" || f.After != "Claude Code" {
+		t.Errorf("the harness went %+v", f)
+	}
+	back := diffSnapshots(b, diffBoard())
+	if f := back.Processes[0].Fields[0]; f.Field != "runs with" || f.Before != "Claude Code" || f.After != "pi" {
+		t.Errorf("back to pi went %+v", f)
+	}
+	b = cloneBoard(t, diffBoard())
+	b.Processes[0].Settings.Harness = harnessPi
+	if d := diffSnapshots(diffBoard(), b); d.changed() {
+		t.Errorf("pi said is a change: %+v", d.Processes)
+	}
+}
+
 // The credentials a process picks are a setting the diff names.
 func TestDiffNamesCredentials(t *testing.T) {
 	b := cloneBoard(t, diffBoard())

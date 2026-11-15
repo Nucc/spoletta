@@ -21,7 +21,8 @@ package main
 // worker writes into pi's models.json over the host's entries for the same
 // providers (see the worker's providers.go), pointed at the model proxy,
 // which reaches them with their keys (see llm.go). The models offered are
-// the providers' picked ones and the worker's own of other providers. The
+// the providers' picked ones and the worker's own of other providers, of
+// which Claude Code takes only those of Anthropic's API. The
 // default model, which a process without a model of its own uses, is kept
 // here once a provider is added: the first provider's first model, until
 // an admin picks another.
@@ -150,7 +151,8 @@ func fixDefaultModel(ctx context.Context, tx *sql.Tx, removed string) error {
 }
 
 // The models offered for agent processes: the providers', and the worker's
-// own of other providers, with the default and the providers' names. The
+// own of other providers, with the default and the providers' names, the
+// coding agents the worker offers, and the models Claude Code may use. The
 // worker's own are left out when it can't be asked, if there are providers.
 func offeredModels(ctx context.Context, db *sql.DB, workerURL string) (agentModels, error) {
 	var models agentModels
@@ -162,6 +164,24 @@ func offeredModels(ctx context.Context, db *sql.DB, workerURL string) (agentMode
 	if workerErr != nil && len(providers) == 0 {
 		return models, workerErr
 	}
+	if workerErr != nil {
+		models = agentModels{}
+	}
+	def, err := defaultModel(ctx, db)
+	if err != nil {
+		return models, err
+	}
+	var host []hostProvider
+	if llm != nil {
+		host, _ = llm.hostProviders(ctx)
+	}
+	return offerModels(models, providers, host, def), nil
+}
+
+// The models offered, from what the worker said of its own (nothing when
+// it couldn't be asked), the providers added, the worker's pi config's
+// providers, and the default the settings keep, if any.
+func offerModels(models agentModels, providers []modelProvider, host []hostProvider, def string) agentModels {
 	added := map[string]string{}
 	for _, p := range providers {
 		added[p.ID] = p.Name
@@ -181,11 +201,98 @@ func offeredModels(ctx context.Context, db *sql.DB, workerURL string) (agentMode
 	if len(providers) > 0 {
 		models.Providers = added
 	}
-	def, err := defaultModel(ctx, db)
 	if def != "" {
 		models.Default = def
 	}
-	return models, err
+	models.Harnesses = offeredHarnesses(models.Harnesses)
+	claude := claudeProvidersOf(providers, host)
+	models.Claude = nil
+	for _, m := range offered {
+		if claude.takes(m) {
+			models.Claude = append(models.Claude, m)
+		}
+	}
+	return models
+}
+
+// The coding agents the worker offers, as it says them; pi alone for a
+// worker from before there was a choice.
+func offeredHarnesses(said []string) []string {
+	if len(said) == 0 {
+		return []string{harnessPi}
+	}
+	return said
+}
+
+// Claude Code speaks only Anthropic's Messages API, so the models it may
+// use are those of the providers that do: Anthropic's own, and those added
+// in the settings or of the worker's pi config whose API is
+// anthropic-messages, such as a company's gateway, reached through the
+// model proxy as any provider is. Nothing checks the model's name: a
+// gateway's IDs are its own.
+const anthropicMessages = "anthropic-messages"
+
+// The providers whose models Claude Code may use, by ID.
+type claudeProviders map[string]bool
+
+// The providers of those added and the worker's own whose models Claude
+// Code may use; one added goes over the worker's own of its ID, as the
+// proxy routes them (llm.go).
+func claudeProvidersOf(added []modelProvider, host []hostProvider) claudeProviders {
+	c := claudeProviders{}
+	for _, p := range host {
+		c[p.ID] = p.API == anthropicMessages
+	}
+	for _, p := range added {
+		c[p.ID] = p.API == anthropicMessages
+	}
+	c["anthropic"] = true
+	return c
+}
+
+// Whether Claude Code may use the model, provider/id.
+func (c claudeProviders) takes(model string) bool {
+	provider, id, ok := strings.Cut(model, "/")
+	return ok && id != "" && c[provider]
+}
+
+// The providers whose models Claude Code may use now: those added, and the
+// worker's own as it said last.
+func currentClaudeProviders(ctx context.Context, db rowsQuerier) (claudeProviders, error) {
+	added, err := modelProviders(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	var host []hostProvider
+	if llm != nil {
+		host, _ = llm.hostProviders(ctx)
+	}
+	return claudeProvidersOf(added, host), nil
+}
+
+// Why a step running with Claude Code can't run on the model, or "": its
+// process's own, or with own false the default it took.
+func claudeModelProblem(c claudeProviders, model string, own bool) string {
+	switch {
+	case c.takes(model):
+		return ""
+	case own:
+		return fmt.Sprintf("Claude Code can't use the model %s: it takes only models of a provider speaking Anthropic's API; pick another for the process", model)
+	}
+	return "the default model isn't one Claude Code can use; pick one for the process"
+}
+
+// The default model of the worker's pi config, for a process that must
+// name its model when the settings keep none; or why it can't be had.
+func workerDefaultModel(ctx context.Context, workerURL string) (model, problem string) {
+	var models agentModels
+	if err := callWorker(ctx, http.MethodGet, workerURL+"/models", nil, &models); err != nil {
+		if ctx.Err() != nil {
+			return "", stopReason(ctx)
+		}
+		return "", "worker unavailable: " + err.Error()
+	}
+	return models.Default, ""
 }
 
 // The providers pi knows that can be added, with their models, as the

@@ -18,16 +18,23 @@ import (
 	"strings"
 )
 
-// Agent processes run in the worker's pi harness, which takes its models,
-// defaults and credentials from the user's pi setup.
+// Agent processes run in the worker, with the coding agent their process
+// picks (see harnessProblem): pi, which takes its models and defaults from
+// the worker's pi config and the model providers (model_providers.go), or
+// Claude Code. Either reaches its models through the model proxy (llm.go).
 
 // The models offered for agent processes: pi's enabledModels and its default,
 // as the worker has them, with the model providers' (see model_providers.go)
-// and their names.
+// and their names; the coding agents the worker offers, and the models
+// offered that Claude Code may use (claudeProviders).
 type agentModels struct {
 	Default   string            `json:"default"`
 	Models    []string          `json:"models"`
 	Providers map[string]string `json:"providers,omitempty"`
+	// pi alone, or pi and claude, as the worker says; pi alone for a worker
+	// from before there was a choice, or one that can't be asked.
+	Harnesses []string `json:"harnesses"`
+	Claude    []string `json:"claude,omitempty"`
 }
 
 // An object a process takes as input, with the output of the process that
@@ -77,7 +84,7 @@ type agentRun struct {
 	// Where the agent writes the files it generates.
 	FilesDir string `json:"filesDir,omitempty"`
 	// The MCP servers the process uses, reached through the webapp's proxy
-	// with the step's token; pi gets no MCP servers without them.
+	// with the step's token; the agent gets no MCP servers without them.
 	MCPServers []mcpRunServer `json:"mcpServers,omitempty"`
 	MCPToken   string         `json:"mcpToken,omitempty"`
 	// The workspace it works in, if it works on repositories.
@@ -88,11 +95,14 @@ type agentRun struct {
 	// The token the step's git reaches its repositories with; see
 	// git_tokens.go. Beside the workspace, which is kept, as it never is.
 	Git *gitCredentials `json:"git,omitempty"`
-	// In a workspace, the pi session the worker keeps its conversation in, so
-	// a person can carry it on once the step is over; see followups.go.
-	// Resume carries on one that exists.
+	// In a workspace, the agent's session the worker keeps its conversation
+	// in, so a person can carry it on once the step is over; see
+	// followups.go. Resume carries on one that exists.
 	SessionID string `json:"sessionId,omitempty"`
 	Resume    bool   `json:"resume,omitempty"`
+	// The coding agent that runs it: none for pi, harnessClaude for Claude
+	// Code; the worker refuses one it doesn't have.
+	Harness string `json:"harness,omitempty"`
 	// How long the run may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
@@ -109,7 +119,8 @@ type agentRun struct {
 	// Where the agent's container reaches the internet hosts it may; see
 	// egress.go.
 	Egress *egressAccess `json:"egress,omitempty"`
-	// The skills the process picked, which the worker hands pi; see skills.go.
+	// The skills the process picked, which the worker hands the agent; see
+	// skills.go.
 	Skills []runSkill `json:"skills,omitempty"`
 	// The credentials the process calls services with, each at its URL at
 	// the webapp's proxy, which the step's token reaches; never their
@@ -121,10 +132,13 @@ type agentRun struct {
 	credentialsFlow int64
 }
 
-// The pi session of a step that worked in a workspace, which follow-ups carry on.
+// The agent's session of a step that worked in a workspace, which
+// follow-ups carry on with the coding agent that made it, whatever its
+// process runs with since; one without a harness is pi's.
 type stepSession struct {
 	ID        string         `json:"id"`
 	Workspace *workspaceSpec `json:"workspace"`
+	Harness   string         `json:"harness,omitempty"`
 }
 
 func newSessionID() (string, error) {
@@ -193,6 +207,8 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	}
 	flow, settings := b.flow, p.Settings
 	run.ProcessName, run.Prompt, run.Model, run.Thinking = p.Name, p.Prompt, p.Model, p.Thinking
+	run.Harness = settings.Harness
+	claude, ownModel := run.Harness == harnessClaude, run.Model != ""
 	contract, msg := b.contractFor(id, true)
 	run.TimeoutMS = settings.timeout().Milliseconds()
 	// The prompt couldn't tell apart two inputs of one name.
@@ -234,16 +250,29 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	}
 	started(stepID)
 	// A process without a model of its own takes the default, which its
-	// step keeps for follow-ups.
+	// step keeps for follow-ups. Claude Code is told its model, so it takes
+	// the worker's pi default by name when the settings keep none.
 	if run.Model == "" {
 		if run.Model, err = defaultModel(ctx, db); err != nil {
 			return res, err
+		}
+		if run.Model == "" && claude && res.Error == "" {
+			run.Model, res.Error = workerDefaultModel(ctx, workerURL)
 		}
 		if run.Model != "" {
 			if _, err := db.ExecContext(ctx, "UPDATE run_steps SET model = ? WHERE id = ?", run.Model, stepID); err != nil {
 				return res, err
 			}
 		}
+	}
+	// Claude Code takes only models of Anthropic's API, which the step
+	// fails on before the worker sees it rather than in the worker.
+	if claude && res.Error == "" {
+		providers, err := currentClaudeProviders(ctx, db)
+		if err != nil {
+			return res, err
+		}
+		res.Error = claudeModelProblem(providers, run.Model, ownModel)
 	}
 	if run.Workspace != nil {
 		run.Workspace.Step = stepID
@@ -294,7 +323,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 		if run.SessionID, err = newSessionID(); err != nil {
 			return res, err
 		}
-		b, err := json.Marshal(stepSession{ID: run.SessionID, Workspace: run.Workspace})
+		b, err := json.Marshal(stepSession{ID: run.SessionID, Workspace: run.Workspace, Harness: run.Harness})
 		if err != nil {
 			return res, err
 		}

@@ -49,6 +49,10 @@ type agentModels struct {
 	Models  []string `json:"models"`
 	// The names of the model providers admins added, by ID.
 	Providers map[string]string `json:"providers,omitempty"`
+	// The coding agents the worker offers, and the models offered that
+	// Claude Code may use.
+	Harnesses []string `json:"harnesses,omitempty"`
+	Claude    []string `json:"claude,omitempty"`
 }
 
 // Where a step's container reaches the internet.
@@ -110,6 +114,8 @@ type agentRun struct {
 	// Resume carries on one that exists.
 	SessionID string `json:"sessionId,omitempty"`
 	Resume    bool   `json:"resume,omitempty"`
+	// The coding agent that runs it: none for pi, claude for Claude Code.
+	Harness string `json:"harness,omitempty"`
 	// How long the run may take, if the process has a timeout; the
 	// worker's own limit otherwise.
 	TimeoutMS int64 `json:"timeoutMs,omitempty"`
@@ -464,6 +470,9 @@ type processSettings struct {
 	Quorum *int `json:"quorum,omitempty"`
 	// Whether an agent's prompt describes the flow it works in, in OPL; see opl.go.
 	DescribeFlow bool `json:"describeFlow,omitempty"`
+	// The coding agent an agent process runs with: none for pi, claude for
+	// Claude Code.
+	Harness string `json:"harness,omitempty"`
 	// How long a human step waits before those who may decide it are
 	// reminded, and the longest it waits before it fails, in seconds.
 	RemindAfter *int `json:"remindAfter,omitempty"`
@@ -809,6 +818,9 @@ type step struct {
 	Session     string     `json:"session"`
 	CanFollowUp bool       `json:"canFollowUp"`
 	FollowUps   []followUp `json:"followUps"`
+	// For an agent step, the coding agent it ran with: claude for Claude
+	// Code, none for pi.
+	Harness string `json:"harness"`
 	// What an agent step's model calls used, as pi reports it.
 	Usage *stepUsage `json:"usage,omitempty"`
 	// For an agent, script or connector step: how long it waited for its

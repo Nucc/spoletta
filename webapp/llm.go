@@ -2,15 +2,16 @@ package main
 
 // The model proxy: agents reach their models' providers through the webapp,
 // never with the providers' keys. Each agent step, follow-up and assistant
-// reply gets a token of its own, which the worker writes into pi's
-// models.json as every provider's key, with the provider's URL pointed
-// here, at /llm/{provider}/; the proxy takes a request with a token
-// granted at any replica of the webapp (grants.go), puts the provider's
-// real key where the token was, and passes it on to the provider,
-// streaming the answer back. The token ends with the step, or a while
-// after its timeout should the webapp lose it, so an agent that printed it
-// has nothing worth keeping. Keys are opened from their sealed rows by the
-// replica a call reaches, and stay in its memory.
+// reply gets a token of its own, which the worker hands its agent, pi or
+// Claude Code, as every provider's key, with the provider's URL pointed
+// here, at /llm/{provider}/: pi has it in its models.json, Claude Code as
+// its API key with its base URL at /llm/{provider}. The proxy takes a
+// request with a token granted at any replica of the webapp (grants.go),
+// puts the provider's real key where the token was, and passes it on to
+// the provider, streaming the answer back. The token ends with the step,
+// or a while after its timeout should the webapp lose it, so an agent that
+// printed it has nothing worth keeping. Keys are opened from their sealed
+// rows by the replica a call reaches, and stay in its memory.
 //
 // The providers a token reaches are those added in the settings, with
 // their saved keys or ones in the webapp's environment, and those of the
@@ -19,15 +20,20 @@ package main
 // environment's. Where each is reached is its custom URL, the URL the
 // worker's models.json gives it, as a gateway's, or the provider's own,
 // below. OpenRouter and Fireworks serve Anthropic's API at another path
-// than OpenAI's; pi's requests in Anthropic's carry anthropic-version,
-// which picks it.
+// than OpenAI's; the agent's requests in Anthropic's carry
+// anthropic-version, which picks it.
 //
 // pi sends the key as x-api-key for Anthropic's API, x-goog-api-key for
 // Google's, and as a bearer token for OpenAI's, Mistral's and the rest; the
 // proxy finds the token in whichever and puts the key there in its place.
-// Bedrock with a Bedrock API key is reached so too; without one, pi signs
-// its requests with the worker's AWS credentials, which no proxy can do
-// without them, so it isn't routed here.
+// Claude Code speaks only Anthropic's API, sending the token as x-api-key
+// to /llm/{provider}/v1/messages (with ?beta=true, and its anthropic-beta
+// list, which pass on as they are), counting tokens at
+// v1/messages/count_tokens, whose answer has no usage to record, and
+// asking v1/models and api/hello as it starts, which record nothing
+// either. Bedrock with a Bedrock API key is reached so too; without one,
+// pi signs its requests with the worker's AWS credentials, which no proxy
+// can do without them, so it isn't routed here.
 //
 // What each call took and gave, as the provider's answer says, goes in
 // llm_usage, for whom and which step, with what it cost (spend.go);
@@ -187,7 +193,7 @@ func (b *llmBroker) hostProviders(ctx context.Context) ([]hostProvider, error) {
 
 // The providers a step may reach and how, by ID: those added in the
 // settings over the worker's own of the same ID. A provider without a key
-// to be had isn't one; its agents fail saying pi has no key for it.
+// to be had isn't one; its agents fail saying they have no key for it.
 func (b *llmBroker) routes(ctx context.Context) (map[string]llmRoute, error) {
 	added, err := modelProviders(ctx, b.db)
 	if err != nil {
@@ -320,7 +326,7 @@ const llmGrantMargin = 5 * time.Minute
 // The longest a model's request may be: prompts with images in them.
 const maxLLMRequestBytes = 64 << 20
 
-// The headers a request carries the token in, as pi's clients send it.
+// The headers a request carries the token in, as the agents' clients send it.
 var llmKeyHeaders = []string{"Authorization", "X-Api-Key", "X-Goog-Api-Key"}
 
 // Headers that stay here: the token's, the connection's, and what says who

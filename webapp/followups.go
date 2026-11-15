@@ -14,12 +14,13 @@ import (
 	"time"
 )
 
-// An agent step that worked in a workspace keeps its pi session there, so
-// once it is over a person can carry its conversation on: send it a message,
-// such as to push what it committed or to change something, and the agent
-// acts on it with everything it did in mind, in the same checkouts on the
-// same branch. Each such follow-up is another try of the step's conversation;
-// what it does doesn't change what the step generated.
+// An agent step that worked in a workspace keeps its agent's session there,
+// pi's or Claude Code's, so once it is over a person can carry its
+// conversation on: send it a message, such as to push what it committed or
+// to change something, and the agent that made the session acts on it with
+// everything it did in mind, in the same checkouts on the same branch. Each
+// such follow-up is another try of the step's conversation; what it does
+// doesn't change what the step generated.
 type followUp struct {
 	ID int64 `json:"id"`
 	// The try of the step's conversation its messages belong to.
@@ -305,6 +306,9 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	run.Run = runID
 	run.SessionID = s.ID
 	run.Resume = true
+	// The coding agent that made the session carries it on, whatever the
+	// process runs with now.
+	run.Harness = s.Harness
 	return f, run, uses, nil
 }
 

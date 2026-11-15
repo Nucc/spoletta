@@ -320,8 +320,12 @@ func (d *boardDiff) diffProcesses(a, b snapshot, m diffMatch) {
 		fs.add("script", o.Script, p.Script)
 		fs.add("model", o.Model, p.Model)
 		fs.add("thinking", o.Thinking, p.Thinking)
+		// The coding agent by its name, pi for none.
+		fs.add("runs with", harnessName(o.Settings.Harness), harnessName(p.Settings.Harness))
 		fs.add("runs of its own", yesNo(o.Recording), yesNo(p.Recording))
-		fs = append(fs, diffJSONFields(o.Settings, p.Settings, processSettingNames)...)
+		before, after := o.Settings, p.Settings
+		before.Harness, after.Harness = "", ""
+		fs = append(fs, diffJSONFields(before, after, processSettingNames)...)
 		if o.X != p.X || o.Y != p.Y || !sameFloat(o.Width, p.Width) {
 			d.Layout = true
 		}

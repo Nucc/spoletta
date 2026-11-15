@@ -201,6 +201,111 @@ func TestLLMProxyStreams(t *testing.T) {
 	}
 }
 
+// Claude Code's requests pass as it sends them: its token in x-api-key
+// swapped for the key, its query, anthropic-version and anthropic-beta list
+// as they are, and the answer streamed back whole, whose usage is read from
+// its events. Counting tokens, listing models and its start-up probe pass
+// too, and their answers hold no usage to record.
+func TestLLMProxyPassesClaudeCode(t *testing.T) {
+	type reached struct {
+		method, path, query string
+		header              http.Header
+	}
+	var got []reached
+	stream := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":12,\"cache_read_input_tokens\":3000,\"cache_creation_input_tokens\":400,\"output_tokens\":1}}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Done.\"}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":57}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	answers := map[string]string{
+		"/v1/messages":              stream,
+		"/v1/messages/count_tokens": `{"input_tokens": 2048}`,
+		"/v1/models":                `{"data": [{"type": "model", "id": "claude-sonnet-4-6"}], "has_more": false}`,
+		"/api/hello":                "",
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, reached{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Clone()})
+		if r.URL.Path == "/v1/messages" {
+			w.Header().Set("Content-Type", "text/event-stream")
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		io.WriteString(w, answers[r.URL.Path])
+	}))
+	defer upstream.Close()
+	b := grantedBroker(t, "step-token", map[string]llmRoute{"anthropic": {base: upstream.URL, key: "sk-ant-real"}})
+	beta := "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+	claude := func(method, path, body string) *httptest.ResponseRecorder {
+		var r *http.Request
+		if body == "" {
+			r = httptest.NewRequest(method, path, nil)
+		} else {
+			r = httptest.NewRequest(method, path, strings.NewReader(body))
+		}
+		r.Header.Set("X-Api-Key", "step-token")
+		r.Header.Set("Anthropic-Version", "2023-06-01")
+		r.Header.Set("Anthropic-Beta", beta)
+		r.Header.Set("User-Agent", "claude-cli/2.1.325 (external, sdk-cli)")
+		r.Header.Set("Content-Type", "application/json")
+		return serveLLM(b, r)
+	}
+
+	w := claude("POST", "/llm/anthropic/v1/messages?beta=true", `{"model":"claude-sonnet-4-6","stream":true,"max_tokens":32000}`)
+	if w.Code != http.StatusOK || w.Body.String() != stream || len(got) != 1 {
+		t.Fatalf("a message: %d %q, reaching %+v", w.Code, w.Body, got)
+	}
+	m := got[0]
+	if m.method != "POST" || m.path != "/v1/messages" || m.query != "beta=true" {
+		t.Errorf("a message reached %s %s?%s", m.method, m.path, m.query)
+	}
+	if m.header.Get("X-Api-Key") != "sk-ant-real" || m.header.Get("Authorization") != "" ||
+		m.header.Get("Anthropic-Version") != "2023-06-01" || strings.Join(m.header.Values("Anthropic-Beta"), ",") != beta ||
+		m.header.Get("User-Agent") != "claude-cli/2.1.325 (external, sdk-cli)" || strings.Contains(strings.Join(flatten(m.header), " "), "step-token") {
+		t.Errorf("a message reached the provider with %v", m.header)
+	}
+	if w.Header().Get("Content-Type") != "text/event-stream" {
+		t.Errorf("the answer came as %q", w.Header().Get("Content-Type"))
+	}
+	// What the proxy records of it: what each event says, the most of each.
+	u := &usageReader{}
+	u.Write([]byte(stream))
+	if got := u.usage(); got != (llmUsage{input: 12, output: 57, cacheRead: 3000, cacheWrite: 400}) {
+		t.Errorf("the stream's usage = %+v", got)
+	}
+
+	// Counting a message's tokens says how many it would take, which is no
+	// usage: a call records nothing when its answer has none.
+	w = claude("POST", "/llm/anthropic/v1/messages/count_tokens?beta=true", `{"model":"claude-sonnet-4-6","messages":[]}`)
+	if w.Code != http.StatusOK || w.Body.String() != answers["/v1/messages/count_tokens"] || got[1].path != "/v1/messages/count_tokens" || got[1].query != "beta=true" {
+		t.Errorf("counting tokens: %d %q, reaching %+v", w.Code, w.Body, got[1])
+	}
+	u = &usageReader{}
+	u.Write(w.Body.Bytes())
+	if got := u.usage(); got != (llmUsage{}) {
+		t.Errorf("counting tokens reads as usage %+v", got)
+	}
+
+	// As it starts: models listed, and the API's HEAD probe, which the
+	// mux serves on the GET pattern.
+	w = claude("GET", "/llm/anthropic/v1/models?limit=1000", "")
+	if w.Code != http.StatusOK || got[2].method != "GET" || got[2].path != "/v1/models" || got[2].header.Get("X-Api-Key") != "sk-ant-real" {
+		t.Errorf("listing models: %d, reaching %+v", w.Code, got[2])
+	}
+	u = &usageReader{}
+	u.Write(w.Body.Bytes())
+	if got := u.usage(); got != (llmUsage{}) {
+		t.Errorf("listing models reads as usage %+v", got)
+	}
+	w = claude("HEAD", "/llm/anthropic/api/hello", "")
+	if w.Code != http.StatusOK || len(got) != 4 || got[3].method != "HEAD" || got[3].path != "/api/hello" {
+		t.Errorf("the probe: %d, reaching %+v", w.Code, got[len(got)-1])
+	}
+	// Without its token, as a probe sent before it has one would be.
+	r := httptest.NewRequest("HEAD", "/llm/anthropic/api/hello", nil)
+	if w := serveLLM(b, r); w.Code != http.StatusForbidden || len(got) != 4 {
+		t.Errorf("a probe without the token: %d", w.Code)
+	}
+}
+
 // The usage is read from a streamed answer's events, the most each says,
 // and from a whole one in each API's words, with what was read from the
 // cache apart from what was taken in.

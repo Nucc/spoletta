@@ -371,6 +371,10 @@ func (x exporter) process(p process) setupProcess {
 		X: addrOf(p.X), Y: addrOf(p.Y), Width: p.Width,
 	}
 	st := p.Settings
+	// pi goes without saying.
+	if p.Kind == kindAgent {
+		sp.Harness = st.Harness
+	}
 	if st.Flow != nil {
 		sp.Runs = x.flowNames[*st.Flow]
 	}

@@ -147,7 +147,8 @@ func TestARunThatSpendsWhatItMayIsStopped(t *testing.T) {
 
 // A flow may hold its runs to less than the instance does, and a run's
 // follow-ups count toward it; a call when nothing is left is refused
-// saying the run is out of budget, which pi doesn't try again.
+// saying the run is out of budget, in the words of Anthropic's errors, which
+// neither pi nor Claude Code tries again.
 func TestAFlowsLimitAndRefusedCalls(t *testing.T) {
 	a := newApp(t)
 	a.worker.quiet = true

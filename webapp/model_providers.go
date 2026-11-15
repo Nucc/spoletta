@@ -121,6 +121,23 @@ func defaultModel(ctx context.Context, db rowsQuerier) (string, error) {
 	return model, err
 }
 
+// The worker's own pi config's providers, and whether it could say them.
+type hostProviders struct {
+	providers []hostProvider
+	known     bool
+}
+
+// The worker's own providers as the model proxy knows them, asked of the
+// worker if it hasn't lately: before a transaction, never inside one, so no
+// lock is held while the worker is asked.
+func savedHostProviders(ctx context.Context) hostProviders {
+	if llm == nil {
+		return hostProviders{known: true}
+	}
+	host, err := llm.hostProviders(ctx)
+	return hostProviders{providers: host, known: err == nil}
+}
+
 // The default model for agent processes running with Claude Code, kept
 // here beside the default model; "" takes the default model, when Claude
 // Code can use it.
@@ -138,7 +155,10 @@ func claudeDefaultModel(ctx context.Context, db rowsQuerier) (string, error) {
 // model, as does none, once there is a provider. Claude Code's default goes
 // the same way, but is never replaced: one gone, or of a provider Claude
 // Code can no longer use, is cleared, so its processes take the default.
-func fixDefaultModel(ctx context.Context, tx *sql.Tx, removed string) error {
+// Which providers those are takes the worker's own, read before the
+// transaction (savedHostProviders); when the worker couldn't say, only one
+// gone is cleared.
+func fixDefaultModel(ctx context.Context, tx *sql.Tx, removed string, host hostProviders) error {
 	providers, err := modelProviders(ctx, tx)
 	if err != nil {
 		return err
@@ -156,11 +176,7 @@ func fixDefaultModel(ctx context.Context, tx *sql.Tx, removed string) error {
 		return err
 	}
 	if claude != "" {
-		var host []hostProvider
-		if llm != nil {
-			host, _ = llm.hostProviders(ctx)
-		}
-		if !kept(claude) || !claudeProvidersOf(providers, host).takes(claude) {
+		if !kept(claude) || host.known && !claudeProvidersOf(providers, host.providers).takes(claude) {
 			if _, err := tx.ExecContext(ctx, "UPDATE model_default SET claude_model = '' WHERE id = 1"); err != nil {
 				return err
 			}
@@ -610,6 +626,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			http.Error(w, "the worker didn't say which providers pi knows: "+workerMessage(err), http.StatusBadGateway)
 			return
 		}
+		host := savedHostProviders(r.Context())
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
@@ -666,7 +683,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			serverError(w, err)
 			return
 		}
-		if err := fixDefaultModel(r.Context(), tx, ""); err != nil {
+		if err := fixDefaultModel(r.Context(), tx, "", host); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -684,6 +701,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			return
 		}
 		id := r.PathValue("id")
+		host := savedHostProviders(r.Context())
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
@@ -694,7 +712,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			serverError(w, err)
 			return
 		}
-		if err := fixDefaultModel(r.Context(), tx, id); err != nil {
+		if err := fixDefaultModel(r.Context(), tx, id, host); err != nil {
 			serverError(w, err)
 			return
 		}

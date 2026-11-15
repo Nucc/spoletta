@@ -79,11 +79,20 @@ type agentCommand struct {
 	shown string
 }
 
-// The harness a request names: pi by default.
+// The harness a request names: pi by default, or Claude Code when the
+// worker has it.
 func harnessFor(run runRequest) (harness, error) {
 	switch run.Harness {
 	case "", "pi":
 		return piHarness{}, nil
+	case "claude":
+		if !claudeInstalled {
+			return nil, errors.New("this worker doesn't have Claude Code: its images were built without CLAUDE_CODE_VERSION")
+		}
+		if run.NoTools {
+			return nil, errors.New("Claude Code doesn't run without tools; the assistant runs with pi")
+		}
+		return claudeHarness{}, nil
 	}
 	return nil, fmt.Errorf("unknown harness %q", run.Harness)
 }

@@ -41,10 +41,13 @@ var modelSettings = []string{
 
 var thinkingSuffix = regexp.MustCompile(`:(off|minimal|low|medium|high|xhigh|max)$`)
 
-// The models offered for agent processes: pi's enabledModels and its default.
+// The models offered for agent processes: pi's enabledModels and its
+// default, with the harnesses the worker runs: pi, and claude when it has
+// Claude Code.
 type agentModels struct {
-	Default string   `json:"default"`
-	Models  []string `json:"models"`
+	Default   string   `json:"default"`
+	Models    []string `json:"models"`
+	Harnesses []string `json:"harnesses"`
 }
 
 type runRequest struct {
@@ -56,17 +59,17 @@ type runRequest struct {
 	Prompt      string `json:"prompt"`
 	Model       string `json:"model"`
 	Thinking    string `json:"thinking"`
-	// The coding agent that runs the step: empty or "pi" for pi; see
-	// harnessFor.
+	// The coding agent that runs the step: empty or "pi" for pi, "claude"
+	// for Claude Code; see harnessFor.
 	Harness string `json:"harness,omitempty"`
 	// The objects the process generates, which the agent hands in through
 	// submit_output; see submit-output.ts. Absent when it generates none.
 	Output *outputSpec `json:"output"`
 	// Where the agent writes files; inside the files root.
 	FilesDir string `json:"filesDir"`
-	// The only MCP servers pi gets, which mcp-servers.ts registers; with
-	// none, pi runs without MCP. The URLs are the webapp's proxy, which
-	// takes the token.
+	// The only MCP servers the agent gets (pi's through mcp-servers.ts);
+	// with none, it runs without MCP. The URLs are the webapp's proxy,
+	// which takes the token.
 	MCPServers []mcpServer `json:"mcpServers"`
 	MCPToken   string      `json:"mcpToken"`
 	// The workspace it works in, if the flow has repositories.
@@ -76,9 +79,9 @@ type runRequest struct {
 	// The token its git reaches the workspace's repositories with, if any;
 	// see git_credentials.go.
 	Git *gitCredentials `json:"git"`
-	// In a workspace: the pi session the conversation is kept in, so a person
-	// can carry it on later. Resume says the session must exist already,
-	// which a step's first run creates.
+	// In a workspace: the agent's session the conversation is kept in, so a
+	// person can carry it on later, with the harness that made it. Resume
+	// says the session must exist already, which a step's first run creates.
 	SessionID string `json:"sessionId"`
 	Resume    bool   `json:"resume"`
 	// How long the run may take, if not the worker's own limit.
@@ -99,8 +102,8 @@ type runRequest struct {
 	// Put the guide to authoring flows before the prompt, for an agent that
 	// can't read it itself.
 	Guide bool `json:"guide"`
-	// The skills pi is given, each written as a SKILL.md of its own; see
-	// writeSkills.
+	// The skills the agent is given, each written as a SKILL.md of its own;
+	// see writeSkills.
 	Skills []skill `json:"skills"`
 	// The credentials the step calls services with, each at its URL at the
 	// webapp's proxy, which CredentialsToken reaches; see credentialVars.
@@ -298,6 +301,11 @@ func main() {
 		def = "(pi default)"
 	}
 	log.Printf("worker: %d enabled models, default %s", len(models.Models), def)
+	models.Harnesses = []string{"pi"}
+	if claudeInstalled = findClaude(); claudeInstalled {
+		models.Harnesses = append(models.Harnesses, "claude")
+		log.Printf("worker: Claude Code is installed, so agent processes may run with it")
+	}
 	hostProviders, err := hostProvidersOf(hostConfigDir, models)
 	if err != nil {
 		log.Fatalf("worker: %v", err)

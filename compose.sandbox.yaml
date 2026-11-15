@@ -48,6 +48,10 @@ services:
     build:
       context: .
       dockerfile: worker/sandbox.Containerfile
+      # The same as the worker's, so steps' containers have Claude Code
+      # when the worker offers it.
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}
     image: localhost/spoletta-sandbox:latest
     command: ["true"]
     restart: "no"

@@ -1,6 +1,7 @@
 # What a step's container runs when steps run in containers of their own
 # (SANDBOX=podman; see sandbox_podman.go): pi, with the extensions the
-# worker gives it, and what a coding agent reaches for: bash, git, curl
+# worker gives it, Claude Code if built with it, and what a coding agent
+# reaches for: bash, git, curl
 # and jq, ripgrep and fd to search, GNU's coreutils, grep, sed and awk in
 # place of busybox's, diff and patch, archivers, make, GitHub's gh, and Python with pip
 # (installing into the step's home, as the root is read-only). Nothing
@@ -19,6 +20,18 @@ RUN apk add --no-cache bash curl git jq \
 RUN ln -s /usr/bin/python3 /usr/local/bin/python
 ENV PIP_USER=1 PIP_BREAK_SYSTEM_PACKAGES=1
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
+# Claude Code, a second coding agent agent processes may run with, only when
+# built with CLAUDE_CODE_VERSION, which an operator sets having accepted
+# Anthropic's terms (docs/INSTALL.md); the worker offers it when it finds
+# it, and both images take the same version. The package's own install
+# script alone runs, putting its native binary for this platform (musl's
+# included) in place of the package's stub; nothing of it is changed.
+ARG CLAUDE_CODE_VERSION=
+RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
+      npm install -g --ignore-scripts "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
+      && node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs" \
+      && claude --version; \
+    fi
 
 COPY worker/submit-output.ts /opt/flow/submit-output.ts
 COPY worker/mcp-servers.ts /opt/flow/mcp-servers.ts

@@ -19,8 +19,8 @@ services:
       timeout: 5s
       retries: 20
 
-  # Runs pi agent harnesses for agent processes, and bash for script
-  # processes. Only the webapp reaches it, so its port isn't published. It
+  # Runs coding agents for agent processes (pi, and Claude Code if built
+  # with it), and bash for script processes. Only the webapp reaches it, so its port isn't published. It
   # uses the models and model settings from your pi config (PI_CONFIG_DIR,
   # ~/.pi/agent by default), never its keys: agents reach their models
   # through the webapp, which has the keys. Restart it after changing it.
@@ -29,6 +29,12 @@ services:
     build:
       context: .
       dockerfile: worker/Containerfile
+      # Claude Code beside pi, as a second coding agent agent processes may
+      # run with: set CLAUDE_CODE_VERSION in .env to an exact version, such
+      # as 2.1.325, only if you accept Anthropic's Commercial Terms for
+      # running it in a product (docs/INSTALL.md); empty leaves it out.
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}
     environment:
       - PORT=8090
       # The token only the webapp asks the worker with, the same in both;

@@ -26,6 +26,18 @@ RUN apk add --no-cache bash curl git jq \
 RUN ln -s /usr/bin/python3 /usr/local/bin/python
 ENV PIP_USER=1 PIP_BREAK_SYSTEM_PACKAGES=1
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
+# Claude Code, a second coding agent agent processes may run with, only when
+# built with CLAUDE_CODE_VERSION, which an operator sets having accepted
+# Anthropic's terms (docs/INSTALL.md); the worker offers it when it finds
+# it, and both images take the same version. The package's own install
+# script alone runs, putting its native binary for this platform (musl's
+# included) in place of the package's stub; nothing of it is changed.
+ARG CLAUDE_CODE_VERSION=
+RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
+      npm install -g --ignore-scripts "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
+      && node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs" \
+      && claude --version; \
+    fi
 
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY worker/submit-output.ts /opt/flow/submit-output.ts

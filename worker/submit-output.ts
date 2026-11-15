@@ -5,58 +5,20 @@
 // loads it for a run that generates objects, describing them in the JSON
 // file FLOW_OUTPUT_SPEC names.
 //
-// Each object is a JSON object with its attributes, or {"data": ...} when it
-// has none; a list is an array of them. An attribute that is an object of its
-// own, or a part, holds a JSON object with its attributes in turn, or for a
-// list an array of them. A file attribute holds the path of a file the agent
-// wrote in the run's files directory. A typed attribute holds a value of its
-// type: an integer, number or yes or no as the parameters say, text matching
-// its pattern and a date or date and time as the call is checked, so the
-// agent fixes it there; the webapp checks them all again.
-//
-// An agent deciding the state of objects hands in its output under output,
-// next to decisions: for each object it decides on, the state, one of those
-// listed, and maybe instructions for the process taking it in that state.
-// Deciding only on objects it reviews, it hands in only decisions.
+// What the spec holds, how each object is handed in and what is checked of
+// it beyond the parameters (files, patterns, dates) is in output-spec.ts,
+// which Claude Code's MCP server for the same tool (submit-output-mcp.ts)
+// shares; the parameters are built here with typebox, and there as the same
+// schema in plain JSON Schema. The import names output-spec.ts with its
+// extension, which jiti, loading this for pi, resolves as it is, and which
+// Node needs when it loads it stripping the types, as the worker's
+// scripts/output-schema.ts does.
 
-import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
-
-// How many items a list holds: at least minItems, and at most maxItems if given.
-type Bounds = { minItems?: number; maxItems?: number };
-
-// With attributes of its own, it holds a JSON object of them, or for many
-// an array of such objects; without, any JSON value, or for many an array.
-type Attribute = Bounds & {
-	name: string;
-	description: string;
-	file: boolean;
-	// What it holds, if typed: text, integer, number, boolean or datetime;
-	// for text, maybe a pattern, anchored, that the whole of it matches.
-	type?: string;
-	pattern?: string;
-	many?: boolean;
-	attributes?: Attribute[];
-};
-type OutputObject = Bounds & { name: string; many: boolean; attributes: Attribute[] };
-
-// An object whose state the agent decides; one it reviews keeps what it holds.
-type Decision = { name: string; states: string[]; review: boolean };
-
-type Spec = {
-	// "object": one object, the arguments are its attributes. "items": one
-	// list, under "items" since tool arguments must be an object. "objects":
-	// several, each under its name. "decisions": none, only decisions.
-	shape: "object" | "items" | "objects" | "decisions";
-	objects: OutputObject[];
-	decisions?: Decision[];
-	// Where the agent writes files; file attributes must point inside it.
-	filesDir: string;
-	// Where the output goes once a call passes.
-	resultFile: string;
-};
+import { fileProblems, output, toolDescription, typeProblems } from "./output-spec.ts";
+import type { Attribute, Bounds, Decision, OutputObject, Spec } from "./output-spec.ts";
 
 const fieldsSchema = (attributes: Attribute[], options: { description?: string } = {}): TSchema =>
 	Type.Object(Object.fromEntries(attributes.map((a) => [a.name, attributeSchema(a)])), {
@@ -121,7 +83,9 @@ function outputSchema(spec: Spec): TSchema {
 	return spec.shape === "items" ? listSchema(spec.objects[0]) : parameters(spec);
 }
 
-function toolParameters(spec: Spec): TSchema {
+// Exported for scripts/output-schema.ts, which checks that output-spec.ts's
+// jsonSchema builds the same; pi takes only the default export.
+export function toolParameters(spec: Spec): TSchema {
 	if (!spec.decisions?.length) return parameters(spec);
 	if (spec.shape === "decisions") {
 		return Type.Object({ decisions: decisionsSchema(spec.decisions) }, { additionalProperties: false });
@@ -143,109 +107,6 @@ function parameters(spec: Spec): TSchema {
 	}
 }
 
-// The output as the webapp reads it: the object, the list, or the objects by
-// name; with decisions, a JSON object of the output and the decisions.
-function output(spec: Spec, params: Record<string, unknown>): unknown {
-	if (spec.decisions?.length) return params;
-	return spec.shape === "items" ? params.items : params;
-}
-
-// What the call says each object holds, by object, as a list of items.
-function parts(spec: Spec, args: Record<string, unknown>): [OutputObject, unknown[]][] {
-	if (spec.shape === "decisions") return [];
-	let params = args;
-	if (spec.decisions?.length) {
-		if (spec.shape === "items") return [[spec.objects[0], args.output as unknown[]]];
-		params = args.output as Record<string, unknown>;
-	}
-	if (spec.shape === "object") return [[spec.objects[0], [params]]];
-	if (spec.shape === "items") return [[spec.objects[0], params.items as unknown[]]];
-	return spec.objects.map((o) => [o, o.many ? (params[o.name] as unknown[]) : [params[o.name]]]);
-}
-
-// A date, or a date and time in RFC 3339, as the webapp takes them.
-const datetime = /^\d{4}-\d{2}-\d{2}([Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2}))?$/;
-
-// The pattern as JavaScript reads it, or null if it can't: the webapp's is
-// Go's, which mostly reads the same; one it can't is left to the webapp.
-function regExp(pattern: string): RegExp | null {
-	try {
-		return new RegExp(pattern);
-	} catch {
-		return null;
-	}
-}
-
-// Says what is wrong with each text attribute not matching its pattern and
-// each date and time not written as one, at any depth.
-function typeProblems(spec: Spec, params: Record<string, unknown>): string[] {
-	const problems: string[] = [];
-	const check = (attributes: Attribute[], items: unknown[], at: string, many: boolean) => {
-		for (const a of attributes) {
-			items.forEach((item, i) => {
-				const where = `${at}${many ? ` item ${i + 1}` : ""} "${a.name}"`;
-				const value = (item as Record<string, unknown>)?.[a.name];
-				if (a.attributes?.length) {
-					if (value !== undefined) check(a.attributes, a.many ? (Array.isArray(value) ? value : []) : [value], where, Boolean(a.many));
-					return;
-				}
-				if (typeof value !== "string") return;
-				if (a.type === "datetime" && !datetime.test(value)) {
-					problems.push(`${where} must be a date such as 2026-11-03, or a date and time in RFC 3339 such as 2026-11-03T09:00:00Z`);
-				} else if (a.type === "text" && a.pattern && regExp(a.pattern)?.test(value) === false) {
-					problems.push(`${where}: ${JSON.stringify(value)} doesn't match the regular expression ${a.pattern}`);
-				}
-			});
-		}
-	};
-	for (const [o, items] of parts(spec, params)) check(o.attributes, items, o.name, o.many);
-	return problems;
-}
-
-// Says what is wrong with each file attribute that doesn't name a file in
-// the files directory, at any depth, and makes the paths of those that do
-// absolute.
-function fileProblems(spec: Spec, params: Record<string, unknown>): string[] {
-	const root = realpathSync(spec.filesDir);
-	const problems: string[] = [];
-	const check = (attributes: Attribute[], items: unknown[], at: string, many: boolean) => {
-		for (const a of attributes) {
-			items.forEach((item, i) => {
-				const where = `${at}${many ? ` item ${i + 1}` : ""} "${a.name}"`;
-				const value = (item as Record<string, unknown>)?.[a.name];
-				if (!a.file) {
-					if (a.attributes?.length && value !== undefined) {
-						check(a.attributes, a.many ? (Array.isArray(value) ? value : []) : [value], where, Boolean(a.many));
-					}
-					return;
-				}
-				if (typeof value !== "string" || value === "") {
-					problems.push(`${where} must be the path of a file you wrote in ${spec.filesDir}`);
-					return;
-				}
-				const given = resolve(spec.filesDir, value);
-				let path: string;
-				try {
-					path = realpathSync(given);
-				} catch {
-					problems.push(`${where}: ${value} doesn't exist`);
-					return;
-				}
-				const rel = relative(root, path);
-				if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-					problems.push(`${where}: ${value} isn't in ${spec.filesDir}`);
-				} else if (!statSync(path).isFile()) {
-					problems.push(`${where}: ${value} isn't a file`);
-				} else {
-					(item as Record<string, unknown>)[a.name] = given;
-				}
-			});
-		}
-	};
-	for (const [o, items] of parts(spec, params)) check(o.attributes, items, o.name, o.many);
-	return problems;
-}
-
 export default function (pi: ExtensionAPI) {
 	const specFile = process.env.FLOW_OUTPUT_SPEC;
 	if (!specFile) return;
@@ -254,8 +115,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "submit_output",
 		label: "Submit output",
-		description:
-			"Hand in what you generate. Its parameters are exactly the objects you generate; call it once as your last action, and only once the work is finished.",
+		description: toolDescription,
 		promptSnippet: "Hand in the objects you generate; the only way to give your result",
 		promptGuidelines: [
 			"Give your result only by calling submit_output; text you write as a reply is not your result.",

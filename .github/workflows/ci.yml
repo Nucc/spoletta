@@ -79,6 +79,12 @@ jobs:
           go-version-file: worker/go.mod
           # The worker has no dependencies, so no go.sum to key a cache on.
           cache: false
+      # The Node the images build on, which runs submit_output's MCP
+      # server in TestOutputSchema; comparing its schema with pi's needs pi
+      # too, which isn't installed here, so that half is skipped.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
       # The tests' output goes to a file, shown once they end: with -v the
       # test binary writes straight to the step's output, and a process a
       # test leaves behind would hold it open and keep the step from ending.

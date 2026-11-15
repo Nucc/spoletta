@@ -30,6 +30,8 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY worker/submit-output.ts /opt/flow/submit-output.ts
 COPY worker/mcp-servers.ts /opt/flow/mcp-servers.ts
+COPY worker/output-spec.ts /opt/flow/output-spec.ts
+COPY worker/submit-output-mcp.ts /opt/flow/submit-output-mcp.ts
 COPY --chmod=755 worker/git-credential.sh /opt/flow/git-credential.sh
 # gh, given the step's git token as it runs; the real one is /usr/bin/gh.
 COPY --chmod=755 worker/gh.sh /usr/local/bin/gh

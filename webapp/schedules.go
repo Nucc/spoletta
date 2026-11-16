@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -139,7 +140,8 @@ func withLastRun(ctx context.Context, db *sql.DB, s *schedule) error {
 // When the schedule that started the run, or the run it is part of, last
 // started a run that ended done, as a Unix timestamp; nil for a run no
 // schedule started, or a schedule's first. A script in the run gets it as
-// $SINCE and $LAST_RUN, so it can fetch only what changed since, such as the
+// $SINCE and $LAST_RUN, and an agent's prompt has them filled in with it
+// (withSince), so either can fetch only what changed since, such as the
 // pull requests updated after it. A run that fails, is stopped or terminated
 // doesn't move it on, so what that run was to handle comes round again; an
 // item of a list whose own run fails doesn't hold it back, though, so it
@@ -171,6 +173,22 @@ func scheduleSince(ctx context.Context, db *sql.DB, run int64) (*int64, error) {
 		}
 		return &since, nil
 	}
+}
+
+// $SINCE and $LAST_RUN as an agent process's prompt may name them: bare, as
+// ${SINCE}, or in braces, as {$SINCE}. A longer name, such as $SINCE_DAYS,
+// is neither.
+var sinceVariable = regexp.MustCompile(`\{\$(?:SINCE|LAST_RUN)\}|\$\{(?:SINCE|LAST_RUN)\}|\$(?:SINCE|LAST_RUN)\b`)
+
+// The prompt with $SINCE and $LAST_RUN filled in with what a script in the
+// run gets as them: the Unix timestamp scheduleSince gives, or nothing when
+// it gives none, as in a schedule's first run or one started by hand.
+func withSince(prompt string, since *int64) string {
+	value := ""
+	if since != nil {
+		value = strconv.FormatInt(*since, 10)
+	}
+	return sinceVariable.ReplaceAllLiteralString(prompt, value)
 }
 
 func getSchedule(ctx context.Context, db *sql.DB, id int64) (schedule, error) {

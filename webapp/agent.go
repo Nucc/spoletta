@@ -196,8 +196,8 @@ func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 
 // Runs an agent process's prompt in the worker as a step of a run and waits
 // for the result. The commands its prompt names are spelled out (see
-// skills.go), and then its input objects and a human's change request are
-// appended to it. Problems with the process itself are step
+// skills.go), $SINCE and $LAST_RUN filled in (see withSince), and then its
+// input objects and a human's change request are appended to it. Problems with the process itself are step
 // failures, so they show up on the node like any other; the error is for
 // recording the step. about, if not empty, is the flow's OPL, which goes
 // before the inputs. started gets the step's id once it is recorded.
@@ -220,6 +220,14 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	expanded, err := expandCommands(ctx, db, flow, run.Prompt)
 	if err != nil {
 		return res, err
+	}
+	// It may name when its schedule last got through, as a script is told.
+	if sinceVariable.MatchString(expanded) {
+		since, err := scheduleSince(ctx, db, runID)
+		if err != nil {
+			return res, err
+		}
+		expanded = withSince(expanded, since)
 	}
 	var skillsMsg string
 	if run.Skills, skillsMsg, err = stepSkills(ctx, db, flow, settings.Skills); err != nil {

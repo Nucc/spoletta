@@ -541,6 +541,12 @@ export default function ProcessPanel({
           <code>Authorization: Bearer $CREDENTIALS_TOKEN</code>.
         </small>
       )}
+      {kind === 'agent' && !readOnly && (
+        <small className="panel-note">
+          In a scheduled run, <code>$SINCE</code> (or <code>$LAST_RUN</code>) in the prompt is filled in with when the
+          schedule's last run that got through started, as a Unix timestamp, as a script gets it; empty if none did.
+        </small>
+      )}
       {(kind === 'agent' || kind === 'script') && (
         <SettingsGroup key={`uses-${kind}`} title="Can use" summary={canUseSummary(kind, settings, names, repositories.length)}>
           {readOnly ? (

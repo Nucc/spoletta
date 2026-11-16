@@ -15,7 +15,8 @@ import (
 // JSON array for a list. Files it generates go in the directory $OUTPUTS
 // points to, with their paths in its output. A non-zero exit fails the step.
 // In a scheduled run, $SINCE and its alias $LAST_RUN say when the schedule
-// last got through, so the script can fetch only what changed since. Each
+// last got through, so the script can fetch only what changed since; an
+// agent's prompt naming them has them filled in (withSince). Each
 // credential its process picks is reached at $CREDENTIAL_<NAME>_URL, with
 // $CREDENTIALS_TOKEN as a bearer token; see credentials.go. What it prints
 // is kept as it prints it, for reading; see script_output.go.

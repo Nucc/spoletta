@@ -84,3 +84,28 @@ func TestNextRun(t *testing.T) {
 		}
 	}
 }
+
+// An agent's prompt names $SINCE and $LAST_RUN bare, as ${SINCE} or as
+// {$SINCE}, and has them filled in as a script gets them: the Unix
+// timestamp, or nothing in a run no schedule got through before. A longer
+// name, and a command's placeholders, stay as written.
+func TestWithSince(t *testing.T) {
+	since := int64(1731772800)
+	for _, c := range []struct {
+		prompt string
+		since  *int64
+		want   string
+	}{
+		{"Fetch the latest message since {$LAST_RUN}.", &since, "Fetch the latest message since 1731772800."},
+		{"Since {$SINCE}, ${SINCE}, ${LAST_RUN}, $SINCE and $LAST_RUN", &since,
+			"Since 1731772800, 1731772800, 1731772800, 1731772800 and 1731772800"},
+		{"oldest=$SINCE&limit=20", &since, "oldest=1731772800&limit=20"},
+		{"Fetch the latest message since {$LAST_RUN}, or the latest 20 if none.", nil, "Fetch the latest message since , or the latest 20 if none."},
+		{"$SINCE_DAYS, $LAST_RUNS, ${SINCE_X}, $since, $1, ${1:-x} and $@", &since, "$SINCE_DAYS, $LAST_RUNS, ${SINCE_X}, $since, $1, ${1:-x} and $@"},
+		{"No variables here.", &since, "No variables here."},
+	} {
+		if got := withSince(c.prompt, c.since); got != c.want {
+			t.Errorf("withSince(%q) = %q, want %q", c.prompt, got, c.want)
+		}
+	}
+}

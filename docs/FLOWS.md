@@ -966,6 +966,13 @@ The engine builds it as follows:
 1. **Your `prompt`.** With `credentials`, a paragraph after it names each
    service, its base URL and the variable holding its URL at the proxy, and
    says to send `Authorization: Bearer $CREDENTIALS_TOKEN` (section 5.3).
+   `$SINCE` and `$LAST_RUN` in it, also written `${SINCE}` or `{$LAST_RUN}`,
+   are filled in with what a script would get as them (section 5.3): in a
+   run a schedule started, when its last run that ended done started, as a
+   Unix timestamp; nothing on its first run or in a run started by hand. So
+   *Fetch the messages posted since {$LAST_RUN}, or the latest 20 if no time
+   is given* lets the agent fetch only what is new. Only your own prompt is
+   filled in, with the commands it names, never its inputs.
 2. With `describeFlow`, the line *You carry out the process "Name" of the
    flow described below in OPL…*, then `<flow>…OPL…</flow>`.
 3. The inputs, one element per object:
@@ -1014,7 +1021,8 @@ definitions do that.
   run's branch.
 - In a run a schedule started, `$SINCE` (alias `$LAST_RUN`) is when the
   schedule's last run that ended done started, as a Unix timestamp, and empty
-  on its first run or in a run started by hand. Fetch only what changed
+  on its first run or in a run started by hand. An agent's prompt naming
+  them has them filled in with the same (5.1). Fetch only what changed
   since, and make what it lists persistent with a unique attribute, so the
   overlap is skipped. A failed run doesn't move it on; an item whose own run
   fails comes round only if it changes again.

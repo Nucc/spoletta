@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -199,6 +200,59 @@ func TestScheduleTellsScriptsSince(t *testing.T) {
 	mu.Unlock()
 	if byHand != nil {
 		t.Errorf("a run started by hand was told since %d, want nothing", *byHand)
+	}
+}
+
+// An agent's prompt naming $SINCE or $LAST_RUN, as {$LAST_RUN} too, has it
+// filled in with what a script would be told, so the agent can fetch only
+// what changed since: nothing on the schedule's first run or a run started
+// by hand, then when its last run that ended done started. The step keeps
+// the prompt as the agent got it.
+func TestScheduleFillsAgentPromptsSince(t *testing.T) {
+	a := newApp(t)
+	f := a.newFlow("Digest")
+	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindAgent,
+		"prompt": "Fetch the latest messages since {$LAST_RUN} (${SINCE}), keeping $SINCE_DAYS as written."})
+	a.startAt(f.ID, fetch.ID)
+	var mu sync.Mutex
+	var prompts []string
+	a.worker.onAgent("Fetch", func(_ context.Context, run agentRun) runResult {
+		mu.Lock()
+		defer mu.Unlock()
+		prompts = append(prompts, run.Prompt)
+		return runResult{OK: true, Output: "fetched"}
+	})
+
+	s := a.newSchedule(f.ID, everySecond)
+	a.waitScheduledRuns(f.ID, s.ID, 2)
+	a.call("PATCH", fmt.Sprintf("/api/schedules/%d", s.ID), map[string]any{"enabled": false}, http.StatusOK, nil)
+	rs := a.scheduledRuns(f.ID, s.ID)
+	slices.Reverse(rs)
+	for _, rn := range rs {
+		a.finish(rn.ID)
+	}
+	first := rs[0].StartedAt.Unix()
+	mu.Lock()
+	got := slices.Clone(prompts[:2])
+	mu.Unlock()
+	for i, want := range []string{
+		"Fetch the latest messages since  (), keeping $SINCE_DAYS as written.",
+		fmt.Sprintf("Fetch the latest messages since %d (%d), keeping $SINCE_DAYS as written.", first, first),
+	} {
+		if !strings.HasPrefix(got[i], want) {
+			t.Errorf("run %d's agent got the prompt %q, want it to start %q", i+1, got[i], want)
+		}
+	}
+	if d := a.getRun(rs[1].ID); len(d.Steps) == 0 || !strings.HasPrefix(d.Steps[0].Prompt, got[1]) {
+		t.Errorf("the second run's step keeps another prompt than its agent got: %+v", d.Steps)
+	}
+
+	a.finish(a.startRun(f.ID).ID)
+	mu.Lock()
+	byHand := prompts[len(prompts)-1]
+	mu.Unlock()
+	if want := "Fetch the latest messages since  (),"; !strings.HasPrefix(byHand, want) {
+		t.Errorf("a run started by hand got the prompt %q, want it to start %q", byHand, want)
 	}
 }
 

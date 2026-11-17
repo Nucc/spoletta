@@ -654,6 +654,8 @@ type fakeWorker struct {
 	scriptRuns []scriptRun
 	// The runs whose workspaces the webapp asked to release, in the order asked.
 	released []int64
+	// The projects whose shared repositories it was asked to remove.
+	deletedProjects []int64
 	// The diffs the webapp asked for, in the order asked, and what the
 	// worker replies to each; see worker/diff.go.
 	diffs     []map[string]string
@@ -706,6 +708,19 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 	})
 	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{})
+	})
+	mux.HandleFunc("POST /projects/delete", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Project int64 `json:"project"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		fw.mu.Lock()
+		fw.deletedProjects = append(fw.deletedProjects, body.Project)
+		fw.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /workspaces/release", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

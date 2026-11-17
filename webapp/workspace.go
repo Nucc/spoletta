@@ -471,14 +471,37 @@ func dropWorkspaces(workerURL string, runs []int64) {
 	if len(runs) == 0 {
 		return
 	}
+	go deleteWorkspaces(workerURL, runs)
+}
+
+func deleteWorkspaces(workerURL string, runs []int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var res struct {
+		Error string `json:"error"`
+	}
+	if err := callWorker(ctx, http.MethodPost, workerURL+"/workspaces/delete", map[string][]int64{"runs": runs}, &res); err != nil {
+		log.Printf("delete workspaces of %d runs: %v", len(runs), err)
+	}
+}
+
+// Has the worker remove what it keeps of a project deleted for good: its
+// runs' workspaces, then the repositories it shared among them, where their
+// branches were (the worker's deleteProjectRepos). The project is gone
+// either way, so a worker that can't be reached only leaves them on its
+// volume, in .projects/<id>, which the log then names to be removed by hand.
+func dropProject(workerURL string, project int64, runs []int64) {
 	go func() {
+		if len(runs) > 0 {
+			deleteWorkspaces(workerURL, runs)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		var res struct {
 			Error string `json:"error"`
 		}
-		if err := callWorker(ctx, http.MethodPost, workerURL+"/workspaces/delete", map[string][]int64{"runs": runs}, &res); err != nil {
-			log.Printf("delete workspaces of %d runs: %v", len(runs), err)
+		if err := callWorker(ctx, http.MethodPost, workerURL+"/projects/delete", map[string]int64{"project": project}, &res); err != nil {
+			log.Printf("remove the shared repositories of the deleted project %d: %v; they stay in .projects/%d on the worker's workspaces volume until removed", project, err, project)
 		}
 	}()
 }

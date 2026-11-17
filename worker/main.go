@@ -505,6 +505,27 @@ func main() {
 		reply(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 
+	// Removes what the worker keeps of a project deleted for good, its shared
+	// repositories: {"project": id}, never Legacy; see deleteProjectRepos.
+	mux.HandleFunc("POST /projects/delete", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Project int64 `json:"project"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
+			reply(w, http.StatusBadRequest, map[string]string{"error": "invalid request: " + err.Error()})
+			return
+		}
+		if body.Project <= legacyProject {
+			reply(w, http.StatusBadRequest, map[string]string{"error": "invalid project"})
+			return
+		}
+		if err := deleteProjectRepos(body.Project); err != nil {
+			reply(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+
 	// Releases the workspaces of runs that are over, keeping their branches
 	// and sessions: {"runs": [ids]}, of whichever projects, each brought
 	// back into its own project's shared repositories; see releaseWorkspaces.

@@ -801,6 +801,19 @@ func TestProjectsArchiveAndDelete(t *testing.T) {
 	if _, ok := projectIn(ps, p.ID); ok {
 		t.Errorf("the project deleted for good is still listed")
 	}
+	// The worker is asked to remove the repositories the project shared
+	// among its runs, and no other project's.
+	asked := func() []int64 {
+		a.worker.mu.Lock()
+		defer a.worker.mu.Unlock()
+		return slices.Clone(a.worker.deletedProjects)
+	}
+	for deadline := time.Now().Add(5 * time.Second); len(asked()) == 0 && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := asked(); !slices.Equal(got, []int64{p.ID}) {
+		t.Errorf("the worker was asked to remove the repositories of projects %v, want %d's alone", got, p.ID)
+	}
 	for _, table := range projectTables(t, db) {
 		var left int
 		if err := db.QueryRow("SELECT COUNT(*) FROM `"+table+"` WHERE project_id = ?", p.ID).Scan(&left); err != nil {

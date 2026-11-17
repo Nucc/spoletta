@@ -609,8 +609,10 @@ providers.
   by super admins alone, and starts no runs; runs going on go on. Bringing it
   back undoes it. **Deleting for good**, only once archived and with no run
   going on, empties every table of the project, its audit log included, has
-  the worker delete its runs' workspaces and branches, and records it in
-  `instance_events`. Legacy can't be deleted for good.
+  the worker delete its runs' workspaces and then the repositories it shared
+  among them, with their branches (`dropProject`, the worker's
+  `deleteProjectRepos`), and records it in `instance_events`. Legacy can't be
+  deleted for good.
 - **The worker goes before or with the webapp.** An old worker ignores
   `project` and `inheritsInstance`: it keeps every project's repositories in
   the same `.repos` and hands every step the instance's pi config, `AWS_*`,
@@ -633,9 +635,9 @@ providers.
 - The worker trusts the webapp's pairing of a run and its project: it keeps
   a workspace to the project of its first step, but takes a request's
   project and `inheritsInstance` as the webapp says them.
-- Shared repositories count toward no run's disk limit. Deleting a project
-  for good leaves its `.projects/<id>/repos` on the worker's volume, to be
-  removed by hand.
+- Shared repositories count toward no run's disk limit. If the worker can't
+  be reached as a project is deleted for good, its `.projects/<id>` stays on
+  the worker's volume, which the webapp's log says, to be removed by hand.
 - The URLs a project's owners set are dialled from the webapp without
   keeping to public addresses: a model provider's, an MCP server's and a
   connector's at any address, and a credential's at any but link-local,

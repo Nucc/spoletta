@@ -270,3 +270,41 @@ func TestDiffWithholdsTheWorkersGitConfig(t *testing.T) {
 		}
 	}
 }
+
+// A project deleted for good takes its shared repositories with it, and
+// nothing of another project's or of Legacy's.
+func TestDeletingAProjectRemovesItsSharedRepositories(t *testing.T) {
+	const url = "https://example.invalid/acme/api.git"
+	const other = "https://example.invalid/acme/web.git"
+	sharedWithBranchOf(t, 2, url, "flow/run-30")
+	sharedWithBranchOf(t, 2, other, "flow/run-31")
+	sharedWithBranchOf(t, 3, url, "flow/run-32")
+	sharedWithBranchOf(t, 1, url, "flow/run-33")
+
+	if err := deleteProjectRepos(2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(projectDir(2)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("project 2's directory is still there (%v)", err)
+	}
+	for _, kept := range []string{sharedRepo(3, url), sharedRepo(1, url)} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("%s went with project 2: %v", kept, err)
+		}
+	}
+	// A project that kept nothing, or was deleted already, has nothing to
+	// remove.
+	if err := deleteProjectRepos(2); err != nil {
+		t.Errorf("deleting it again: %v", err)
+	}
+	// Legacy's repositories are every run's from before projects, and no
+	// project is nobody's.
+	for _, project := range []int64{1, 0, -4} {
+		if err := deleteProjectRepos(project); err == nil {
+			t.Errorf("project %d's repositories were deleted", project)
+		}
+	}
+	if _, err := os.Stat(sharedRepo(1, url)); err != nil {
+		t.Errorf("Legacy's repository went: %v", err)
+	}
+}

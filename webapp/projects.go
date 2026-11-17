@@ -705,7 +705,7 @@ func registerProjectRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			serverError(w, err)
 			return
 		}
-		dropWorkspaces(workerURL, runs)
+		dropProject(workerURL, v.ID, runs)
 		instanceEvent(ctx, db, who, "project.deleted", "deleted the project %s (%d) for good, with its %d runs", v.Name, v.ID, len(runs))
 		w.WriteHeader(http.StatusNoContent)
 	})

@@ -78,8 +78,10 @@ What this doesn't cover:
   ones [below](#credentials) says, so an owner of any project can have the
   webapp call a service on its own network. The internet proxy keeps every
   project but Legacy to public addresses.
-- **Disk.** Shared repositories count toward no run's disk limit, and
-  deleting a project for good leaves its `.projects/<id>/repos`.
+- **Disk.** Shared repositories count toward no run's disk limit. Deleting
+  a project for good removes its `.projects/<id>` (`deleteProjectRepos`,
+  `POST /projects/delete`); a worker that couldn't be reached then keeps it,
+  which the webapp's log names, to be removed by hand.
 
 ## What every step gets, whatever the sandbox
 

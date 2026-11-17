@@ -627,7 +627,41 @@ func sharedRepo(project int64, url string) string {
 	if project = projectOrLegacy(project); project == legacyProject {
 		return filepath.Join(workspacesRoot, ".repos", name)
 	}
-	return filepath.Join(workspacesRoot, ".projects", strconv.FormatInt(project, 10), "repos", name)
+	return filepath.Join(projectDir(project), "repos", name)
+}
+
+// Where a project other than Legacy keeps what is its own beside the
+// workspaces: its shared repositories.
+func projectDir(project int64) string {
+	return filepath.Join(workspacesRoot, ".projects", strconv.FormatInt(project, 10))
+}
+
+// Removes what the worker keeps of a project deleted for good: its shared
+// repositories, with every branch its runs left there. The webapp asks once
+// the project's rows are gone and its runs' workspaces deleted; a project's
+// id is never given to another, so nothing can be working there again.
+// Each repository goes under its lock, in case a fetch of it was still
+// ending. Legacy is never deleted, and its repositories are where every
+// shared repository was before projects, so it is refused, as is no project.
+func deleteProjectRepos(project int64) error {
+	if project <= legacyProject {
+		return fmt.Errorf("invalid project %d", project)
+	}
+	dir := projectDir(project)
+	repos, err := os.ReadDir(filepath.Join(dir, "repos"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, e := range repos {
+		repo := filepath.Join(dir, "repos", e.Name())
+		unlock := lockPath(repo)
+		err := os.RemoveAll(repo)
+		unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(dir)
 }
 
 // Brings the base branch, or else the default one, up to date in the shared

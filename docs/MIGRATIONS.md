@@ -7,6 +7,8 @@ Which ran is recorded in the `goose_db_version` table. The files are
 embedded in the webapp's binary, so an image carries the migrations of its
 own version and needs nothing else to migrate its database. How it works is
 described at the top of [webapp/migrations.go](../webapp/migrations.go).
+A webapp built on Spoletta's code keeps migrations of its own apart, as
+[local migrations](#local-migrations).
 
 ## What there is
 
@@ -180,3 +182,72 @@ check with `webapp migrate status`, run `webapp migrate down-to` the
 version before it, and start again. From `webapp/`, `go run . migrate status`
 does the same as the binary. The e2e tests (`go test -race ./tests`) start
 the webapp on a new database, so they run every migration up.
+
+## Local migrations
+
+A webapp built on Spoletta's code, merging its releases into a repository
+of its own, may need tables or columns Spoletta doesn't have. The
+migrations making them are kept apart from Spoletta's, so that the two never
+take the same number: Spoletta's next migration may well be numbered as
+yours would have been.
+
+- They go in `webapp/local_migrations/`, numbered from `00001`, written as
+  [above](#writing-a-migration), each with its Down. Spoletta ships the
+  directory with only its README: add files beside it and leave the README
+  as it is, and Spoletta's releases merge without touching them.
+- Goose records them in `goose_local_version`, apart from Spoletta's in
+  `goose_db_version`.
+- They run as the webapp starts, after Spoletta's, so they may change
+  Spoletta's tables, adding a column to `users`, say. Whoever merges a
+  Spoletta release changing what a local migration changes looks out for
+  it.
+- A webapp built as Spoletta ships it can take them from a directory
+  instead: `LOCAL_MIGRATIONS=/path/to/dir` replaces the built-in ones (mount
+  it into the container). Naming a directory that isn't there stops the
+  webapp before it migrates anything.
+
+`webapp migrate status` lists them after Spoletta's, each named `local …`:
+
+```
+VERSION  STATE    APPLIED AT (UTC)     MIGRATION
+48       applied  2026-11-17 09:12:40  00048_add_claude_default_model.sql
+1        applied  2026-11-17 09:12:41  local 00001_add_user_badges.sql
+2        pending                       local 00002_add_badge_colours.sql
+```
+
+and `webapp migrate local down-to <version>` undoes them as `down-to` undoes
+Spoletta's, leaving Spoletta's as they are. Going back to an older webapp,
+undo the local migrations it doesn't know first, then Spoletta's, since a
+local migration may stand on what a Down of Spoletta's takes away:
+
+```sh
+webapp migrate local down-to 1
+webapp migrate down-to 47
+```
+
+A webapp without local migrations started on a database that ran some logs
+a warning saying so, and starts all the same.
+
+### Moving migrations of your own here
+
+Migrations of your own numbered among Spoletta's are recorded in
+`goose_db_version` under numbers Spoletta's own migrations come to take, and
+goose, finding a number recorded, skips Spoletta's migration of that number
+without a word, leaving the schema short of it. Move them before merging the
+Spoletta release whose numbers reach theirs: the files into
+`local_migrations/`, numbered from `00001`, and, on each database that ran
+them, their records, before the new webapp starts on it and with every
+webapp stopped:
+
+```sql
+CREATE TABLE goose_local_version LIKE goose_db_version;
+INSERT INTO goose_local_version (version_id, is_applied, tstamp)
+  SELECT 0, TRUE, NOW()
+  UNION ALL SELECT version_id - 48, is_applied, tstamp
+            FROM goose_db_version WHERE version_id IN (49, 50) AND is_applied;
+DELETE FROM goose_db_version WHERE version_id IN (49, 50);
+```
+
+Here your migrations were numbered 49 and 50 and become local 1 and 2. Goose
+needs the row for version 0, which it would have written itself had it made
+the table. A database that never ran them needs nothing.

@@ -94,6 +94,7 @@ never committed. The ones to know:
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD` | Emailing people when a review waits on them, and when their runs fail. |
 | `RESUME_RUNS` | `false` ends the runs of a webapp that stopped, rather than having another carry them on. |
 | `TRASH_KEEP` | How long the trash keeps a deleted flow, such as `30d`, the default. |
+| `LOCAL_MIGRATIONS` | A directory of migrations of your own, run after Spoletta's in place of those built into `webapp/local_migrations/`; see [MIGRATIONS.md](MIGRATIONS.md#local-migrations). |
 | `CLAUDE_CODE_VERSION` | Builds the worker's and steps' images with Claude Code, at that exact version, so agent processes may run with it; empty, the default, leaves it out. See [Claude Code](#claude-code). |
 | `CHILD_ENV` | Variables of the worker's own to hand every step, comma-separated, each passed through in compose.yaml too. |
 | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | Compose's MySQL, which the webapp connects to as that user. |

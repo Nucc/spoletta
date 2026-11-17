@@ -46,9 +46,11 @@ type projectsMe struct {
 }
 
 // The tables above the projects, which name none, or have it as part of
-// what they are.
+// what they are. instance_limits holds the ceilings over every project's
+// limits, which the instance's admin sets (limits.go).
 var aboveProjects = []string{"projects", "users", "user_identities", "user_groups", "sessions",
-	"project_groups", "project_members", "instance_events", "replicas", "replica_commands", "goose_db_version"}
+	"project_groups", "project_members", "instance_events", "replicas", "replica_commands", "goose_db_version",
+	"instance_limits"}
 
 // Makes a project named apart from those of other tests, which share the
 // database.

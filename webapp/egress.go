@@ -6,16 +6,19 @@ package main
 // anything else through this one, a forward proxy the step's HTTPS_PROXY
 // and HTTP_PROXY name, with a token of the step's as the proxy's
 // credentials. It takes CONNECT for TLS and plain requests for http, to a
-// host an admin allowed in the settings (egress_hosts, Internet access) or
-// one of the step's own repositories' hosts, which its git pushes to.
-// Without any, a step reaches nothing. Every connection goes in the step's
-// run's log.
+// host an owner of the step's project allowed in its settings
+// (egress_hosts, Internet access) or one of the step's own repositories'
+// hosts, which its git pushes to. Without any, a step reaches nothing.
+// Every connection goes in the step's run's log.
 //
 // An allowed host is a name, which takes ports 80 and 443, or name:port;
 // *.example.com takes example.com's subdomains. A host is dialled only at
-// a public address, unless an admin allowed it by name: an allowed name
-// that resolves to the webapp's own network, or a repository's URL a flow
-// names, mustn't reach the database or the webapp's neighbours. Not public
+// a public address, unless it is allowed by name in a project inheriting
+// the instance's configuration (Legacy; see projects.go), whose owners
+// were the instance's admins: an allowed name that resolves to the
+// webapp's own network, or a repository's URL a flow names, mustn't reach
+// the database or the webapp's neighbours, and the network is the
+// instance's, which another project's owners may not open. Not public
 // are the private ranges, shared address space (100.64.0.0/10, where
 // clusters often keep pods and services), the IETF's, benchmarking and
 // reserved ranges, in IPv4 or written as IPv6; the machine's own,
@@ -90,15 +93,25 @@ func newEgressBroker(db *sql.DB, proxyURL string) *egressBroker {
 		expiries: map[string]*time.Timer{}, tunnels: map[string]map[net.Conn]bool{}}
 }
 
-// Grants the step a token for the proxy, reaching the allowed hosts and
-// its workspace's repositories' hosts, for ttl at most; nil for a broker
-// there isn't, or a token that couldn't be kept, which leaves the step
-// without the internet.
+// Grants the step of the run a token for the proxy, reaching the hosts its
+// project allowed and its workspace's repositories' hosts, for ttl at
+// most; nil for a broker there isn't, or a token that couldn't be kept,
+// which leaves the step without the internet.
 func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl time.Duration) *egressAccess {
 	if b == nil {
 		return nil
 	}
-	g := proxyGrant{user: who, run: run, step: step}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	project := legacyProject
+	if b.db != nil {
+		var err error
+		if project, err = runProject(ctx, b.db, run); err != nil {
+			log.Printf("read the project of run %d for the egress token of step %d: %v", run, step, err)
+			return nil
+		}
+	}
+	g := proxyGrant{project: project, user: who, run: run, step: step}
 	reaches := egressReaches{Repos: repositoryHosts(ws)}
 	if ttl <= 0 {
 		ttl = llmDefaultTTL
@@ -108,8 +121,6 @@ func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl
 		return nil
 	}
 	token := randomToken()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	if err := b.grants.put(ctx, grantInternet, token, g, reaches, ttl+llmGrantMargin); err != nil {
 		log.Printf("keep the egress token of step %d: %v", step, err)
 		return nil
@@ -119,7 +130,7 @@ func (b *egressBroker) grant(who *int64, run, step int64, ws *workspaceSpec, ttl
 	b.mu.Unlock()
 	u.User = url.UserPassword(egressUser, token)
 	u.Path = ""
-	audit("internet.grant", who, run, step, "the egress proxy, reaching the hosts allowed and %s", hostList(reaches.Repos))
+	g.audit("internet.grant", "the egress proxy, reaching the hosts allowed and %s", hostList(reaches.Repos))
 	return &egressAccess{URL: u.String()}
 }
 
@@ -157,7 +168,7 @@ func (b *egressBroker) revokeToken(token, why string) {
 	g, ok := b.grants.remove(grantInternet, token)
 	open := b.closeTunnels(token)
 	if ok {
-		audit("internet.revoke", g.user, g.run, g.step, "the egress proxy's token %s, with %d connections open", why, open)
+		g.audit("internet.revoke", "the egress proxy's token %s, with %d connections open", why, open)
 	}
 }
 
@@ -324,18 +335,26 @@ func (b *egressBroker) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host = strings.ToLower(host)
-	listed, err := b.allowed(r.Context(), host, port)
+	listed, err := b.allowed(r.Context(), g.project, host, port)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	viaRepo := slices.Contains(g.Repos, net.JoinHostPort(host, port))
 	if !listed && !viaRepo {
-		b.logConnection(g, "refused %s:%s, which isn't allowed: an admin allows hosts in Settings, under Internet access", host, port)
-		http.Error(w, fmt.Sprintf("%s isn't a host steps may reach; an admin allows hosts in Settings, under Internet access", host), http.StatusForbidden)
+		b.logConnection(g, "refused %s:%s, which isn't allowed: an owner of the project allows hosts in Settings, under Internet access", host, port)
+		http.Error(w, fmt.Sprintf("%s isn't a host steps may reach; an owner of the project allows hosts in Settings, under Internet access", host), http.StatusForbidden)
 		return
 	}
-	dialer := &net.Dialer{Timeout: 15 * time.Second, Control: refusePrivate(listed, b.loopback)}
+	// Only the instance's own allow a private address, by name.
+	inherits := true
+	if b.db != nil {
+		if inherits, err = inheritsInstance(r.Context(), b.db, g.project); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	dialer := &net.Dialer{Timeout: 15 * time.Second, Control: refusePrivate(listed && inherits, b.loopback)}
 	if r.Method == http.MethodConnect {
 		b.tunnel(w, r, g, dialer, net.JoinHostPort(host, port))
 		return
@@ -418,13 +437,13 @@ func (b *egressBroker) forward(w http.ResponseWriter, r *http.Request, g *egress
 	io.Copy(w, resp.Body)
 }
 
-// Notes a connection in the step's run's log, and the audit log.
+// Notes a connection in the step's run's log, and its project's audit log.
 func (b *egressBroker) logConnection(g *egressGrant, format string, args ...any) {
 	kind := "internet.connect"
 	if strings.HasPrefix(format, "refused") {
 		kind = "internet.refused"
 	}
-	audit(kind, g.user, g.run, g.step, format, args...)
+	g.audit(kind, format, args...)
 	if g.run == 0 || b.db == nil {
 		log.Printf("egress of step %d: "+format, append([]any{g.step}, args...)...)
 		return
@@ -497,8 +516,8 @@ func inNets(ip net.IP, nets []*net.IPNet) bool {
 	return slices.ContainsFunc(nets, func(n *net.IPNet) bool { return n.Contains(ip) })
 }
 
-// Refuses dialling an address that isn't public, unless an admin allowed
-// the host by name: a private or otherwise internal address is reached only
+// Refuses dialling an address that isn't public, unless the host is allowed
+// by name (listed): a private or otherwise internal address is reached only
 // by a host allowed, and the machine's own, link-local and multicast
 // addresses never.
 func refusePrivate(listed, loopback bool) func(network, address string, _ syscall.RawConn) error {
@@ -515,18 +534,18 @@ func refusePrivate(listed, loopback bool) func(network, address string, _ syscal
 			return fmt.Errorf("%s isn't an address steps may reach", shown)
 		}
 		if (ip.IsPrivate() || inNets(ip, internalNets)) && !listed {
-			return fmt.Errorf("%s is a private address, which only a host an admin allowed may be at", shown)
+			return fmt.Errorf("%s is a private address, which only a host the instance allowed may be at", shown)
 		}
 		return nil
 	}
 }
 
-// Whether an admin allowed the host at the port.
-func (b *egressBroker) allowed(ctx context.Context, host, port string) (bool, error) {
+// Whether the project allowed the host at the port.
+func (b *egressBroker) allowed(ctx context.Context, project int64, host, port string) (bool, error) {
 	hosts := b.hosts
 	if hosts == nil {
 		var err error
-		if hosts, err = egressHosts(ctx, b.db); err != nil {
+		if hosts, err = egressHosts(ctx, b.db, project); err != nil {
 			return false, err
 		}
 	}
@@ -559,16 +578,17 @@ type egressHost struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-func egressHosts(ctx context.Context, db rowsQuerier) ([]egressHost, error) {
+// The hosts the project allows.
+func egressHosts(ctx context.Context, db rowsQuerier, project int64) ([]egressHost, error) {
 	hosts := []egressHost{}
-	err := scanAll(ctx, db, "SELECT host, note, created_at FROM egress_hosts ORDER BY host", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT host, note, created_at FROM egress_hosts WHERE project_id = ? ORDER BY host", func(rows *sql.Rows) error {
 		var h egressHost
 		if err := rows.Scan(&h.Host, &h.Note, &h.CreatedAt); err != nil {
 			return err
 		}
 		hosts = append(hosts, h)
 		return nil
-	})
+	}, project)
 	return hosts, err
 }
 
@@ -577,7 +597,7 @@ var egressHostPattern = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])
 
 func registerEgressRoutes(mux *http.ServeMux, db *sql.DB) {
 	list := func(w http.ResponseWriter, r *http.Request) {
-		hosts, err := egressHosts(r.Context(), db)
+		hosts, err := egressHosts(r.Context(), db, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -607,7 +627,8 @@ func registerEgressRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "a host is a name such as registry.npmjs.org, *.example.com for its subdomains, with :port for a port other than 80 and 443", http.StatusBadRequest)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "INSERT INTO egress_hosts (host, note) VALUES (?, ?) ON DUPLICATE KEY UPDATE note = VALUES(note)", host, truncate(strings.TrimSpace(body.Note), 255)); err != nil {
+		if _, err := db.ExecContext(r.Context(), "INSERT INTO egress_hosts (project_id, host, note) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE note = VALUES(note)",
+			requestProject(r), host, truncate(strings.TrimSpace(body.Note), 255)); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -618,7 +639,7 @@ func registerEgressRoutes(mux *http.ServeMux, db *sql.DB) {
 		if refuseKeys(w, r) {
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "DELETE FROM egress_hosts WHERE host = ?", r.PathValue("host")); err != nil {
+		if _, err := db.ExecContext(r.Context(), "DELETE FROM egress_hosts WHERE project_id = ? AND host = ?", requestProject(r), r.PathValue("host")); err != nil {
 			serverError(w, err)
 			return
 		}

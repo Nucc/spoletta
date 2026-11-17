@@ -8,7 +8,8 @@ package main
 // what a call took in, gave out, read from the provider's cache and wrote
 // to it; costs are kept in millionths of a dollar.
 //
-// A model's price is the one the worker's models.json gives it, else pi's
+// A model's price is the one the worker's models.json gives it, for a
+// project inheriting the instance's configuration (projects.go), else pi's
 // catalog's for the provider and model, else the catalog's for a model of
 // the ID with any provider, which is how a gateway's or a custom
 // provider's models are priced: their IDs are mostly a provider's own
@@ -28,6 +29,9 @@ import (
 	"strings"
 	"time"
 )
+
+// What a project spends, and the limits it is held to, are its own: a
+// person's monthly spending counts their calls in the project alone.
 
 // A model's price, in dollars a million tokens.
 type modelCost struct {
@@ -51,16 +55,21 @@ func (c modelCost) micros(u llmUsage) int64 {
 // How long the catalog's prices are kept before the worker is asked again.
 const pricesFor = 10 * time.Minute
 
-// The prices the broker knows: the worker's models.json's by provider and
-// model, then the catalog's.
+// The prices the broker knows for a project: the worker's models.json's by
+// provider and model, if it inherits the instance's configuration, then
+// the catalog's, which are everyone's.
 type priceBook struct {
 	host    map[string]map[string]modelCost
 	catalog map[string]map[string]modelCost
 }
 
-func (b *llmBroker) prices(ctx context.Context) priceBook {
+func (b *llmBroker) prices(ctx context.Context, inherits bool) priceBook {
 	p := priceBook{host: map[string]map[string]modelCost{}}
-	if host, _ := b.hostProviders(ctx); host != nil {
+	var host []hostProvider
+	if inherits {
+		host, _ = b.hostProviders(ctx)
+	}
+	if host != nil {
 		for _, h := range host {
 			for _, m := range h.Models {
 				if p.host[h.ID] == nil {
@@ -120,8 +129,8 @@ func (p priceBook) of(provider, model string) (modelCost, bool) {
 // What a run, with its subflows' and items' runs, and a person this month
 // have spent is summed from llm_usage as each call comes to the proxy, so
 // it counts every replica's calls. A run's calls are checked against the
-// least of the instance's limit and its flow's, and a person's against the
-// instance's; the call that crosses a limit is let through, as what it
+// least of its project's limit and its flow's, and a person's against the
+// project's, each under the instance's ceiling (limits.go); the call that crosses a limit is let through, as what it
 // costs is only known once it is over, and so are calls already going, so
 // a run with steps running at once spends a little more than its limit.
 
@@ -158,7 +167,7 @@ func leastLimit(a, b int64) int64 {
 // Sets the limits a grant's spending is held to, and the run it counts
 // toward.
 func (b *llmBroker) limitSpend(ctx context.Context, g *llmGrant) error {
-	l := currentLimits()
+	l := limitsIn(g.project)
 	g.UserLimit = l.UserMonthSpend
 	if g.run != 0 {
 		root, flowLimit, err := rootRun(ctx, b.db, g.run)
@@ -196,12 +205,12 @@ func (b *llmBroker) outOfBudget(ctx context.Context, g *llmGrant) (string, error
 	if g.user != nil && g.UserLimit > 0 {
 		now := time.Now().UTC()
 		var spent int64
-		if err := b.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(cost_micros), 0) FROM llm_usage WHERE user_id = ? AND at >= ?",
-			*g.user, time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)).Scan(&spent); err != nil {
+		if err := b.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(cost_micros), 0) FROM llm_usage WHERE user_id = ? AND project_id = ? AND at >= ?",
+			*g.user, g.project, time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)).Scan(&spent); err != nil {
 			return "", err
 		}
 		if spent >= g.UserLimit {
-			return fmt.Sprintf("out of budget: its person has spent %s on models this month, and may spend %s", formatDollars(spent), formatDollars(g.UserLimit)), nil
+			return fmt.Sprintf("out of budget: its person has spent %s on models in the project this month, and may spend %s", formatDollars(spent), formatDollars(g.UserLimit)), nil
 		}
 	}
 	return "", nil
@@ -232,10 +241,10 @@ func (b *llmBroker) checkSpent(ctx context.Context, g *llmGrant) {
 		return
 	}
 	for _, other := range ended {
-		audit("model.revoke", other.user, other.run, other.step, "the model proxy's token ended, as its run spent what it may")
+		other.audit("model.revoke", "the model proxy's token ended, as its run spent what it may")
 	}
 	stop := fmt.Sprintf("it spent %s on its models, and may spend %s", formatDollars(spent), formatDollars(g.RunLimit))
-	audit("run.overspent", g.user, g.root, 0, "stopped: %s", stop)
+	auditIn(g.project, "run.overspent", g.user, g.root, 0, "stopped: %s", stop)
 	if b.overspent != nil {
 		b.overspent(g.root, stop)
 	}
@@ -255,7 +264,11 @@ func runSpent(ctx context.Context, db *sql.DB, run int64) (float64, float64, err
 	if err != nil {
 		return 0, 0, err
 	}
-	return dollars(micros), dollars(leastLimit(currentLimits().RunSpend, flowLimit)), nil
+	project, err := runProject(ctx, db, run)
+	if err != nil {
+		return 0, 0, err
+	}
+	return dollars(micros), dollars(leastLimit(limitsIn(project).RunSpend, flowLimit)), nil
 }
 
 func derefUser(u *int64) int64 {
@@ -288,9 +301,9 @@ type runSpending struct {
 const costliestRuns = 20
 
 func registerSpendingRoutes(mux *http.ServeMux, db *sql.DB) {
-	// What was spent on models this month (UTC), or in month=YYYY-MM: by
-	// everyone and on the costliest runs for an admin, else only by and
-	// for whoever asks.
+	// What was spent on models in the project this month (UTC), or in
+	// month=YYYY-MM: by everyone and on the costliest runs for an owner,
+	// else only by and for whoever asks.
 	mux.HandleFunc("GET /api/spending", func(w http.ResponseWriter, r *http.Request) {
 		month := r.URL.Query().Get("month")
 		if month == "" {
@@ -302,7 +315,7 @@ func registerSpendingRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		to := from.AddDate(0, 1, 0)
-		where, args := "u.at >= ? AND u.at < ?", []any{from, to}
+		where, args := "u.project_id = ? AND u.at >= ? AND u.at < ?", []any{requestProject(r), from, to}
 		if me := requestUser(r); me != nil && !me.Admin {
 			where, args = where+" AND u.user_id = ?", append(args, me.ID)
 		}

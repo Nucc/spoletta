@@ -1,12 +1,16 @@
 package main
 
-// Secrets the webapp keeps for others, the model keys admins save, the
-// tokens of people's MCP connections, credentials' secrets and webhooks'
-// secrets, are sealed in the database with
+// Secrets the webapp keeps for others, the model keys owners save, the
+// tokens of people's MCP connections, credentials' secrets, webhooks'
+// secrets and projects' git tokens, are sealed in the database with
 // SECRET_KEY, so a copy of the database, a backup or a dump doesn't hand
 // them out. Each is sealed with AES-256-GCM under a key derived from
 // SECRET_KEY, and bound to where it is kept, its table, column and row, so
-// one can't be moved to stand in for another.
+// one can't be moved to stand in for another. A row known by a name its
+// project chose, a model key's variable or a provider's ID, is bound to its
+// project too, so one project's can't stand in for another's of the same
+// name; Legacy's are where they were before projects, so they open as they
+// were sealed.
 //
 // Without SECRET_KEY secrets are kept as they come, as before there was
 // sealing, with a warning. Once it is set, starting seals every secret still
@@ -156,12 +160,25 @@ func (s *sealer) openAged(where, stored string) (string, bool, error) {
 	return "", false, errors.New("SECRET_KEY doesn't open this secret; it was sealed with another")
 }
 
-// Where a model key is kept, and an MCP connection's token, which column
-// says.
-func modelKeyPlace(env string) string { return "model_keys/" + env }
+// Where a project's model key is kept, and an MCP connection's token,
+// which column says.
+func modelKeyPlace(project int64, env string) string {
+	if project == legacyProject {
+		return "model_keys/" + env
+	}
+	return fmt.Sprintf("model_keys/%d/%s", project, env)
+}
 
-// Where a model provider's key is kept.
-func modelProviderPlace(id string) string { return "model_providers/" + id }
+// Where a project's model provider's key is kept.
+func modelProviderPlace(project int64, id string) string {
+	if project == legacyProject {
+		return "model_providers/" + id
+	}
+	return fmt.Sprintf("model_providers/%d/%s", project, id)
+}
+
+// Where a project's git token is kept; see git_tokens.go.
+func gitTokenPlace(project int64) string { return fmt.Sprintf("project_git_tokens/%d", project) }
 
 // A sign-in under way's verifier, kept only for the ten minutes it lasts,
 // so it isn't sealed again as keys rotate: one sealed with a key gone has
@@ -199,7 +216,7 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 	}
 	secrets = s
 	if s == nil {
-		log.Printf("WARNING: SECRET_KEY isn't set, so model keys, MCP tokens, credentials' and webhooks' secrets are kept in the database unsealed")
+		log.Printf("WARNING: SECRET_KEY isn't set, so model keys, MCP tokens, credentials' and webhooks' secrets and git tokens are kept in the database unsealed")
 	}
 	ctx := context.Background()
 	// A secret, and how to seal it where it is unless it changed meanwhile.
@@ -208,23 +225,37 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 		args                  []any
 	}
 	var all []secret
-	err = scanAll(ctx, db, "SELECT env, api_key FROM model_keys", func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, "SELECT project_id, env, api_key FROM model_keys", func(rows *sql.Rows) error {
+		var project int64
 		var env, key string
-		if err := rows.Scan(&env, &key); err != nil {
+		if err := rows.Scan(&project, &env, &key); err != nil {
 			return err
 		}
-		all = append(all, secret{"UPDATE model_keys SET api_key = ? WHERE env = ? AND api_key = ?", modelKeyPlace(env), key, []any{env, key}})
+		all = append(all, secret{"UPDATE model_keys SET api_key = ? WHERE project_id = ? AND env = ? AND api_key = ?", modelKeyPlace(project, env), key, []any{project, env, key}})
 		return nil
 	})
 	if err != nil {
 		return 0, err
 	}
-	err = scanAll(ctx, db, "SELECT id, api_key FROM model_providers WHERE api_key <> ''", func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, "SELECT project_id, id, api_key FROM model_providers WHERE api_key <> ''", func(rows *sql.Rows) error {
+		var project int64
 		var id, key string
-		if err := rows.Scan(&id, &key); err != nil {
+		if err := rows.Scan(&project, &id, &key); err != nil {
 			return err
 		}
-		all = append(all, secret{"UPDATE model_providers SET api_key = ? WHERE id = ? AND api_key = ?", modelProviderPlace(id), key, []any{id, key}})
+		all = append(all, secret{"UPDATE model_providers SET api_key = ? WHERE project_id = ? AND id = ? AND api_key = ?", modelProviderPlace(project, id), key, []any{project, id, key}})
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	err = scanAll(ctx, db, "SELECT project_id, token FROM project_git_tokens", func(rows *sql.Rows) error {
+		var project int64
+		var token string
+		if err := rows.Scan(&project, &token); err != nil {
+			return err
+		}
+		all = append(all, secret{"UPDATE project_git_tokens SET token = ? WHERE project_id = ? AND token = ?", gitTokenPlace(project), token, []any{project, token}})
 		return nil
 	})
 	if err != nil {

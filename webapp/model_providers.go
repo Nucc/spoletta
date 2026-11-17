@@ -1,7 +1,10 @@
 package main
 
-// Model providers: where agents' models come from, as admins add them in the
-// settings beside the worker's own pi config. A provider pi knows, such as
+// Model providers: where agents' models come from, as a project's owners
+// add them in its settings, beside the worker's own pi config for a project
+// inheriting what the instance is configured with outside the database
+// (Legacy; see projects.go). Each project has its own, by IDs of its own,
+// and its own default models; a new one has none. A provider pi knows, such as
 // Anthropic, OpenAI or OpenRouter, gives agents the models picked of it,
 // reached with its key; a custom one, such as a company's own AI gateway,
 // is reached at its URL, speaking the API it says (OpenAI's, Anthropic's or
@@ -12,10 +15,13 @@ package main
 // characters, under a variable of the provider's own,
 // MODEL_PROVIDER_<ID>_KEY, so it can't be taken for what the worker's pi
 // config reads from the provider's usual variable, as a gateway's providers
-// may. Or it is kept in a vault that puts it in the webapp's environment,
-// under the provider's usual variable or one the admin names, never coming
-// here: the settings then show only the variable to set and whether the
-// webapp has it.
+// may. Or, in a project inheriting the instance's configuration, it is kept
+// in a vault that puts it in the webapp's environment, under the
+// provider's usual variable or one the owner names, never coming here: the
+// settings then show only the variable to set and whether the webapp has
+// it. The webapp's environment is the instance's, so another project's
+// owners can't name a variable of it, which the proxy would send wherever
+// their provider's URL says.
 //
 // Every agent step gets the providers, without their keys, which the
 // worker writes into pi's models.json over the host's entries for the same
@@ -83,10 +89,10 @@ type runProvider struct {
 	Models  []string `json:"models"`
 }
 
-// The providers added, the first added first, with their saved keys.
-func modelProviders(ctx context.Context, db rowsQuerier) ([]modelProvider, error) {
+// The project's providers, the first added first, with their saved keys.
+func modelProviders(ctx context.Context, db rowsQuerier, project int64) ([]modelProvider, error) {
 	providers := []modelProvider{}
-	err := scanAll(ctx, db, "SELECT id, name, api, base_url, key_source, env, api_key, models, updated_at FROM model_providers ORDER BY created_at, id", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT id, name, api, base_url, key_source, env, api_key, models, updated_at FROM model_providers WHERE project_id = ? ORDER BY created_at, id", func(rows *sql.Rows) error {
 		var p modelProvider
 		var stored string
 		var models []byte
@@ -97,7 +103,7 @@ func modelProviders(ctx context.Context, db rowsQuerier) ([]modelProvider, error
 			return err
 		}
 		if stored != "" {
-			key, err := secrets.open(modelProviderPlace(p.ID), stored)
+			key, err := secrets.open(modelProviderPlace(project, p.ID), stored)
 			if err != nil {
 				return err
 			}
@@ -108,16 +114,17 @@ func modelProviders(ctx context.Context, db rowsQuerier) ([]modelProvider, error
 		}
 		providers = append(providers, p)
 		return nil
-	})
+	}, project)
 	return providers, err
 }
 
-// The default model kept here; "" leaves it to the worker's pi config.
-func defaultModel(ctx context.Context, db rowsQuerier) (string, error) {
+// The project's default model kept here; "" leaves it to the worker's pi
+// config, for a project inheriting it, else to none.
+func defaultModel(ctx context.Context, db rowsQuerier, project int64) (string, error) {
 	var model string
-	err := scanAll(ctx, db, "SELECT model FROM model_default WHERE id = 1", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT model FROM model_default WHERE project_id = ? AND id = 1", func(rows *sql.Rows) error {
 		return rows.Scan(&model)
-	})
+	}, project)
 	return model, err
 }
 
@@ -127,25 +134,36 @@ type hostProviders struct {
 	known     bool
 }
 
-// The worker's own providers as the model proxy knows them, asked of the
-// worker if it hasn't lately: before a transaction, never inside one, so no
-// lock is held while the worker is asked.
-func savedHostProviders(ctx context.Context) hostProviders {
-	if llm == nil {
+// The worker's own providers as the model proxy knows them, for a project
+// inheriting them, asked of the worker if it hasn't lately: before a
+// transaction, never inside one, so no lock is held while the worker is
+// asked. Another project has none, and nothing is asked on its behalf.
+func savedHostProviders(ctx context.Context, inherits bool) hostProviders {
+	if llm == nil || !inherits {
 		return hostProviders{known: true}
 	}
 	host, err := llm.hostProviders(ctx)
 	return hostProviders{providers: host, known: err == nil}
 }
 
-// The default model for agent processes running with Claude Code, kept
-// here beside the default model; "" takes the default model, when Claude
-// Code can use it.
-func claudeDefaultModel(ctx context.Context, db rowsQuerier) (string, error) {
+// The worker's own providers for a project: as it said last, if the
+// project inherits them, else none.
+func hostProvidersFor(ctx context.Context, inherits bool) []hostProvider {
+	if llm == nil || !inherits {
+		return nil
+	}
+	host, _ := llm.hostProviders(ctx)
+	return host
+}
+
+// The project's default model for agent processes running with Claude
+// Code, kept here beside its default model; "" takes the default model,
+// when Claude Code can use it.
+func claudeDefaultModel(ctx context.Context, db rowsQuerier, project int64) (string, error) {
 	var model string
-	err := scanAll(ctx, db, "SELECT claude_model FROM model_default WHERE id = 1", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT claude_model FROM model_default WHERE project_id = ? AND id = 1", func(rows *sql.Rows) error {
 		return rows.Scan(&model)
-	})
+	}, project)
 	return model, err
 }
 
@@ -157,9 +175,9 @@ func claudeDefaultModel(ctx context.Context, db rowsQuerier) (string, error) {
 // Code can no longer use, is cleared, so its processes take the default.
 // Which providers those are takes the worker's own, read before the
 // transaction (savedHostProviders); when the worker couldn't say, only one
-// gone is cleared.
-func fixDefaultModel(ctx context.Context, tx *sql.Tx, removed string, host hostProviders) error {
-	providers, err := modelProviders(ctx, tx)
+// gone is cleared. All of it the project's.
+func fixDefaultModel(ctx context.Context, tx *sql.Tx, project int64, removed string, host hostProviders) error {
+	providers, err := modelProviders(ctx, tx, project)
 	if err != nil {
 		return err
 	}
@@ -171,18 +189,18 @@ func fixDefaultModel(ctx context.Context, tx *sql.Tx, removed string, host hostP
 		i := slices.IndexFunc(providers, func(p modelProvider) bool { return p.ID == provider })
 		return i >= 0 && slices.Contains(providers[i].Models, id) || i < 0 && provider != removed
 	}
-	claude, err := claudeDefaultModel(ctx, tx)
+	claude, err := claudeDefaultModel(ctx, tx, project)
 	if err != nil {
 		return err
 	}
 	if claude != "" {
 		if !kept(claude) || host.known && !claudeProvidersOf(providers, host.providers).takes(claude) {
-			if _, err := tx.ExecContext(ctx, "UPDATE model_default SET claude_model = '' WHERE id = 1"); err != nil {
+			if _, err := tx.ExecContext(ctx, "UPDATE model_default SET claude_model = '' WHERE project_id = ? AND id = 1", project); err != nil {
 				return err
 			}
 		}
 	}
-	model, err := defaultModel(ctx, tx)
+	model, err := defaultModel(ctx, tx, project)
 	if err != nil {
 		return err
 	}
@@ -193,40 +211,45 @@ func fixDefaultModel(ctx context.Context, tx *sql.Tx, removed string, host hostP
 	if len(providers) > 0 && len(providers[0].Models) > 0 {
 		model = providers[0].ID + "/" + providers[0].Models[0]
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO model_default (id, model) VALUES (1, ?) ON DUPLICATE KEY UPDATE model = VALUES(model)", model)
+	_, err = tx.ExecContext(ctx, "INSERT INTO model_default (project_id, id, model) VALUES (?, 1, ?) ON DUPLICATE KEY UPDATE model = VALUES(model)", project, model)
 	return err
 }
 
-// The models offered for agent processes: the providers', and the worker's
+// The models offered for the project's agent processes: its providers',
+// and, for a project inheriting the instance's configuration, the worker's
 // own of other providers, with the default and the providers' names, the
 // coding agents the worker offers, and the models Claude Code may use. The
-// worker's own are left out when it can't be asked, if there are providers.
-func offeredModels(ctx context.Context, db *sql.DB, workerURL string) (agentModels, error) {
+// worker's own are left out when it can't be asked, if there are
+// providers. Of what the worker says, another project takes only the
+// coding agents it can run, which are no configuration of models.
+func offeredModels(ctx context.Context, db *sql.DB, workerURL string, project int64) (agentModels, error) {
 	var models agentModels
-	providers, err := modelProviders(ctx, db)
+	inherits, err := inheritsInstance(ctx, db, project)
+	if err != nil {
+		return models, err
+	}
+	providers, err := modelProviders(ctx, db, project)
 	if err != nil {
 		return models, err
 	}
 	workerErr := callWorker(ctx, http.MethodGet, workerURL+"/models", nil, &models)
-	if workerErr != nil && len(providers) == 0 {
+	switch {
+	case workerErr != nil && len(providers) == 0 && inherits:
 		return models, workerErr
-	}
-	if workerErr != nil {
+	case workerErr != nil:
 		models = agentModels{}
+	case !inherits:
+		models = agentModels{Harnesses: models.Harnesses}
 	}
-	def, err := defaultModel(ctx, db)
+	def, err := defaultModel(ctx, db, project)
 	if err != nil {
 		return models, err
 	}
-	claudeDef, err := claudeDefaultModel(ctx, db)
+	claudeDef, err := claudeDefaultModel(ctx, db, project)
 	if err != nil {
 		return models, err
 	}
-	var host []hostProvider
-	if llm != nil {
-		host, _ = llm.hostProviders(ctx)
-	}
-	models = offerModels(models, providers, host, def)
+	models = offerModels(models, providers, hostProvidersFor(ctx, inherits), def)
 	models.ClaudeDefault = claudeDef
 	return models, nil
 }
@@ -341,18 +364,18 @@ func (c claudeProviders) takes(model string) bool {
 	return false
 }
 
-// The providers whose models Claude Code may use now: those added, and the
-// worker's own as it said last.
-func currentClaudeProviders(ctx context.Context, db rowsQuerier) (claudeProviders, error) {
-	added, err := modelProviders(ctx, db)
+// The providers whose models Claude Code may use now in the project: those
+// added there, and the worker's own as it said last, if it inherits them.
+func currentClaudeProviders(ctx context.Context, db dbQuerier, project int64) (claudeProviders, error) {
+	inherits, err := inheritsInstance(ctx, db, project)
 	if err != nil {
 		return nil, err
 	}
-	var host []hostProvider
-	if llm != nil {
-		host, _ = llm.hostProviders(ctx)
+	added, err := modelProviders(ctx, db, project)
+	if err != nil {
+		return nil, err
 	}
-	return claudeProvidersOf(added, host), nil
+	return claudeProvidersOf(added, hostProvidersFor(ctx, inherits)), nil
 }
 
 // Where a step's model came from: its process's own, the default for Claude
@@ -378,9 +401,18 @@ func claudeModelProblem(c claudeProviders, model string, from modelSource) strin
 	return "the default model isn't one Claude Code can use; pick one for the process, or a default model for Claude Code in the settings"
 }
 
-// The default model of the worker's pi config, for a process that must
-// name its model when the settings keep none; or why it can't be had.
-func workerDefaultModel(ctx context.Context, workerURL string) (model, problem string) {
+// The default model of the worker's pi config, for a process of the
+// project that must name its model when its settings keep none; or why it
+// can't be had. Only a project inheriting the instance's configuration has
+// it.
+func workerDefaultModel(ctx context.Context, db querier, workerURL string, project int64) (model, problem string) {
+	inherits, err := inheritsInstance(ctx, db, project)
+	if err != nil {
+		return "", err.Error()
+	}
+	if !inherits {
+		return "", "there is no default model: pick one for the process, or a default model in the settings"
+	}
 	var models agentModels
 	if err := callWorker(ctx, http.MethodGet, workerURL+"/models", nil, &models); err != nil {
 		if ctx.Err() != nil {
@@ -480,8 +512,10 @@ func checkProviderURL(raw string) string {
 }
 
 // Turns what the settings sent into the provider to keep, given the one kept
-// already, if any, and the others; says what is wrong instead, if anything.
-func (in providerInput) provider(catalog []catalogProvider, existing *modelProvider, others []modelProvider) (modelProvider, string) {
+// already, if any, and the others of its project, and whether the project
+// inherits the instance's configuration, which a key in the webapp's
+// environment is; says what is wrong instead, if anything.
+func (in providerInput) provider(catalog []catalogProvider, existing *modelProvider, others []modelProvider, inherits bool) (modelProvider, string) {
 	p := modelProvider{ID: in.ID, KeySource: in.KeySource}
 	known := slices.IndexFunc(catalog, func(c catalogProvider) bool { return c.ID == in.ID })
 	switch {
@@ -528,6 +562,9 @@ func (in providerInput) provider(catalog []catalogProvider, existing *modelProvi
 			return p, "that isn't a key"
 		}
 	case keyEnv:
+		if !inherits {
+			return p, envKeyRefused
+		}
 		// A vault names its variables its own way.
 		if env := strings.TrimSpace(in.Env); env != "" {
 			p.Env = env
@@ -562,14 +599,19 @@ func (in providerInput) provider(catalog []catalogProvider, existing *modelProvi
 	return p, ""
 }
 
+// Why a project not inheriting the instance's configuration can't read a
+// provider's key from the webapp's environment.
+const envKeyRefused = "the webapp's environment is the instance's, which this project doesn't inherit; save the key here"
+
 func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	writeProviders := func(w http.ResponseWriter, r *http.Request) {
-		providers, err := modelProviders(r.Context(), db)
+		project := requestProject(r)
+		providers, err := modelProviders(r.Context(), db, project)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		def, err := defaultModel(r.Context(), db)
+		def, err := defaultModel(r.Context(), db, project)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -580,7 +622,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 				providers[i].EnvSet = &set
 			}
 		}
-		claudeDef, err := claudeDefaultModel(r.Context(), db)
+		claudeDef, err := claudeDefaultModel(r.Context(), db, project)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -608,9 +650,15 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 		writeJSON(w, http.StatusOK, c)
 	})
 
-	// Adds a provider, or changes the one at {id}.
+	// Adds a provider to the project, or changes its one at {id}.
 	save := func(w http.ResponseWriter, r *http.Request, id string) {
 		if refuseKeys(w, r) {
+			return
+		}
+		project := requestProject(r)
+		inherits, err := inheritsInstance(r.Context(), db, project)
+		if err != nil {
+			serverError(w, err)
 			return
 		}
 		var in providerInput
@@ -626,24 +674,25 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			http.Error(w, "the worker didn't say which providers pi knows: "+workerMessage(err), http.StatusBadGateway)
 			return
 		}
-		host := savedHostProviders(r.Context())
+		host := savedHostProviders(r.Context(), inherits)
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer tx.Rollback()
-		// Saves are one at a time, so two can't take one ID or variable.
-		if _, err := tx.ExecContext(r.Context(), "INSERT INTO model_default (id, model) VALUES (1, '') ON DUPLICATE KEY UPDATE id = id"); err != nil {
+		// A project's saves are one at a time, so two can't take one ID or
+		// variable.
+		if _, err := tx.ExecContext(r.Context(), "INSERT INTO model_default (project_id, id, model) VALUES (?, 1, '') ON DUPLICATE KEY UPDATE id = id", project); err != nil {
 			serverError(w, err)
 			return
 		}
 		var locked string
-		if err := tx.QueryRowContext(r.Context(), "SELECT model FROM model_default WHERE id = 1 FOR UPDATE").Scan(&locked); err != nil {
+		if err := tx.QueryRowContext(r.Context(), "SELECT model FROM model_default WHERE project_id = ? AND id = 1 FOR UPDATE", project).Scan(&locked); err != nil {
 			serverError(w, err)
 			return
 		}
-		others, err := modelProviders(r.Context(), tx)
+		others, err := modelProviders(r.Context(), tx, project)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -657,14 +706,14 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			}
 			existing = &others[i]
 		}
-		p, msg := in.provider(catalog, existing, others)
+		p, msg := in.provider(catalog, existing, others, inherits)
 		if msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
 		stored := ""
 		if p.KeySource == keySaved {
-			if stored, err = secrets.seal(modelProviderPlace(p.ID), p.key); err != nil {
+			if stored, err = secrets.seal(modelProviderPlace(project, p.ID), p.key); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -672,18 +721,18 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 		models, _ := json.Marshal(p.Models)
 		if existing == nil {
 			_, err = tx.ExecContext(r.Context(),
-				"INSERT INTO model_providers (id, name, api, base_url, key_source, env, api_key, models) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-				p.ID, p.Name, p.API, p.BaseURL, p.KeySource, p.Env, stored, models)
+				"INSERT INTO model_providers (project_id, id, name, api, base_url, key_source, env, api_key, models) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				project, p.ID, p.Name, p.API, p.BaseURL, p.KeySource, p.Env, stored, models)
 		} else {
 			_, err = tx.ExecContext(r.Context(),
-				"UPDATE model_providers SET name = ?, api = ?, base_url = ?, key_source = ?, env = ?, api_key = ?, models = ? WHERE id = ?",
-				p.Name, p.API, p.BaseURL, p.KeySource, p.Env, stored, models, p.ID)
+				"UPDATE model_providers SET name = ?, api = ?, base_url = ?, key_source = ?, env = ?, api_key = ?, models = ? WHERE project_id = ? AND id = ?",
+				p.Name, p.API, p.BaseURL, p.KeySource, p.Env, stored, models, project, p.ID)
 		}
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		if err := fixDefaultModel(r.Context(), tx, "", host); err != nil {
+		if err := fixDefaultModel(r.Context(), tx, project, "", host); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -701,18 +750,24 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			return
 		}
 		id := r.PathValue("id")
-		host := savedHostProviders(r.Context())
+		project := requestProject(r)
+		inherits, err := inheritsInstance(r.Context(), db, project)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		host := savedHostProviders(r.Context(), inherits)
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer tx.Rollback()
-		if _, err := tx.ExecContext(r.Context(), "DELETE FROM model_providers WHERE id = ?", id); err != nil {
+		if _, err := tx.ExecContext(r.Context(), "DELETE FROM model_providers WHERE project_id = ? AND id = ?", project, id); err != nil {
 			serverError(w, err)
 			return
 		}
-		if err := fixDefaultModel(r.Context(), tx, id, host); err != nil {
+		if err := fixDefaultModel(r.Context(), tx, project, id, host); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -723,7 +778,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 		writeProviders(w, r)
 	})
 
-	// Picks the default model among those offered.
+	// Picks the project's default model among those offered it.
 	mux.HandleFunc("PUT /api/model-default", func(w http.ResponseWriter, r *http.Request) {
 		if refuseKeys(w, r) {
 			return
@@ -735,7 +790,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		offered, err := offeredModels(r.Context(), db, workerURL)
+		offered, err := offeredModels(r.Context(), db, workerURL, requestProject(r))
 		if err != nil {
 			http.Error(w, "the worker didn't say which models it offers: "+workerMessage(err), http.StatusBadGateway)
 			return
@@ -744,7 +799,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			http.Error(w, "no model offered is "+body.Model, http.StatusBadRequest)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "INSERT INTO model_default (id, model) VALUES (1, ?) ON DUPLICATE KEY UPDATE model = VALUES(model)", body.Model); err != nil {
+		if _, err := db.ExecContext(r.Context(), "INSERT INTO model_default (project_id, id, model) VALUES (?, 1, ?) ON DUPLICATE KEY UPDATE model = VALUES(model)", requestProject(r), body.Model); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -765,7 +820,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			return
 		}
 		if body.Model != "" {
-			offered, err := offeredModels(r.Context(), db, workerURL)
+			offered, err := offeredModels(r.Context(), db, workerURL, requestProject(r))
 			if err != nil {
 				http.Error(w, "the worker didn't say which models it offers: "+workerMessage(err), http.StatusBadGateway)
 				return
@@ -779,7 +834,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 				return
 			}
 		}
-		if _, err := db.ExecContext(r.Context(), "INSERT INTO model_default (id, model, claude_model) VALUES (1, '', ?) ON DUPLICATE KEY UPDATE claude_model = VALUES(claude_model)", body.Model); err != nil {
+		if _, err := db.ExecContext(r.Context(), "INSERT INTO model_default (project_id, id, model, claude_model) VALUES (?, 1, '', ?) ON DUPLICATE KEY UPDATE claude_model = VALUES(claude_model)", requestProject(r), body.Model); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -787,9 +842,16 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 	})
 
 	// The models a custom provider says it serves, asked with the key typed,
-	// the one saved for it, or the one in the webapp's environment.
+	// the one saved for it in the project, or, for a project inheriting the
+	// instance's configuration, the one in the webapp's environment.
 	mux.HandleFunc("POST /api/model-providers/models", func(w http.ResponseWriter, r *http.Request) {
 		if refuseKeys(w, r) {
+			return
+		}
+		project := requestProject(r)
+		inherits, err := inheritsInstance(r.Context(), db, project)
+		if err != nil {
+			serverError(w, err)
 			return
 		}
 		var in providerInput
@@ -804,6 +866,9 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 		}
 		key := strings.TrimSpace(in.Key)
 		switch {
+		case in.KeySource == keyEnv && !inherits:
+			http.Error(w, envKeyRefused, http.StatusBadRequest)
+			return
 		case in.KeySource == keyEnv:
 			env := strings.TrimSpace(in.Env)
 			if !envNamePattern.MatchString(env) {
@@ -812,7 +877,7 @@ func registerModelProviderRoutes(mux *http.ServeMux, db *sql.DB, workerURL strin
 			}
 			key = os.Getenv(env)
 		case key == "" && in.ID != "":
-			providers, err := modelProviders(r.Context(), db)
+			providers, err := modelProviders(r.Context(), db, project)
 			if err != nil {
 				serverError(w, err)
 				return

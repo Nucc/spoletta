@@ -13,14 +13,16 @@ package main
 // never what its inputs or a reviewer bring, and a /word naming no command
 // the flow may use, such as a path, stays as it is.
 //
-// Each is owned as a flow is (see owners.go): its maker's at first, whom
-// only they see, then a team's or everyone's as they share it; those it
-// belongs to see it and change it, and admins everything. A flow uses what
-// its owner may: a person's flow, theirs, their teams' and everyone's; a
-// team's flow, the team's and everyone's; a global one, only everyone's. The
-// board offers those, and a run uses nothing else, so nobody's own skill
-// reaches a flow others work on. Names are pi's, and one of a kind each, so
-// a prompt and the setup file name them plainly.
+// Each is a project's, and owned within it as a flow is (see owners.go):
+// its maker's at first, whom only they see, then a team's or everyone's in
+// the project as they share it; those it belongs to see it and change it,
+// and the project's owners everything. A flow uses what its owner may of
+// its project: a person's flow, theirs, their teams' and everyone's; a
+// team's flow, the team's and everyone's; a global one, only everyone's.
+// The board offers those, and a run uses nothing else, so nobody's own
+// skill reaches a flow others work on, nor one of another project. Names
+// are pi's, and one of a kind each in a project, so a prompt and the setup
+// file name them plainly.
 
 import (
 	"context"
@@ -85,24 +87,26 @@ func scanSkill(rows interface{ Scan(...any) error }) (skill, error) {
 	return s, err
 }
 
-// The condition on skills s that only the ones the flow may use meet, by
-// its owner, and its arguments.
+// The condition on skills s that only the ones the flow may use meet, of
+// its project, by its owner, and its arguments.
 func flowSkills(ctx context.Context, db querier, flow int64) (string, []any, error) {
+	var project int64
 	var person, team sql.NullInt64
-	err := db.QueryRowContext(ctx, "SELECT owner_user_id, owner_team_id FROM flows WHERE id = ?", flow).Scan(&person, &team)
+	err := db.QueryRowContext(ctx, "SELECT project_id, owner_user_id, owner_team_id FROM flows WHERE id = ?", flow).Scan(&project, &person, &team)
 	if err != nil {
 		return "", nil, err
 	}
 	global := "(s.owner_user_id IS NULL AND s.owner_team_id IS NULL)"
 	switch {
 	case person.Valid:
-		// What the owner may change, as if they weren't an admin.
-		cond, args := ownedBy("s", &user{ID: person.Int64})
+		// What the owner may change, as if they weren't an owner of the
+		// project, in the flow's.
+		cond, args := ownedBy("s", &user{ID: person.Int64, Project: project})
 		return cond, args, nil
 	case team.Valid:
-		return "(" + global + " OR s.owner_team_id = ?)", []any{team.Int64}, nil
+		return "(s.project_id = ? AND (" + global + " OR s.owner_team_id = ?))", []any{project, team.Int64}, nil
 	}
-	return global, nil, nil
+	return "(s.project_id = ? AND " + global + ")", []any{project}, nil
 }
 
 // The skills or commands of a kind meeting cond, by name.
@@ -322,11 +326,12 @@ func (f *skillFields) check(kind string) string {
 	return ""
 }
 
-// The skill or command of a kind with the id, if the user sees it.
-func visibleSkill(ctx context.Context, db querier, u *user, kind string, id int64) (skill, error) {
+// The skill or command of a kind of the project with the id, if the user
+// sees it.
+func visibleSkill(ctx context.Context, db querier, u *user, project int64, kind string, id int64) (skill, error) {
 	cond, args := ownedBy("s", u)
-	return scanSkill(db.QueryRowContext(ctx, "SELECT "+skillColumns+" FROM skills s WHERE s.id = ? AND s.kind = ? AND "+cond,
-		append([]any{id, kind}, args...)...))
+	return scanSkill(db.QueryRowContext(ctx, "SELECT "+skillColumns+" FROM skills s WHERE s.id = ? AND s.kind = ? AND s.project_id = ? AND "+cond,
+		append([]any{id, kind, project}, args...)...))
 }
 
 func registerSkillRoutes(mux *http.ServeMux, db *sql.DB) {
@@ -347,7 +352,7 @@ func registerSkillKind(mux *http.ServeMux, db *sql.DB, route, kind string) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return skill{}, false
 		}
-		s, err := visibleSkill(r.Context(), db, requestUser(r), kind, id)
+		s, err := visibleSkill(r.Context(), db, requestUser(r), requestProject(r), kind, id)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			notFound(w)
@@ -359,10 +364,11 @@ func registerSkillKind(mux *http.ServeMux, db *sql.DB, route, kind string) {
 		return s, true
 	}
 
-	// The ones whoever asks sees; with ?flow=, of those, the ones the flow
-	// may use, which its board offers.
+	// The ones of the project whoever asks sees; with ?flow=, of those, the
+	// ones the flow may use, which its board offers.
 	mux.HandleFunc("GET "+base, func(w http.ResponseWriter, r *http.Request) {
 		cond, args := ownedBy("s", requestUser(r))
+		cond, args = "s.project_id = ? AND "+cond, append([]any{requestProject(r)}, args...)
 		if v := r.URL.Query().Get("flow"); v != "" {
 			flow, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
@@ -415,8 +421,8 @@ func registerSkillKind(mux *http.ServeMux, db *sql.DB, route, kind string) {
 			return
 		}
 		res, err := db.ExecContext(r.Context(),
-			"INSERT INTO skills (kind, name, description, argument_hint, content, owner_user_id, owner_team_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			kind, f.Name, f.Description, f.ArgumentHint, f.Content, userID, teamID)
+			"INSERT INTO skills (project_id, kind, name, description, argument_hint, content, owner_user_id, owner_team_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			requestProject(r), kind, f.Name, f.Description, f.ArgumentHint, f.Content, userID, teamID)
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			taken(w, f.Name)
@@ -431,7 +437,7 @@ func registerSkillKind(mux *http.ServeMux, db *sql.DB, route, kind string) {
 		id, err := res.LastInsertId()
 		var s skill
 		if err == nil {
-			s, err = visibleSkill(r.Context(), db, nil, kind, id)
+			s, err = visibleSkill(r.Context(), db, nil, requestProject(r), kind, id)
 		}
 		if err != nil {
 			serverError(w, err)
@@ -462,7 +468,7 @@ func registerSkillKind(mux *http.ServeMux, db *sql.DB, route, kind string) {
 			return
 		}
 		if err == nil {
-			s, err = visibleSkill(r.Context(), db, nil, kind, s.ID)
+			s, err = visibleSkill(r.Context(), db, nil, requestProject(r), kind, s.ID)
 		}
 		if err != nil {
 			serverError(w, err)
@@ -519,7 +525,7 @@ func registerSkillKind(mux *http.ServeMux, db *sql.DB, route, kind string) {
 			return
 		}
 		if err == nil {
-			s, err = visibleSkill(r.Context(), db, nil, kind, s.ID)
+			s, err = visibleSkill(r.Context(), db, nil, requestProject(r), kind, s.ID)
 		}
 		if err != nil {
 			serverError(w, err)

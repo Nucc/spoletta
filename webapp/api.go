@@ -659,16 +659,17 @@ func apiFlowAccess(w http.ResponseWriter, r *http.Request, db *sql.DB, u *user, 
 }
 
 func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool) {
-	// The keys of whoever asks.
+	// The keys of whoever asks, of the project the request is worked on in,
+	// whose flows alone each starts.
 	mux.HandleFunc("GET /api/api-keys", func(w http.ResponseWriter, r *http.Request) {
 		keys := []apiKey{}
-		err := scanAll(r.Context(), db, "SELECT id, name, prefix, created_at, last_used_at FROM api_keys WHERE "+ownKeys+" ORDER BY id",
+		err := scanAll(r.Context(), db, "SELECT id, name, prefix, created_at, last_used_at FROM api_keys WHERE project_id = ? AND "+ownKeys+" ORDER BY id",
 			func(rows *sql.Rows) error {
 				var k apiKey
 				err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &k.CreatedAt, &k.LastUsedAt)
 				keys = append(keys, k)
 				return err
-			}, requestUserID(r))
+			}, requestProject(r), requestUserID(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -676,8 +677,9 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 		writeJSON(w, http.StatusOK, keys)
 	})
 
-	// Makes a key for whoever asks: {"name": "..."}. The reply holds the key,
-	// which is never shown again.
+	// Makes a key for whoever asks, in the project the request is worked on
+	// in: {"name": "..."}. The reply holds the key, which is never shown
+	// again.
 	mux.HandleFunc("POST /api/api-keys", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Name string `json:"name"`
@@ -693,8 +695,8 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 		}
 		token := apiKeyPrefix + randomToken()
 		k := apiKey{Name: name, Prefix: token[:len(apiKeyPrefix)+6], Key: token}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO api_keys (user_id, name, prefix, token_hash) VALUES (?, ?, ?, ?)",
-			requestUserID(r), k.Name, k.Prefix, hashToken(token))
+		res, err := db.ExecContext(r.Context(), "INSERT INTO api_keys (project_id, user_id, name, prefix, token_hash) VALUES (?, ?, ?, ?, ?)",
+			requestProject(r), requestUserID(r), k.Name, k.Prefix, hashToken(token))
 		if err == nil {
 			k.ID, err = res.LastInsertId()
 		}
@@ -715,7 +717,7 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "DELETE FROM api_keys WHERE id = ? AND "+ownKeys, id, requestUserID(r))
+		res, err := db.ExecContext(r.Context(), "DELETE FROM api_keys WHERE id = ? AND project_id = ? AND "+ownKeys, id, requestProject(r), requestUserID(r))
 		if err != nil {
 			serverError(w, err)
 			return

@@ -111,7 +111,7 @@ func main() {
 		log.Fatalf("%v", err)
 	}
 	logGitTokens()
-	registerGitTokenRoutes(mux)
+	registerGitTokenRoutes(mux, db)
 	registerAuthRoutes(mux, db, auth)
 	registerProjectRoutes(mux, db, workerURL)
 	registerUserRoleRoutes(mux, db, auth)

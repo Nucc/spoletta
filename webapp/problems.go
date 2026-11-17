@@ -778,15 +778,22 @@ func problemErrors(ps []problem) []problem {
 func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerURL string, flow int64, withModel bool, boards ...snapshot) (problemFacts, error) {
 	f := problemFacts{signIn: requestUser(r) != nil, servers: map[int64]serverFacts{}, flows: map[int64]bool{}, trashed: map[int64]bool{}, skills: map[int64]pickFacts{},
 		credentials: map[int64]pickFacts{}, roles: map[string]bool{}, sources: map[int64]bool{}}
-	if err := db.QueryRowContext(ctx, "SELECT module FROM flows WHERE id = ?", flow).Scan(&f.module); err != nil {
+	// The MCP servers, models and the worker's own configuration are the
+	// flow's project's.
+	var project int64
+	if err := db.QueryRowContext(ctx, "SELECT module, project_id FROM flows WHERE id = ?", flow).Scan(&f.module, &project); err != nil {
 		return f, err
 	}
-	err := scanAll(ctx, db, "SELECT "+mcpServerColumns+" FROM mcp_servers", func(rows *sql.Rows) error {
+	inherits, err := inheritsInstance(ctx, db, project)
+	if err != nil {
+		return f, err
+	}
+	err = scanAll(ctx, db, "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE project_id = ?", func(rows *sql.Rows) error {
 		var s mcpServer
 		err := scanMCPServer(rows, &s)
 		f.servers[s.ID] = serverFacts{name: s.Name, auth: s.Auth, connector: s.Connector, connected: s.Connected}
 		return err
-	}, tokenOwner(r))
+	}, tokenOwner(r), project)
 	if err != nil {
 		return f, err
 	}
@@ -878,11 +885,11 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 	}
 	claude := withModel && runsClaude(boards)
 	if withModel && (needsDefaultModel(boards) || claude) {
-		if f.defaultModel, err = defaultModel(ctx, db); err != nil {
+		if f.defaultModel, err = defaultModel(ctx, db, project); err != nil {
 			return f, err
 		}
 		if claude {
-			if f.claudeDefault, err = claudeDefaultModel(ctx, db); err != nil {
+			if f.claudeDefault, err = claudeDefaultModel(ctx, db, project); err != nil {
 				return f, err
 			}
 		}
@@ -895,22 +902,18 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
 			if callWorker(wctx, http.MethodGet, workerURL+"/models", nil, &models) == nil {
-				if f.defaultModel == "" {
+				if f.defaultModel == "" && inherits {
 					f.defaultModel = models.Default
 				}
 				if claude {
 					f.harnesses = offeredHarnesses(models.Harnesses)
-					added, err := modelProviders(ctx, db)
+					added, err := modelProviders(ctx, db, project)
 					if err != nil {
 						return f, err
 					}
-					var host []hostProvider
-					if llm != nil {
-						host, _ = llm.hostProviders(wctx)
-					}
-					f.claude = claudeProvidersOf(added, host)
+					f.claude = claudeProvidersOf(added, hostProvidersFor(wctx, inherits))
 				}
-			} else if f.defaultModel == "" {
+			} else if f.defaultModel == "" && inherits {
 				f.modelKnown = false
 			}
 		}

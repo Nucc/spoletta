@@ -583,7 +583,13 @@ func (n *notifier) deliver(id int64) {
 		}
 	}
 	if p.bySlack {
-		c, installed, err := slackNotifier(ctx, n.db)
+		// The Slack connector of the run's project.
+		var c connectorClient
+		var installed bool
+		project, err := runProject(ctx, n.db, run)
+		if err == nil {
+			c, installed, err = slackNotifier(ctx, n.db, project)
+		}
 		if err == nil && installed {
 			err = slackDirect(ctx, c, p.email, m.slack)
 		}
@@ -810,6 +816,6 @@ func (n *notifier) channels(ctx context.Context) (email, slack bool, err error) 
 	if n == nil {
 		return false, false, nil
 	}
-	_, slack, err = slackNotifier(ctx, n.db)
+	slack, err = slackInstalled(ctx, n.db)
 	return n.mail != nil, slack, err
 }

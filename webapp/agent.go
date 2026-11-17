@@ -114,6 +114,14 @@ type agentRun struct {
 	NoTools bool `json:"noTools,omitempty"`
 	// Has the worker put the guide to authoring flows before the prompt.
 	Guide bool `json:"guide,omitempty"`
+	// The project the step is of, and whether it inherits what the instance
+	// is configured with outside the database, which the worker withholds
+	// otherwise: its own models.json, AWS_* and CHILD_ENV variables and git
+	// config (see projects.go). Always sent, false too, so the worker tells
+	// a webapp saying no from one from before projects saying nothing; set
+	// by withModelAccess.
+	Project          int64 `json:"project"`
+	InheritsInstance bool  `json:"inheritsInstance"`
 	// The model providers admins added; see model_providers.go.
 	Providers []runProvider `json:"providers,omitempty"`
 	// Where the agent reaches its models' providers, the webapp's proxy,
@@ -185,7 +193,7 @@ type runResult struct {
 
 func registerAgentRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	mux.HandleFunc("GET /api/models", func(w http.ResponseWriter, r *http.Request) {
-		models, err := offeredModels(r.Context(), db, workerURL)
+		models, err := offeredModels(r.Context(), db, workerURL, requestProject(r))
 		if err != nil {
 			http.Error(w, "worker unavailable: "+err.Error(), http.StatusBadGateway)
 			return
@@ -205,6 +213,10 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	var res runResult
 	run := agentRun{Run: runID, ProcessID: id}
 	p, err := b.process(id)
+	if err != nil {
+		return res, err
+	}
+	project, err := runProject(ctx, db, runID)
 	if err != nil {
 		return res, err
 	}
@@ -251,7 +263,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	default:
 		run.Prompt = expanded
 		run.Workspace = ws.forProcess(settings)
-		run.DiskLimit = currentLimits().diskBytes()
+		run.DiskLimit = limitsIn(project).diskBytes()
 		run.Prompt = withChangeRequest(withInputs(withFlow(withCredentials(withWorkspace(run.Prompt, run.Workspace), creds), run.ProcessName, about), inputs), cr)
 	}
 
@@ -267,19 +279,19 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	// settings keep none.
 	if run.Model == "" {
 		if claude {
-			if run.Model, err = claudeDefaultModel(ctx, db); err != nil {
+			if run.Model, err = claudeDefaultModel(ctx, db, project); err != nil {
 				return res, err
 			}
 			modelFrom = fromClaudeDefault
 		}
 		if run.Model == "" {
-			if run.Model, err = defaultModel(ctx, db); err != nil {
+			if run.Model, err = defaultModel(ctx, db, project); err != nil {
 				return res, err
 			}
 			modelFrom = fromDefault
 		}
 		if run.Model == "" && claude && res.Error == "" {
-			run.Model, res.Error = workerDefaultModel(ctx, workerURL)
+			run.Model, res.Error = workerDefaultModel(ctx, db, workerURL, project)
 		}
 		if run.Model != "" {
 			if _, err := db.ExecContext(ctx, "UPDATE run_steps SET model = ? WHERE id = ?", run.Model, stepID); err != nil {
@@ -291,7 +303,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 	// Bedrock, which the step fails on before the worker sees it rather
 	// than in the worker.
 	if claude && res.Error == "" {
-		providers, err := currentClaudeProviders(ctx, db)
+		providers, err := currentClaudeProviders(ctx, db, project)
 		if err != nil {
 			return res, err
 		}
@@ -322,7 +334,7 @@ func runAgentStep(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBro
 			return res, err
 		}
 		// A step that isn't handed in gets a second try, in the same time.
-		if err = run.withModelAccess(ctx, db, who, runID, stepID, 2*settings.timeout()); err != nil {
+		if err = run.withModelAccess(ctx, db, project, who, runID, stepID, 2*settings.timeout()); err != nil {
 			return res, err
 		}
 		defer llm.revoke(run.LLM)

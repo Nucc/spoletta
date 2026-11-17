@@ -1,16 +1,20 @@
 package main
 
-// Model keys are the API keys agents reach their models' providers with.
-// They are the instance's: an admin sets them in the settings, as they
-// choose the models agents may use, and everyone's agents use them. pi reads
-// each provider's key from an environment variable, which several providers
-// may share, as a gateway's do; the worker says which variables the
-// providers of the models it offers read (see the worker's
-// host_providers.go). A key saved here, or else the webapp's environment's
-// for the same variable, is what the model proxy reaches those providers
-// with (see llm.go); it never goes to the worker, and isn't shown again: the
-// settings show its last four characters. Keys are sealed with SECRET_KEY;
-// see secrets.go.
+// Model keys are the API keys agents reach the providers of the worker's
+// own pi config with. They are a project's: its owners set them in its
+// settings, and its agents use them. pi reads each provider's key from an
+// environment variable, which several providers may share, as a gateway's
+// do; the worker says which variables the providers of the models it
+// offers read (see the worker's host_providers.go). A key saved here, or
+// else the webapp's environment's for the same variable, is what the model
+// proxy reaches those providers with (see llm.go); it never goes to the
+// worker, and isn't shown again: the settings show its last four
+// characters. Keys are sealed with SECRET_KEY; see secrets.go.
+//
+// The worker's providers are the instance's configuration, so only a
+// project inheriting it (Legacy; see projects.go) has them and their keys;
+// another has none to set, and gives its agents models through the
+// providers its owners add (model_providers.go).
 
 import (
 	"context"
@@ -68,19 +72,25 @@ func workerKeys(ctx context.Context) ([]workerKey, error) {
 	return keys, nil
 }
 
-// The keys the worker's models read, with those saved here; a key saved for
-// a variable no model reads any more shows too, to be removed. The worker's
-// models of a provider added in the settings aren't offered, so their
-// providers' keys don't show. Says why the worker couldn't say, if it
-// couldn't.
-func listModelKeys(ctx context.Context, db *sql.DB) ([]modelKey, string, error) {
+// The keys the worker's models read, for a project inheriting them, with
+// those the project saved; a key saved for a variable no model reads any
+// more shows too, to be removed. The worker's models of a provider added in
+// the project's settings aren't offered, so their providers' keys don't
+// show. Says why the worker couldn't say, if it couldn't.
+func listModelKeys(ctx context.Context, db *sql.DB, project int64) ([]modelKey, string, error) {
 	keys := []modelKey{}
-	reported, err := workerKeys(ctx)
-	workerError := ""
+	inherits, err := inheritsInstance(ctx, db, project)
 	if err != nil {
-		workerError = "the worker didn't say which keys its models read: " + err.Error()
+		return nil, "", err
 	}
-	added, err := modelProviders(ctx, db)
+	var reported []workerKey
+	workerError := ""
+	if inherits {
+		if reported, err = workerKeys(ctx); err != nil {
+			workerError = "the worker didn't say which keys its models read: " + err.Error()
+		}
+	}
+	added, err := modelProviders(ctx, db, project)
 	if err != nil {
 		return nil, "", err
 	}
@@ -92,13 +102,13 @@ func listModelKeys(ctx context.Context, db *sql.DB) ([]modelKey, string, error) 
 			keys = append(keys, modelKey{workerKey: k})
 		}
 	}
-	err = scanAll(ctx, db, "SELECT env, api_key, updated_at FROM model_keys ORDER BY env", func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, "SELECT env, api_key, updated_at FROM model_keys WHERE project_id = ? ORDER BY env", func(rows *sql.Rows) error {
 		var env, stored string
 		var at time.Time
 		if err := rows.Scan(&env, &stored, &at); err != nil {
 			return err
 		}
-		key, err := secrets.open(modelKeyPlace(env), stored)
+		key, err := secrets.open(modelKeyPlace(project, env), stored)
 		if err != nil {
 			return err
 		}
@@ -114,36 +124,37 @@ func listModelKeys(ctx context.Context, db *sql.DB) ([]modelKey, string, error) 
 			keys[i].Hint = key[len(key)-4:]
 		}
 		return nil
-	})
+	}, project)
 	return keys, workerError, err
 }
 
-// The keys saved here, by variable; nil without any.
-func modelKeys(ctx context.Context, db *sql.DB) (map[string]string, error) {
+// The keys the project saved, by variable; nil without any.
+func modelKeys(ctx context.Context, db *sql.DB, project int64) (map[string]string, error) {
 	keys := map[string]string{}
-	err := scanAll(ctx, db, "SELECT env, api_key FROM model_keys", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT env, api_key FROM model_keys WHERE project_id = ?", func(rows *sql.Rows) error {
 		var env, stored string
 		if err := rows.Scan(&env, &stored); err != nil {
 			return err
 		}
-		key, err := secrets.open(modelKeyPlace(env), stored)
+		key, err := secrets.open(modelKeyPlace(project, env), stored)
 		keys[env] = key
 		return err
-	})
+	}, project)
 	if len(keys) == 0 {
 		return nil, err
 	}
 	return keys, err
 }
 
-// Only an admin, or anyone without sign-in, sees and changes the keys.
+// Only an owner of the project the request is worked on in, or anyone
+// without sign-in, sees and changes its keys and settings.
 func refuseKeys(w http.ResponseWriter, r *http.Request) bool {
 	return requestUser(r) != nil && refuseNonAdmin(w, r)
 }
 
 func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 	writeKeys := func(w http.ResponseWriter, r *http.Request) {
-		keys, workerError, err := listModelKeys(r.Context(), db)
+		keys, workerError, err := listModelKeys(r.Context(), db, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -158,7 +169,8 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeKeys(w, r)
 	})
 
-	// Only a variable one of the worker's models reads takes a key.
+	// Only a variable one of the worker's models reads takes a key, in a
+	// project inheriting them.
 	mux.HandleFunc("PUT /api/model-keys/{env}", func(w http.ResponseWriter, r *http.Request) {
 		if refuseKeys(w, r) {
 			return
@@ -183,6 +195,16 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "that isn't a key", http.StatusBadRequest)
 			return
 		}
+		project := requestProject(r)
+		inherits, err := inheritsInstance(r.Context(), db, project)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if !inherits {
+			http.Error(w, "this project has none of the worker's own models, whose keys these are; add a provider with its key instead", http.StatusBadRequest)
+			return
+		}
 		reported, err := workerKeys(r.Context())
 		if err != nil {
 			http.Error(w, "the worker didn't say which keys its models read: "+err.Error(), http.StatusBadGateway)
@@ -196,14 +218,14 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "no model the worker offers reads "+env, http.StatusBadRequest)
 			return
 		}
-		stored, err := secrets.seal(modelKeyPlace(env), body.Key)
+		stored, err := secrets.seal(modelKeyPlace(project, env), body.Key)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		if _, err := db.ExecContext(r.Context(),
-			"INSERT INTO model_keys (env, api_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE api_key = VALUES(api_key)",
-			env, stored); err != nil {
+			"INSERT INTO model_keys (project_id, env, api_key) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE api_key = VALUES(api_key)",
+			project, env, stored); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -215,7 +237,7 @@ func registerModelKeyRoutes(mux *http.ServeMux, db *sql.DB) {
 		if refuseKeys(w, r) {
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "DELETE FROM model_keys WHERE env = ?", r.PathValue("env")); err != nil {
+		if _, err := db.ExecContext(r.Context(), "DELETE FROM model_keys WHERE project_id = ? AND env = ?", requestProject(r), r.PathValue("env")); err != nil {
 			serverError(w, err)
 			return
 		}

@@ -13,14 +13,18 @@ package main
 // printed it has nothing worth keeping. Keys are opened from their sealed
 // rows by the replica a call reaches, and stay in its memory.
 //
-// The providers a token reaches are those added in the settings, with
-// their saved keys or ones in the webapp's environment, and those of the
-// worker's own pi config (see the worker's host_providers.go) with the
-// model keys saved for their variables (model_keys.go) or the webapp's
-// environment's. Where each is reached is its custom URL, the URL the
-// worker's models.json gives it, as a gateway's, or the provider's own,
-// below. OpenRouter and Fireworks serve Anthropic's API at another path
-// than OpenAI's; the agent's requests in Anthropic's carry
+// The providers a token reaches are its project's: those its owners added
+// in the settings, with their saved keys. A project inheriting what the
+// instance is configured with outside the database (inherits_instance,
+// Legacy alone; see projects.go) also has keys in the webapp's environment,
+// the providers of the worker's own pi config (see the worker's
+// host_providers.go) with the model keys saved for their variables
+// (model_keys.go) or the environment's, and LLM_UPSTREAMS; another project
+// has none of them, so its owners can't have the proxy send the webapp's
+// environment anywhere. Where each is reached is its custom URL, the URL
+// the worker's models.json gives it, as a gateway's, or the provider's
+// own, below. OpenRouter and Fireworks serve Anthropic's API at another
+// path than OpenAI's; the agent's requests in Anthropic's carry
 // anthropic-version, which picks it.
 //
 // pi sends the key as x-api-key for Anthropic's API, x-goog-api-key for
@@ -39,7 +43,8 @@ package main
 // which no proxy can do without them, so it isn't routed here.
 //
 // What each call took and gave, as the provider's answer says, goes in
-// llm_usage, for whom and which step, with what it cost (spend.go);
+// llm_usage, for whom, which step and the grant's project, with what it
+// cost (spend.go);
 // reading it is best effort and never fails the call. A run or a person
 // that has spent what the limits let them (limits.go) has its calls
 // refused, and a run is stopped as it gets there.
@@ -79,7 +84,8 @@ var knownUpstreams = map[string]struct{ base, anthropic string }{
 
 // LLM_UPSTREAMS reaches providers pi knows elsewhere than their own URLs,
 // such as through a company's egress gateway: comma-separated
-// provider=URL pairs, anthropic=https://gateway.example.com/anthropic.
+// provider=URL pairs, anthropic=https://gateway.example.com/anthropic. Only
+// for a project inheriting the instance's configuration.
 func upstreamOverrides() map[string]string {
 	out := map[string]string{}
 	for _, pair := range strings.Split(os.Getenv("LLM_UPSTREAMS"), ",") {
@@ -135,9 +141,9 @@ type llmBroker struct {
 	mu sync.Mutex
 	// Ends each token this replica granted as it expires.
 	expiries map[string]*time.Timer
-	// The routes to the providers, worked out at most every routesFor.
-	routed   map[string]llmRoute
-	routedAt time.Time
+	// The routes to each project's providers, by project, worked out at
+	// most every routesFor.
+	routed map[int64]projectRoutes
 	// The worker's providers, asked for at most once a minute.
 	host   []hostProvider
 	hostAt time.Time
@@ -151,12 +157,18 @@ type llmBroker struct {
 	overspent func(run int64, why string)
 }
 
+// A project's routes to its providers, and when they were worked out.
+type projectRoutes struct {
+	routes map[string]llmRoute
+	at     time.Time
+}
+
 // The broker every agent run goes through; set as the webapp starts.
 var llm *llmBroker
 
 func newLLMBroker(db *sql.DB, workerURL, proxyURL string) *llmBroker {
 	return &llmBroker{db: db, workerURL: workerURL, proxyURL: strings.TrimSuffix(proxyURL, "/"), grants: grantsIn(db),
-		expiries: map[string]*time.Timer{}, upstreams: upstreamOverrides()}
+		expiries: map[string]*time.Timer{}, routed: map[int64]projectRoutes{}, upstreams: upstreamOverrides()}
 }
 
 // A provider of the worker's pi config, as the worker says; see the
@@ -195,21 +207,28 @@ func (b *llmBroker) hostProviders(ctx context.Context) ([]hostProvider, error) {
 	return fresh, nil
 }
 
-// The providers a step may reach and how, by ID: those added in the
-// settings over the worker's own of the same ID. A provider without a key
-// to be had isn't one; its agents fail saying they have no key for it.
-func (b *llmBroker) routes(ctx context.Context) (map[string]llmRoute, error) {
-	added, err := modelProviders(ctx, b.db)
+// The providers a step of the project may reach and how, by ID: those
+// added in its settings, over the worker's own of the same ID for a
+// project inheriting the instance's configuration. A provider without a
+// key to be had isn't one; its agents fail saying they have no key for it.
+func (b *llmBroker) routes(ctx context.Context, project int64) (map[string]llmRoute, error) {
+	inherits, err := inheritsInstance(ctx, b.db, project)
 	if err != nil {
 		return nil, err
 	}
-	saved, err := modelKeys(ctx, b.db)
+	added, err := modelProviders(ctx, b.db, project)
 	if err != nil {
 		return nil, err
 	}
-	host, err := b.hostProviders(ctx)
-	if err != nil {
-		log.Printf("the worker didn't say which providers its pi config has, so its own models' providers are reached as it last said: %v", err)
+	var saved map[string]string
+	var host []hostProvider
+	if inherits {
+		if saved, err = modelKeys(ctx, b.db, project); err != nil {
+			return nil, err
+		}
+		if host, err = b.hostProviders(ctx); err != nil {
+			log.Printf("the worker didn't say which providers its pi config has, so its own models' providers are reached as it last said: %v", err)
+		}
 	}
 	routes := map[string]llmRoute{}
 	add := func(id, baseURL, key string) {
@@ -223,7 +242,7 @@ func (b *llmBroker) routes(ctx context.Context) (map[string]llmRoute, error) {
 			if id == "amazon-bedrock" {
 				r.base = bedrockUpstream()
 			}
-			if u, ok := b.upstreams[id]; ok {
+			if u, ok := b.upstreams[id]; ok && inherits {
 				r.base, r.anthropic = u, ""
 			}
 		}
@@ -242,8 +261,12 @@ func (b *llmBroker) routes(ctx context.Context) (map[string]llmRoute, error) {
 	}
 	for _, p := range added {
 		key := p.key
-		if p.KeySource == keyEnv {
+		switch {
+		case p.KeySource == keyEnv && inherits:
 			key = os.Getenv(p.Env)
+		case p.KeySource == keyEnv:
+			// The webapp's environment is the instance's.
+			key = ""
 		}
 		add(p.ID, p.BaseURL, key)
 	}
@@ -254,37 +277,38 @@ func (b *llmBroker) routes(ctx context.Context) (map[string]llmRoute, error) {
 // out again, so a key changed in the settings reaches calls soon after.
 const routesFor = 10 * time.Second
 
-// The routes as worked out last, or again if that was a while ago.
-func (b *llmBroker) currentRoutes(ctx context.Context) (map[string]llmRoute, error) {
+// The project's routes as worked out last, or again if that was a while
+// ago.
+func (b *llmBroker) currentRoutes(ctx context.Context, project int64) (map[string]llmRoute, error) {
 	b.mu.Lock()
-	routed, at := b.routed, b.routedAt
+	routed, ok := b.routed[project]
 	b.mu.Unlock()
-	if routed != nil && time.Since(at) < routesFor {
-		return routed, nil
+	if ok && time.Since(routed.at) < routesFor {
+		return routed.routes, nil
 	}
-	return b.freshRoutes(ctx)
+	return b.freshRoutes(ctx, project)
 }
 
-func (b *llmBroker) freshRoutes(ctx context.Context) (map[string]llmRoute, error) {
-	routes, err := b.routes(ctx)
+func (b *llmBroker) freshRoutes(ctx context.Context, project int64) (map[string]llmRoute, error) {
+	routes, err := b.routes(ctx, project)
 	if err != nil {
 		return nil, err
 	}
 	b.mu.Lock()
-	b.routed, b.routedAt = routes, time.Now()
+	b.routed[project] = projectRoutes{routes: routes, at: time.Now()}
 	b.mu.Unlock()
 	return routes, nil
 }
 
-// Grants a token reaching the providers for a step of the run or a
-// follow-up of it, or for a flow's assistant (step 0, run 0), done for
-// who, and ends it after ttl unless revoked first.
-func (b *llmBroker) grant(ctx context.Context, who *int64, run, step int64, ttl time.Duration) (*llmAccess, error) {
-	routes, err := b.freshRoutes(ctx)
+// Grants a token reaching the project's providers for a step of the run or
+// a follow-up of it, or for one of its flows' assistant (step 0, run 0),
+// done for who, and ends it after ttl unless revoked first.
+func (b *llmBroker) grant(ctx context.Context, project int64, who *int64, run, step int64, ttl time.Duration) (*llmAccess, error) {
+	routes, err := b.freshRoutes(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	g := &llmGrant{proxyGrant: proxyGrant{user: who, run: run, step: step}, llmReaches: llmReaches{Providers: []string{}}}
+	g := &llmGrant{proxyGrant: proxyGrant{project: project, user: who, run: run, step: step}, llmReaches: llmReaches{Providers: []string{}}}
 	if err := b.limitSpend(ctx, g); err != nil {
 		return nil, err
 	}
@@ -299,7 +323,7 @@ func (b *llmBroker) grant(ctx context.Context, who *int64, run, step int64, ttl 
 	b.mu.Lock()
 	b.expiries[token] = time.AfterFunc(ttl, func() { b.revokeToken(token, "expired") })
 	b.mu.Unlock()
-	audit("model.grant", who, run, step, "the model proxy, reaching %s, for %s at most", strings.Join(g.Providers, ", "), ttl.Round(time.Second))
+	g.audit("model.grant", "the model proxy, reaching %s, for %s at most", strings.Join(g.Providers, ", "), ttl.Round(time.Second))
 	return &llmAccess{URL: b.proxyURL + "/llm", Token: token, Providers: g.Providers}, nil
 }
 
@@ -365,7 +389,8 @@ func registerLLMRoutes(mux *http.ServeMux, b *llmBroker) {
 	}
 }
 
-// Passes an agent's request on to its provider with the provider's key.
+// Passes an agent's request on to its provider with the provider's key:
+// one of the project the step's grant names.
 func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	token, header := llmTokenOf(r.Header)
@@ -379,7 +404,7 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	var route llmRoute
 	reaches := false
 	if granted && slices.Contains(g.Providers, provider) {
-		routes, err := b.currentRoutes(r.Context())
+		routes, err := b.currentRoutes(r.Context(), g.project)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -388,9 +413,9 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if token == "" || !granted || !reaches {
 		if granted {
-			audit("model.refused", g.user, g.run, g.step, "a call to the model provider %s, which the step may not reach", provider)
+			g.audit("model.refused", "a call to the model provider %s, which the step may not reach", provider)
 		} else if token != "" {
-			audit("model.refused", nil, 0, 0, "a call to the model provider %s with a token that isn't granted, or ended", provider)
+			auditInstance("model.refused", nil, "a call to the model provider %s with a token that isn't granted, or ended", provider)
 		}
 		http.Error(w, "the model provider "+provider+" isn't available to this step", http.StatusForbidden)
 		return
@@ -401,7 +426,7 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if refused != "" {
-		audit("model.refused", g.user, g.run, g.step, "a call to the model provider %s: %s", provider, refused)
+		g.audit("model.refused", "a call to the model provider %s: %s", provider, refused)
 		if g.run != 0 {
 			runLog(b.db, g.run, g.step, logError, "a call to the model provider %s was refused: %s", provider, refused)
 		}
@@ -420,7 +445,7 @@ func (b *llmBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	target, ok := llmTarget(base, r.PathValue("path"), r.URL.RawQuery)
 	if !ok {
-		audit("model.refused", g.user, g.run, g.step, "a call to the model provider %s at a path outside its URL", provider)
+		g.audit("model.refused", "a call to the model provider %s at a path outside its URL", provider)
 		http.Error(w, "the path isn't one under the model provider's URL", http.StatusBadRequest)
 		return
 	}
@@ -732,7 +757,11 @@ func (b *llmBroker) recordUsage(g *llmGrant, provider, model string, u llmUsage)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	price, priced := b.prices(ctx).of(provider, model)
+	inherits, err := inheritsInstance(ctx, b.db, g.project)
+	if err != nil {
+		log.Printf("read whether project %d inherits the instance's prices: %v", g.project, err)
+	}
+	price, priced := b.prices(ctx, inherits).of(provider, model)
 	if !priced {
 		price = unknownModelCost
 	}
@@ -743,9 +772,9 @@ func (b *llmBroker) recordUsage(g *llmGrant, provider, model string, u llmUsage)
 	}
 	defer b.checkSpent(ctx, g)
 	if _, err := b.db.ExecContext(ctx,
-		`INSERT INTO llm_usage (user_id, run_id, root_run_id, step_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, priced)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		g.user, run, root, step, provider, truncate(model, 255), u.input, u.output, u.cacheRead, u.cacheWrite, cost, priced); err != nil {
+		`INSERT INTO llm_usage (project_id, user_id, run_id, root_run_id, step_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, priced)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		g.project, g.user, run, root, step, provider, truncate(model, 255), u.input, u.output, u.cacheRead, u.cacheWrite, cost, priced); err != nil {
 		log.Printf("record the usage of %s: %v", provider, err)
 		return
 	}
@@ -774,11 +803,20 @@ func truncate(s string, n int) string {
 // How long a token lasts without a timeout of the step's to go by.
 const llmDefaultTTL = time.Hour
 
-// Gives the run the providers added in the settings and a token reaching
-// every provider through the proxy, for its timeout ttl (or an hour, for
-// none) at most; the caller revokes it once the run is over.
-func (run *agentRun) withModelAccess(ctx context.Context, db *sql.DB, who *int64, runID, stepID int64, ttl time.Duration) error {
-	providers, err := modelProviders(ctx, db)
+// Gives the run of the project the providers added in its settings, a
+// token reaching every provider of its through the proxy, for its timeout
+// ttl (or an hour, for none) at most, which the caller revokes once the run
+// is over, and says to the worker its project and whether it inherits what
+// the instance is configured with outside the database, which the worker
+// withholds otherwise. Every agent the webapp asks the worker for gets it
+// here: a step's, a follow-up's and an assistant's reply.
+func (run *agentRun) withModelAccess(ctx context.Context, db *sql.DB, project int64, who *int64, runID, stepID int64, ttl time.Duration) error {
+	inherits, err := inheritsInstance(ctx, db, project)
+	if err != nil {
+		return err
+	}
+	run.Project, run.InheritsInstance = project, inherits
+	providers, err := modelProviders(ctx, db, project)
 	if err != nil {
 		return err
 	}
@@ -788,6 +826,6 @@ func (run *agentRun) withModelAccess(ctx context.Context, db *sql.DB, who *int64
 	if ttl <= 0 {
 		ttl = llmDefaultTTL
 	}
-	run.LLM, err = llm.grant(ctx, who, runID, stepID, ttl+llmGrantMargin)
+	run.LLM, err = llm.grant(ctx, project, who, runID, stepID, ttl+llmGrantMargin)
 	return err
 }

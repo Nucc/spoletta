@@ -314,11 +314,12 @@ type mcpTool struct {
 	ReadOnly bool `json:"readOnly"`
 }
 
-// The tools of a server, as whoever asks has it connected: a connector's
-// operations, or what an MCP server lists, asked as an agent would.
-func (b *mcpBroker) tools(ctx context.Context, id, user int64) ([]mcpTool, error) {
+// The tools of a server of the project, as whoever asks has it connected:
+// a connector's operations, or what an MCP server lists, asked as an agent
+// would. A server of another project is none.
+func (b *mcpBroker) tools(ctx context.Context, project, id, user int64) ([]mcpTool, error) {
 	var serverURL, connector string
-	err := b.db.QueryRowContext(ctx, "SELECT url, connector FROM mcp_servers WHERE id = ?", id).Scan(&serverURL, &connector)
+	err := b.db.QueryRowContext(ctx, "SELECT url, connector FROM mcp_servers WHERE id = ? AND project_id = ?", id, project).Scan(&serverURL, &connector)
 	if err != nil {
 		return nil, errNotFound
 	}

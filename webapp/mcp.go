@@ -22,21 +22,31 @@ import (
 	"time"
 )
 
-// MCP servers agents can use, such as the company MCP gateway's. An admin
-// configures them once in the settings, and then everyone connects each for
-// themselves there, by signing in through the browser (OAuth with PKCE), so
-// an agent acts on a server as whoever its run is for; see runUser. An agent
-// process uses only the servers it selects, none by default. Without
-// sign-in, anyone configures them, and a connection is everyone's.
+// MCP servers agents can use, such as the company MCP gateway's. They are a
+// project's: its owners configure them once in its settings, and then
+// everyone in it connects each for themselves there, by signing in through
+// the browser (OAuth with PKCE), so an agent acts on a server as whoever
+// its run is for; see runUser. An agent process uses only the servers of
+// its project it selects, none by default. Without sign-in, anyone
+// configures them, and a connection is everyone's. Names are unique within
+// a project.
+//
+// The sign-in window is opened as a page, which can't send the project's
+// header, so it names the project in its address (?project=, which
+// enterProject takes on a GET); the sign-in under way keeps the project and
+// the person who started it, and the callback, which comes back with only
+// the OAuth state, connects the server for them alone, if they may still
+// enter its project and the server is still in it.
 //
 // The agent never sees the servers' tokens: the webapp hands each agent step
-// a token of its own that reaches only the step's servers, through the proxy
-// at /mcp/{id}, which puts the server's token on the request. The step's
-// token stops working when the step ends. The servers' tokens are sealed
-// with SECRET_KEY; see secrets.go.
+// a token of its own that reaches only the step's servers, of its run's
+// project, through the proxy at /mcp/{id}, which puts the server's token on
+// the request. The step's token stops working when the step ends. The
+// servers' tokens are sealed with SECRET_KEY; see secrets.go.
 //
-// A server may instead take a token an admin sets, such as an API key: that
-// one connection is everyone's, and nobody signs in. The connectors built
+// A server may instead take a token an owner sets, such as an API key: that
+// one connection is everyone's in the project, and nobody signs in. The
+// connectors built
 // into the webapp are such servers (see connectors.go): the proxy answers
 // their requests itself, from the connector's operations, which call the
 // connector's service with the token.
@@ -80,7 +90,8 @@ func tokenOwner(r *http.Request) int64 {
 	return 0
 }
 
-// Turns away a request to configure servers from someone not an admin, when people sign in.
+// Turns away a request to configure servers from someone not an owner of
+// the project, when people sign in.
 func refuseMCPConfig(w http.ResponseWriter, r *http.Request) bool {
 	return requestUser(r) != nil && refuseNonAdmin(w, r)
 }
@@ -151,9 +162,10 @@ func (s *mcpServer) defaults() {
 	}
 }
 
-// Whether another server has a name pi takes for the same one.
-func mcpNameTaken(ctx context.Context, db *sql.DB, name string, except int64) (bool, error) {
-	rows, err := db.QueryContext(ctx, "SELECT name FROM mcp_servers WHERE id <> ?", except)
+// Whether another server of the project has a name pi takes for the same
+// one.
+func mcpNameTaken(ctx context.Context, db *sql.DB, project int64, name string, except int64) (bool, error) {
+	rows, err := db.QueryContext(ctx, "SELECT name FROM mcp_servers WHERE project_id = ? AND id <> ?", project, except)
 	if err != nil {
 		return false, err
 	}
@@ -199,6 +211,7 @@ type mcpReaches struct {
 }
 
 type mcpSignIn struct {
+	project       int64
 	server        int64
 	user          int64
 	verifier      string
@@ -224,9 +237,46 @@ var errMCPNotConnected = errors.New("not connected")
 // since tool calls can take long and responses stream.
 var oauthClient = &http.Client{Timeout: 30 * time.Second}
 
+// The id a request's path names.
+func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return 0, false
+	}
+	return id, true
+}
+
+// Whether the server is one of the project's.
+func mcpServerIn(ctx context.Context, db querier, project, id int64) (bool, error) {
+	var in bool
+	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM mcp_servers WHERE id = ? AND project_id = ?)", id, project).Scan(&in)
+	return in, err
+}
+
 func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
+	// The id of the server of the request's project the path names; false
+	// once it has answered, as for a server of another project, which isn't
+	// one to it.
+	serverOf := func(w http.ResponseWriter, r *http.Request) (int64, bool) {
+		id, ok := pathID(w, r)
+		if !ok {
+			return 0, false
+		}
+		in, err := mcpServerIn(r.Context(), db, requestProject(r), id)
+		if err != nil {
+			serverError(w, err)
+			return 0, false
+		}
+		if !in {
+			http.Error(w, "server not found", http.StatusNotFound)
+			return 0, false
+		}
+		return id, true
+	}
+
 	mux.HandleFunc("GET /api/mcp-servers", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), "SELECT "+mcpServerColumns+" FROM mcp_servers ORDER BY name", tokenOwner(r))
+		rows, err := db.QueryContext(r.Context(), "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE project_id = ? ORDER BY name", tokenOwner(r), requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -263,14 +313,19 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		if taken, err := mcpNameTaken(r.Context(), db, s.Name, 0); err != nil {
+		if taken, err := mcpNameTaken(r.Context(), db, requestProject(r), s.Name, 0); err != nil {
 			serverError(w, err)
 			return
 		} else if taken {
 			http.Error(w, "another server has that name", http.StatusConflict)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO mcp_servers (name, url, description, auth, connector) VALUES (?, ?, ?, ?, ?)", s.Name, s.URL, s.Description, s.Auth, s.Connector)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO mcp_servers (project_id, name, url, description, auth, connector) VALUES (?, ?, ?, ?, ?, ?)",
+			requestProject(r), s.Name, s.URL, s.Description, s.Auth, s.Connector)
+		if mysqlErrorIs(err, mysqlErrDuplicate) {
+			http.Error(w, "another server has that name", http.StatusConflict)
+			return
+		}
 		if err != nil {
 			serverError(w, err)
 			return
@@ -285,13 +340,13 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		if refuseMCPConfig(w, r) {
 			return
 		}
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
+		project := requestProject(r)
 		var s mcpServer
-		if err := scanMCPServer(db.QueryRowContext(r.Context(), "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ?", tokenOwner(r), id), &s); errors.Is(err, sql.ErrNoRows) {
+		if err := scanMCPServer(db.QueryRowContext(r.Context(), "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ? AND project_id = ?", tokenOwner(r), id, project), &s); errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "server not found", http.StatusNotFound)
 			return
 		} else if err != nil {
@@ -321,25 +376,29 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		if taken, err := mcpNameTaken(r.Context(), db, s.Name, id); err != nil {
+		if taken, err := mcpNameTaken(r.Context(), db, project, s.Name, id); err != nil {
 			serverError(w, err)
 			return
 		} else if taken {
 			http.Error(w, "another server has that name", http.StatusConflict)
 			return
 		}
-		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
-			q := "UPDATE mcp_servers SET name = ?, url = ?, description = ? WHERE id = ?"
+		err := inTx(r.Context(), db, func(tx *sql.Tx) error {
+			q := "UPDATE mcp_servers SET name = ?, url = ?, description = ? WHERE id = ? AND project_id = ?"
 			if s.URL != oldURL {
-				q = "UPDATE mcp_servers SET name = ?, url = ?, description = ?, client_id = '', redirect_uri = '', token_endpoint = '' WHERE id = ?"
+				q = "UPDATE mcp_servers SET name = ?, url = ?, description = ?, client_id = '', redirect_uri = '', token_endpoint = '' WHERE id = ? AND project_id = ?"
 				s.Connected = false
 				if _, err := tx.ExecContext(r.Context(), "DELETE FROM mcp_tokens WHERE server_id = ?", id); err != nil {
 					return err
 				}
 			}
-			_, err := tx.ExecContext(r.Context(), q, s.Name, s.URL, s.Description, id)
+			_, err := tx.ExecContext(r.Context(), q, s.Name, s.URL, s.Description, id, project)
 			return err
 		})
+		if mysqlErrorIs(err, mysqlErrDuplicate) {
+			http.Error(w, "another server has that name", http.StatusConflict)
+			return
+		}
 		if err != nil {
 			serverError(w, err)
 			return
@@ -352,27 +411,26 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		if refuseMCPConfig(w, r) {
 			return
 		}
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "DELETE FROM mcp_servers WHERE id = ?", id); err != nil {
+		if _, err := db.ExecContext(r.Context(), "DELETE FROM mcp_servers WHERE id = ? AND project_id = ?", id, requestProject(r)); err != nil {
 			serverError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// Opened in a window of its own: sends the browser to the server's
-	// sign-in page, which comes back to the callback below.
+	// Opened in a window of its own, naming the project in its address:
+	// sends the browser to the server's sign-in page, which comes back to
+	// the callback below.
 	mux.HandleFunc("GET /api/mcp-servers/{id}/connect", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
-		to, err := b.startSignIn(r.Context(), id, tokenOwner(r), callbackURL(r))
+		to, err := b.startSignIn(r.Context(), requestProject(r), id, tokenOwner(r), callbackURL(r))
 		if err != nil {
 			log.Printf("mcp: sign in to server %d: %v", id, err)
 			signInPage(w, http.StatusBadGateway, "Couldn't start signing in", err.Error())
@@ -381,8 +439,10 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		http.Redirect(w, r, to, http.StatusFound)
 	})
 
+	// Where a server's sign-in page sends the browser back, with the OAuth
+	// state alone: the project and the person are the sign-in's.
 	mux.HandleFunc("GET /api/mcp-oauth/callback", func(w http.ResponseWriter, r *http.Request) {
-		name, err := b.finishSignIn(r.Context(), r.URL.Query())
+		name, err := b.finishSignIn(r.Context(), requestUser(r), r.URL.Query())
 		if err != nil {
 			log.Printf("mcp: sign-in callback: %v", err)
 			signInPage(w, http.StatusBadRequest, "Signing in failed", err.Error())
@@ -392,9 +452,8 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 	})
 
 	mux.HandleFunc("POST /api/mcp-servers/{id}/disconnect", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+		id, ok := serverOf(w, r)
+		if !ok {
 			return
 		}
 		if _, err := db.ExecContext(r.Context(), "DELETE FROM mcp_tokens WHERE server_id = ? AND user_id = ?", id, tokenOwner(r)); err != nil {
@@ -404,17 +463,17 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// A server taking a token has it set by an admin, as everyone's
-	// connection; nobody sees it again.
+	// A server taking a token has it set by an owner, as everyone's
+	// connection in the project; nobody sees it again.
 	mux.HandleFunc("PUT /api/mcp-servers/{id}/token", func(w http.ResponseWriter, r *http.Request) {
 		if refuseMCPConfig(w, r) {
 			return
 		}
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
+		project := requestProject(r)
 		var body struct {
 			Token string `json:"token"`
 		}
@@ -428,7 +487,7 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			return
 		}
 		var auth, connector string
-		if err := db.QueryRowContext(r.Context(), "SELECT auth, connector FROM mcp_servers WHERE id = ?", id).Scan(&auth, &connector); errors.Is(err, sql.ErrNoRows) {
+		if err := db.QueryRowContext(r.Context(), "SELECT auth, connector FROM mcp_servers WHERE id = ? AND project_id = ?", id, project).Scan(&auth, &connector); errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "server not found", http.StatusNotFound)
 			return
 		} else if err != nil {
@@ -450,8 +509,8 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			serverError(w, err)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), `INSERT INTO mcp_tokens (server_id, user_id, access_token) VALUES (?, 0, ?)
-			ON DUPLICATE KEY UPDATE access_token = VALUES(access_token), refresh_token = NULL, expires_at = NULL`, id, sealed); err != nil {
+		if _, err := db.ExecContext(r.Context(), `INSERT INTO mcp_tokens (project_id, server_id, user_id, access_token) VALUES (?, ?, 0, ?)
+			ON DUPLICATE KEY UPDATE access_token = VALUES(access_token), refresh_token = NULL, expires_at = NULL`, project, id, sealed); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -462,9 +521,8 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		if refuseMCPConfig(w, r) {
 			return
 		}
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+		id, ok := serverOf(w, r)
+		if !ok {
 			return
 		}
 		if _, err := db.ExecContext(r.Context(), "DELETE FROM mcp_tokens WHERE server_id = ? AND user_id = 0", id); err != nil {
@@ -474,14 +532,14 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// The tools a server offers, for picking those an agent process uses.
+	// The tools a server of the project offers, for picking those an agent
+	// process uses.
 	mux.HandleFunc("GET /api/mcp-servers/{id}/tools", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+		id, ok := pathID(w, r)
+		if !ok {
 			return
 		}
-		tools, err := b.tools(r.Context(), id, tokenOwner(r))
+		tools, err := b.tools(r.Context(), requestProject(r), id, tokenOwner(r))
 		switch {
 		case errors.Is(err, errNotFound):
 			http.Error(w, "server not found", http.StatusNotFound)
@@ -662,12 +720,12 @@ func getJSON(ctx context.Context, u string, out any) error {
 	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
 }
 
-// Registers the webapp as a client of the server's authorization server, if
-// it isn't for this redirect yet, and returns where to send the browser to
-// connect the server for the user.
-func (b *mcpBroker) startSignIn(ctx context.Context, id, user int64, redirect string) (string, error) {
+// Registers the webapp as a client of the authorization server of the
+// project's server, if it isn't for this redirect yet, and returns where to
+// send the browser to connect the server for the user.
+func (b *mcpBroker) startSignIn(ctx context.Context, project, id, user int64, redirect string) (string, error) {
 	var serverURL, clientID, registeredRedirect, auth string
-	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, redirect_uri, auth FROM mcp_servers WHERE id = ?", id).
+	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, redirect_uri, auth FROM mcp_servers WHERE id = ? AND project_id = ?", id, project).
 		Scan(&serverURL, &clientID, &registeredRedirect, &auth)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errors.New("the server doesn't exist")
@@ -676,7 +734,7 @@ func (b *mcpBroker) startSignIn(ctx context.Context, id, user int64, redirect st
 		return "", err
 	}
 	if auth == authToken {
-		return "", errors.New("nobody signs in to this server: it takes the token an admin sets in Settings")
+		return "", errors.New("nobody signs in to this server: it takes the token an owner of the project sets in Settings")
 	}
 	c, err := discoverOAuth(ctx, serverURL)
 	if err != nil {
@@ -690,8 +748,8 @@ func (b *mcpBroker) startSignIn(ctx context.Context, id, user int64, redirect st
 			return "", err
 		}
 	}
-	if _, err := b.db.ExecContext(ctx, "UPDATE mcp_servers SET client_id = ?, redirect_uri = ?, token_endpoint = ? WHERE id = ?",
-		clientID, redirect, c.tokenEndpoint, id); err != nil {
+	if _, err := b.db.ExecContext(ctx, "UPDATE mcp_servers SET client_id = ?, redirect_uri = ?, token_endpoint = ? WHERE id = ? AND project_id = ?",
+		clientID, redirect, c.tokenEndpoint, id, project); err != nil {
 		return "", err
 	}
 
@@ -708,9 +766,9 @@ func (b *mcpBroker) startSignIn(ctx context.Context, id, user int64, redirect st
 		return "", err
 	}
 	if _, err := b.db.ExecContext(ctx,
-		`INSERT INTO mcp_sign_ins (state_hash, server_id, user_id, verifier, redirect_uri, client_id, token_endpoint, resource, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) + INTERVAL 10 MINUTE)`,
-		hashToken(state), id, user, sealedVerifier, redirect, clientID, c.tokenEndpoint, c.resource); err != nil {
+		`INSERT INTO mcp_sign_ins (state_hash, project_id, server_id, user_id, verifier, redirect_uri, client_id, token_endpoint, resource, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) + INTERVAL 10 MINUTE)`,
+		hashToken(state), project, id, user, sealedVerifier, redirect, clientID, c.tokenEndpoint, c.resource); err != nil {
 		return "", err
 	}
 
@@ -809,14 +867,33 @@ func expiresAt(t tokenResponse) *time.Time {
 }
 
 // Exchanges the code the sign-in page came back with for tokens, and returns
-// the server's name.
-func (b *mcpBroker) finishSignIn(ctx context.Context, q url.Values) (string, error) {
+// the server's name. The sign-in, used up whatever comes of it, says the
+// project and the person: only they, u, finish it, as long as they may
+// still enter the project and the server is still in it, so a sign-in can't
+// be handed to someone else to connect their account to its starter, nor
+// connect a server of another project than it was started in.
+func (b *mcpBroker) finishSignIn(ctx context.Context, u *user, q url.Values) (string, error) {
 	p, ok, err := b.takeSignIn(ctx, q.Get("state"))
 	if err != nil {
 		return "", err
 	}
 	if !ok {
 		return "", errors.New("this sign-in expired or was already used; start it again from the settings")
+	}
+	if u != nil {
+		if u.ID != p.user {
+			return "", errors.New("someone else started this sign-in; start your own from the settings")
+		}
+		if _, in, err := userInProject(ctx, b.db, u, p.project); err != nil {
+			return "", err
+		} else if !in {
+			return "", errors.New("you no longer have access to the project this sign-in was started in")
+		}
+	}
+	if in, err := mcpServerIn(ctx, b.db, p.project, p.server); err != nil {
+		return "", err
+	} else if !in {
+		return "", errors.New("the server was removed")
 	}
 	if e := q.Get("error"); e != "" {
 		if d := q.Get("error_description"); d != "" {
@@ -848,13 +925,13 @@ func (b *mcpBroker) finishSignIn(ctx context.Context, q url.Values) (string, err
 		refresh = &r
 	}
 	if _, err := b.db.ExecContext(ctx,
-		`INSERT INTO mcp_tokens (server_id, user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO mcp_tokens (project_id, server_id, user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE access_token = VALUES(access_token), refresh_token = VALUES(refresh_token), expires_at = VALUES(expires_at)`,
-		p.server, p.user, access, refresh, expiresAt(t)); err != nil {
+		p.project, p.server, p.user, access, refresh, expiresAt(t)); err != nil {
 		return "", err
 	}
 	var name string
-	err = b.db.QueryRowContext(ctx, "SELECT name FROM mcp_servers WHERE id = ?", p.server).Scan(&name)
+	err = b.db.QueryRowContext(ctx, "SELECT name FROM mcp_servers WHERE id = ? AND project_id = ?", p.server, p.project).Scan(&name)
 	return name, err
 }
 
@@ -864,9 +941,9 @@ func (b *mcpBroker) takeSignIn(ctx context.Context, state string) (mcpSignIn, bo
 	var p mcpSignIn
 	var verifier string
 	err := b.db.QueryRowContext(ctx,
-		`SELECT server_id, user_id, verifier, redirect_uri, client_id, token_endpoint, resource FROM mcp_sign_ins
+		`SELECT project_id, server_id, user_id, verifier, redirect_uri, client_id, token_endpoint, resource FROM mcp_sign_ins
 		WHERE state_hash = ? AND expires_at > CURRENT_TIMESTAMP(3)`, hashToken(state)).
-		Scan(&p.server, &p.user, &verifier, &p.redirect, &p.clientID, &p.tokenEndpoint, &p.resource)
+		Scan(&p.project, &p.server, &p.user, &verifier, &p.redirect, &p.clientID, &p.tokenEndpoint, &p.resource)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, false, nil
 	}
@@ -1038,8 +1115,8 @@ func lockInDatabase(ctx context.Context, db *sql.DB, name string) (func(), error
 	}, nil
 }
 
-// The token an admin set for a server taking one. It can't be refreshed, so
-// once the server turns it away, the admin sets a new one.
+// The token an owner set for a server taking one. It can't be refreshed, so
+// once the server turns it away, an owner sets a new one.
 func adminToken(ctx context.Context, db *sql.DB, id int64, rejected string) (string, error) {
 	var access sql.NullString
 	err := db.QueryRowContext(ctx, "SELECT access_token FROM mcp_tokens WHERE server_id = ? AND user_id = 0", id).Scan(&access)
@@ -1059,7 +1136,7 @@ func adminToken(ctx context.Context, db *sql.DB, id int64, rejected string) (str
 	return token, nil
 }
 
-var errMCPTokenRejected = errors.New("the server turned its token away; an admin sets a new one in Settings, under MCP servers")
+var errMCPTokenRejected = errors.New("the server turned its token away; an owner of the project sets a new one in Settings, under MCP servers")
 
 // The user a run's agents work for, with their MCP connections: whoever
 // started it, or the run it is part of, else whoever made the schedule that
@@ -1092,10 +1169,11 @@ type mcpRunServer struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Grants an agent step the servers its process selects, with the
-// connections of the user it works for: nil is nobody, with no connections
-// when people sign in, and everyone's without. A server taking a token has
-// the one an admin set whoever the run is for. Checks each is connected and
+// Grants an agent step the servers its process selects of its run's
+// project, with the connections of the user it works for: nil is nobody,
+// with no connections when people sign in, and everyone's without. A server
+// of another project is no server to it. A server taking a token has
+// the one an owner set whoever the run is for. Checks each is connected and
 // returns them with the token that reaches them through the proxy, which
 // revoke ends, and which reaches only the tools the process keeps to. A
 // server that is missing or signed out fails the step with a message
@@ -1104,6 +1182,10 @@ type mcpRunServer struct {
 func (b *mcpBroker) grant(ctx context.Context, who *int64, run, step int64, uses processSettings, ttl time.Duration) (servers []mcpRunServer, token, msg string, err error) {
 	if len(uses.MCPServers) == 0 {
 		return nil, "", "", nil
+	}
+	project, err := runProject(ctx, b.db, run)
+	if err != nil {
+		return nil, "", "", err
 	}
 	var user int64
 	if who != nil {
@@ -1115,7 +1197,7 @@ func (b *mcpBroker) grant(ctx context.Context, who *int64, run, step int64, uses
 			continue
 		}
 		var s mcpServer
-		err := scanMCPServer(b.db.QueryRowContext(ctx, "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ?", user, id), &s)
+		err := scanMCPServer(b.db.QueryRowContext(ctx, "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ? AND project_id = ?", user, id, project), &s)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, "", "An MCP server the process uses was removed; pick its MCP servers again.", nil
 		}
@@ -1128,7 +1210,7 @@ func (b *mcpBroker) grant(ctx context.Context, who *int64, run, step int64, uses
 		if _, err := b.accessToken(ctx, id, user, ""); errors.Is(err, errMCPNotConnected) {
 			switch {
 			case s.Auth == authToken:
-				return nil, "", fmt.Sprintf("The MCP server %s has no token. An admin sets it in Settings, under MCP servers, then run again.", s.Name), nil
+				return nil, "", fmt.Sprintf("The MCP server %s has no token. An owner of the project sets it in Settings, under MCP servers, then run again.", s.Name), nil
 			case b.signIn:
 				return nil, "", fmt.Sprintf("The MCP server %s isn't connected for %s. Connect it in Settings, under MCP servers, then run again.", s.Name, userLabel(ctx, b.db, user)), nil
 			}
@@ -1147,7 +1229,7 @@ func (b *mcpBroker) grant(ctx context.Context, who *int64, run, step int64, uses
 		ttl = llmDefaultTTL
 	}
 	token = randomToken()
-	if err := b.grants.put(ctx, grantMCP, token, proxyGrant{user: who, run: run, step: step}, mcpReaches{Servers: allowed}, ttl+llmGrantMargin); err != nil {
+	if err := b.grants.put(ctx, grantMCP, token, proxyGrant{project: project, user: who, run: run, step: step}, mcpReaches{Servers: allowed}, ttl+llmGrantMargin); err != nil {
 		return nil, "", "", err
 	}
 	return servers, token, "", nil
@@ -1169,7 +1251,8 @@ const maxMCPRequestBytes = 10 << 20
 
 // Passes an agent's request on to the MCP server with the server's token,
 // streaming the response back, or answers it from the connector the server
-// is. A request the server turns away gets one retry with a refreshed
+// is; a server of the grant's project alone. A request the server turns
+// away gets one retry with a refreshed
 // token; nothing else is retried, since a tool call may already have taken
 // effect. A call of a tool the step doesn't have is refused without
 // reaching the server, and the tools it lists leave those out.
@@ -1198,7 +1281,7 @@ func (b *mcpBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var serverURL, name, connector string
-	if err := b.db.QueryRowContext(r.Context(), "SELECT url, name, connector FROM mcp_servers WHERE id = ?", id).Scan(&serverURL, &name, &connector); err != nil {
+	if err := b.db.QueryRowContext(r.Context(), "SELECT url, name, connector FROM mcp_servers WHERE id = ? AND project_id = ?", id, g.project).Scan(&serverURL, &name, &connector); err != nil {
 		http.Error(w, "the MCP server was removed", http.StatusNotFound)
 		return
 	}

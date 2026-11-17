@@ -109,6 +109,18 @@ type runRequest struct {
 	// webapp's proxy, which CredentialsToken reaches; see credentialVars.
 	Credentials      []credentialAccess `json:"credentials"`
 	CredentialsToken string             `json:"credentialsToken"`
+	// The project the step is of, and whether it inherits what the instance
+	// is configured with outside the webapp's database: the worker's own
+	// pi config, its AWS_* variables and those CHILD_ENV names, its git
+	// config, and its own providers' say in Claude Code's choice of Bedrock.
+	// Absent from a webapp from before projects; see inheritsInstance.
+	Project          int64 `json:"project"`
+	InheritsInstance *bool `json:"inheritsInstance"`
+}
+
+// Whether the step gets the worker's own configuration.
+func (run runRequest) inherits() bool {
+	return inheritsInstance(run.InheritsInstance, run.Project, run.Workspace)
 }
 
 // A skill as the webapp sends it.
@@ -168,6 +180,15 @@ type scriptRequest struct {
 	// When its schedule's last run that got through started, in seconds
 	// since 1970, which $SINCE and $LAST_RUN hold; nil for none.
 	Since *int64 `json:"since"`
+	// The project the step is of, and whether it inherits the instance's
+	// configuration; see runRequest.
+	Project          int64 `json:"project"`
+	InheritsInstance *bool `json:"inheritsInstance"`
+}
+
+// Whether the step gets the worker's own configuration.
+func (run scriptRequest) inherits() bool {
+	return inheritsInstance(run.InheritsInstance, run.Project, run.Workspace)
 }
 
 // The tokens the step is handed, and the usernames it is given with them,
@@ -666,7 +687,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		return runResult{Error: "create private directory: " + err.Error()}
 	}
 	defer os.RemoveAll(private)
-	ctx, gitEnv, err := writeGitCredentials(ctx, private, run.Git)
+	ctx, gitEnv, err := writeGitCredentials(withInheritance(ctx, run.inherits()), private, run.Git)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}
@@ -710,7 +731,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	if len(credVars) > 0 {
 		l.infof("calling %s through the webapp's credential proxy", credentialNames(run.Credentials))
 	}
-	spec.Env = childEnv(append(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since, "PYTHONUNBUFFERED=1"), credVars...)...)
+	spec.Env = stepEnv(run.inherits(), append(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since, "PYTHONUNBUFFERED=1"), credVars...)...)
 	if run.Workspace != nil {
 		spec.Env = append(spec.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.checkoutBranch())
 	}

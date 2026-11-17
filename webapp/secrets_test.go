@@ -16,31 +16,38 @@ func TestSealer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	box, err := s.seal(modelKeyPlace("OPENAI_API_KEY"), "sk-secret")
+	box, err := s.seal(modelKeyPlace(legacyProject, "OPENAI_API_KEY"), "sk-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !sealed(box) || strings.Contains(box, "sk-secret") {
 		t.Fatalf("sealed as %q", box)
 	}
-	if again, _ := s.seal(modelKeyPlace("OPENAI_API_KEY"), "sk-secret"); again == box {
+	if again, _ := s.seal(modelKeyPlace(legacyProject, "OPENAI_API_KEY"), "sk-secret"); again == box {
 		t.Errorf("sealing twice gave the same %q", box)
 	}
-	if got, err := s.open(modelKeyPlace("OPENAI_API_KEY"), box); err != nil || got != "sk-secret" {
+	if got, err := s.open(modelKeyPlace(legacyProject, "OPENAI_API_KEY"), box); err != nil || got != "sk-secret" {
 		t.Errorf("open = %q, %v", got, err)
 	}
-	if _, err := s.open(modelKeyPlace("GATEWAY_KEY"), box); err == nil {
+	if _, err := s.open(modelKeyPlace(legacyProject, "GATEWAY_KEY"), box); err == nil {
 		t.Errorf("opened somewhere else")
 	}
+	// Another project's key of the same variable is kept somewhere else.
+	if _, err := s.open(modelKeyPlace(2, "OPENAI_API_KEY"), box); err == nil {
+		t.Errorf("opened as another project's")
+	}
+	if modelKeyPlace(legacyProject, "OPENAI_API_KEY") != "model_keys/OPENAI_API_KEY" || modelProviderPlace(legacyProject, "gw") != "model_providers/gw" {
+		t.Errorf("Legacy's keys moved from where they were sealed before projects")
+	}
 	other, _ := newSealer(strings.Repeat("x", minSecretKey), "")
-	if _, err := other.open(modelKeyPlace("OPENAI_API_KEY"), box); err == nil {
+	if _, err := other.open(modelKeyPlace(legacyProject, "OPENAI_API_KEY"), box); err == nil {
 		t.Errorf("opened with another key")
 	}
 	var none *sealer
-	if _, err := none.open(modelKeyPlace("OPENAI_API_KEY"), box); err != errSealed {
+	if _, err := none.open(modelKeyPlace(legacyProject, "OPENAI_API_KEY"), box); err != errSealed {
 		t.Errorf("opened without a key: %v", err)
 	}
-	if _, err := s.open(modelKeyPlace("OPENAI_API_KEY"), sealedPrefix+"!!"); err == nil {
+	if _, err := s.open(modelKeyPlace(legacyProject, "OPENAI_API_KEY"), sealedPrefix+"!!"); err == nil {
 		t.Errorf("opened a damaged one")
 	}
 }
@@ -73,7 +80,7 @@ func TestSealerRotating(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	where := modelKeyPlace("OPENAI_API_KEY")
+	where := modelKeyPlace(legacyProject, "OPENAI_API_KEY")
 	aged, _ := old.seal(where, "sk-old")
 	if got, current, err := both.openAged(where, aged); got != "sk-old" || current || err != nil {
 		t.Errorf("one sealed with the primary = %q, %v, %v", got, current, err)

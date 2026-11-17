@@ -231,9 +231,12 @@ func enterAsMember(ctx context.Context, db *sql.DB, project, user int64, level, 
 
 // Requests about the person or the projects themselves, rather than what is
 // in the project their header names: they go on whatever their level there.
+// So does the OAuth callback of an MCP server's sign-in, which comes back
+// with only the sign-in's state, whose project it is (mcp.go).
 func outsideProjects(path string) bool {
 	return path == "/api/me" || strings.HasPrefix(path, "/api/me/") ||
-		path == "/api/projects" || strings.HasPrefix(path, "/api/projects/")
+		path == "/api/projects" || strings.HasPrefix(path, "/api/projects/") ||
+		path == "/api/mcp-oauth/callback"
 }
 
 // Works out the project a request to /api/ is about, from its header, and
@@ -248,7 +251,14 @@ func enterProject(db *sql.DB, next http.Handler) http.Handler {
 			return
 		}
 		project := legacyProject
-		if h := strings.TrimSpace(r.Header.Get(projectHeader)); h != "" {
+		h := strings.TrimSpace(r.Header.Get(projectHeader))
+		// A page the browser opens, such as an MCP server's sign-in window
+		// or a run's file, can't send the header, so a GET names its
+		// project in its address instead.
+		if h == "" && r.Method == http.MethodGet {
+			h = strings.TrimSpace(r.URL.Query().Get("project"))
+		}
+		if h != "" {
 			id, err := strconv.ParseInt(h, 10, 64)
 			if err != nil || id <= 0 {
 				http.Error(w, projectHeader+" must be a project's id", http.StatusBadRequest)

@@ -24,10 +24,11 @@ import (
 // webapp; the directory in the settings lists them, with the MCP servers
 // picked to go with them.
 //
-// An admin installs a connector as an MCP server taking a token (see
-// mcp.go), set once for everyone: the operations call the service with it,
-// at the server's URL, its API's, so a connector reaches a service's own
-// installation too. Agents use a connector as they do any MCP server: the
+// A project's owner installs a connector as an MCP server taking a token
+// (see mcp.go), set once for everyone in the project: the operations call
+// the service with it, at the server's URL, its API's, so a connector
+// reaches a service's own installation too. A process uses only its
+// project's connectors. Agents use a connector as they do any MCP server: the
 // proxy answers their requests itself, its operations being the tools, of
 // which an agent process has those that only read unless it picks others.
 // A connector process carries out one operation as a step of a run, with
@@ -753,14 +754,15 @@ func connectorObject(o shapedObject, answer json.RawMessage) (string, error) {
 	return "[" + strings.Join(parts, ",") + "]", nil
 }
 
-// The operation a connector process carries out, with its server, or why
-// it can't be carried out.
-func connectorOperation(ctx context.Context, db *sql.DB, s *connectorSettings) (*connector, *operation, mcpServer, string, error) {
+// The operation a connector process of the project carries out, with its
+// server, or why it can't be carried out. A server of another project is
+// none of its.
+func connectorOperation(ctx context.Context, db *sql.DB, project int64, s *connectorSettings) (*connector, *operation, mcpServer, string, error) {
 	var server mcpServer
 	if s == nil || s.Server == 0 {
 		return nil, nil, server, "the process uses no connector; pick one in its panel", nil
 	}
-	err := scanMCPServer(db.QueryRowContext(ctx, "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ?", 0, s.Server), &server)
+	err := scanMCPServer(db.QueryRowContext(ctx, "SELECT "+mcpServerColumns+" FROM mcp_servers WHERE id = ? AND project_id = ?", 0, s.Server, project), &server)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, server, "the connector the process uses was removed; pick one again", nil
 	}
@@ -788,7 +790,11 @@ func runConnectorStep(ctx context.Context, db *sql.DB, b *runBoard, runID, id in
 		return res, err
 	}
 	settings := p.Settings
-	c, op, server, msg, err := connectorOperation(ctx, db, settings.Connector)
+	project, err := runProject(ctx, db, runID)
+	if err != nil {
+		return res, err
+	}
+	c, op, server, msg, err := connectorOperation(ctx, db, project, settings.Connector)
 	if err != nil {
 		return res, err
 	}
@@ -929,11 +935,11 @@ var directoryServers = []directoryEntry{
 		Docs:        "https://developers.notion.com/docs/get-started-with-mcp"},
 }
 
-// The directory, with what of it is installed: a connector by its name, an
-// MCP server by its URL.
-func directory(ctx context.Context, db *sql.DB) ([]directoryEntry, error) {
+// The directory, with what of it the project installed: a connector by its
+// name, an MCP server by its URL.
+func directory(ctx context.Context, db *sql.DB, project int64) ([]directoryEntry, error) {
 	byConnector, byURL := map[string]int64{}, map[string]int64{}
-	err := scanAll(ctx, db, "SELECT id, url, connector FROM mcp_servers", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT id, url, connector FROM mcp_servers WHERE project_id = ?", func(rows *sql.Rows) error {
 		var id int64
 		var u, c string
 		err := rows.Scan(&id, &u, &c)
@@ -943,7 +949,7 @@ func directory(ctx context.Context, db *sql.DB) ([]directoryEntry, error) {
 			byURL[strings.TrimSuffix(u, "/")] = id
 		}
 		return err
-	})
+	}, project)
 	if err != nil {
 		return nil, err
 	}
@@ -976,7 +982,7 @@ func directory(ctx context.Context, db *sql.DB) ([]directoryEntry, error) {
 
 func registerConnectorRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/connectors", func(w http.ResponseWriter, r *http.Request) {
-		entries, err := directory(r.Context(), db)
+		entries, err := directory(r.Context(), db, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return

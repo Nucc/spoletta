@@ -54,6 +54,10 @@ type scriptRun struct {
 	// When its schedule's last run that got through started, as a Unix
 	// timestamp, which $SINCE and $LAST_RUN hold; see scheduleSince.
 	Since *int64 `json:"since,omitempty"`
+	// The project the step is of, and whether it inherits what the instance
+	// is configured with outside the database; see agentRun.
+	Project          int64 `json:"project"`
+	InheritsInstance bool  `json:"inheritsInstance"`
 }
 
 // The tokens the step is handed, in each form it could print them in
@@ -104,8 +108,14 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 		res.Error = inputClash(run.ProcessName, inputs)
 	}
 
+	if run.Project, err = runProject(ctx, db, runID); err != nil {
+		return res, err
+	}
+	if run.InheritsInstance, err = inheritsInstance(ctx, db, run.Project); err != nil {
+		return res, err
+	}
 	run.Workspace = ws.forProcess(settings)
-	run.DiskLimit = currentLimits().diskBytes()
+	run.DiskLimit = limitsIn(run.Project).diskBytes()
 	run.TimeoutMS = settings.timeout().Milliseconds()
 	if run.Since, err = scheduleSince(ctx, db, runID); err != nil {
 		return res, err

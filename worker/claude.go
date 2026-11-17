@@ -67,7 +67,8 @@ var outputMCPServer = envOr("OUTPUT_MCP_SERVER", "/opt/flow/submit-output-mcp.ts
 const outputServerName = "flow_output"
 
 // The worker's own pi config's providers, as read as it started, which say
-// the API a provider speaks when the run's added providers don't.
+// the API a provider speaks when the run's added providers don't, for a
+// step inheriting the instance's configuration.
 var ownProviders []hostProvider
 
 // Whether Claude Code speaks Bedrock's API to the provider: Amazon Bedrock,
@@ -79,17 +80,25 @@ func claudeBedrock(run runRequest, provider string) bool {
 			api, found = p.API, true
 		}
 	}
-	for _, p := range ownProviders {
-		if p.ID == provider && !found {
-			api = p.API
+	if run.inherits() {
+		for _, p := range ownProviders {
+			if p.ID == provider && !found {
+				api = p.API
+			}
 		}
 	}
 	return api == "bedrock-converse-stream" || api == "" && provider == "amazon-bedrock"
 }
 
 // The region Claude Code is told Bedrock is in, which it needs though it
-// reaches it through the proxy.
-func bedrockRegion() string { return envOr("AWS_REGION", "us-east-1") }
+// reaches it through the proxy: the worker's AWS_REGION, for a step
+// inheriting the instance's configuration.
+func bedrockRegion(inherits bool) string {
+	if !inherits {
+		return "us-east-1"
+	}
+	return envOr("AWS_REGION", "us-east-1")
+}
 
 // What Claude Code's tools are named for MCP servers: theirs and the
 // webapp's names agree, so the proxy's tool filter holds either harness.
@@ -245,7 +254,7 @@ func (claudeHarness) prepare(st *agentStep) (agentCommand, error) {
 	}
 
 	small := id
-	if m := os.Getenv("CLAUDE_SMALL_MODEL"); m != "" {
+	if m := os.Getenv("CLAUDE_SMALL_MODEL"); m != "" && run.inherits() {
 		small = m
 	}
 	base := strings.TrimSuffix(run.LLM.URL, "/") + "/" + provider
@@ -262,7 +271,7 @@ func (claudeHarness) prepare(st *agentStep) (agentCommand, error) {
 			// A Bedrock API key, sent as a bearer token, which the proxy
 			// swaps in place.
 			"AWS_BEARER_TOKEN_BEDROCK=" + run.LLM.Token,
-			"AWS_REGION=" + bedrockRegion(),
+			"AWS_REGION=" + bedrockRegion(run.inherits()),
 		}
 	}
 	vars := append(signIn,
@@ -282,7 +291,7 @@ func (claudeHarness) prepare(st *agentStep) (agentCommand, error) {
 		// searching for them, which the agent may not do.
 		"ENABLE_TOOL_SEARCH=false",
 	)
-	env := claudeEnv(childEnv(append(slices.Clone(st.env), vars...)...), vars, bedrock)
+	env := claudeEnv(stepEnv(run.inherits(), append(slices.Clone(st.env), vars...)...), vars, bedrock)
 
 	// Claude Code reads a prompt starting with /name as one of its skills
 	// or commands. The webapp spelled out the flow's commands already, so

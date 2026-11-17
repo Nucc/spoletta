@@ -2,19 +2,20 @@ package main
 
 // Credentials: what scripts and agents call a service of their own with,
 // such as a Jira token or an internal API's key, without ever seeing it.
-// Admins keep them in the settings, under Credentials: each a name, the
+// They are a project's: its owners keep them in its settings, under
+// Credentials, names and variables unique within it: each a name, the
 // service's base URL, how its secret goes on each request (a header whose
 // value a template such as Bearer {secret} makes, basic auth with a
 // username, or a query parameter), and the secret, sealed with SECRET_KEY
-// (secrets.go) and never sent back to the browser. Each is everyone's, or
-// only the teams' it is given to.
+// (secrets.go) and never sent back to the browser. Each is everyone's in the
+// project, or only the teams' of the project it is given to.
 //
 // An agent or script process picks the credentials it uses
-// (processSettings.Credentials). A flow uses only those its owner may, as
-// it does skills (flowSkills): a person's flow, everyone's and those given
-// a team of theirs; a team's flow, everyone's and those given the team; a
-// global one, only everyone's. A step whose process picked one its flow may
-// not use fails as it starts, saying so.
+// (processSettings.Credentials). A flow uses only those of its project its
+// owner may, as it does skills (flowSkills): a person's flow, everyone's
+// and those given a team of theirs; a team's flow, everyone's and those
+// given the team; a global one, only everyone's. A step whose process
+// picked one its flow may not use fails as it starts, saying so.
 //
 // The way the model proxy does it (llm.go), a step using credentials gets,
 // for each, a variable holding the proxy's URL for it,
@@ -22,8 +23,9 @@ package main
 // granted at any replica (grants.go) and ending with the step, or a while
 // after its timeout should the webapp lose it. The proxy, at
 // /credentials/{id}/..., takes the token as a bearer token or as basic
-// auth's password, checks the step's process picked the credential and its
-// flow may still use it, and joins the path to the base URL, refusing one
+// auth's password, checks the step's process picked the credential, that
+// it is of the grant's project and its flow may still use it, and joins
+// the path to the base URL, refusing one
 // that would leave it or that some servers would read as leaving it. It
 // passes on only the headers a client sends to say what it sends and
 // wants, and those the credential names, never the step's token, puts the
@@ -305,11 +307,11 @@ func scanCredential(rows interface{ Scan(...any) error }, more ...any) (credenti
 	return c, stored, err
 }
 
-// Every credential, with the teams given each and whether its secret is
-// kept, never the secret.
-func listCredentials(ctx context.Context, db *sql.DB) ([]credential, error) {
+// Every credential of the project, with the teams given each and whether
+// its secret is kept, never the secret.
+func listCredentials(ctx context.Context, db *sql.DB, project int64) ([]credential, error) {
 	out := []credential{}
-	err := scanAll(ctx, db, "SELECT "+credentialColumns+" FROM credentials c ORDER BY c.name", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT "+credentialColumns+" FROM credentials c WHERE c.project_id = ? ORDER BY c.name", func(rows *sql.Rows) error {
 		c, stored, err := scanCredential(rows)
 		if err != nil {
 			return err
@@ -327,11 +329,11 @@ func listCredentials(ctx context.Context, db *sql.DB) ([]credential, error) {
 		c.Teams = []teamRef{}
 		out = append(out, c)
 		return nil
-	})
+	}, project)
 	if err != nil {
 		return nil, err
 	}
-	err = scanAll(ctx, db, "SELECT ct.credential_id, t.id, t.name FROM credential_teams ct JOIN teams t ON t.id = ct.team_id ORDER BY t.name", func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, "SELECT ct.credential_id, t.id, t.name FROM credential_teams ct JOIN teams t ON t.id = ct.team_id WHERE ct.project_id = ? ORDER BY t.name", func(rows *sql.Rows) error {
 		var id int64
 		var t teamRef
 		if err := rows.Scan(&id, &t.ID, &t.Name); err != nil {
@@ -341,26 +343,28 @@ func listCredentials(ctx context.Context, db *sql.DB) ([]credential, error) {
 			out[i].Teams = append(out[i].Teams, t)
 		}
 		return nil
-	})
+	}, project)
 	return out, err
 }
 
-// The condition on credentials c that only those the flow may use meet, by
-// its owner, as flowSkills has it for skills, and its arguments.
+// The condition on credentials c that only those the flow may use meet, of
+// its project, by its owner, as flowSkills has it for skills, and its
+// arguments.
 func flowCredentials(ctx context.Context, db querier, flow int64) (string, []any, error) {
+	var project int64
 	var person, team sql.NullInt64
-	err := db.QueryRowContext(ctx, "SELECT owner_user_id, owner_team_id FROM flows WHERE id = ?", flow).Scan(&person, &team)
+	err := db.QueryRowContext(ctx, "SELECT project_id, owner_user_id, owner_team_id FROM flows WHERE id = ?", flow).Scan(&project, &person, &team)
 	if err != nil {
 		return "", nil, err
 	}
 	switch {
 	case person.Valid:
-		return `(c.everyone OR c.id IN (SELECT ct.credential_id FROM credential_teams ct
-			JOIN team_members tm ON tm.team_id = ct.team_id WHERE tm.user_id = ?))`, []any{person.Int64}, nil
+		return `(c.project_id = ? AND (c.everyone OR c.id IN (SELECT ct.credential_id FROM credential_teams ct
+			JOIN team_members tm ON tm.team_id = ct.team_id WHERE tm.user_id = ?)))`, []any{project, person.Int64}, nil
 	case team.Valid:
-		return "(c.everyone OR c.id IN (SELECT credential_id FROM credential_teams WHERE team_id = ?))", []any{team.Int64}, nil
+		return "(c.project_id = ? AND (c.everyone OR c.id IN (SELECT credential_id FROM credential_teams WHERE team_id = ?)))", []any{project, team.Int64}, nil
 	}
-	return "c.everyone", nil, nil
+	return "(c.project_id = ? AND c.everyone)", []any{project}, nil
 }
 
 // The credentials the flow may use, as its board offers them.
@@ -391,12 +395,17 @@ type credentialAccess struct {
 }
 
 // The credentials a process picked, for its step, if its flow may use them
-// all and each has its secret; else why not.
+// all and each has its secret; else why not. One of another project than
+// the flow's is none.
 func stepCredentials(ctx context.Context, db querier, flow int64, ids []int64) ([]credentialAccess, string, error) {
 	if len(ids) == 0 {
 		return nil, "", nil
 	}
 	cond, args, err := flowCredentials(ctx, db, flow)
+	if err != nil {
+		return nil, "", err
+	}
+	project, err := flowProject(ctx, db, flow)
 	if err != nil {
 		return nil, "", err
 	}
@@ -408,8 +417,8 @@ func stepCredentials(ctx context.Context, db querier, flow int64, ids []int64) (
 		c := credentialAccess{id: id}
 		var variable string
 		var secretSet, usable bool
-		err := db.QueryRowContext(ctx, "SELECT c.name, c.variable, c.base_url, c.secret <> '', "+cond+" FROM credentials c WHERE c.id = ?",
-			append(args, id)...).Scan(&c.Name, &variable, &c.BaseURL, &secretSet, &usable)
+		err := db.QueryRowContext(ctx, "SELECT c.name, c.variable, c.base_url, c.secret <> '', "+cond+" FROM credentials c WHERE c.id = ? AND c.project_id = ?",
+			append(args, id, project)...).Scan(&c.Name, &variable, &c.BaseURL, &secretSet, &usable)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, "a credential the process uses was removed; pick its credentials again", nil
@@ -417,9 +426,9 @@ func stepCredentials(ctx context.Context, db querier, flow int64, ids []int64) (
 			return nil, "", err
 		case !usable:
 			// Not named: whoever reads the step may not see it.
-			return nil, "a credential the process uses isn't one this flow may use: it is neither everyone's nor given to its owner's team; an admin gives it in Settings, under Credentials, or pick its credentials again", nil
+			return nil, "a credential the process uses isn't one this flow may use: it is neither everyone's nor given to its owner's team; an owner of the project gives it in Settings, under Credentials, or pick its credentials again", nil
 		case !secretSet:
-			return nil, fmt.Sprintf("the credential %s has no secret; an admin sets it in Settings, under Credentials", c.Name), nil
+			return nil, fmt.Sprintf("the credential %s has no secret; an owner of the project sets it in Settings, under Credentials", c.Name), nil
 		}
 		c.Env = credentialEnv(variable)
 		out = append(out, c)
@@ -502,11 +511,17 @@ func credentialClient(loopback bool) *http.Client {
 
 // Grants the step a token reaching the credentials, with their URLs at the
 // proxy filled in, for ttl at most; none for none. The flow is the
-// process's, whose owner must be allowed each as each call is made.
+// process's, of whose project they are, whose owner must be allowed each as
+// each call is made.
 func (b *credentialBroker) grant(ctx context.Context, who *int64, run, step, flow int64, creds []credentialAccess, ttl time.Duration) (string, error) {
 	if len(creds) == 0 {
 		return "", nil
 	}
+	project, err := flowProject(ctx, b.db, flow)
+	if err != nil {
+		return "", err
+	}
+	g := proxyGrant{project: project, user: who, run: run, step: step}
 	reaches := credentialReaches{Flow: flow}
 	names := make([]string, len(creds))
 	for i := range creds {
@@ -519,13 +534,13 @@ func (b *credentialBroker) grant(ctx context.Context, who *int64, run, step, flo
 	}
 	ttl += llmGrantMargin
 	token := randomToken()
-	if err := b.grants.put(ctx, grantCredential, token, proxyGrant{user: who, run: run, step: step}, reaches, ttl); err != nil {
+	if err := b.grants.put(ctx, grantCredential, token, g, reaches, ttl); err != nil {
 		return "", err
 	}
 	b.mu.Lock()
 	b.expiries[token] = time.AfterFunc(ttl, func() { b.revokeToken(token, "expired") })
 	b.mu.Unlock()
-	audit("credential.grant", who, run, step, "the credential proxy, reaching %s, for %s at most", strings.Join(names, ", "), ttl.Round(time.Second))
+	g.audit("credential.grant", "the credential proxy, reaching %s, for %s at most", strings.Join(names, ", "), ttl.Round(time.Second))
 	return token, nil
 }
 
@@ -1140,21 +1155,22 @@ func secretFirst(param, secret, raw string) string {
 	return out
 }
 
-// A call refused, which is audited, and logged in the run's log when its
-// grant is known.
+// A call refused, which is audited, in its grant's project's log, and
+// logged in the run's log, when its grant is known; else in the instance's.
 func (b *credentialBroker) refuse(w http.ResponseWriter, g *proxyGrant, status int, msg, format string, args ...any) {
 	if g != nil {
-		audit("credential.refused", g.user, g.run, g.step, format, args...)
+		g.audit("credential.refused", format, args...)
 		if g.run != 0 && b.db != nil {
 			runLog(b.db, g.run, g.step, logError, "a call through the credential proxy was refused: "+format, args...)
 		}
 	} else {
-		audit("credential.refused", nil, 0, 0, format, args...)
+		auditInstance("credential.refused", nil, format, args...)
 	}
 	http.Error(w, msg, status)
 }
 
-// Passes a step's call on to the credential's service with its secret.
+// Passes a step's call on to the credential's service with its secret: a
+// credential of the grant's project alone.
 func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 	notAvailable := "this credential isn't available to this step"
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -1192,7 +1208,7 @@ func (b *credentialBroker) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var usable bool
-	c, stored, err := scanCredential(b.db.QueryRowContext(r.Context(), "SELECT "+credentialColumns+", "+cond+" FROM credentials c WHERE c.id = ?", append(args, id)...), &usable)
+	c, stored, err := scanCredential(b.db.QueryRowContext(r.Context(), "SELECT "+credentialColumns+", "+cond+" FROM credentials c WHERE c.id = ? AND c.project_id = ?", append(args, id, g.project)...), &usable)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		b.refuse(w, g, http.StatusForbidden, notAvailable, "a call to the credential %d, which was removed", id)
@@ -1459,10 +1475,10 @@ func startsWithBOM(r *bufio.Reader) bool {
 	}
 }
 
-// Notes a call in the step's run's log, and the audit log.
+// Notes a call in the step's run's log, and its project's audit log.
 func (b *credentialBroker) logCall(g *proxyGrant, c credential, format string, args ...any) {
 	detail := fmt.Sprintf(format, args...)
-	audit("credential.call", g.user, g.run, g.step, "the credential %s: %s", c.Name, detail)
+	g.audit("credential.call", "the credential %s: %s", c.Name, detail)
 	if g.run == 0 || b.db == nil {
 		log.Printf("credential %s of step %d: %s", c.Name, g.step, detail)
 		return
@@ -1507,13 +1523,15 @@ func credentialOrigin(raw string) string {
 	return strings.ToLower(u.Scheme) + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
 }
 
-// Gives the credential to the teams, in place of those it had.
-func setCredentialTeams(ctx context.Context, tx *sql.Tx, id int64, teams []int64) error {
+// Gives the project's credential to its teams, in place of those it had; a
+// team of another project is none (mysqlErrForeignKey).
+func setCredentialTeams(ctx context.Context, tx *sql.Tx, project, id int64, teams []int64) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM credential_teams WHERE credential_id = ?", id); err != nil {
 		return err
 	}
 	for _, t := range teams {
-		if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO credential_teams (credential_id, team_id) VALUES (?, ?)", id, t); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO credential_teams (project_id, credential_id, team_id) VALUES (?, ?, ?)
+			ON DUPLICATE KEY UPDATE team_id = team_id`, project, id, t); err != nil {
 			return err
 		}
 	}
@@ -1530,7 +1548,7 @@ func credentialUsers(f credentialFields) string {
 
 func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 	writeList := func(w http.ResponseWriter, r *http.Request, status int) {
-		out, err := listCredentials(r.Context(), db)
+		out, err := listCredentials(r.Context(), db, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -1540,9 +1558,11 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 	taken := func(w http.ResponseWriter, name string) {
 		http.Error(w, fmt.Sprintf("there is a credential named %s already, or one whose variable would be %s; name it apart", name, credentialEnv(credentialVariable(name))), http.StatusConflict)
 	}
-	// Saves what a request gives a credential, as a new one for id 0, in a
-	// transaction, and says what went wrong with it that is the request's.
+	// Saves what a request gives a credential of its project, as a new one
+	// for id 0, in a transaction, and says what went wrong with it that is
+	// the request's.
 	save := func(w http.ResponseWriter, r *http.Request, id int64, f credentialFields) (int64, bool) {
+		project := requestProject(r)
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
@@ -1552,9 +1572,9 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 		variable, headers := credentialVariable(f.Name), strings.Join(f.Headers, ",")
 		if id == 0 {
 			res, err := tx.ExecContext(r.Context(),
-				`INSERT INTO credentials (name, variable, description, base_url, auth, header, template, username, param, headers, secret, everyone)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
-				f.Name, variable, f.Description, f.BaseURL, f.Auth, f.Header, f.Template, f.Username, f.Param, headers, f.Everyone)
+				`INSERT INTO credentials (project_id, name, variable, description, base_url, auth, header, template, username, param, headers, secret, everyone)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
+				project, f.Name, variable, f.Description, f.BaseURL, f.Auth, f.Header, f.Template, f.Username, f.Param, headers, f.Everyone)
 			if mysqlErrorIs(err, mysqlErrDuplicate) {
 				taken(w, f.Name)
 				return 0, false
@@ -1567,7 +1587,7 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 				return 0, false
 			}
 		} else {
-			was, _, err := scanCredential(tx.QueryRowContext(r.Context(), "SELECT "+credentialColumns+" FROM credentials c WHERE c.id = ? FOR UPDATE", id))
+			was, _, err := scanCredential(tx.QueryRowContext(r.Context(), "SELECT "+credentialColumns+" FROM credentials c WHERE c.id = ? AND c.project_id = ? FOR UPDATE", id, project))
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(w, "credential not found", http.StatusNotFound)
 				return 0, false
@@ -1579,8 +1599,8 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(),
 					`UPDATE credentials SET name = ?, variable = ?, description = ?, base_url = ?, auth = ?, header = ?, template = ?, username = ?, param = ?, headers = ?, everyone = ?
-					WHERE id = ?`,
-					f.Name, variable, f.Description, f.BaseURL, f.Auth, f.Header, f.Template, f.Username, f.Param, headers, f.Everyone, id)
+					WHERE id = ? AND project_id = ?`,
+					f.Name, variable, f.Description, f.BaseURL, f.Auth, f.Header, f.Template, f.Username, f.Param, headers, f.Everyone, id, project)
 			}
 			if mysqlErrorIs(err, mysqlErrDuplicate) {
 				taken(w, f.Name)
@@ -1602,7 +1622,7 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 				return 0, false
 			}
 		}
-		err = setCredentialTeams(r.Context(), tx, id, f.Teams)
+		err = setCredentialTeams(r.Context(), tx, project, id, f.Teams)
 		if mysqlErrorIs(err, mysqlErrForeignKey) {
 			http.Error(w, "no such team", http.StatusBadRequest)
 			return 0, false
@@ -1629,8 +1649,9 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 		return f, true
 	}
 
-	// Every credential, for admins; with ?flow=, the ones the flow may use,
-	// which its board offers, for whoever sees the flow.
+	// Every credential of the project, for its owners; with ?flow=, the
+	// ones the flow may use, which its board offers, for whoever sees the
+	// flow.
 	mux.HandleFunc("GET /api/credentials", func(w http.ResponseWriter, r *http.Request) {
 		if v := r.URL.Query().Get("flow"); v != "" {
 			flow, err := strconv.ParseInt(v, 10, 64)
@@ -1706,13 +1727,14 @@ func registerCredentialRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var name string
-		err := db.QueryRowContext(r.Context(), "SELECT name FROM credentials WHERE id = ?", r.PathValue("id")).Scan(&name)
+		project := requestProject(r)
+		err := db.QueryRowContext(r.Context(), "SELECT name FROM credentials WHERE id = ? AND project_id = ?", r.PathValue("id"), project).Scan(&name)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "credential not found", http.StatusNotFound)
 			return
 		}
 		if err == nil {
-			_, err = db.ExecContext(r.Context(), "DELETE FROM credentials WHERE id = ?", r.PathValue("id"))
+			_, err = db.ExecContext(r.Context(), "DELETE FROM credentials WHERE id = ? AND project_id = ?", r.PathValue("id"), project)
 		}
 		if err != nil {
 			serverError(w, err)

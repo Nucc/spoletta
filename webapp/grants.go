@@ -2,11 +2,16 @@ package main
 
 // Proxy grants: the tokens steps are handed for the webapp's proxies, to
 // their models (llm.go), their MCP servers (mcp.go), the internet
-// (egress.go) and the services of their credentials (credentials.go). They are kept in the database, so that whichever replica of
+// (egress.go) and the services of their credentials (credentials.go). They
+// are kept in the database, so that whichever replica of
 // the webapp a step's request reaches knows its token, wherever it was
 // granted. Only a token's SHA-256 is kept, never the token, and never a
 // key: what a grant reaches is worked out again by the replica it reaches,
 // from what the grant names, such as its providers or its MCP servers' ids.
+// Each names the project its step's run is in (the flow's, for an
+// assistant's reply), and its proxy reaches only that project's keys,
+// providers, servers, tokens, credentials and hosts, refusing anything
+// else; what a grant does is audited in that project's log.
 //
 // A grant ends when it is revoked, as its step ends, or once it expires,
 // whichever replica it is used at. Whoever deletes its row audits its end,
@@ -37,6 +42,8 @@ const (
 // Who and what a grant is for; what of its proxy it reaches is the proxy's
 // own, kept as JSON beside it.
 type proxyGrant struct {
+	// The project whose things it reaches.
+	project   int64
 	user      *int64
 	run, step int64
 	// The run whose spending a model grant's counts toward, 0 for none.
@@ -73,9 +80,9 @@ func (s dbGrants) put(ctx context.Context, kind, token string, g proxyGrant, rea
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO proxy_grants (token_hash, kind, user_id, run_id, step_id, root_run_id, reaches, replica_id, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) + INTERVAL ? MICROSECOND)`,
-		hashToken(token), kind, g.user, nullID(g.run), nullID(g.step), nullID(g.root), data, replicaID, ttl.Microseconds())
+		`INSERT INTO proxy_grants (token_hash, kind, project_id, user_id, run_id, step_id, root_run_id, reaches, replica_id, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) + INTERVAL ? MICROSECOND)`,
+		hashToken(token), kind, g.project, g.user, nullID(g.run), nullID(g.step), nullID(g.root), data, replicaID, ttl.Microseconds())
 	return err
 }
 
@@ -100,8 +107,8 @@ func (s dbGrants) row(ctx context.Context, kind, token, and string) (proxyGrant,
 	var g proxyGrant
 	var run, step, root sql.NullInt64
 	var data []byte
-	err := s.db.QueryRowContext(ctx, "SELECT user_id, run_id, step_id, root_run_id, reaches FROM proxy_grants WHERE token_hash = ? AND kind = ? "+and,
-		hashToken(token), kind).Scan(&g.user, &run, &step, &root, &data)
+	err := s.db.QueryRowContext(ctx, "SELECT project_id, user_id, run_id, step_id, root_run_id, reaches FROM proxy_grants WHERE token_hash = ? AND kind = ? "+and,
+		hashToken(token), kind).Scan(&g.project, &g.user, &run, &step, &root, &data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return proxyGrant{}, nil, false, nil
 	}
@@ -139,10 +146,10 @@ func (s dbGrants) removeRoot(root int64) ([]proxyGrant, error) {
 	}
 	defer tx.Rollback()
 	var ended []proxyGrant
-	err = scanAll(ctx, tx, "SELECT user_id, run_id, step_id FROM proxy_grants WHERE kind = ? AND root_run_id = ? FOR UPDATE", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT project_id, user_id, run_id, step_id FROM proxy_grants WHERE kind = ? AND root_run_id = ? FOR UPDATE", func(rows *sql.Rows) error {
 		g := proxyGrant{root: root}
 		var run, step sql.NullInt64
-		if err := rows.Scan(&g.user, &run, &step); err != nil {
+		if err := rows.Scan(&g.project, &g.user, &run, &step); err != nil {
 			return err
 		}
 		g.run, g.step = run.Int64, step.Int64
@@ -244,10 +251,10 @@ func clearGrants(ctx context.Context, db *sql.DB, where, why string, args ...any
 		g          proxyGrant
 	}
 	var found []ended
-	err := scanAll(ctx, db, "SELECT token_hash, kind, user_id, run_id, step_id FROM proxy_grants WHERE "+where, func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT token_hash, kind, project_id, user_id, run_id, step_id FROM proxy_grants WHERE "+where, func(rows *sql.Rows) error {
 		var e ended
 		var run, step sql.NullInt64
-		if err := rows.Scan(&e.hash, &e.kind, &e.g.user, &run, &step); err != nil {
+		if err := rows.Scan(&e.hash, &e.kind, &e.g.project, &e.g.user, &run, &step); err != nil {
 			return err
 		}
 		e.g.run, e.g.step = run.Int64, step.Int64
@@ -269,16 +276,23 @@ func clearGrants(ctx context.Context, db *sql.DB, where, why string, args ...any
 	return nil
 }
 
-// Records the end of a grant in the audit log, as its proxy words it.
+// Records the end of a grant in its project's audit log, as its proxy
+// words it.
 func auditGrantEnd(kind string, g proxyGrant, why string) {
 	switch kind {
 	case grantModel:
-		audit("model.revoke", g.user, g.run, g.step, "the model proxy's token %s", why)
+		g.audit("model.revoke", "the model proxy's token %s", why)
 	case grantMCP:
-		audit("mcp.revoke", g.user, g.run, g.step, "the MCP proxy's token %s", why)
+		g.audit("mcp.revoke", "the MCP proxy's token %s", why)
 	case grantInternet:
-		audit("internet.revoke", g.user, g.run, g.step, "the egress proxy's token %s", why)
+		g.audit("internet.revoke", "the egress proxy's token %s", why)
 	case grantCredential:
-		audit("credential.revoke", g.user, g.run, g.step, "the credential proxy's token %s", why)
+		g.audit("credential.revoke", "the credential proxy's token %s", why)
 	}
+}
+
+// Records an event of what the grant's step did in its project's audit
+// log, for whom and which run and step.
+func (g proxyGrant) audit(kind, format string, args ...any) {
+	auditIn(g.project, kind, g.user, g.run, g.step, format, args...)
 }

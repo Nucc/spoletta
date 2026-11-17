@@ -1991,8 +1991,9 @@ func (w *walk) execute(id int64, inputs []runInput, cr *changeRequest, try int) 
 	return res, res.OK || res.Duplicate != nil, stop.Err() != nil, stepID
 }
 
-// Waits until the person's runs have fewer steps going than they may
-// (limits.go), at every replica, before the step takes one of this
+// Waits until the person's runs in the run's project have fewer steps going
+// than they may there (limits.go), at every replica, before the step takes
+// one of this
 // replica's slots, so one waiting holds none of everyone's. Returns the
 // slot taken in person_slots, which endPersonSlot gives back, 0 for a run
 // of nobody's, which isn't held to it; false if the run ended meanwhile.
@@ -2002,12 +2003,19 @@ func (e *engine) personSlot(ctx context.Context, who *int64, run int64, process 
 		return 0, true
 	}
 	logged := false
+	project, err := runProject(ctx, e.db, run)
+	if err != nil {
+		if ctx.Err() == nil {
+			runLog(e.db, run, 0, logError, "%s couldn't read its run's project: %v", process, err)
+		}
+		return 0, false
+	}
 	for {
-		limit := currentLimits().UserSteps
+		limit := limitsIn(project).UserSteps
 		e.mu.Lock()
 		ended := e.stepEnded
 		e.mu.Unlock()
-		slot, err := takePersonSlot(ctx, e.db, *who, run, limit)
+		slot, err := takePersonSlot(ctx, e.db, *who, run, project, limit)
 		if err != nil && ctx.Err() == nil {
 			runLog(e.db, run, 0, logError, "%s couldn't count its person's steps going: %v", process, err)
 		}
@@ -2028,9 +2036,9 @@ func (e *engine) personSlot(ctx context.Context, who *int64, run int64, process 
 	}
 }
 
-// Takes a slot of the person's for a step of the run, unless they have as
-// many as limit taken, 0 for no limit; 0 if they have.
-func takePersonSlot(ctx context.Context, db *sql.DB, who, run, limit int64) (int64, error) {
+// Takes a slot of the person's for a step of the run, of the project, unless
+// they have as many as limit taken there, 0 for no limit; 0 if they have.
+func takePersonSlot(ctx context.Context, db *sql.DB, who, run, project, limit int64) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -2044,15 +2052,14 @@ func takePersonSlot(ctx context.Context, db *sql.DB, who, run, limit int64) (int
 	}
 	if limit > 0 {
 		var taken int64
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM person_slots WHERE user_id = ?", who).Scan(&taken); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM person_slots WHERE user_id = ? AND project_id = ?", who, project).Scan(&taken); err != nil {
 			return 0, err
 		}
 		if taken >= limit {
 			return 0, nil
 		}
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO person_slots (user_id, run_id, replica_id, project_id) VALUES (?, ?, ?, (SELECT project_id FROM runs WHERE id = ?))",
-		who, run, replicaID, run)
+	res, err := tx.ExecContext(ctx, "INSERT INTO person_slots (project_id, user_id, run_id, replica_id) VALUES (?, ?, ?, ?)", project, who, run, replicaID)
 	if err != nil {
 		return 0, err
 	}

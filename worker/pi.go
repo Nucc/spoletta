@@ -39,10 +39,16 @@ func (piHarness) prepare(st *agentStep) (agentCommand, error) {
 		args = append(args, "--thinking", run.Thinking)
 	}
 	agentDir := filepath.Join(st.private, "agent")
-	if err := writeAgentDir(agentDir, run.Providers, run.LLM); err != nil {
+	inherits := run.inherits()
+	if err := writeAgentDir(agentDir, run.Providers, run.LLM, inherits); err != nil {
 		return agentCommand{}, err
 	}
-	env := withCloudCredentials(childEnv(append(st.env, "PI_CODING_AGENT_DIR="+agentDir)...))
+	env := stepEnv(inherits, append(st.env, "PI_CODING_AGENT_DIR="+agentDir)...)
+	// Bedrock without a key signs in with the worker's AWS credentials,
+	// which are the instance's.
+	if inherits {
+		env = withCloudCredentials(env)
+	}
 	if len(run.MCPServers) > 0 {
 		b, err := json.Marshal(map[string]any{"servers": run.MCPServers, "token": run.MCPToken})
 		if err == nil {

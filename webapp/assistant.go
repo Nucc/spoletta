@@ -495,12 +495,17 @@ func runAssistant(ctx context.Context, db *sql.DB, workerURL string, who *int64,
 	}
 	prompt := assistantPrompt(af, runs, history)
 
+	// It reaches the models of the flow's project.
+	project, err := flowProject(ctx, db, flow)
+	if err != nil {
+		return failed(err)
+	}
 	run := agentRun{ProcessName: "Assistant", Prompt: prompt, NoTools: true, Guide: true}
-	if err := run.withModelAccess(ctx, db, who, 0, 0, 0); err != nil {
+	if err := run.withModelAccess(ctx, db, project, who, 0, 0, 0); err != nil {
 		return failed(err)
 	}
 	defer llm.revoke(run.LLM)
-	model, err := defaultModel(ctx, db)
+	model, err := defaultModel(ctx, db, project)
 	if err != nil {
 		return failed(err)
 	}

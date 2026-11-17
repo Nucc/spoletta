@@ -29,7 +29,9 @@ func testAppKey(t *testing.T) (*rsa.PrivateKey, string) {
 
 // The app's token is asked for with a JWT signed with its key, for the
 // run's repositories by name, which must all be on its GitHub; otherwise
-// the static token is handed out as it is.
+// the project's own token, or the static one, is handed out as it is. A
+// project not inheriting the instance's configuration gets neither the
+// app's nor the static one.
 func TestGitHubAppTokens(t *testing.T) {
 	key, pemKey := testAppKey(t)
 	var asked struct {
@@ -71,16 +73,28 @@ func TestGitHubAppTokens(t *testing.T) {
 	}
 	// The test's GitHub is at its own host, as an Enterprise's would be.
 	host := strings.TrimPrefix(github.URL, "http://")
-	c, err := s.token(context.Background(), []string{"https://" + host + "/acme/api.git", "https://" + host + "/acme/web"})
-	if err != nil || c.Token != "ghs_app" || c.Expires == nil || !c.Expires.Equal(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("app token = %+v, %v", c, err)
+	onApp := []string{"https://" + host + "/acme/api.git", "https://" + host + "/acme/web"}
+	c, from, err := s.token(context.Background(), onApp, true, nil)
+	if err != nil || from != gitFromApp || c.Token != "ghs_app" || c.Expires == nil || !c.Expires.Equal(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("app token = %+v from %s, %v", c, from, err)
 	}
 	if !slices.Equal(asked.Repositories, []string{"api", "web"}) || asked.Permissions["contents"] != "write" {
 		t.Errorf("asked for %+v", asked)
 	}
-	c, err = s.token(context.Background(), []string{"https://" + host + "/acme/api", "https://gitlab.example.com/acme/lib"})
-	if err != nil || c.Token != "static" || c.Expires != nil {
-		t.Errorf("for repositories elsewhere too = %+v, %v", c, err)
+	elsewhere := []string{"https://" + host + "/acme/api", "https://gitlab.example.com/acme/lib"}
+	c, from, err = s.token(context.Background(), elsewhere, true, nil)
+	if err != nil || from != gitFromInstance || c.Token != "static" || c.Expires != nil {
+		t.Errorf("for repositories elsewhere too = %+v from %s, %v", c, from, err)
+	}
+	own := &gitCredentials{Username: "acme-bot", Token: "the-projects-own"}
+	if c, from, err = s.token(context.Background(), elsewhere, true, own); err != nil || from != gitFromProject || c != own {
+		t.Errorf("with the project's own, elsewhere = %+v from %s, %v", c, from, err)
+	}
+	if c, from, err = s.token(context.Background(), onApp, false, own); err != nil || from != gitFromProject || c != own {
+		t.Errorf("for a project not inheriting, with its own = %+v from %s, %v", c, from, err)
+	}
+	if c, from, err = s.token(context.Background(), onApp, false, nil); err != nil || from != gitFromNone || c != nil {
+		t.Errorf("for a project not inheriting, without its own = %+v from %s, %v", c, from, err)
 	}
 
 	t.Setenv("GITHUB_APP_ID", "")
@@ -92,7 +106,7 @@ func TestGitHubAppTokens(t *testing.T) {
 	t.Setenv("GIT_TOKEN", "")
 	if s, err := newGitTokenSource(); err != nil || s.app != nil {
 		t.Errorf("without anything = %+v, %v", s, err)
-	} else if c, err := s.token(context.Background(), []string{"https://github.com/acme/api"}); c != nil || err != nil {
+	} else if c, _, err := s.token(context.Background(), []string{"https://github.com/acme/api"}, true, nil); c != nil || err != nil {
 		t.Errorf("without a token = %+v, %v", c, err)
 	}
 }

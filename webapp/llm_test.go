@@ -24,11 +24,11 @@ func grantedBroker(t *testing.T, token string, routes map[string]llmRoute) *llmB
 	for id := range routes {
 		providers = append(providers, id)
 	}
-	if err := b.grants.put(context.Background(), grantModel, token, proxyGrant{}, llmReaches{Providers: providers}, time.Hour); err != nil {
+	if err := b.grants.put(context.Background(), grantModel, token, proxyGrant{project: legacyProject}, llmReaches{Providers: providers}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	// Worked out already, for as long as the test takes.
-	b.routed, b.routedAt = routes, time.Now().Add(time.Hour)
+	b.routed[legacyProject] = projectRoutes{routes: routes, at: time.Now().Add(time.Hour)}
 	return b
 }
 
@@ -432,5 +432,21 @@ func TestPrices(t *testing.T) {
 	// $3 a million taken in, $15 given out, $0.30 read and $3.75 written.
 	if m := c.micros(llmUsage{input: 1000, output: 100, cacheRead: 10000, cacheWrite: 2000}); m != 3000+1500+3000+7500 {
 		t.Errorf("cost = %d millionths", m)
+	}
+}
+
+// Every request the worker gets says its project and whether it inherits
+// the instance's configuration, false too, so a path that forgets to set
+// it withholds the instance's from the step rather than saying nothing,
+// which the worker takes for a webapp from before projects.
+func TestWorkerRequestsSayWhetherTheyInherit(t *testing.T) {
+	for name, v := range map[string]any{"agent": agentRun{}, "script": scriptRun{}} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), `"inheritsInstance":false`) || !strings.Contains(string(b), `"project":0`) {
+			t.Errorf("an %s request says %s", name, b)
+		}
 	}
 }

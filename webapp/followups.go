@@ -308,7 +308,8 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	if run.Workspace != nil {
 		run.Workspace.Project = project
 	}
-	run.DiskLimit = currentLimits().diskBytes()
+	run.Project = project
+	run.DiskLimit = limitsIn(project).diskBytes()
 	run.Run = runID
 	run.SessionID = s.ID
 	run.Resume = true
@@ -323,7 +324,7 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 func runFollowUp(ctx context.Context, db *sql.DB, workerURL string, mcp *mcpBroker, who *int64, run agentRun, uses processSettings, stepID int64, attempt int) runResult {
 	var msg string
 	var err error
-	if err = run.withModelAccess(ctx, db, who, run.Run, stepID, time.Duration(run.TimeoutMS)*time.Millisecond); err != nil {
+	if err = run.withModelAccess(ctx, db, run.Project, who, run.Run, stepID, time.Duration(run.TimeoutMS)*time.Millisecond); err != nil {
 		return runResult{Error: err.Error()}
 	}
 	defer llm.revoke(run.LLM)

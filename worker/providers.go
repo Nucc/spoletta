@@ -18,6 +18,11 @@ package main
 // key that is neither a $variable nor a !command as it is, which the
 // token, made of letters, digits, - and _, never is. A key models.json
 // holds is dropped: no key is the worker's.
+//
+// The host's models.json and settings.json are the instance's
+// configuration, so only a step whose project inherits it starts from
+// them; another's agent directory holds its project's providers alone, and
+// no settings choosing its models.
 
 import (
 	"context"
@@ -361,10 +366,16 @@ func providersModels(host []byte, providers []modelProvider, known map[string]ca
 // Makes a step's agent directory, which pi keeps what it writes in, such
 // as credentials it is given and the models it finds, so no step sees
 // another's: the host's settings, and its models.json with the run's
-// providers over its entries for the same ones.
-func writeAgentDir(dir string, providers []modelProvider, llm *llmAccess) error {
+// providers over its entries for the same ones, for a step inheriting the
+// instance's configuration; else no settings, and the run's providers
+// alone.
+func writeAgentDir(dir string, providers []modelProvider, llm *llmAccess, inherits bool) error {
 	if err := llm.check(); err != nil {
 		return err
+	}
+	settings, host := agentConfig.settings, agentConfig.models
+	if !inherits {
+		settings, host = []byte("{}"), nil
 	}
 	var known map[string]catalogModel
 	if len(providers) > 0 {
@@ -373,14 +384,14 @@ func writeAgentDir(dir string, providers []modelProvider, llm *llmAccess) error 
 			known = c.byID
 		}
 	}
-	models, err := providersModels(agentConfig.models, providers, known, llm)
+	models, err := providersModels(host, providers, known, llm)
 	if err != nil {
 		return err
 	}
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return fmt.Errorf("create the agent directory: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "settings.json"), agentConfig.settings, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), settings, 0o600); err != nil {
 		return fmt.Errorf("write settings.json: %w", err)
 	}
 	if models != nil {

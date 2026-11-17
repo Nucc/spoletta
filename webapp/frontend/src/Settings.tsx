@@ -113,6 +113,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
 
   const tabs = me ? tabsFor(me) : []
   const shown = tabs.find((t) => t.id === tab)?.id ?? landingTab(tabs)
+  const shownLabel = tabs.find((t) => t.id === shown)?.label
 
   useEffect(() => {
     document.title =
@@ -128,7 +129,20 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
           <span className="crumb-separator" aria-hidden>
             /
           </span>
-          Settings
+          {/* The tab shown ends the trail, after the settings it is one of. */}
+          {shownLabel ? (
+            <>
+              <a className="home" href={pageHash('#/settings')} title="The settings' first tab">
+                Settings
+              </a>
+              <span className="crumb-separator" aria-hidden>
+                /
+              </span>
+              {shownLabel}
+            </>
+          ) : (
+            'Settings'
+          )}
         </h1>
       </header>
       <ErrorBanner error={error} onDismiss={() => setError(null)} />

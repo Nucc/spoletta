@@ -50,6 +50,24 @@ const LOGS = {
   },
 }
 
+// How many events show of those the search matched, and whether older ones
+// were left out of the search.
+function countLine(log: AuditLog): string {
+  const n = (x: number) => x.toLocaleString()
+  const shown = log.events.length
+  const all = log.matched === log.searched
+  let line =
+    shown < log.matched
+      ? all
+        ? `Showing ${n(shown)} of ${n(log.searched)} events.`
+        : `Showing ${n(shown)} of ${n(log.matched)} matching events, of ${n(log.searched)}.`
+      : all
+        ? `${n(log.searched)} events.`
+        : `${n(log.matched)} of ${n(log.searched)} events match.`
+  if (log.truncated) line += ` Only the latest ${n(log.searched)} are searched; older ones are kept.`
+  return line
+}
+
 // The audit log, for the project's owners: the tokens steps were handed for
 // their models, MCP servers, the internet and git, and when they ended;
 // each internet connection; calls refused and runs stopped for spending
@@ -76,17 +94,22 @@ export function AuditLogSection({ instance = false }: { instance?: boolean }) {
     </th>
   )
 
+  // Beside the search once there are events, so it sits by what it reloads.
+  const refresh = (
+    <button type="button" className="settings-button" onClick={load} title="Fetch the latest events">
+      Refresh
+    </button>
+  )
+  // Who is left out while no event shown names anyone, as with steps' own grants.
+  const who = log?.events.some((e) => e.who) ?? false
+
   return (
     <section className="flow-section audit" aria-label={words.label}>
       <SettingsHead
         title={words.label}
         lead={words.lead}
         more={words.more}
-        action={
-          <button type="button" className="settings-button" onClick={load} title="Fetch the latest events">
-            Refresh
-          </button>
-        }
+        action={log === null || log.searched === 0 ? refresh : undefined}
       />
       <ErrorBanner error={error} />
       {log === null ? (
@@ -98,24 +121,19 @@ export function AuditLogSection({ instance = false }: { instance?: boolean }) {
           <div className="search-row">
             <QueryBar facets={facets} query={query} onChange={setQuery} placeholder={words.placeholder} />
             <TimeRange facets={facets} query={query} field="at" onChange={setQuery} />
+            {refresh}
           </div>
           <div className="search-body">
-            <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} rows={log.searched} />
+            <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} rows={log.searched} folded={['run', 'step']} />
             <div className="search-results">
-              <p className="flows-note">
-                {log.matched === log.searched
-                  ? `${log.searched} events`
-                  : `${log.matched} of ${log.searched} events match`}
-                {log.events.length < log.matched && `; the first ${log.events.length} show`}
-                {log.truncated && '; older events are kept but not searched'}
-              </p>
+              <p className="flows-note">{countLine(log)}</p>
               <div className="data-table-scroll">
                 <table className="data-table audit-table">
                   <thead>
                     <tr>
                       {header('at', 'When', true)}
                       {header('kind', 'Kind')}
-                      {header('who', 'Who')}
+                      {who && header('who', 'Who')}
                       {!instance && header('run', 'Run')}
                       {!instance && header('step', 'Step')}
                       <th>What</th>
@@ -128,7 +146,7 @@ export function AuditLogSection({ instance = false }: { instance?: boolean }) {
                         <td>
                           <code>{e.kind}</code>
                         </td>
-                        <td>{e.who || <span className="data-started">nobody</span>}</td>
+                        {who && <td>{e.who || <span className="data-started">nobody</span>}</td>}
                         {!instance && (
                           <td>
                             {e.run !== null &&

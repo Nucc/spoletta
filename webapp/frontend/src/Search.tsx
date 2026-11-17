@@ -405,6 +405,7 @@ export function FacetList({
   onChange,
   display,
   rows,
+  folded,
 }: {
   facets: Facets
   ast: Node
@@ -413,6 +414,9 @@ export function FacetList({
   display?: Display
   // How many rows were searched, to fold facets whose values are mostly each a row's own.
   rows: number
+  // Facets that start folded whatever their values, such as the audit log's
+  // runs, which a link in each row reaches more readily.
+  folded?: string[]
 }) {
   const [shown, toggle] = useFacetsShown()
   const groups: { name: string; keys: string[] }[] = []
@@ -465,7 +469,17 @@ export function FacetList({
           <section key={g.name} className="facet-group">
             <h3>{g.name}</h3>
             {g.keys.map((k) => (
-              <FacetItem key={k} facets={facets} facetKey={k} ast={ast} query={query} onChange={onChange} display={display} rows={rows} />
+              <FacetItem
+                key={k}
+                facets={facets}
+                facetKey={k}
+                ast={ast}
+                query={query}
+                onChange={onChange}
+                display={display}
+                rows={rows}
+                folded={folded?.some((f) => f.toLowerCase() === k.toLowerCase())}
+              />
             ))}
           </section>
         ))}
@@ -494,6 +508,7 @@ function FacetItem({
   onChange,
   display,
   rows,
+  folded = false,
 }: {
   facets: Facets
   facetKey: string
@@ -502,13 +517,15 @@ function FacetItem({
   onChange: (q: string) => void
   display?: Display
   rows: number
+  folded?: boolean
 }) {
   const named = useMemo(() => facets.byKey.get(facetKey.toLowerCase())!.map((i) => facets.list[i]), [facets, facetKey])
   const facet = named[0]
   const ticked = useMemo(() => selection(facets, ast, facetKey), [facets, ast, facetKey])
   const distinct = named.reduce((n, f) => n + f.distinct, 0)
-  // A facet whose values are mostly each a row's own starts folded.
-  const [open, setOpen] = useState(() => distinct <= 20 || distinct < rows / 2)
+  // A facet whose values are mostly each a row's own starts folded, as does
+  // one the page asks to.
+  const [open, setOpen] = useState(() => !folded && (distinct <= 20 || distinct < rows / 2))
   const [all, setAll] = useState(false)
   const [filter, setFilter] = useState('')
   const isOpen = open || ticked.length > 0

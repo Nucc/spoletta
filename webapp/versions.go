@@ -22,7 +22,9 @@ import (
 // keeps its rows' ids across jumps: runs refer to processes and objects by
 // id, and persistent objects remember what runs stored by object and
 // attribute id. A flow may publish one of its versions for the runs nobody
-// starts by hand to take; see publish.go.
+// starts by hand to take; see publish.go. A snapshot names no project: the
+// board it brings back is its flow's project's, whatever it holds (see
+// board_projects.go).
 type version struct {
 	ID int64 `json:"id"`
 	// The version the board was on when this one was saved, if any; a save

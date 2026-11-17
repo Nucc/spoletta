@@ -10,8 +10,8 @@ package main
 // commands, structs or procedures, since importing those would make over
 // what the app already has of the same name, which is everyone's and only
 // admins change. For the same reason the flow is named apart from every
-// flow of the project, seen or not. What it needs of the app is worked out from
-// it: the repositories its processes work on, which its flow then lacks
+// flow of the project, seen or not. What it needs of the app is worked out
+// from it: the repositories its processes work on, which its flow then lacks
 // until someone adds them in its settings; the connectors its connector
 // processes use, named in the file by the connector, such as slack, and
 // given the first installed one of that connector, or none while there is

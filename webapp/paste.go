@@ -22,6 +22,14 @@ import (
 // keeps the object it specializes when that is copied along, or still in the
 // same flow; pasted into another flow, it takes over what it inherited
 // instead, as a module's copies do.
+//
+// What is pasted is the pasted flow's project's (see board_projects.go).
+// The route reaches the request's project alone (guardFlows), so a flow of
+// another project can't be pasted from; were one, a copy of its structs'
+// or procedures' objects would be the pasted flow's own, its references to
+// records none, the MCP servers, skills and credentials its processes pick
+// there left behind, and a subflow process running its procedure refused,
+// as checkCall refuses one of another project.
 
 type pasteRequest struct {
 	// The flow copied from, and what was selected on one of its boards.

@@ -47,7 +47,8 @@ export type SettingsTab =
   | 'ceilings'
   | 'events'
 
-// The tabs as wide as the window, holding a table.
+// The parts taking the rest of the window's width beside the tabs, holding a
+// table; the others keep to a reading width.
 const WIDE: SettingsTab[] = ['audit', 'events']
 
 // The groups the tabs show in down the side, each under its heading: the

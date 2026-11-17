@@ -6736,23 +6736,15 @@ input.record-field-name {
 }
 
 /* The settings: a tab per part down the side, in groups, staying in sight
-   while a long part scrolls; the part on the right. The audit log's table
-   takes the window's width, growing to the right only, so the tabs stay
-   where they are on every part. */
+   while a long part scrolls; the part on the right. The tabs keep to the
+   window's left edge on every part, so they never move between parts; a
+   part keeps to a reading width beside them, but the audit logs, whose
+   tables take the rest of the window's width. */
 .settings {
   display: flex;
   gap: 32px;
   width: 100%;
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 32px 16px;
-}
-
-.settings.wide {
-  width: auto;
-  max-width: none;
-  margin-left: max(0px, calc((100% - 980px) / 2));
-  margin-right: 0;
+  padding: 32px 24px;
 }
 
 .settings-tabs {
@@ -6806,6 +6798,11 @@ input.record-field-name {
 .settings-main {
   flex: 1;
   min-width: 0;
+  max-width: 760px;
+}
+
+.settings.wide .settings-main {
+  max-width: none;
 }
 
 .settings-main .flow-section h2 {

@@ -478,6 +478,59 @@ func TestProjectsRunsReachNoOtherProject(t *testing.T) {
 	prRowsOf(t, db, p.ID, runs)
 }
 
+// A subflow process somehow running another project's procedure, started
+// by a way that doesn't look at the board first (the API on the version
+// published, and a re-run on the board as it is), fails its step as the
+// run comes to it, saying the procedure is another project's, and starts no
+// run of the procedure: the engine checks as it walks, whatever let the run
+// start.
+func TestProjectsSubflowOfAnotherProjectFailsAsTheRunComesToIt(t *testing.T) {
+	a := newApp(t)
+	db := secretsDB(t)
+	legacy := verBuildSubflow(a)
+
+	p := newProject(a, "Calling")
+	a.project = p.ID
+	sub := verBuildSubflow(a)
+	prPlant(t, db, "UPDATE processes SET settings = JSON_SET(settings, '$.flow', ?) WHERE id = ? AND project_id = ?", legacy.callee.ID, sub.call.ID, p.ID)
+	pubPublish(a, sub.caller.ID, "calling Legacy's procedure")
+	key := apiNewKey(a, "Calling")
+	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", sub.caller.ID), map[string]any{"published": true}, http.StatusConflict, "pick another in its panel")
+
+	childRuns := func(run int64) int {
+		t.Helper()
+		var n int
+		if err := db.QueryRow("SELECT COUNT(*) FROM runs WHERE parent_run_id = ?", run).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	failedSaying := func(how string, d runDetail) {
+		t.Helper()
+		call := onlyStep(t, d, "Call")
+		if d.Status != runFailed || call.Status != stepError || !strings.Contains(call.Error, "another project's") || call.ChildRun != nil {
+			t.Errorf("%s: the run ended %s, Call %s with %q and child run %v; want it failed saying the procedure is another project's",
+				how, d.Status, call.Status, call.Error, call.ChildRun)
+		}
+		if n := childRuns(d.ID); n != 0 {
+			t.Errorf("%s: the run started %d runs inside it, want none", how, n)
+		}
+	}
+
+	viaKey := apiStart(a, key.Key, sub.caller.ID, map[string]any{}, http.StatusCreated)
+	first := a.finish(viaKey.ID)
+	failedSaying("started over the API", first)
+
+	var rerun run
+	a.call("POST", fmt.Sprintf("/api/runs/%d/steps/%d/rerun", first.ID, onlyStep(t, first, "Call").ID), map[string]any{}, http.StatusCreated, &rerun)
+	failedSaying("re-run", a.finish(rerun.ID))
+
+	var ran int
+	if err := db.QueryRow("SELECT COUNT(*) FROM runs WHERE flow_id = ?", legacy.callee.ID).Scan(&ran); err != nil || ran != 0 {
+		t.Errorf("Legacy's procedure ran %d times (%v), want never", ran, err)
+	}
+}
+
 // A flow of a second project taking an issue, run by a script.
 func prIssueFlow(a *app, name string) flow {
 	a.t.Helper()

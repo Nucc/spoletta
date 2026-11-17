@@ -109,6 +109,8 @@ type paster struct {
 	procMap  map[int64]int64
 	objMap   map[int64]int64
 	stateMap map[int64]int64
+	// The project of the flow pasted into, which every copy is in.
+	project int64
 	// The copies that specialize an object, by the object they copy's general.
 	generals [][2]int64
 }
@@ -123,8 +125,12 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 	if err != nil {
 		return res, "", err
 	}
+	project, err := flowProject(ctx, tx, req.Flow)
+	if err != nil {
+		return res, "", err
+	}
 	p := &paster{
-		ctx: ctx, db: db, tx: tx, req: req,
+		ctx: ctx, db: db, tx: tx, req: req, project: project,
 		procs: map[int64]process{}, objs: map[int64]snapshotObject{},
 		states: map[int64][]objectState{}, attrs: map[int64][]attribute{}, parts: map[int64][]snapshotObject{},
 		selProcs: map[int64]bool{}, selObjs: map[int64]bool{},
@@ -218,14 +224,14 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 		if !ok {
 			continue
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, end_x, end_y) VALUES (?, ?, ?, ?, ?)",
-			id, b.Start.X, b.Start.Y, b.End.X, b.End.Y)
+		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, end_x, end_y, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+			id, b.Start.X, b.Start.Y, b.End.X, b.End.Y, project)
 		if err != nil {
 			return res, "", err
 		}
 		for _, t := range b.Start.Targets {
 			if to, ok := p.procMap[t.Process]; ok {
-				if _, err := tx.ExecContext(ctx, "INSERT INTO start_targets (process_id, route) VALUES (?, ?)", to, storedRoute(t.Route)); err != nil {
+				if _, err := tx.ExecContext(ctx, "INSERT INTO start_targets (process_id, route, project_id) VALUES (?, ?, ?)", to, storedRoute(t.Route), project); err != nil {
 					return res, "", err
 				}
 			}
@@ -321,8 +327,8 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 				role = roleNone
 			}
 		}
-		r, err := tx.ExecContext(ctx, "INSERT INTO object_links (process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			process, object, l.Direction, state, route, atX, atY, role, l.Condition && state != 0, storedQuery(l.Query))
+		r, err := tx.ExecContext(ctx, "INSERT INTO object_links (process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			process, object, l.Direction, state, route, atX, atY, role, l.Condition && state != 0, storedQuery(l.Query), project)
 		if err != nil {
 			return res, "", err
 		}
@@ -334,7 +340,7 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 		link, ok := links[ls.Link]
 		state, ok2 := p.stateMap[ls.State]
 		if ok && ok2 {
-			if _, err := tx.ExecContext(ctx, "INSERT INTO link_states (link_id, state_id) VALUES (?, ?)", link, state); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO link_states (link_id, state_id, project_id) VALUES (?, ?, ?)", link, state, project); err != nil {
 				return res, "", err
 			}
 		}
@@ -343,7 +349,7 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 		source, ok := p.procMap[c.Source]
 		target, ok2 := p.procMap[c.Target]
 		if ok && ok2 {
-			if _, err := tx.ExecContext(ctx, "INSERT INTO connections (source_id, target_id, kind) VALUES (?, ?, ?)", source, target, c.Kind); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO connections (source_id, target_id, kind, project_id) VALUES (?, ?, ?, ?)", source, target, c.Kind, project); err != nil {
 				return res, "", err
 			}
 		}
@@ -365,7 +371,7 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 		if len(inputs) == 0 && len(sm.Inputs) > 0 {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO process_samples (process_id, name, inputs) VALUES (?, ?, ?)", process, sm.Name, inputs); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO process_samples (process_id, name, inputs, project_id) VALUES (?, ?, ?, ?)", process, sm.Name, inputs, project); err != nil {
 			return res, "", err
 		}
 	}
@@ -393,8 +399,8 @@ func paste(ctx context.Context, db *sql.DB, tx *sql.Tx, req pasteRequest) (paste
 				object = &c
 			}
 		}
-		r, err := tx.ExecContext(ctx, "INSERT INTO notes (flow_id, parent_id, x, y, width, height, text, colour, process_id, object_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			req.Flow, parent, x, y, n.Width, n.Height, n.Text, n.Colour, process, object)
+		r, err := tx.ExecContext(ctx, "INSERT INTO notes (flow_id, parent_id, x, y, width, height, text, colour, process_id, object_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			req.Flow, parent, x, y, n.Width, n.Height, n.Text, n.Colour, process, object, project)
 		if err != nil {
 			return res, "", err
 		}
@@ -502,9 +508,13 @@ func (p *paster) copyProcess(pr process) (string, error) {
 	if msg, err := checkCall(p.ctx, p.db, p.req.Flow, pr.Kind, pr.Settings); err != nil || msg != "" {
 		return msg, err
 	}
-	r, err := p.tx.ExecContext(p.ctx, `INSERT INTO processes (flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.req.Flow, pr.Name, pr.Kind, pr.Prompt, pr.Script, pr.Model, pr.Thinking, x, y, pr.Width, parent, pr.Recording, pr.Settings)
+	// What it picks of another project stays behind.
+	if _, err := settingsElsewhere(p.ctx, p.tx, p.project, true, &pr.Settings); err != nil {
+		return "", err
+	}
+	r, err := p.tx.ExecContext(p.ctx, `INSERT INTO processes (flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings, project_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.req.Flow, pr.Name, pr.Kind, pr.Prompt, pr.Script, pr.Model, pr.Thinking, x, y, pr.Width, parent, pr.Recording, pr.Settings, p.project)
 	if err != nil {
 		return "", err
 	}
@@ -535,14 +545,16 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 			relation = relationExhibition
 		}
 	}
-	// A copy of the module's own object would follow itself.
+	// A copy of the module's own object would follow itself, and one of
+	// another project's is the pasted flow's own (see board_projects.go).
 	var source *int64
 	if o.Source != nil {
-		module, err := flowOfObject(p.ctx, p.tx, *o.Source)
-		if err != nil {
+		var module, project int64
+		err := p.tx.QueryRowContext(p.ctx, "SELECT flow_id, project_id FROM objects WHERE id = ?", *o.Source).Scan(&module, &project)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return 0, err
 		}
-		if module != 0 && module != p.req.Flow {
+		if module != 0 && module != p.req.Flow && project == p.project {
 			source = o.Source
 		}
 	}
@@ -565,9 +577,9 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 	if source != nil && parent == nil && owner == nil {
 		pick = o.Pick
 	}
-	r, err := p.tx.ExecContext(p.ctx, `INSERT INTO objects (flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, source_id, pick)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.req.Flow, o.Name, x, y, o.Width, o.Persistent && owner == nil, o.Many, o.Min, o.Max, o.Human && owner == nil, end, parent, owner, relation, source, storedPick(pick))
+	r, err := p.tx.ExecContext(p.ctx, `INSERT INTO objects (flow_id, name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, source_id, pick, project_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.req.Flow, o.Name, x, y, o.Width, o.Persistent && owner == nil, o.Many, o.Min, o.Max, o.Human && owner == nil, end, parent, owner, relation, source, storedPick(pick), p.project)
 	if err != nil {
 		return 0, err
 	}
@@ -589,7 +601,7 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 	}
 
 	for _, st := range p.states[o.ID] {
-		r, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_states (object_id, name, rule, source_id) VALUES (?, ?, ?, ?)", id, st.Name, st.Rule, sourceOf(st.Source))
+		r, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_states (object_id, name, rule, source_id, project_id) VALUES (?, ?, ?, ?, ?)", id, st.Name, st.Rule, sourceOf(st.Source), p.project)
 		if err != nil {
 			return 0, err
 		}
@@ -608,8 +620,15 @@ func (p *paster) copyObject(o snapshotObject, parent, owner *int64, top, mapped 
 	}
 	attrs = append(attrs, p.attrs[o.ID]...)
 	for _, a := range attrs {
-		_, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			id, a.Name, a.Definition, a.Unique && unique, a.File, sourceOf(a.Source), a.Ref, a.Type, a.Pattern)
+		// A reference to another project's struct is none.
+		ref := a.Ref
+		if other, err := objectElsewhere(p.ctx, p.tx, p.project, ref); err != nil {
+			return 0, err
+		} else if other {
+			ref = nil
+		}
+		_, err := p.tx.ExecContext(p.ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id, a.Name, a.Definition, a.Unique && unique, a.File, sourceOf(a.Source), ref, a.Type, a.Pattern, p.project)
 		if err != nil {
 			return 0, err
 		}

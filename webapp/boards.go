@@ -45,9 +45,9 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// Gives a flow process its board, unless it has one.
+// Gives a flow process its board, unless it has one, in its project.
 func ensureBoard(ctx context.Context, db execer, process int64) error {
-	_, err := db.ExecContext(ctx, "INSERT IGNORE INTO inner_boards (process_id, x, y, end_x, end_y) VALUES (?, 40, 40, 40, 480)", process)
+	_, err := db.ExecContext(ctx, "INSERT IGNORE INTO inner_boards (process_id, x, y, end_x, end_y, project_id) SELECT id, 40, 40, 40, 480, project_id FROM processes WHERE id = ?", process)
 	return err
 }
 
@@ -263,7 +263,7 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 				if target == nil {
 					return nil
 				}
-				_, err := tx.ExecContext(r.Context(), "INSERT INTO start_targets (process_id) VALUES (?)", *target)
+				_, err := tx.ExecContext(r.Context(), "INSERT INTO start_targets (process_id, project_id) SELECT id, project_id FROM processes WHERE id = ?", *target)
 				return err
 			})
 			if err != nil {
@@ -310,9 +310,9 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid route", http.StatusBadRequest)
 			return
 		}
-		var flow int64
+		var flow, project int64
 		var board *int64
-		err = db.QueryRowContext(r.Context(), "SELECT flow_id, parent_id FROM processes WHERE id = ?", id).Scan(&flow, &board)
+		err = db.QueryRowContext(r.Context(), "SELECT flow_id, parent_id, project_id FROM processes WHERE id = ?", id).Scan(&flow, &board, &project)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "process not found", http.StatusNotFound)
 			return
@@ -322,7 +322,7 @@ func registerBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if connect {
-			_, err = db.ExecContext(r.Context(), "INSERT INTO start_targets (process_id, route) VALUES (?, ?) AS new ON DUPLICATE KEY UPDATE route = new.route", id, stored)
+			_, err = db.ExecContext(r.Context(), "INSERT INTO start_targets (process_id, route, project_id) VALUES (?, ?, ?) AS new ON DUPLICATE KEY UPDATE route = new.route", id, stored, project)
 		} else {
 			_, err = db.ExecContext(r.Context(), "DELETE FROM start_targets WHERE process_id = ?", id)
 		}
@@ -533,16 +533,21 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 
 	p.Name, p.Kind = name, kindFlow
 	p.X, p.Y = (minX+maxX)/2, (minY+maxY)/2
-	res, err := tx.ExecContext(ctx, "INSERT INTO processes (flow_id, name, kind, prompt, script, x, y, parent_id) VALUES (?, ?, ?, '', '', ?, ?, ?)",
-		p.Flow, p.Name, p.Kind, p.X, p.Y, p.Parent)
+	// All of it is the flow's project's.
+	project, err := flowProject(ctx, tx, p.Flow)
+	if err != nil {
+		return p, "", err
+	}
+	res, err := tx.ExecContext(ctx, "INSERT INTO processes (flow_id, name, kind, prompt, script, x, y, parent_id, project_id) VALUES (?, ?, ?, '', '', ?, ?, ?, ?)",
+		p.Flow, p.Name, p.Kind, p.X, p.Y, p.Parent, project)
 	if err != nil {
 		return p, "", err
 	}
 	if p.ID, err = res.LastInsertId(); err != nil {
 		return p, "", err
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, end_x, end_y) VALUES (?, ?, ?, ?, ?)",
-		p.ID, minX, minY-wrapMargin, minX, maxY+wrapNodeHeight+wrapMargin)
+	_, err = tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, end_x, end_y, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+		p.ID, minX, minY-wrapMargin, minX, maxY+wrapNodeHeight+wrapMargin, project)
 	if err != nil {
 		return p, "", err
 	}
@@ -559,10 +564,10 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 
 	// The flow process takes and generates each such object once, in no
 	// state: the states processes inside take it in are theirs to trigger.
-	args := append([]any{p.ID}, procArgs...)
+	args := append([]any{p.ID, project}, procArgs...)
 	_, err = tx.ExecContext(ctx,
-		`INSERT IGNORE INTO object_links (process_id, object_id, direction, state_id)
-		SELECT DISTINCT ?, l.object_id, l.direction, 0
+		`INSERT IGNORE INTO object_links (process_id, object_id, direction, state_id, project_id)
+		SELECT DISTINCT ?, l.object_id, l.direction, 0, ?
 		FROM object_links l JOIN objects o ON o.id = l.object_id
 		WHERE l.process_id IN `+placeholders(len(processes))+` AND NOT (o.parent_id <=> `+strconv.FormatInt(p.ID, 10)+`)`,
 		args...)
@@ -587,7 +592,7 @@ func wrap(ctx context.Context, tx *sql.Tx, name string, processes, objects []int
 	if _, err := tx.ExecContext(ctx, "UPDATE start_targets SET route = NULL WHERE process_id IN "+placeholders(len(processes)), procArgs...); err != nil {
 		return p, "", err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO start_targets (process_id) VALUES (?)", p.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO start_targets (process_id, project_id) VALUES (?, ?)", p.ID, project); err != nil {
 		return p, "", err
 	}
 	return p, "", nil

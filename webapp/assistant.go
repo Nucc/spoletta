@@ -286,12 +286,14 @@ func startAssistantReply(ctx context.Context, db *sql.DB, flow int64, message st
 	if going {
 		return 0, conflictError("the assistant is still replying to your last message")
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO assistant_messages (flow_id, role, content, status, error, finished_at) VALUES (?, ?, ?, ?, '', CURRENT_TIMESTAMP(3))",
-		flow, rolePerson, message, stepDone); err != nil {
+	// They are the flow's project's.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO assistant_messages (flow_id, role, content, status, error, finished_at, project_id)
+		SELECT id, ?, ?, ?, '', CURRENT_TIMESTAMP(3), project_id FROM flows WHERE id = ?`,
+		rolePerson, message, stepDone, flow); err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO assistant_messages (flow_id, role, content, status, error, replica_id) VALUES (?, ?, '', ?, '', ?)",
-		flow, roleAssistant, stepActive, replicaID)
+	res, err := tx.ExecContext(ctx, "INSERT INTO assistant_messages (flow_id, role, content, status, error, replica_id, project_id) SELECT id, ?, '', ?, '', ?, project_id FROM flows WHERE id = ?",
+		roleAssistant, stepActive, replicaID, flow)
 	if err != nil {
 		return 0, err
 	}

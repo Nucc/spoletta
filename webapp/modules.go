@@ -131,12 +131,13 @@ func markModule(ctx context.Context, tx *sql.Tx, flow int64) error {
 	return err
 }
 
-// How many other flows run a flow through their subflow processes, of
-// those out of the trash.
+// How many other flows of its project run a flow through their subflow
+// processes, of those out of the trash.
 func usersOf(ctx context.Context, db querier, flow int64) (int, error) {
 	var n int
 	err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT p.flow_id) FROM processes p JOIN flows f ON f.id = p.flow_id AND `+liveFlows+`
-		WHERE p.kind = ? AND CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) = ? AND p.flow_id <> ?`, kindSubflow, flow, flow).Scan(&n)
+		WHERE p.kind = ? AND CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) = ? AND p.flow_id <> ?
+			AND p.project_id = (SELECT project_id FROM flows WHERE id = ?)`, kindSubflow, flow, flow, flow).Scan(&n)
 	return n, err
 }
 
@@ -198,13 +199,15 @@ func syncCopiesFrom(ctx context.Context, tx *sql.Tx, flow int64, outcomes bool, 
 	seen[flow] = true
 	if outcomes {
 		var callers []int64
-		err := scanAll(ctx, tx, `SELECT id FROM processes WHERE kind = ? AND CAST(JSON_EXTRACT(settings, '$.flow') AS SIGNED) = ? ORDER BY id`,
+		// Only the flow's project's run it (see board_projects.go).
+		err := scanAll(ctx, tx, `SELECT p.id FROM processes p JOIN flows f ON f.id = ? AND f.project_id = p.project_id
+			WHERE p.kind = ? AND CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) = f.id ORDER BY p.id`,
 			func(rows *sql.Rows) error {
 				var p int64
 				err := rows.Scan(&p)
 				callers = append(callers, p)
 				return err
-			}, kindSubflow, flow)
+			}, flow, kindSubflow)
 		if err != nil {
 			return err
 		}
@@ -383,7 +386,7 @@ func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) e
 		if here := pairs[w.id]; here != 0 {
 			_, err = tx.ExecContext(ctx, "UPDATE object_states SET name = ?, source_id = ? WHERE id = ?", w.name, w.id, here)
 		} else {
-			_, err = tx.ExecContext(ctx, "INSERT INTO object_states (object_id, name, source_id) VALUES (?, ?, ?)", dup, w.name, w.id)
+			_, err = tx.ExecContext(ctx, "INSERT INTO object_states (object_id, name, source_id, project_id) SELECT id, ?, ?, project_id FROM objects WHERE id = ?", w.name, w.id, dup)
 		}
 		if err != nil {
 			return err
@@ -422,8 +425,9 @@ func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) e
 			_, err = tx.ExecContext(ctx, "UPDATE object_attributes SET name = ?, definition = ?, is_unique = ?, is_file = ?, source_id = ?, ref_id = ?, value_type = ?, value_pattern = ? WHERE id = ?",
 				a.Name, a.Definition, a.Unique, a.File, a.ID, a.Ref, a.Type, a.Pattern, here)
 		} else {
-			_, err = tx.ExecContext(ctx, "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-				dup, a.Name, a.Definition, a.Unique, a.File, a.ID, a.Ref, a.Type, a.Pattern)
+			_, err = tx.ExecContext(ctx, `INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern, project_id)
+				SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, project_id FROM objects WHERE id = ?`,
+				a.Name, a.Definition, a.Unique, a.File, a.ID, a.Ref, a.Type, a.Pattern, dup)
 		}
 		if err != nil {
 			return err
@@ -439,6 +443,9 @@ func syncCopy(ctx context.Context, tx *sql.Tx, s structure, source, dup int64) e
 		return err
 	}
 	pairs, left = matchRows(want, have)
+	if err := releaseGoing(ctx, tx, nil, left); err != nil {
+		return err
+	}
 	for _, p := range left {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM objects WHERE id = ?", p); err != nil {
 			return err

@@ -70,7 +70,7 @@ func clientParam(r *http.Request) string {
 // Says the flow's board changed, as by says, and lets go of the changes
 // made over an hour ago.
 func noteBoardChange(ctx context.Context, tx *sql.Tx, flow int64, by boardChanger) error {
-	if _, err := tx.ExecContext(ctx, "INSERT INTO board_changes (flow_id, user_id, client) VALUES (?, ?, ?)", flow, by.user, by.client); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO board_changes (flow_id, user_id, client, project_id) SELECT id, ?, ?, project_id FROM flows WHERE id = ?", by.user, by.client, flow); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, "DELETE FROM board_changes WHERE flow_id = ? AND changed_at < NOW(3) - INTERVAL 1 HOUR", flow)
@@ -120,8 +120,10 @@ func registerPresenceRoutes(mux *http.ServeMux, db *sql.DB) {
 		u := requestUser(r)
 		res := presence{People: []boardViewer{}}
 		if u != nil {
-			_, err := db.ExecContext(ctx, `INSERT INTO board_viewers (flow_id, user_id, client, seen_at) VALUES (?, ?, ?, NOW(3))
-				ON DUPLICATE KEY UPDATE seen_at = NOW(3)`, flow, u.ID, body.Client)
+			// The guard keeps the flow to the request's project, which the
+			// key checks it is in.
+			_, err := db.ExecContext(ctx, `INSERT INTO board_viewers (flow_id, user_id, client, seen_at, project_id) VALUES (?, ?, ?, NOW(3), ?)
+				ON DUPLICATE KEY UPDATE seen_at = NOW(3)`, flow, u.ID, body.Client, requestProject(r))
 			if mysqlErrorIs(err, mysqlErrForeignKey) {
 				http.Error(w, "flow not found", http.StatusNotFound)
 				return

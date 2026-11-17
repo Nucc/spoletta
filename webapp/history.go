@@ -72,7 +72,7 @@ func recordStep(ctx context.Context, tx *sql.Tx, flow int64, by boardChanger) (b
 	if _, err := tx.ExecContext(ctx, "DELETE FROM flow_history WHERE flow_id = ? AND undone", flow); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO flow_history (flow_id, snapshot) VALUES (?, ?)", flow, body); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO flow_history (flow_id, snapshot, project_id) SELECT id, ?, project_id FROM flows WHERE id = ?", body, flow); err != nil {
 		return false, err
 	}
 	if err := noteBoardChange(ctx, tx, flow, by); err != nil {

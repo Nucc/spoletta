@@ -710,6 +710,11 @@ func TestProjectsSweepEveryRoute(t *testing.T) {
 		}
 		return submitted(data("the draft"))
 	})
+	// The assistant's route is swept too; its reply fails rather than
+	// bring a setup file that would change the boards being swept.
+	a.worker.onAgent("Assistant", func(context.Context, agentRun) runResult {
+		return runResult{Error: "the sweep asks the assistant nothing"}
+	})
 	one := buildSweepSide(t, a, db, "One")
 	two := buildSweepSide(t, a, db, "Two")
 	olga := usersNewPerson("Olga")

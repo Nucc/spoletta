@@ -205,6 +205,10 @@ func registerHistoryRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			changed, err := step(ctx, tx, f, requestChanger(r))
+			if errors.Is(err, errOthersRows) {
+				http.Error(w, "the step names what another flow has, so it can't be gone back to", http.StatusConflict)
+				return
+			}
 			if err != nil {
 				serverError(w, err)
 				return

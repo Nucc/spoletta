@@ -302,7 +302,7 @@ function withProject(url: string, headers: HeadersInit | undefined, project: num
 // The paths of requests about the person or the projects themselves rather
 // than what is in a project, which go on whatever their project; the
 // server's outsideProjects.
-const outsideProjects = (url: string) => /^\/api\/(me|projects)(?=$|[/?])/.test(url)
+const outsideProjects = (url: string) => /^\/api\/(me|projects|instance|inbox)(?=$|[/?])/.test(url)
 
 // An address under /api/ that the browser opens itself, as a window or a
 // link, rather than the page asking for it: it can't carry the header, so

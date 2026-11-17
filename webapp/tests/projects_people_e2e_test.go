@@ -512,6 +512,44 @@ func TestProjectsPeopleTeamsAndRolesPerProject(t *testing.T) {
 	}
 }
 
+// A flow, a skill, a task board and a credential are given only to a team
+// of their own project: another project's team, which the keys refuse, is
+// none, and asking for it is answered plainly, whether making it or giving
+// it on.
+func TestProjectsPeopleGivenOnlyToTheirProjectsTeams(t *testing.T) {
+	a, prov := usersApp(t)
+	usersSignIn(a, prov, usersAda)
+	one, two := newProject(a, "Given one"), newProject(a, "Given two")
+	var theirs, ours peopleTeam
+	a.project = one.ID
+	a.call("POST", "/api/teams", map[string]any{"name": "Theirs"}, http.StatusCreated, &theirs)
+	a.project = two.ID
+	a.call("POST", "/api/teams", map[string]any{"name": "Ours"}, http.StatusCreated, &ours)
+	to := map[string]any{"kind": "team", "id": theirs.ID}
+
+	f := a.newFlow(fmt.Sprintf("Given %d", time.Now().UnixNano()))
+	a.refused("PUT", fmt.Sprintf("/api/flows/%d/owner", f.ID), to, http.StatusBadRequest, "no such team")
+	a.refused("POST", "/api/skills", map[string]any{"name": skillsName("given"), "description": "Given.", "content": "Given.", "owner": to},
+		http.StatusBadRequest, "no such team")
+	s := skillsNew(a, "skills", map[string]any{"name": skillsName("given"), "description": "Given.", "content": "Given."})
+	a.refused("PUT", fmt.Sprintf("/api/skills/%d/owner", s.ID), to, http.StatusBadRequest, "no such team")
+	a.refused("POST", "/api/taskboards", map[string]any{"name": "Given", "owner": to}, http.StatusBadRequest, "no such team")
+	b := taskBoardCall(a, "POST", "/api/taskboards", map[string]any{"name": "Given"}, http.StatusCreated)
+	a.refused("PUT", fmt.Sprintf("/api/taskboards/%d/owner", b.ID), to, http.StatusBadRequest, "no such team")
+	cred := map[string]any{"name": credentialsName(t, "Given"), "baseUrl": "https://given.example.com", "auth": "header",
+		"header": "X-Api-Key", "template": "{secret}", "secret": "given-secret-0123456789", "teams": []int64{theirs.ID}}
+	a.refused("POST", "/api/credentials", cred, http.StatusBadRequest, "no such team")
+	cred["teams"] = []int64{ours.ID}
+	c := credentialsAdd(a, cred)
+	cred["teams"] = []int64{ours.ID, theirs.ID}
+	a.refused("PUT", fmt.Sprintf("/api/credentials/%d", c.ID), cred, http.StatusBadRequest, "no such team")
+
+	// Their own team they are given to.
+	a.call("PUT", fmt.Sprintf("/api/flows/%d/owner", f.ID), map[string]any{"kind": "team", "id": ours.ID}, http.StatusOK, nil)
+	a.call("PUT", fmt.Sprintf("/api/skills/%d/owner", s.ID), map[string]any{"kind": "team", "id": ours.ID}, http.StatusOK, nil)
+	a.call("PUT", fmt.Sprintf("/api/taskboards/%d/owner", b.ID), map[string]any{"kind": "team", "id": ours.ID}, http.StatusOK, nil)
+}
+
 // Someone who may enter no project is told whom to ask: the instance's
 // admins, by name.
 func TestProjectsPeopleWhomToAsk(t *testing.T) {

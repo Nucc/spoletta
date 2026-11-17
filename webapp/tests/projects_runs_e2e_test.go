@@ -313,8 +313,8 @@ func TestProjectsRunAFlowInASecondProject(t *testing.T) {
 		t.Error("the worker was asked for no diff")
 	}
 	for _, df := range diffs {
-		if df["project"] != project {
-			t.Errorf("the worker was asked for the diff %v, want project %s's", df, project)
+		if df["project"] != project || df["inheritsInstance"] != "false" {
+			t.Errorf("the worker was asked for the diff %v, want project %s's, which doesn't inherit the instance's configuration", df, project)
 		}
 	}
 
@@ -531,6 +531,36 @@ func TestProjectsSubflowOfAnotherProjectFailsAsTheRunComesToIt(t *testing.T) {
 	}
 }
 
+// Trying a process says what it does outside the flow, naming the MCP
+// servers and the connector it uses: only its own project's, so a process
+// somehow naming another project's, planted as no route lets anyone, names
+// none of them.
+func TestProjectsTrialNamesNoOtherProjectsServers(t *testing.T) {
+	a := newApp(t)
+	db := secretsDB(t)
+	n := time.Now().UnixNano()
+	server, connector := fmt.Sprintf("legacy_mcp_%d", n), fmt.Sprintf("legacy_slack_%d", n)
+	forgetMCPServers(t, server, connector)
+	legacyServer := psAddServer(a, map[string]any{"name": server, "url": testProvider.URL + "/mcp"})
+	legacyConnector := psAddServer(a, map[string]any{"name": connector, "connector": "slack", "url": testProvider.URL + "/slack"})
+
+	p := newProject(a, "Tried")
+	a.project = p.ID
+	f := a.newFlow(fmt.Sprintf("Tried %d", n))
+	agent := a.agent(f.ID, "Ask", "Ask around.")
+	post := a.newProcess(f.ID, map[string]any{"name": "Post", "kind": kindConnector})
+	prPlant(t, db, "UPDATE processes SET settings = JSON_SET(COALESCE(settings, JSON_OBJECT()), '$.mcpServers', JSON_ARRAY(?)) WHERE id = ? AND project_id = ?",
+		legacyServer, agent.ID, p.ID)
+	prPlant(t, db, `UPDATE processes SET settings = JSON_SET(COALESCE(settings, JSON_OBJECT()), '$.connector', JSON_OBJECT('server', ?, 'operation', 'post_message'))
+		WHERE id = ? AND project_id = ?`, legacyConnector, post.ID, p.ID)
+	for _, id := range []int64{agent.ID, post.ID} {
+		status, reply := a.do("GET", fmt.Sprintf("/api/processes/%d/trial", id), nil)
+		if status != http.StatusOK || strings.Contains(string(reply), server) || strings.Contains(string(reply), connector) {
+			t.Errorf("trying process %d = %d %s, which names Legacy's servers", id, status, reply)
+		}
+	}
+}
+
 // A flow of a second project taking an issue, run by a script.
 func prIssueFlow(a *app, name string) flow {
 	a.t.Helper()
@@ -612,6 +642,28 @@ func TestProjectsStartRunsInTheirOwnProject(t *testing.T) {
 	db.QueryRow("SELECT COUNT(*) FROM webhook_digests WHERE webhook_id = ? AND project_id = ?", h.ID, p.ID).Scan(&digests)
 	if deliveries != 2 || digests != 1 {
 		t.Errorf("the project holds %d deliveries and %d digests of the webhook, want 2 and 1", deliveries, digests)
+	}
+	// A delivery starting no run is audited in the webhook's project too.
+	if status, reply := hookGitHub(a, h, h.Secret, "ping", "p-1", map[string]any{"zen": "Keep it apart."}); status != http.StatusOK {
+		t.Errorf("a ping = %d %s", status, reply)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var here, elsewhere int
+		if err := db.QueryRow(`SELECT COALESCE(SUM(project_id = ?), 0), COALESCE(SUM(project_id <> ?), 0) FROM audit_events
+			WHERE kind = 'webhook.delivery' AND run_id IS NULL AND detail LIKE ?`, p.ID, p.ID, `%"p-1"%`).Scan(&here, &elsewhere); err != nil {
+			t.Fatal(err)
+		}
+		if elsewhere > 0 {
+			t.Fatalf("the ping's delivery is audited in another project than the webhook's")
+		}
+		if here == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the ping's delivery isn't audited in the webhook's project")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	prRowsOf(t, db, p.ID, []int64{viaKey.ID, viaHook})
 

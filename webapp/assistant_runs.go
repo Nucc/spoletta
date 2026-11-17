@@ -78,8 +78,9 @@ const (
 
 var (
 	// A run's link, as the board's address has it, with one of its steps
-	// after it or not: #/flows/3/runs/412/steps/9.
-	runLinkPattern = regexp.MustCompile(`#/flows/\d+/runs/(\d+)(?:/steps/(\d+))?`)
+	// after it or not, and its project before it or not:
+	// #/p/2/flows/3/runs/412/steps/9, or #/flows/3/runs/412.
+	runLinkPattern = regexp.MustCompile(`#/(?:p/\d+/)?flows/\d+/runs/(\d+)(?:/steps/(\d+))?`)
 	// "run 412", "Run #412", "runs 412, 413 and #414".
 	runWordPattern = regexp.MustCompile(`(?i)\bruns?\s+#?(\d+)\b((?:\s*(?:,|&|\band\b|\bor\b)\s*#?\d+\b)*)`)
 	// "#412" alone: not within a word, a character reference (&#39;) or a link.

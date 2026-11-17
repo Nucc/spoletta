@@ -659,7 +659,7 @@ func TestProjectsTemplatesAndTheAssistant(t *testing.T) {
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
-	noSlackInstalled(t)
+	noSlackInstalled(a)
 	slack := newTplSlack(t)
 	slack.install(a, fmt.Sprintf("legacy_slack_%d", n))
 	digest := tplFind(a, "daily-digest-to-slack")

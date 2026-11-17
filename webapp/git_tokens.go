@@ -140,11 +140,16 @@ func (s gitTokenSource) forWorkspace(ctx context.Context, ws *workspaceSpec) (*g
 	if s.db != nil {
 		var err error
 		// A session from before workspaces named their run is Legacy's, as
-		// everything from before projects is.
-		if ws.Run != 0 {
+		// everything from before projects is, unless it names its project;
+		// every workspace made since names its run (follow-ups too, whose
+		// sessions may not), whose project it is.
+		switch {
+		case ws.Run != 0:
 			if project, err = runProject(ctx, s.db, ws.Run); err != nil {
 				return nil, err
 			}
+		case ws.Project != 0:
+			project = ws.Project
 		}
 		if inherits, err = inheritsInstance(ctx, s.db, project); err != nil {
 			return nil, err

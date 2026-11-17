@@ -554,13 +554,9 @@ func TestProjectsPeopleGivenOnlyToTheirProjectsTeams(t *testing.T) {
 // admins, by name.
 func TestProjectsPeopleWhomToAsk(t *testing.T) {
 	a, prov := usersApp(t)
-	db := secretsDB(t)
 	usersSignIn(a, prov, usersAda)
 	lone := usersNewPerson("Lone")
-	usersAdd(a, lone.email)
-	if _, err := db.Exec("UPDATE project_members m JOIN users u ON u.id = m.user_id SET m.removed_at = CURRENT_TIMESTAMP(3) WHERE u.email = ?", lone.email); err != nil {
-		t.Fatal(err)
-	}
+	a.call("POST", "/api/users", map[string]any{"email": lone.email}, http.StatusCreated, nil)
 	usersSignIn(a, prov, lone)
 	var me struct {
 		Projects []projectRow `json:"projects"`

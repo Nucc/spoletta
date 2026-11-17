@@ -419,7 +419,14 @@ func TestProjectsLevels(t *testing.T) {
 	db := secretsDB(t)
 	p := newProject(a, "Levels")
 	vera, ed, olga, nobu := usersNewPerson("Vera"), usersNewPerson("Ed"), usersNewPerson("Olga"), usersNewPerson("Nobu")
-	v, e, o := usersAdd(a, vera.email), usersAdd(a, ed.email), usersAdd(a, olga.email)
+	// Added with no project, they are in none until given this one.
+	var v, e, o usersPersonRow
+	for _, c := range []struct {
+		email string
+		row   *usersPersonRow
+	}{{vera.email, &v}, {ed.email, &e}, {olga.email, &o}} {
+		a.call("POST", "/api/users", map[string]any{"email": c.email}, http.StatusCreated, c.row)
+	}
 
 	a.project = p.ID
 	seen := a.newFlow(fmt.Sprintf("Seen %d", time.Now().UnixNano()))
@@ -497,12 +504,13 @@ func TestProjectsLevels(t *testing.T) {
 	if me.Super || !me.User.Admin {
 		t.Errorf("the owner's me in her project = %+v, want its admin, not super", me)
 	}
-	// In Legacy, which she joined as she was added, she is an editor.
+	// Legacy, which nobody gave her, she may not enter.
 	a.project = 0
 	a.call("GET", "/api/me", nil, http.StatusOK, &me)
-	if mine, ok := projectIn(me.Projects, 1); me.User.Admin || !ok || mine.Level != "editor" {
-		t.Errorf("the owner's me in Legacy = %+v", me)
+	if _, ok := projectIn(me.Projects, 1); me.User.Admin || ok || len(me.Projects) != 1 {
+		t.Errorf("the owner's me in Legacy = %+v, want her in her project alone", me)
 	}
+	a.refused("GET", "/api/flows", nil, http.StatusForbidden, "no access to this project")
 
 	// Someone signing in who was given none of it has no access to it.
 	usersSignIn(a, prov, nobu)
@@ -517,46 +525,86 @@ func TestProjectsLevels(t *testing.T) {
 	}
 }
 
-// While projects come in, the instance's admins own Legacy, as they had
-// everything before: someone made an admin no longer is its owner no more,
-// as they were no admin, and made one again, or added back as one, is
-// again.
-func TestProjectsAdminsOwnLegacy(t *testing.T) {
+// The instance's admins enter every project as its owner, Legacy too,
+// without being anyone's member; made an admin no more, someone has only
+// what they were given by hand, which being made one or no more never
+// touched. Someone signing in the first time, or added with no project, is
+// in none; a project and a level an admin adds them with give it to them
+// at once, with roles there, which are given only so.
+func TestProjectsSuperAdminsEnterEveryProject(t *testing.T) {
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
+	p := newProject(a, "Supered")
 	amy := usersNewPerson("Amy")
 	var row usersPersonRow
 	a.call("POST", "/api/users", map[string]any{"email": amy.email, "admin": true}, http.StatusCreated, &row)
-	legacyAdmin := func(want bool) {
+	levels := func(want map[int64]string) {
 		t.Helper()
 		usersSignIn(a, prov, amy)
 		var me projectsMe
 		a.call("GET", "/api/me", nil, http.StatusOK, &me)
-		level := "editor"
-		if want {
-			level = "owner"
+		for _, id := range []int64{1, p.ID} {
+			l, _ := projectIn(me.Projects, id)
+			if l.Level != want[id] {
+				t.Errorf("amy's level in project %d = %q, want %q (me %+v)", id, l.Level, want[id], me)
+			}
 		}
-		if l, _ := projectIn(me.Projects, 1); me.Super != want || me.User.Admin != want || l.Level != level {
-			t.Errorf("amy's me = %+v, want super and Legacy's admin %v, %s", me, want, level)
+		for _, id := range []int64{1, p.ID} {
+			a.project = id
+			switch want[id] {
+			case "owner":
+				a.call("GET", "/api/model-keys", nil, http.StatusOK, nil)
+			case "":
+				a.refused("GET", "/api/model-keys", nil, http.StatusForbidden, "no access to this project")
+			default:
+				a.refused("GET", "/api/model-keys", nil, http.StatusForbidden, "only an admin")
+			}
 		}
-		if want {
-			a.call("GET", "/api/model-keys", nil, http.StatusOK, nil)
-		} else {
-			a.refused("GET", "/api/model-keys", nil, http.StatusForbidden, "only an admin")
-		}
+		a.project = 0
 		usersSignIn(a, prov, usersAda)
 	}
-	legacyAdmin(true)
+	levels(map[int64]string{1: "owner", p.ID: "owner"})
 	a.call("PATCH", fmt.Sprintf("/api/users/%d", row.ID), map[string]any{"admin": false}, http.StatusOK, nil)
-	legacyAdmin(false)
+	levels(map[int64]string{})
+	// Given the project as a viewer by hand, she keeps that through being
+	// made an admin and no more.
+	a.call("PUT", fmt.Sprintf("/api/projects/%d/members", p.ID), []map[string]any{{"user": row.ID, "level": "viewer"}}, http.StatusOK, nil)
+	levels(map[int64]string{p.ID: "viewer"})
 	a.call("PATCH", fmt.Sprintf("/api/users/%d", row.ID), map[string]any{"admin": true}, http.StatusOK, nil)
-	legacyAdmin(true)
-	a.call("DELETE", fmt.Sprintf("/api/users/%d", row.ID), nil, http.StatusNoContent, nil)
-	a.call("POST", "/api/users", map[string]any{"email": amy.email}, http.StatusCreated, nil)
-	legacyAdmin(false)
-	a.call("DELETE", fmt.Sprintf("/api/users/%d", row.ID), nil, http.StatusNoContent, nil)
-	a.call("POST", "/api/users", map[string]any{"email": amy.email, "admin": true}, http.StatusCreated, nil)
-	legacyAdmin(true)
+	levels(map[int64]string{1: "owner", p.ID: "owner"})
+	a.call("PATCH", fmt.Sprintf("/api/users/%d", row.ID), map[string]any{"admin": false}, http.StatusOK, nil)
+	levels(map[int64]string{p.ID: "viewer"})
+
+	// Someone signing in the first time is in no project.
+	nell := usersNewPerson("Nell")
+	usersSignIn(a, prov, nell)
+	var me projectsMe
+	a.call("GET", "/api/me", nil, http.StatusOK, &me)
+	if me.Super || len(me.Projects) != 0 {
+		t.Errorf("someone signing in the first time = %+v, want in no project", me)
+	}
+	a.refused("GET", "/api/flows", nil, http.StatusForbidden, "no access to this project")
+
+	// Added with a project and a level, someone is in it at once, holding
+	// the roles given there; roles or a level without a project are none.
+	usersSignIn(a, prov, usersAda)
+	olive := usersNewPerson("Olive")
+	a.refused("POST", "/api/users", map[string]any{"email": olive.email, "roles": []string{"Finance"}}, http.StatusBadRequest, "name it too")
+	a.refused("POST", "/api/users", map[string]any{"email": olive.email, "level": "editor"}, http.StatusBadRequest, "name it too")
+	a.refused("POST", "/api/users", map[string]any{"email": olive.email, "project": p.ID, "level": "boss"}, http.StatusBadRequest, "level")
+	a.refused("POST", "/api/users", map[string]any{"email": olive.email, "project": 1 << 40, "level": "editor"}, http.StatusBadRequest, "no such project")
+	var added usersPersonRow
+	a.call("POST", "/api/users", map[string]any{"email": olive.email, "project": p.ID, "level": "editor", "roles": []string{"Finance"}}, http.StatusCreated, &added)
+	if !slices.Equal(added.Roles, []string{"Finance"}) {
+		t.Errorf("olive added with the roles %q, want Finance", added.Roles)
+	}
+	usersSignIn(a, prov, olive)
+	a.call("GET", "/api/me", nil, http.StatusOK, &me)
+	if l, ok := projectIn(me.Projects, p.ID); !ok || l.Level != "editor" || len(me.Projects) != 1 {
+		t.Errorf("olive's projects = %+v, want the one she was added to, as an editor", me.Projects)
+	}
+	a.project = p.ID
+	a.call("GET", "/api/flows", nil, http.StatusOK, nil)
 }
 
 // A group the identity provider puts people in, given to a project, lets

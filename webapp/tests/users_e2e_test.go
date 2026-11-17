@@ -452,11 +452,13 @@ func usersShare(a *app, f int64) {
 	a.call("PUT", fmt.Sprintf("/api/flows/%d/owner", f), map[string]any{"kind": "global"}, http.StatusOK, nil)
 }
 
-// The admin adds someone, before they first sign in.
+// The admin adds someone, before they first sign in, giving them the test's
+// project, the one the app's requests name, as an editor holding the roles
+// given there: someone signs in to no project of their own (projects.go).
 func usersAdd(a *app, email string, roles ...string) usersPersonRow {
 	a.t.Helper()
 	var p usersPersonRow
-	a.call("POST", "/api/users", map[string]any{"email": email, "roles": roles}, http.StatusCreated, &p)
+	a.call("POST", "/api/users", map[string]any{"email": email, "project": a.projectID(), "level": "editor", "roles": roles}, http.StatusCreated, &p)
 	return p
 }
 
@@ -555,7 +557,9 @@ func TestUsersRolesWhereReviewsAre(t *testing.T) {
 	nested := a.waitStep(rn.ID, "Approve", stepWaiting)
 	look := a.waitStep(freeRun.ID, "Look", stepWaiting)
 
-	usersSignIn(a, p, usersNewPerson("Carl"))
+	carl := usersNewPerson("Carl")
+	usersAdd(a, carl.email)
+	usersSignIn(a, p, carl)
 	if !look.CanDecide || len(look.HandledBy) != 0 {
 		t.Errorf("the free review is handled by %v", look.HandledBy)
 	}

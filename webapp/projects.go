@@ -38,13 +38,14 @@ package main
 // or start anything are refused there, in one place. Requests about the
 // person, the projects or the instance (outsideProjects) need name none.
 //
-// Transition, until the projects work is done: the instance's people are
-// Legacy's members, someone an admin adds or who signs in the first time
-// becoming one, an owner if an admin else an editor, as everyone was in
-// the one space there was before projects (joinLegacy), and making someone
-// an admin or no longer one moves them to owner or editor there
-// (followAdminInLegacy). Legacy is project 1, inheriting what the instance
-// is configured with outside the database.
+// Someone signing in the first time, or added by a super admin, is in no
+// project until given one: by hand, by a group or by a project's
+// others_access; a super admin adding them may give them one at once
+// (POST /api/users). Making someone a super admin, or one no more, leaves
+// their level in each project as it was given. Legacy is project 1, which
+// everything from before projects is in, and whose members everyone there
+// was then became; it inherits what the instance is configured with
+// outside the database.
 //
 // Without sign-in there is nobody, as before: every request may do
 // anything, including making and switching projects.
@@ -338,36 +339,6 @@ func refuseNonSuper(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	return false
-}
-
-// The level an admin of the instance has in Legacy, and anyone else.
-func legacyLevel(admin bool) string {
-	if admin {
-		return levelOwner
-	}
-	return levelEditor
-}
-
-// Transition: makes the person a member of Legacy by hand, an owner if an
-// admin else an editor, as everyone was in the one space there was before
-// projects; brings them back if they were removed from it, at that level.
-// Run as an admin adds someone, or adds them back, and as someone signs in
-// the first time.
-func joinLegacy(ctx context.Context, tx *sql.Tx, user int64, admin bool) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO project_members (project_id, user_id, level, source) VALUES (?, ?, ?, ?) AS joining
-		ON DUPLICATE KEY UPDATE level = joining.level, source = joining.source, removed_at = NULL`,
-		legacyProject, user, legacyLevel(admin), sourceManual)
-	return err
-}
-
-// Transition: keeps someone's level in Legacy, given by hand, in step with
-// whether they are the instance's admin, so making them one or no longer
-// one gives or takes Legacy as it gave or took everything before projects.
-// It overrides a level an owner gave them there by hand meanwhile.
-func followAdminInLegacy(ctx context.Context, tx *sql.Tx, user int64, admin bool) error {
-	_, err := tx.ExecContext(ctx, "UPDATE project_members SET level = ? WHERE project_id = ? AND user_id = ? AND source = ?",
-		legacyLevel(admin), legacyProject, user, sourceManual)
-	return err
 }
 
 // Makes the person a member of each project the flows the query names are
@@ -694,8 +665,9 @@ func registerProjectRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 
 	// Archives the project, which only a super admin then enters; once
 	// archived, ?forever=true deletes it for good, with everything in it. A
-	// super admin's. Legacy, which the instance's people join, is archived
-	// like any but never deleted.
+	// super admin's. Legacy, which holds what there was before projects and
+	// inherits the instance's configuration, is archived like any but never
+	// deleted.
 	mux.HandleFunc("DELETE /api/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if refuseNonSuper(w, r) {
 			return
@@ -718,7 +690,7 @@ func registerProjectRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 			return
 		}
 		if v.ID == legacyProject {
-			http.Error(w, "Legacy holds what there was before projects, and everyone joins it, so it can be archived but not deleted", http.StatusConflict)
+			http.Error(w, "Legacy holds what there was before projects, so it can be archived but not deleted", http.StatusConflict)
 			return
 		}
 		runs, err := deleteProject(ctx, db, v.ID)

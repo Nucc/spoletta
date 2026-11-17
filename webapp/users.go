@@ -605,9 +605,9 @@ func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims, groups []s
 			if _, err = tx.ExecContext(ctx, "INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)", p.issuer, c.Subject, id); err != nil {
 				return err
 			}
-			if err := joinLegacy(ctx, tx, id, admin); err != nil {
-				return err
-			}
+			// They are in no project but what their groups, a project
+			// letting anyone in, or being an admin give them, until someone
+			// gives them one by hand (projects.go).
 			return setGroups(ctx, tx, id, groups)
 		case err != nil:
 			return err

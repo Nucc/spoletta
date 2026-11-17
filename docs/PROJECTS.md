@@ -160,6 +160,14 @@ projects may reach the same URL with different tokens, and a workspace is
 told its project (`workspaceSpec.Project`). Nothing a step of one project
 fetched is readable by a step of another.
 
+The worker's own configuration is the instance's, so a step gets it only
+when its project has `inherits_instance`, which the webapp says with each
+agent and script request (`inheritsInstance`): the host's `models.json`, the
+worker's `AWS_*` variables and those `CHILD_ENV` names, its own git config,
+and its own providers steering Claude Code's choice of Bedrock. Without it
+the worker withholds them all, and the webapp doesn't ask `GET /models` or
+`GET /host-providers` on that project's behalf.
+
 Nothing about projects lives only in a replica's memory; caches keyed by
 what is now per project (the price book's providers, allowed hosts) are keyed
 by project.

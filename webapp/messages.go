@@ -36,7 +36,8 @@ func recordMessage(ctx context.Context, db *sql.DB, stepID int64, attempt int, r
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, "INSERT INTO run_step_messages (step_id, attempt, message) VALUES (?, ?, ?)", stepID, attempt, string(m))
+	_, err = db.ExecContext(ctx, "INSERT INTO run_step_messages (step_id, attempt, message, project_id) VALUES (?, ?, ?, (SELECT project_id FROM run_steps WHERE id = ?))",
+		stepID, attempt, string(m), stepID)
 	return err
 }
 

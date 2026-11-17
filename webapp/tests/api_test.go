@@ -869,8 +869,10 @@ type version struct {
 // What the worker takes for a step: the workspace with the repositories the
 // process works on.
 type workspaceSpec struct {
-	ID     string `json:"id"`
-	Branch string `json:"branch"`
+	ID string `json:"id"`
+	// The project the run is in, whose shared repositories the worker uses.
+	Project int64  `json:"project,omitempty"`
+	Branch  string `json:"branch"`
 	// The branch its checkouts are on when the run's flow names it, or why
 	// it names none.
 	Named   string `json:"named"`

@@ -155,7 +155,7 @@ func claimItem(ctx context.Context, db *sql.DB, b *runBoard, run, stepID, list i
 		return nil, err
 	}
 	defer tx.Rollback()
-	dup, err := storeInstance(ctx, tx, run, stepID, list, name, content, "", b.uniqueAttributes(list))
+	dup, err := storeInstance(ctx, tx, b.project, run, stepID, list, name, content, "", b.uniqueAttributes(list))
 	if err != nil || dup != nil {
 		return dup, err
 	}

@@ -301,14 +301,14 @@ func refFields(ctx context.Context, db rowQuerier, store int64) ([]refField, err
 	return fields, err
 }
 
-// Why content can't be written to store, if a reference it holds names no
-// record: "" when each names one or is empty.
-func danglingRefs(ctx context.Context, db rowQuerier, store int64, content string) (string, error) {
+// Why content can't be written to store in project, if a reference it holds
+// names no record: "" when each names one or is empty.
+func danglingRefs(ctx context.Context, db rowQuerier, project, store int64, content string) (string, error) {
 	fields, err := refFields(ctx, db, store)
 	if err != nil || len(fields) == 0 {
 		return "", err
 	}
-	return danglingIn(ctx, db, fields, content)
+	return danglingIn(ctx, db, project, fields, content)
 }
 
 // The attributes of an object on the board, not a shared struct's, that
@@ -323,9 +323,10 @@ func boardRefFields(s snapshot, object int64) []refField {
 	return fields
 }
 
-// Why what the object holds, one value or each of a list, can't be: a
-// reference in it names no record; "" when each names one or is empty.
-func danglingValue(ctx context.Context, db rowQuerier, fields []refField, content string) (string, error) {
+// Why what the object holds in project, one value or each of a list, can't
+// be: a reference in it names no record; "" when each names one or is
+// empty.
+func danglingValue(ctx context.Context, db rowQuerier, project int64, fields []refField, content string) (string, error) {
 	if len(fields) == 0 {
 		return "", nil
 	}
@@ -338,17 +339,28 @@ func danglingValue(ctx context.Context, db rowQuerier, fields []refField, conten
 		}
 	}
 	for _, item := range items {
-		if msg, err := danglingIn(ctx, db, fields, item); err != nil || msg != "" {
+		if msg, err := danglingIn(ctx, db, project, fields, item); err != nil || msg != "" {
 			return msg, err
 		}
 	}
 	return "", nil
 }
 
-// Why content can't be held, if a reference among fields names no record.
-func danglingIn(ctx context.Context, db rowQuerier, fields []refField, content string) (string, error) {
+// Why content can't be held in project, if a reference among fields names
+// no record, or refers to another project's struct, whose records nothing
+// here reaches.
+func danglingIn(ctx context.Context, db rowQuerier, project int64, fields []refField, content string) (string, error) {
 	for _, f := range fields {
-		for _, v := range refValues(content, f.name) {
+		values := refValues(content, f.name)
+		if len(values) == 0 {
+			continue
+		}
+		if of, err := objectProject(ctx, db, f.store); err != nil {
+			return "", err
+		} else if of != 0 && of != project {
+			return fmt.Sprintf("%s refers to the records of another project's struct, which this project can't reach", f.name), nil
+		}
+		for _, v := range values {
 			record, err := referredRecord(ctx, db, f.store, v, false)
 			if err != nil {
 				return "", err
@@ -365,9 +377,9 @@ func danglingIn(ctx context.Context, db rowQuerier, fields []refField, content s
 	return "", nil
 }
 
-// A *recordConflict failing the step writing content to store if a
-// reference it holds, or an item of it does, names no record.
-func refusedRefs(ctx context.Context, db rowQuerier, store int64, content string) error {
+// A *recordConflict failing the step of a run in project writing content to
+// store if a reference it holds, or an item of it does, names no record.
+func refusedRefs(ctx context.Context, db rowQuerier, project, store int64, content string) error {
 	items := []string{content}
 	if raw, err := jsonArray(content); err == nil {
 		items = items[:0]
@@ -376,7 +388,7 @@ func refusedRefs(ctx context.Context, db rowQuerier, store int64, content string
 		}
 	}
 	for _, item := range items {
-		msg, err := danglingRefs(ctx, db, store, item)
+		msg, err := danglingRefs(ctx, db, project, store, item)
 		if err != nil {
 			return err
 		}
@@ -408,7 +420,7 @@ func refusedOutputs(ctx context.Context, tx *sql.Tx, b *runBoard, stepID int64) 
 		if b.store(o.object) != 0 {
 			continue
 		}
-		msg, err := danglingValue(ctx, tx, boardRefFields(b.snapshot, o.object), o.content)
+		msg, err := danglingValue(ctx, tx, b.project, boardRefFields(b.snapshot, o.object), o.content)
 		if err != nil {
 			return err
 		}
@@ -419,14 +431,15 @@ func refusedOutputs(ctx context.Context, tx *sql.Tx, b *runBoard, stepID int64) 
 	return nil
 }
 
-// Why what a run is given can't be, if a reference in it names no record.
-func refusedGiven(ctx context.Context, db rowQuerier, s snapshot, in []givenObject, given map[int64]value) (string, error) {
+// Why what a run in project is given can't be, if a reference in it names
+// no record.
+func refusedGiven(ctx context.Context, db rowQuerier, project int64, s snapshot, in []givenObject, given map[int64]value) (string, error) {
 	for _, g := range in {
 		v, ok := given[g.id]
 		if !ok {
 			continue
 		}
-		msg, err := danglingValue(ctx, db, boardRefFields(s, g.id), v.content)
+		msg, err := danglingValue(ctx, db, project, boardRefFields(s, g.id), v.content)
 		if err != nil || msg != "" {
 			if msg != "" {
 				msg = quote(g.name) + ": " + msg
@@ -482,6 +495,12 @@ func followRecords(ctx context.Context, tx *sql.Tx, nr *pendingRun, picked map[i
 		if key == "" {
 			return noFollowed(o.Name, source, o.Follows, key)
 		}
+		// Only a record of the run's project, whatever the board says.
+		if of, err := objectProject(ctx, tx, *o.Store); err != nil {
+			return err
+		} else if of != 0 && of != nr.project {
+			return &nothingToTake{msg: fmt.Sprintf("%s follows a reference to another project's struct, which a run here can't reach", quote(o.Name))}
+		}
 		record, err := referredRecord(ctx, tx, *o.Store, key, true)
 		if err != nil {
 			return err
@@ -493,8 +512,8 @@ func followRecords(ctx context.Context, tx *sql.Tx, nr *pendingRun, picked map[i
 		if err := tx.QueryRowContext(ctx, "SELECT state, content FROM shared_records WHERE id = ?", record).Scan(&state, &got); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO taken_records (run_id, object_ref, record_id, state, followed) VALUES (?, ?, ?, ?, TRUE)",
-			nr.id, o.ID, record, state); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO taken_records (run_id, object_ref, record_id, state, followed, project_id) VALUES (?, ?, ?, ?, TRUE, ?)",
+			nr.id, o.ID, record, state, nr.project); err != nil {
 			return err
 		}
 		if err := insertRunObject(ctx, tx, nr.id, step, o.ID, o.Name, state, got); err != nil {
@@ -536,8 +555,12 @@ type referringGroup struct {
 const referringShown = 200
 
 // The records referring to the record of store, by struct and attribute,
-// of the structs the person sees.
+// of the structs of its project the person sees, nobody signing in too.
 func referringRecords(ctx context.Context, db *sql.DB, u *user, store, record int64) ([]referringGroup, error) {
+	project, err := objectProject(ctx, db, store)
+	if err != nil {
+		return nil, err
+	}
 	var keys []string
 	var content string
 	if err := db.QueryRowContext(ctx, "SELECT content FROM shared_records WHERE id = ?", record).Scan(&content); err != nil {
@@ -563,12 +586,12 @@ func referringRecords(ctx context.Context, db *sql.DB, u *user, store, record in
 	}
 	var fields []field
 	err = scanAll(ctx, db, `SELECT f.id, o.id, f.name, a.name FROM object_attributes a JOIN objects o ON o.id = a.object_id AND o.store_id = o.id
-		JOIN flows f ON f.id = o.flow_id AND f.is_struct WHERE a.ref_id = ? AND `+see+` ORDER BY f.name, a.id`, func(rows *sql.Rows) error {
+		JOIN flows f ON f.id = o.flow_id AND f.is_struct WHERE a.ref_id = ? AND f.project_id = ? AND `+see+` ORDER BY f.name, a.id`, func(rows *sql.Rows) error {
 		var x field
 		err := rows.Scan(&x.flow, &x.object, &x.name, &x.attr)
 		fields = append(fields, x)
 		return err
-	}, append([]any{store}, args...)...)
+	}, append([]any{store, project}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -681,10 +704,11 @@ func registerReferenceRoutes(mux *http.ServeMux, db *sql.DB) {
 }
 
 // The fields of a store referring to another struct's records, each with
-// that struct's id.
+// that struct's id; only those of the store's project, as no other is
+// reached.
 func refStructs(ctx context.Context, db rowQuerier, store int64) (map[string]int64, error) {
 	refs := map[string]int64{}
-	err := scanAll(ctx, db, `SELECT a.name, o.flow_id FROM object_attributes a JOIN objects o ON o.id = a.ref_id
+	err := scanAll(ctx, db, `SELECT a.name, o.flow_id FROM object_attributes a JOIN objects o ON o.id = a.ref_id AND o.project_id = a.project_id
 		WHERE a.object_id = ? ORDER BY a.id`, func(rows *sql.Rows) error {
 		var name string
 		var flow int64
@@ -707,14 +731,24 @@ type referred struct {
 	fields map[string]any
 }
 
-// The tables of records the fields of store refer to, read once per field.
+// The tables of records the fields of store refer to, read once per field;
+// a field referring to another project's struct reaches none.
 func referredTables(ctx context.Context, db *sql.DB, store int64) ([]referredTable, error) {
 	fields, err := refFields(ctx, db, store)
 	if err != nil {
 		return nil, err
 	}
+	project, err := objectProject(ctx, db, store)
+	if err != nil {
+		return nil, err
+	}
 	var out []referredTable
 	for _, f := range fields {
+		if of, err := objectProject(ctx, db, f.store); err != nil {
+			return nil, err
+		} else if of != project {
+			continue
+		}
 		attrs, err := uniqueAttributes(ctx, db, f.store)
 		if err != nil {
 			return nil, err
@@ -772,9 +806,14 @@ type referringCountGroup struct {
 }
 
 // Counts what refers to the records of store, a query per struct and
-// attribute referring to it.
+// attribute referring to it, of the structs of its project the person
+// sees, nobody signing in too.
 func countReferring(ctx context.Context, db *sql.DB, u *user, store int64) (*referringCounts, error) {
 	rc := &referringCounts{}
+	project, err := objectProject(ctx, db, store)
+	if err != nil {
+		return nil, err
+	}
 	attrs, err := uniqueAttributes(ctx, db, store)
 	if err != nil {
 		return nil, err
@@ -789,12 +828,12 @@ func countReferring(ctx context.Context, db *sql.DB, u *user, store int64) (*ref
 	}
 	var fields []field
 	err = scanAll(ctx, db, `SELECT o.id, f.name, a.name FROM object_attributes a JOIN objects o ON o.id = a.object_id AND o.store_id = o.id
-		JOIN flows f ON f.id = o.flow_id AND f.is_struct WHERE a.ref_id = ? AND `+see+` ORDER BY f.name, a.id`, func(rows *sql.Rows) error {
+		JOIN flows f ON f.id = o.flow_id AND f.is_struct WHERE a.ref_id = ? AND f.project_id = ? AND `+see+` ORDER BY f.name, a.id`, func(rows *sql.Rows) error {
 		var x field
 		err := rows.Scan(&x.object, &x.name, &x.attr)
 		fields = append(fields, x)
 		return err
-	}, append([]any{store}, args...)...)
+	}, append([]any{store, project}, args...)...)
 	if err != nil {
 		return nil, err
 	}

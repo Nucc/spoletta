@@ -48,9 +48,11 @@ package main
 // not handle the same event twice gives what it starts from a unique
 // attribute, which ends a second run as a duplicate (see api.go).
 //
-// A webhook's runs are for whoever added it (runUser), so their limits and
-// access apply: once they are removed, or may no longer run the flow, its
-// deliveries are refused. Whoever changes what starts its runs (its kind,
+// A webhook is its flow's project's, and its runs are in it, for whoever
+// added it (runUser) as they are there, so their limits and access apply:
+// once they are removed, may no longer enter the project or run the flow,
+// its deliveries are refused. A flow in an archived project has no webhooks
+// to reach, as one in the trash hasn't. Whoever changes what starts its runs (its kind,
 // secret, headers, events or mapping), or turns it on, makes them theirs,
 // so nobody may edit a webhook into running as someone else. Without
 // sign-in it is nobody's, and once people sign in it stops working, as API
@@ -762,7 +764,9 @@ func (p webhookPayload) eventName() string {
 
 // A webhook as a delivery needs it.
 type webhookRow struct {
-	id, flow   int64
+	id, flow int64
+	// The project it is in, its flow's.
+	project    int64
 	name, kind string
 	signer     webhookSigner
 	events     []string
@@ -784,7 +788,8 @@ func splitEvents(s string) []string {
 }
 
 // Whom the webhook's runs are for, or why it starts none: whoever added it,
-// while they may run the flow; nobody without sign-in.
+// as they are in its project, while they may run the flow there; nobody
+// without sign-in.
 func webhookRunner(ctx context.Context, db *sql.DB, signIn bool, h webhookRow) (*int64, string, error) {
 	if !signIn {
 		return nil, "", nil
@@ -792,17 +797,14 @@ func webhookRunner(ctx context.Context, db *sql.DB, signIn bool, h webhookRow) (
 	if !h.createdBy.Valid {
 		return nil, "it was added before people signed in, so it is nobody's; whoever may change the flow adds it again", nil
 	}
-	u := user{ID: h.createdBy.Int64}
-	var removed bool
-	err := db.QueryRowContext(ctx, "SELECT email, name, admin, team_manager, removed_at IS NOT NULL FROM users WHERE id = ?", u.ID).
-		Scan(&u.Email, &u.Name, &u.Admin, &u.TeamManager, &removed)
-	if errors.Is(err, sql.ErrNoRows) || removed {
-		return nil, "whoever added it was removed; whoever may change the flow adds it again", nil
-	}
+	u, why, err := memberAs(ctx, db, h.createdBy.Int64, h.project)
 	if err != nil {
 		return nil, "", err
 	}
-	access, err := flowAccess(ctx, db, &u, h.flow)
+	if why != "" {
+		return nil, "whoever added it " + why + "; whoever may change the flow adds it again", nil
+	}
+	access, err := flowAccess(ctx, db, u, h.flow)
 	if err != nil {
 		return nil, "", err
 	}
@@ -814,8 +816,8 @@ func webhookRunner(ctx context.Context, db *sql.DB, signIn bool, h webhookRow) (
 
 // Keeps a delivery among the webhook's latest, and logs it in the audit log.
 func recordDelivery(ctx context.Context, db *sql.DB, h webhookRow, d webhookDelivery) {
-	_, err := db.ExecContext(ctx, "INSERT INTO webhook_deliveries (webhook_id, delivery, event, outcome, reason, run_id) VALUES (?, ?, ?, ?, ?, ?)",
-		h.id, clipText(d.Delivery, 255), clipText(d.Event, 255), d.Outcome, clipText(d.Reason, 1024), d.Run)
+	_, err := db.ExecContext(ctx, "INSERT INTO webhook_deliveries (webhook_id, delivery, event, outcome, reason, run_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		h.id, clipText(d.Delivery, 255), clipText(d.Event, 255), d.Outcome, clipText(d.Reason, 1024), d.Run, h.project)
 	if err == nil {
 		// The newest are kept; a derived table, as MySQL limits no subquery.
 		_, err = db.ExecContext(ctx, `DELETE FROM webhook_deliveries WHERE webhook_id = ? AND id <= (SELECT id FROM
@@ -951,13 +953,15 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 		var stored, events string
 		err = sql.ErrNoRows
 		if webhookToken.MatchString(token) {
-			err = db.QueryRowContext(ctx, `SELECT id, flow_id, name, kind, secret, verify, header, id_header, timestamp_header, events, mapping, enabled, created_by
-				FROM webhooks WHERE token = ? AND flow_id IN (SELECT id FROM flows WHERE deleted_at IS NULL)`, token).
-				Scan(&h.id, &h.flow, &h.name, &h.kind, &stored, &h.signer.verify, &h.signer.header, &h.signer.idHeader, &h.signer.timestampHeader,
+			err = db.QueryRowContext(ctx, `SELECT h.id, h.flow_id, h.project_id, h.name, h.kind, h.secret, h.verify, h.header, h.id_header, h.timestamp_header,
+					h.events, h.mapping, h.enabled, h.created_by
+				FROM webhooks h JOIN flows f ON f.id = h.flow_id AND f.deleted_at IS NULL JOIN projects p ON p.id = f.project_id AND p.archived_at IS NULL
+				WHERE h.token = ?`, token).
+				Scan(&h.id, &h.flow, &h.project, &h.name, &h.kind, &stored, &h.signer.verify, &h.signer.header, &h.signer.idHeader, &h.signer.timestampHeader,
 					&events, &h.mapping, &h.enabled, &h.createdBy)
 		}
 		// One of a flow in the trash is no one's to reach, as the flow isn't
-		// (trash.go).
+		// (trash.go), nor is one of an archived project's.
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "no such webhook", http.StatusNotFound)
 			return
@@ -1034,7 +1038,7 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 		answer := func(status int, run int64) {
 			d.Run = &run
 			recordDelivery(context.WithoutCancel(ctx), db, h, d)
-			writeJSON(w, status, map[string]any{"run": run, "url": fmt.Sprintf("%s/#/flows/%d/runs/%d", publicOrigin(r), h.flow, run)})
+			writeJSON(w, status, map[string]any{"run": run, "url": runAddress(publicOrigin(r), h.project, h.flow, run)})
 		}
 		// One taken before gets its run, however the webhook changed since;
 		// a GitHub payload taken before and ignored is ignored again,
@@ -1077,7 +1081,7 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 			return
 		}
 		if p.ignored != "" {
-			if err := takeDigest(ctx, db, h.id, p.digest); err != nil {
+			if err := takeDigest(ctx, db, h, p.digest); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -1114,7 +1118,7 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 			answer(http.StatusOK, run)
 			return
 		}
-		if err := takeDigest(ctx, db, h.id, p.digest); err != nil {
+		if err := takeDigest(ctx, db, h, p.digest); err != nil {
 			log.Printf("keep the digest of a delivery to webhook %d: %v", h.id, err)
 		}
 		d.Outcome = deliveryStarted
@@ -1132,16 +1136,16 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 // Keeps the digest of a GitHub payload the webhook took, started or
 // ignored, so it is taken once, and lets go of those older than
 // webhookDigestDays; none for another kind.
-func takeDigest(ctx context.Context, db *sql.DB, webhook int64, digest string) error {
+func takeDigest(ctx context.Context, db *sql.DB, h webhookRow, digest string) error {
 	if digest == "" {
 		return nil
 	}
 	ctx = context.WithoutCancel(ctx)
-	if _, err := db.ExecContext(ctx, "INSERT IGNORE INTO webhook_digests (webhook_id, digest) VALUES (?, ?)", webhook, digest); err != nil {
+	if _, err := db.ExecContext(ctx, "INSERT IGNORE INTO webhook_digests (webhook_id, digest, project_id) VALUES (?, ?, ?)", h.id, digest, h.project); err != nil {
 		return err
 	}
 	_, err := db.ExecContext(ctx, "DELETE FROM webhook_digests WHERE webhook_id = ? AND seen_at < CURRENT_TIMESTAMP(3) - INTERVAL ? DAY LIMIT 1000",
-		webhook, webhookDigestDays)
+		h.id, webhookDigestDays)
 	return err
 }
 
@@ -1362,11 +1366,12 @@ func registerWebhookRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn b
 		}
 		var id int64
 		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
+			// In the flow's project, which the guard found the request's.
 			res, err := tx.ExecContext(r.Context(),
-				`INSERT INTO webhooks (token, flow_id, name, kind, secret, verify, header, id_header, timestamp_header, events, mapping, enabled, created_by)
-				VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO webhooks (token, flow_id, name, kind, secret, verify, header, id_header, timestamp_header, events, mapping, enabled, created_by, project_id)
+				VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, (SELECT project_id FROM flows WHERE id = ?))`,
 				randomToken(), f.Flow, f.Name, f.Kind, f.Verify, f.Header, f.IDHeader, f.TimestampHeader, strings.Join(f.Events, ","), mapping,
-				f.Enabled == nil || *f.Enabled, requestUserID(r))
+				f.Enabled == nil || *f.Enabled, requestUserID(r), f.Flow)
 			if err == nil {
 				id, err = res.LastInsertId()
 			}

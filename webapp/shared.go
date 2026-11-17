@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sort"
@@ -45,6 +46,11 @@ import (
 // as with what else it has (see modules.go): the copy's store is the
 // struct's object. A shared object isn't persistent too, which would store
 // it in each flow's runs besides.
+//
+// A store, and its records, are its struct's project's, and only that
+// project's flows read and write them: a step whose board somehow names
+// another project's store fails, writing nothing, and a query of one reads
+// nothing.
 
 // What's wrong with sharing a struct's object, if anything: records are
 // told apart by a unique attribute, and a copy already stored in its runs
@@ -102,14 +108,19 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 	if err != nil {
 		return err
 	}
-	// A store whose struct is gone keeps no records.
+	// A store whose struct is gone keeps no records, and one of another
+	// project's isn't the run's to write.
 	kept := objects[:0]
 	for _, g := range objects {
-		var n int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM objects WHERE id = ?", g.store).Scan(&n); err != nil {
+		project, err := objectProject(ctx, tx, g.store)
+		if err != nil {
 			return err
 		}
-		if n > 0 {
+		if project != 0 && project != b.project {
+			return &recordConflict{fmt.Sprintf("The step's records weren't written: %s keeps the records of another project's struct, which a run here can't reach.",
+				quote(b.objects[g.object].Name))}
+		}
+		if project != 0 {
 			kept = append(kept, g)
 		}
 	}
@@ -129,7 +140,7 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 			return err
 		}
 		// A reference naming no record fails the step; see references.go.
-		if err := refusedRefs(ctx, tx, g.store, stripFence(g.content)); err != nil {
+		if err := refusedRefs(ctx, tx, b.project, g.store, stripFence(g.content)); err != nil {
 			return err
 		}
 		// The record the run took for the object is the one it changes,
@@ -229,8 +240,8 @@ func recordHolding(ctx context.Context, tx *sql.Tx, store int64, attrs []attribu
 }
 
 func insertRecord(ctx context.Context, tx *sql.Tx, store int64, by recordChanger, attrs []attribute, content, state string) error {
-	res, err := tx.ExecContext(ctx, "INSERT INTO shared_records (object_id, content, state, run_id, step_id) VALUES (?, ?, ?, ?, ?)",
-		store, content, state, by.run, by.step)
+	res, err := tx.ExecContext(ctx, "INSERT INTO shared_records (object_id, content, state, run_id, step_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+		store, content, state, by.run, by.step, by.project)
 	if err != nil {
 		return err
 	}
@@ -240,7 +251,8 @@ func insertRecord(ctx context.Context, tx *sql.Tx, store int64, by recordChanger
 	}
 	for _, a := range attrs {
 		if hash, ok := recordKeys(attrs, content)[a.ID]; ok {
-			_, err := tx.ExecContext(ctx, "INSERT INTO shared_keys (object_id, attribute_id, value_hash, record_id) VALUES (?, ?, ?, ?)", store, a.ID, hash, record)
+			_, err := tx.ExecContext(ctx, "INSERT INTO shared_keys (object_id, attribute_id, value_hash, record_id, project_id) VALUES (?, ?, ?, ?, ?)",
+				store, a.ID, hash, record, by.project)
 			if err != nil {
 				return err
 			}
@@ -272,7 +284,9 @@ func updateRecord(ctx context.Context, tx *sql.Tx, store, record int64, by recor
 		return err
 	}
 	for id, hash := range recordKeys(attrs, content) {
-		_, err := tx.ExecContext(ctx, "INSERT IGNORE INTO shared_keys (object_id, attribute_id, value_hash, record_id) VALUES (?, ?, ?, ?)", store, id, hash, record)
+		// The record's project, whose its keys are.
+		_, err := tx.ExecContext(ctx, `INSERT IGNORE INTO shared_keys (object_id, attribute_id, value_hash, record_id, project_id)
+			SELECT ?, ?, ?, id, project_id FROM shared_records WHERE id = ?`, store, id, hash, record)
 		if err != nil {
 			return err
 		}
@@ -349,9 +363,10 @@ func storeOf(ctx context.Context, db querier, object int64) (int64, error) {
 	return store.Int64, err
 }
 
-// The records of a store the query selects, as a list of it, the latest
-// written first, or the earliest with oldest.
-func querySharedRecords(ctx context.Context, db *sql.DB, store int64, q *linkQuery) (string, error) {
+// The records of a store the query of a run in project selects, as a list
+// of it, the latest written first, or the earliest with oldest; none of
+// another project's store.
+func querySharedRecords(ctx context.Context, db *sql.DB, project, store int64, q *linkQuery) (string, error) {
 	where, err := parseRule(q.Where)
 	if err != nil {
 		return "", err
@@ -360,14 +375,14 @@ func querySharedRecords(ctx context.Context, db *sql.DB, store int64, q *linkQue
 	if q.Oldest {
 		order = "ASC"
 	}
-	args := []any{store}
+	args := []any{store, project}
 	state := ""
 	if q.State != "" {
 		state = " AND state = ?"
 		args = append(args, q.State)
 	}
 	rows, err := db.QueryContext(ctx,
-		"SELECT content FROM shared_records WHERE object_id = ? AND deleted_at IS NULL"+state+" ORDER BY updated_at "+order+", id "+order, args...)
+		"SELECT content FROM shared_records WHERE object_id = ? AND project_id = ? AND deleted_at IS NULL"+state+" ORDER BY updated_at "+order+", id "+order, args...)
 	if err != nil {
 		return "", err
 	}

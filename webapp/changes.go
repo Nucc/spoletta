@@ -49,6 +49,18 @@ type fileChange struct {
 // How long the worker may take over a step's diffs.
 const changesTimeout = time.Minute
 
+// What the worker is asked for a diff: the run's project, whose shared
+// repository it reads, which must be the workspace's, the workspace named
+// after the last part of the step's branch (see flowRun.workspace), the
+// repository and the two commits.
+type diffRequest struct {
+	Project    int64  `json:"project"`
+	Workspace  string `json:"workspace"`
+	Repository string `json:"repository"`
+	Before     string `json:"before"`
+	After      string `json:"after"`
+}
+
 // What the step and its ended follow-ups did to each repository, in the
 // order they did it, spans that follow on from each other joined.
 func spanCommits(tries ...[]repoCommits) []repoChanges {
@@ -78,7 +90,9 @@ func registerChangeRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		var branch string
 		var commits []byte
-		err := db.QueryRowContext(r.Context(), "SELECT branch, commits FROM run_steps WHERE id = ? AND run_id = ?", id, runID).Scan(&branch, &commits)
+		var project int64
+		err := db.QueryRowContext(r.Context(), "SELECT s.branch, s.commits, r.project_id FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ? AND s.run_id = ?", id, runID).
+			Scan(&branch, &commits, &project)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "step not found", http.StatusNotFound)
 			return
@@ -108,10 +122,8 @@ func registerChangeRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 				More  int          `json:"more"`
 				Error string       `json:"error"`
 			}
-			// The workspace is named after the last part of its branch; see
-			// flowRun.workspace.
-			err := callWorker(ctx, http.MethodPost, workerURL+"/workspaces/diff", map[string]string{
-				"workspace": path.Base(branch), "repository": s.Name, "before": s.Before, "after": s.After,
+			err := callWorker(ctx, http.MethodPost, workerURL+"/workspaces/diff", diffRequest{
+				Project: project, Workspace: path.Base(branch), Repository: s.Name, Before: s.Before, After: s.After,
 			}, &res)
 			switch {
 			case err != nil:

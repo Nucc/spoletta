@@ -36,6 +36,9 @@ type auditEvent struct {
 	run, step int64
 	kind      string
 	detail    string
+	// The project whose log it goes in; 0 for Legacy's, as events not yet
+	// naming theirs are while projects come in (see projects.go).
+	project int64
 }
 
 const auditBacklog = 4096
@@ -44,11 +47,20 @@ var auditEvents = make(chan auditEvent, auditBacklog)
 
 // Records an event, for whom, run and step (0 for none), in the background.
 func audit(kind string, who *int64, run, step int64, format string, args ...any) {
-	e := auditEvent{at: time.Now(), user: who, run: run, step: step, kind: kind, detail: fmt.Sprintf(format, args...)}
+	recordAudit(auditEvent{at: time.Now(), user: who, run: run, step: step, kind: kind, detail: fmt.Sprintf(format, args...)})
+}
+
+// Records an event in the project's log, for whom, in the background.
+func auditProject(project int64, kind string, who *int64, format string, args ...any) {
+	recordAudit(auditEvent{at: time.Now(), user: who, kind: kind, detail: fmt.Sprintf(format, args...), project: project})
+}
+
+// Hands the event to writeAudit, or drops it if the log is too far behind.
+func recordAudit(e auditEvent) {
 	select {
 	case auditEvents <- e:
 	default:
-		log.Printf("WARNING: the audit log is behind, so this event went unrecorded: %s %s", kind, e.detail)
+		log.Printf("WARNING: the audit log is behind, so this event went unrecorded: %s %s", e.kind, e.detail)
 	}
 }
 
@@ -79,9 +91,13 @@ func writeAudit(db *sql.DB) {
 		if e.step != 0 {
 			step = e.step
 		}
+		project := e.project
+		if project == 0 {
+			project = legacyProject
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, err := db.ExecContext(ctx, "INSERT INTO audit_events (at, user_id, run_id, step_id, kind, detail) VALUES (?, ?, ?, ?, ?, ?)",
-			e.at.UTC(), e.user, run, step, truncate(e.kind, 64), truncate(e.detail, 4000))
+		_, err := db.ExecContext(ctx, "INSERT INTO audit_events (at, user_id, run_id, step_id, kind, detail, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			e.at.UTC(), e.user, run, step, truncate(e.kind, 64), truncate(e.detail, 4000), project)
 		cancel()
 		if err != nil {
 			log.Printf("record the audit event %s %s: %v", e.kind, e.detail, err)

@@ -162,11 +162,11 @@ func neededAccess(r *http.Request) string {
 	return accessEdit
 }
 
-// The owner a new flow gets from its maker: the one they ask for, else
-// their team, when they are in one only, else themselves; nobody without
-// sign-in. Says why they may not give it to the one they asked for, if they
-// may not.
-func newOwner(ctx context.Context, db *sql.DB, u *user, asked *flowOwner) (userID, teamID *int64, msg string, err error) {
+// The owner a new flow gets from its maker in the project: the one they ask
+// for, else their team there, when they are in one only, else themselves;
+// nobody without sign-in. Says why they may not give it to the one they
+// asked for, if they may not.
+func newOwner(ctx context.Context, db *sql.DB, u *user, asked *flowOwner, project int64) (userID, teamID *int64, msg string, err error) {
 	if u == nil {
 		return nil, nil, "", nil
 	}
@@ -178,12 +178,18 @@ func newOwner(ctx context.Context, db *sql.DB, u *user, asked *flowOwner) (userI
 			return nil, nil, msg, err
 		}
 	} else {
-		teams, err := userTeams(ctx, db, u.ID)
+		var teams []int64
+		err := scanAll(ctx, db, "SELECT t.id FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.user_id = ? AND t.project_id = ?", func(rows *sql.Rows) error {
+			var id int64
+			err := rows.Scan(&id)
+			teams = append(teams, id)
+			return err
+		}, u.ID, project)
 		if err != nil {
 			return nil, nil, "", err
 		}
 		if len(teams) == 1 {
-			to = flowOwner{Kind: ownerTeam, ID: teams[0].ID}
+			to = flowOwner{Kind: ownerTeam, ID: teams[0]}
 		}
 	}
 	switch to.Kind {
@@ -296,47 +302,52 @@ func registerOwnerRoutes(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// Paths whose id is of a row in a flow, and the query giving that flow.
+// Paths whose id is of a row in a flow, or a task board, and the query
+// giving that flow, none for a task board, and the project it is in.
 var flowPaths = []struct {
 	pattern *regexp.Regexp
 	query   string
 }{
-	{regexp.MustCompile(`^/api/flows/(\d+)(/|$)`), "SELECT id FROM flows WHERE id = ?"},
-	{regexp.MustCompile(`^/api/structs/(\d+)(/|$)`), "SELECT id FROM flows WHERE id = ?"},
-	{regexp.MustCompile(`^/api/processes/(\d+)(/|$)`), "SELECT flow_id FROM processes WHERE id = ?"},
-	{regexp.MustCompile(`^/api/objects/(\d+)(/|$)`), "SELECT flow_id FROM objects WHERE id = ?"},
-	{regexp.MustCompile(`^/api/links/(\d+)(/|$)`), "SELECT p.flow_id FROM object_links l JOIN processes p ON p.id = l.process_id WHERE l.id = ?"},
-	{regexp.MustCompile(`^/api/connections/(\d+)(/|$)`), "SELECT p.flow_id FROM connections c JOIN processes p ON p.id = c.source_id WHERE c.id = ?"},
-	{regexp.MustCompile(`^/api/states/(\d+)(/|$)`), "SELECT o.flow_id FROM object_states s JOIN objects o ON o.id = s.object_id WHERE s.id = ?"},
-	{regexp.MustCompile(`^/api/attributes/(\d+)(/|$)`), "SELECT o.flow_id FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE a.id = ?"},
-	{regexp.MustCompile(`^/api/notes/(\d+)(/|$)`), "SELECT flow_id FROM notes WHERE id = ?"},
-	{regexp.MustCompile(`^/api/runs/(\d+)(/|$)`), "SELECT flow_id FROM runs WHERE id = ?"},
-	{regexp.MustCompile(`^/api/schedules/(\d+)(/|$)`), "SELECT flow_id FROM schedules WHERE id = ?"},
-	{regexp.MustCompile(`^/api/webhooks/(\d+)(/|$)`), "SELECT flow_id FROM webhooks WHERE id = ?"},
-	{regexp.MustCompile(`^/api/versions/(\d+)(/|$)`), "SELECT flow_id FROM flow_versions WHERE id = ?"},
+	{regexp.MustCompile(`^/api/flows/(\d+)(/|$)`), "SELECT id, project_id FROM flows WHERE id = ?"},
+	{regexp.MustCompile(`^/api/structs/(\d+)(/|$)`), "SELECT id, project_id FROM flows WHERE id = ?"},
+	{regexp.MustCompile(`^/api/processes/(\d+)(/|$)`), "SELECT flow_id, project_id FROM processes WHERE id = ?"},
+	{regexp.MustCompile(`^/api/objects/(\d+)(/|$)`), "SELECT flow_id, project_id FROM objects WHERE id = ?"},
+	{regexp.MustCompile(`^/api/links/(\d+)(/|$)`), "SELECT p.flow_id, p.project_id FROM object_links l JOIN processes p ON p.id = l.process_id WHERE l.id = ?"},
+	{regexp.MustCompile(`^/api/connections/(\d+)(/|$)`), "SELECT p.flow_id, p.project_id FROM connections c JOIN processes p ON p.id = c.source_id WHERE c.id = ?"},
+	{regexp.MustCompile(`^/api/states/(\d+)(/|$)`), "SELECT o.flow_id, o.project_id FROM object_states s JOIN objects o ON o.id = s.object_id WHERE s.id = ?"},
+	{regexp.MustCompile(`^/api/attributes/(\d+)(/|$)`), "SELECT o.flow_id, o.project_id FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE a.id = ?"},
+	{regexp.MustCompile(`^/api/notes/(\d+)(/|$)`), "SELECT flow_id, project_id FROM notes WHERE id = ?"},
+	{regexp.MustCompile(`^/api/runs/(\d+)(/|$)`), "SELECT flow_id, project_id FROM runs WHERE id = ?"},
+	{regexp.MustCompile(`^/api/schedules/(\d+)(/|$)`), "SELECT flow_id, project_id FROM schedules WHERE id = ?"},
+	{regexp.MustCompile(`^/api/webhooks/(\d+)(/|$)`), "SELECT flow_id, project_id FROM webhooks WHERE id = ?"},
+	{regexp.MustCompile(`^/api/versions/(\d+)(/|$)`), "SELECT flow_id, project_id FROM flow_versions WHERE id = ?"},
+	{regexp.MustCompile(`^/api/taskboards/(\d+)(/|$)`), "SELECT NULL, project_id FROM task_boards WHERE id = ?"},
 }
 
 // The query giving the flow of a row an id in a request names, by the
-// table the id is of.
+// table the id is of, and its project; no flow for a task board.
 var flowOfTable = map[string]string{
-	"flows":         "SELECT id FROM flows WHERE id = ?",
-	"processes":     "SELECT flow_id FROM processes WHERE id = ?",
-	"objects":       "SELECT flow_id FROM objects WHERE id = ?",
-	"runs":          "SELECT flow_id FROM runs WHERE id = ?",
-	"flow_versions": "SELECT flow_id FROM flow_versions WHERE id = ?",
+	"flows":         "SELECT id, project_id FROM flows WHERE id = ?",
+	"processes":     "SELECT flow_id, project_id FROM processes WHERE id = ?",
+	"objects":       "SELECT flow_id, project_id FROM objects WHERE id = ?",
+	"runs":          "SELECT flow_id, project_id FROM runs WHERE id = ?",
+	"flow_versions": "SELECT flow_id, project_id FROM flow_versions WHERE id = ?",
 	// The flow a subflow process runs, which may stay named while it is in
 	// the trash, so the process's settings can still be saved; picking one
 	// anew is refused there (checkCall).
-	"callees": "SELECT id FROM flows WHERE id = ? AND deleted_at IS NULL",
+	"callees":     "SELECT id, project_id FROM flows WHERE id = ? AND deleted_at IS NULL",
+	"task_boards": "SELECT NULL, project_id FROM task_boards WHERE id = ?",
 }
 
 // The tables of the ids a request's query or JSON body names by field.
 // Bodies with a source and a target name processes only in connections and
-// starts, and a flow in settings is the one a subflow process runs.
+// starts, and a flow in settings is the one a subflow process runs. A task
+// board is named by the runs started on records from it (record_runs.go).
 var flowFields = map[string]string{
 	"flow": "flows", "from": "flows",
 	"parent": "processes", "board": "processes", "process": "processes", "processes": "processes",
 	"object": "objects", "objects": "objects",
+	"taskBoard": "task_boards",
 }
 
 // A diff of a version with another; see diff.go.
@@ -355,7 +366,9 @@ const maxGuardedBody = 1 << 20
 // names, so each route needn't; the routes listing flows, or what is in
 // several, filter them themselves. A flow in the trash is no one's to see,
 // admins' included, with nobody signing in too; only the trash's own routes
-// reach it (trash.go), and they name it by a path of their own.
+// reach it (trash.go), and they name it by a path of their own. Anything in
+// another project than the request's (see projects.go), a flow or a task
+// board, doesn't exist for it either, whoever asks.
 func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := requestUser(r)
@@ -363,11 +376,13 @@ func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Someone who sees every flow may send a body larger than the guard
-		// reads, which goes on unread, as their routes keep to their own
-		// limits; it can only be about flows they see, or one in the trash,
-		// which runs refuse anyway (newRun).
-		everything := u == nil || u.Admin
+		// Someone who may reach every flow there is, in any project, may
+		// send a body larger than the guard reads, which goes on unread, as
+		// their routes keep to their own limits; it can only be about flows
+		// they may reach, or one in the trash, which runs refuse anyway
+		// (newRun). An owner of a project may not: the guard would miss
+		// another project's flows in it.
+		everything := u == nil || u.Super
 		type ref struct {
 			query string
 			id    int64
@@ -431,9 +446,11 @@ func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 			}
 		}
 		need := neededAccess(r)
+		project := requestProject(r)
 		for _, rf := range refs {
-			var flow int64
-			err := db.QueryRowContext(r.Context(), rf.query, rf.id).Scan(&flow)
+			var flow sql.NullInt64
+			var in int64
+			err := db.QueryRowContext(r.Context(), rf.query, rf.id).Scan(&flow, &in)
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
@@ -441,7 +458,18 @@ func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 				serverError(w, err)
 				return
 			}
-			access, err := flowAccess(r.Context(), db, u, flow)
+			if in != project {
+				what := "flow"
+				if !flow.Valid {
+					what = "task board"
+				}
+				http.Error(w, what+" not found", http.StatusNotFound)
+				return
+			}
+			if !flow.Valid {
+				continue
+			}
+			access, err := flowAccess(r.Context(), db, u, flow.Int64)
 			if err != nil {
 				serverError(w, err)
 				return

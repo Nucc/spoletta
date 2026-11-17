@@ -405,7 +405,7 @@ func registerSkillKind(mux *http.ServeMux, db *sql.DB, route, kind string) {
 		if asked == nil && u != nil {
 			asked = &flowOwner{Kind: ownerUser, ID: u.ID}
 		}
-		userID, teamID, msg, err := newOwner(r.Context(), db, u, asked)
+		userID, teamID, msg, err := newOwner(r.Context(), db, u, asked, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return

@@ -70,13 +70,14 @@ func flowTags(ctx context.Context, db rowsQuerier, ids []int64) (map[int64][]str
 	return tags, err
 }
 
-// Makes the flow's tags these, which cleanTags has cleaned.
+// Makes the flow's tags these, which cleanTags has cleaned; they are its
+// project's, as it is.
 func setTags(ctx context.Context, tx execer, flow int64, tags []string) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM flow_tags WHERE flow_id = ?", flow); err != nil {
 		return err
 	}
 	for _, t := range tags {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO flow_tags (flow_id, tag) VALUES (?, ?)", flow, t); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO flow_tags (flow_id, tag, project_id) SELECT id, ?, project_id FROM flows WHERE id = ?", t, flow); err != nil {
 			return err
 		}
 	}

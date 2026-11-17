@@ -138,7 +138,8 @@ func getPerson(ctx context.Context, db *sql.DB, id int64) (person, error) {
 	return p, err
 }
 
-// Turns away a request from someone not an admin.
+// Turns away a request from someone not an owner of the project it is
+// about; managing people is a super admin's (refuseNonSuper).
 func refuseNonAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if u := requestUser(r); u == nil || !u.Admin {
 		http.Error(w, "only an admin can do that", http.StatusForbidden)
@@ -202,7 +203,7 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 	// Adds someone by their email, so they can sign in and hold roles before
 	// they first do.
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
-		if refuseNonAdmin(w, r) {
+		if refuseNonSuper(w, r) {
 			return
 		}
 		var body struct {
@@ -243,6 +244,9 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 					id, err = res.LastInsertId()
 				}
 			}
+			if err == nil {
+				err = joinLegacy(r.Context(), tx, id, body.Admin)
+			}
 			if err != nil {
 				return err
 			}
@@ -256,6 +260,9 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			serverError(w, err)
 			return
 		}
+		if body.Admin {
+			instanceEvent(r.Context(), db, requestUserID(r), "user.super", "added %s as an admin", email)
+		}
 		p, err := getPerson(r.Context(), db, id)
 		if err != nil {
 			serverError(w, err)
@@ -266,7 +273,7 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 
 	// Makes someone an admin or a team manager or not, and replaces their roles.
 	mux.HandleFunc("PATCH /api/users/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if refuseNonAdmin(w, r) {
+		if refuseNonSuper(w, r) {
 			return
 		}
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -296,6 +303,8 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 				return
 			}
 		}
+		// Whether they were made the instance's admin, or stopped being one.
+		var madeSuper *bool
 		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
 			var n int
 			if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM users WHERE id = ? AND removed_at IS NULL FOR UPDATE", id).Scan(&n); err != nil {
@@ -305,8 +314,17 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 				return sql.ErrNoRows
 			}
 			if patch.Admin != nil {
-				if _, err := tx.ExecContext(r.Context(), "UPDATE users SET admin = ? WHERE id = ?", *patch.Admin, id); err != nil {
+				res, err := tx.ExecContext(r.Context(), "UPDATE users SET admin = ? WHERE id = ?", *patch.Admin, id)
+				if err != nil {
 					return err
+				}
+				if n, err := res.RowsAffected(); err != nil {
+					return err
+				} else if n > 0 {
+					madeSuper = patch.Admin
+					if err := followAdminInLegacy(r.Context(), tx, id, *patch.Admin); err != nil {
+						return err
+					}
 				}
 			}
 			if patch.TeamManager != nil {
@@ -332,6 +350,13 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			serverError(w, err)
 			return
 		}
+		if madeSuper != nil {
+			what := "made %s an admin"
+			if !*madeSuper {
+				what = "made %s an admin no more"
+			}
+			instanceEvent(r.Context(), db, requestUserID(r), "user.super", what, p.Email)
+		}
 		writeJSON(w, http.StatusOK, p)
 	})
 
@@ -341,7 +366,7 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 	// connections go. They stay in the table, removed, so the runs
 	// they started and the reviews they decided still say so.
 	mux.HandleFunc("DELETE /api/users/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if refuseNonAdmin(w, r) {
+		if refuseNonSuper(w, r) {
 			return
 		}
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -361,6 +386,11 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			}
 			if n == 0 {
 				return sql.ErrNoRows
+			}
+			// In whichever projects they are, which the admin may never
+			// have entered.
+			if err := memberWhereFlows(r.Context(), tx, me.ID, "f.owner_user_id = ?", id); err != nil {
+				return err
 			}
 			for _, q := range []string{
 				"UPDATE flows SET owner_user_id = ? WHERE owner_user_id = ?",
@@ -397,7 +427,7 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 	// The roles boards name, the human objects on them, with those people
 	// hold, for admins to pick from.
 	mux.HandleFunc("GET /api/roles", func(w http.ResponseWriter, r *http.Request) {
-		if refuseNonAdmin(w, r) {
+		if refuseNonSuper(w, r) {
 			return
 		}
 		names := []string{}

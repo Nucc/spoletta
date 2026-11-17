@@ -48,7 +48,8 @@ func registerFavouriteRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		_, err = db.ExecContext(r.Context(), "INSERT INTO favourite_flows (user_id, flow_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE flow_id = flow_id", favouritesOf(r), id)
+		_, err = db.ExecContext(r.Context(), "INSERT INTO favourite_flows (user_id, flow_id, project_id) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE flow_id = flow_id",
+			favouritesOf(r), id, requestProject(r))
 		if mysqlErrorIs(err, mysqlErrForeignKey) {
 			http.Error(w, "flow not found", http.StatusNotFound)
 			return

@@ -61,7 +61,13 @@ type user struct {
 	ID    int64  `json:"id"`
 	Email string `json:"email"`
 	Name  string `json:"name"`
-	Admin bool   `json:"admin"`
+	// For a request's user, an owner of the project it is worked on in (see
+	// projects.go), who sees and changes everything there; elsewhere, as
+	// people are listed or a run's user is read, the instance's admin.
+	Admin bool `json:"admin"`
+	// The instance's admin, users.admin, who makes projects, enters any as
+	// its owner, and manages people.
+	Super bool `json:"-"`
 	// Makes teams and says who is in them; see teams.go.
 	TeamManager bool `json:"teamManager"`
 }
@@ -207,7 +213,9 @@ func hashToken(token string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// The user of the request's session, or nil without one still going.
+// The user of the request's session, or nil without one still going. Whether
+// they are an owner of the project the request is about is worked out next
+// (enterProject).
 func (a *auth) sessionUser(r *http.Request) (*user, error) {
 	c, err := r.Cookie(sessionCookie)
 	if err != nil || c.Value == "" {
@@ -217,7 +225,7 @@ func (a *auth) sessionUser(r *http.Request) (*user, error) {
 	err = a.db.QueryRowContext(r.Context(),
 		`SELECT u.id, u.email, u.name, u.admin, u.team_manager FROM sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP(3) AND u.removed_at IS NULL`, hashToken(c.Value)).
-		Scan(&u.ID, &u.Email, &u.Name, &u.Admin, &u.TeamManager)
+		Scan(&u.ID, &u.Email, &u.Name, &u.Super, &u.TeamManager)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -454,8 +462,10 @@ func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims) (int64, er
 			if id, err = res.LastInsertId(); err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, "INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)", p.issuer, c.Subject, id)
-			return err
+			if _, err = tx.ExecContext(ctx, "INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)", p.issuer, c.Subject, id); err != nil {
+				return err
+			}
+			return joinLegacy(ctx, tx, id, admin)
 		case err != nil:
 			return err
 		}
@@ -484,17 +494,29 @@ func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims) (int64, er
 }
 
 func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
-	// Who is signed in, with their roles, and whether anyone signs in at all.
+	// Who is signed in, with their roles, and whether anyone signs in at
+	// all; whether they are the instance's admin (super), and the projects
+	// they may enter, each with their level there. Their admin is whether
+	// they own the project the request names (see projects.go). Without
+	// sign-in everyone may do anything, in any project.
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
-		me := map[string]any{"signIn": a != nil, "user": nil}
-		if u := requestUser(r); u != nil {
+		u := requestUser(r)
+		me := map[string]any{"signIn": a != nil, "user": nil, "super": u == nil || u.Super}
+		if u != nil {
 			p, err := getPerson(r.Context(), db, u.ID)
 			if err != nil {
 				serverError(w, err)
 				return
 			}
+			p.Admin = u.Admin
 			me["user"] = p
 		}
+		projects, err := enterableProjects(r.Context(), db, u)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		me["projects"] = projects
 		writeJSON(w, http.StatusOK, me)
 	})
 	if a == nil {

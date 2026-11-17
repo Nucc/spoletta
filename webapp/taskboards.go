@@ -242,6 +242,22 @@ func visibleTaskBoard(ctx context.Context, db *sql.DB, u *user, id int64) (taskB
 	return b, err
 }
 
+// Which of the flows with the ids are in another project than the one
+// given.
+func outsideProject(ctx context.Context, db rowsQuerier, project int64, ids []int64) (map[int64]bool, error) {
+	out := map[int64]bool{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := scanAll(ctx, db, "SELECT id FROM flows WHERE project_id <> ? AND id IN "+placeholders(len(ids)), func(rows *sql.Rows) error {
+		var id int64
+		err := rows.Scan(&id)
+		out[id] = true
+		return err
+	}, append([]any{project}, int64Args(ids)...)...)
+	return out, err
+}
+
 // The name of the first unique attribute of a struct's object, which names
 // its records; none for one without.
 func recordKey(ctx context.Context, db querier, root int64) (string, error) {
@@ -532,19 +548,19 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		answerTaskBoard(w, r, db, status, b, cards)
 	}
 
-	// The boards whoever asks sees, by name, their columns described but
-	// without their records.
+	// The boards of the project whoever asks sees, by name, their columns
+	// described but without their records.
 	mux.HandleFunc("GET /api/taskboards", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		u := requestUser(r)
 		cond, args := ownedBy("b", u)
 		out := []taskBoard{}
-		err := scanAll(ctx, db, "SELECT "+taskBoardColumns+" FROM task_boards b WHERE "+cond+" ORDER BY b.name, b.id",
+		err := scanAll(ctx, db, "SELECT "+taskBoardColumns+" FROM task_boards b WHERE b.project_id = ? AND "+cond+" ORDER BY b.name, b.id",
 			func(rows *sql.Rows) error {
 				b, err := scanTaskBoard(rows)
 				out = append(out, b)
 				return err
-			}, args...)
+			}, append([]any{requestProject(r)}, args...)...)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -589,13 +605,14 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		writeJSON(w, http.StatusOK, out)
 	})
 
-	// The shared structs whoever asks sees, by name, to pick a column's
-	// from, each with the fields its records have, in the board's order, and
-	// the one naming them, to pick what its cards show, and its states in
-	// order, to lay out a column for each.
+	// The shared structs of the project whoever asks sees, by name, to pick
+	// a column's from, each with the fields its records have, in the board's
+	// order, and the one naming them, to pick what its cards show, and its
+	// states in order, to lay out a column for each.
 	mux.HandleFunc("GET /api/taskboards/structs", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		cond, args := visibleFlows(requestUser(r))
+		args = append([]any{requestProject(r)}, args...)
 		type option struct {
 			ID     int64    `json:"id"`
 			Name   string   `json:"name"`
@@ -609,7 +626,7 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		out := []option{}
 		err := scanAll(ctx, db, `SELECT f.id, f.name, o.id FROM flows f
 			JOIN objects o ON o.id = (SELECT MIN(r.id) FROM objects r WHERE r.flow_id = f.id AND r.parent_id IS NULL AND r.owner_id IS NULL)
-			WHERE f.is_struct AND o.store_id = o.id AND `+cond+` ORDER BY f.name, f.id`,
+			WHERE f.project_id = ? AND f.is_struct AND o.store_id = o.id AND `+cond+` ORDER BY f.name, f.id`,
 			func(rows *sql.Rows) error {
 				var o option
 				err := rows.Scan(&o.ID, &o.Name, &o.Root)
@@ -657,7 +674,7 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		u := requestUser(r)
-		userID, teamID, msg, err := newOwner(r.Context(), db, u, body.Owner)
+		userID, teamID, msg, err := newOwner(r.Context(), db, u, body.Owner, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -666,7 +683,8 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusForbidden)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO task_boards (name, owner_user_id, owner_team_id) VALUES (?, ?, ?)", e.Name, userID, teamID)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO task_boards (name, owner_user_id, owner_team_id, project_id) VALUES (?, ?, ?, ?)",
+			e.Name, userID, teamID, requestProject(r))
 		if mysqlErrorIs(err, mysqlErrForeignKey) && body.Owner != nil {
 			http.Error(w, "no such "+body.Owner.Kind, http.StatusBadRequest)
 			return
@@ -741,6 +759,26 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 		if err != nil {
 			serverError(w, err)
 			return
+		}
+		// A struct or a flow of another project isn't there for the board.
+		var named []int64
+		for _, c := range e.Columns {
+			for _, id := range []*int64{c.Struct, c.Flow} {
+				if id != nil {
+					named = append(named, *id)
+				}
+			}
+		}
+		elsewhere, err := outsideProject(ctx, db, requestProject(r), named)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		for _, c := range e.Columns {
+			if (c.Struct != nil && elsewhere[*c.Struct]) || (c.Flow != nil && elsewhere[*c.Flow]) {
+				http.Error(w, fmt.Sprintf("the struct %s holds the records of, or its flow, isn't there", c.Name), http.StatusBadRequest)
+				return
+			}
 		}
 		for _, c := range e.Columns {
 			if c.Struct == nil {
@@ -832,9 +870,9 @@ func registerTaskBoardRoutes(mux *http.ServeMux, db *sql.DB) {
 			if c.Retry != nil {
 				every, times = &c.Retry.Every, &c.Retry.Times
 			}
-			_, err := tx.ExecContext(ctx, `INSERT INTO task_board_columns (board_id, position, name, struct_id, query, sort, flow_id, max_runs, retry_minutes, retry_times)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				b.ID, i, c.Name, c.Struct, c.Query, c.Sort, c.Flow, c.MaxRuns, every, times)
+			_, err := tx.ExecContext(ctx, `INSERT INTO task_board_columns (board_id, position, name, struct_id, query, sort, flow_id, max_runs, retry_minutes, retry_times, project_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				b.ID, i, c.Name, c.Struct, c.Query, c.Sort, c.Flow, c.MaxRuns, every, times, requestProject(r))
 			if mysqlErrorIs(err, mysqlErrForeignKey) {
 				http.Error(w, fmt.Sprintf("the struct %s holds the records of, or its flow, isn't there", c.Name), http.StatusBadRequest)
 				return

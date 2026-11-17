@@ -338,7 +338,7 @@ func registerTemplateRoutes(mux *http.ServeMux, db *sql.DB) {
 			name = t.Flow
 		}
 		ctx := r.Context()
-		ownerUser, ownerTeam, msg, err := newOwner(ctx, db, requestUser(r), body.Owner)
+		ownerUser, ownerTeam, msg, err := newOwner(ctx, db, requestUser(r), body.Owner, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return

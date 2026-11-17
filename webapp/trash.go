@@ -111,25 +111,26 @@ type trashedFlow struct {
 
 // Whether the user may restore the flow, or delete it for good: those who
 // may change it, as if it weren't in the trash. False for a flow that isn't
-// in the trash.
-func mayEmpty(ctx context.Context, db querier, u *user, flow int64) (bool, error) {
+// in the trash, or isn't in the project.
+func mayEmpty(ctx context.Context, db querier, u *user, flow, project int64) (bool, error) {
 	edit, args := editableFlows(u)
 	var may bool
-	err := db.QueryRowContext(ctx, "SELECT "+edit+" FROM flows f WHERE f.id = ? AND f.deleted_at IS NOT NULL", append(args, flow)...).Scan(&may)
+	err := db.QueryRowContext(ctx, "SELECT "+edit+" FROM flows f WHERE f.id = ? AND f.project_id = ? AND f.deleted_at IS NOT NULL", append(args, flow, project)...).Scan(&may)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return may, err
 }
 
-// The flows in the trash the user may restore, the latest moved there first.
-func listTrash(ctx context.Context, db *sql.DB, u *user, keep time.Duration) ([]trashedFlow, error) {
+// The flows of the project in the trash the user may restore, the latest
+// moved there first.
+func listTrash(ctx context.Context, db *sql.DB, u *user, project int64, keep time.Duration) ([]trashedFlow, error) {
 	edit, args := editableFlows(u)
 	fs := []trashedFlow{}
 	err := scanAll(ctx, db, `SELECT f.id, f.name, f.module, f.is_struct, `+ownerColumns+`, f.deleted_at, `+userLabelColumn("f.deleted_by")+`,
 			f.deleted_at + INTERVAL ? MICROSECOND,
-			EXISTS (SELECT 1 FROM flows o WHERE o.name = f.name AND o.deleted_at IS NULL)
-		FROM flows f WHERE f.deleted_at IS NOT NULL AND `+edit+` ORDER BY f.deleted_at DESC, f.id DESC`, func(rows *sql.Rows) error {
+			EXISTS (SELECT 1 FROM flows o WHERE o.name = f.name AND o.project_id = f.project_id AND o.deleted_at IS NULL)
+		FROM flows f WHERE f.deleted_at IS NOT NULL AND f.project_id = ? AND `+edit+` ORDER BY f.deleted_at DESC, f.id DESC`, func(rows *sql.Rows) error {
 		var t trashedFlow
 		var ownerUser, ownerTeam sql.NullInt64
 		var ownerName string
@@ -137,7 +138,7 @@ func listTrash(ctx context.Context, db *sql.DB, u *user, keep time.Duration) ([]
 		t.Owner = scanOwner(ownerUser, ownerTeam, ownerName)
 		fs = append(fs, t)
 		return err
-	}, append([]any{keep.Microseconds()}, args...)...)
+	}, append([]any{keep.Microseconds(), project}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -245,11 +246,13 @@ func (n runsGoing) Error() string {
 }
 
 // Why a flow in the trash can't come back under a name, if it can't: a flow
-// out of it has the name, or for a struct, its object would clash with
-// another a process takes or generates. Empty for a name it can have.
+// of its project out of it has the name, or for a struct, its object would
+// clash with another a process takes or generates. Empty for a name it can
+// have.
 func refuseRestoreName(ctx context.Context, db *sql.DB, flow int64, isStruct bool, name string) (string, error) {
 	var taken bool
-	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM flows WHERE name = ? AND deleted_at IS NULL AND id <> ?)", name, flow).Scan(&taken)
+	err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM flows o JOIN flows f ON f.id = ? AND o.project_id = f.project_id
+		WHERE o.name = ? AND o.deleted_at IS NULL AND o.id <> f.id)`, flow, name).Scan(&taken)
 	if err != nil || taken {
 		return "a flow named " + quote(name) + " is out of the trash already; restore it under another name", err
 	}
@@ -436,7 +439,7 @@ func registerTrashRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, workerURL 
 
 	// The flows in the trash whoever asks may restore.
 	mux.HandleFunc("GET /api/trash", func(w http.ResponseWriter, r *http.Request) {
-		fs, err := listTrash(r.Context(), db, requestUser(r), keep)
+		fs, err := listTrash(r.Context(), db, requestUser(r), requestProject(r), keep)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -452,7 +455,7 @@ func registerTrashRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, workerURL 
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return 0, false
 		}
-		may, err := mayEmpty(r.Context(), db, requestUser(r), id)
+		may, err := mayEmpty(r.Context(), db, requestUser(r), id, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return 0, false

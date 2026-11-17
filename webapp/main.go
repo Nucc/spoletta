@@ -113,6 +113,7 @@ func main() {
 	logGitTokens()
 	registerGitTokenRoutes(mux)
 	registerAuthRoutes(mux, db, auth)
+	registerProjectRoutes(mux, db, workerURL)
 	registerUserRoleRoutes(mux, db, auth)
 	registerTeamRoutes(mux, db, auth)
 	registerOwnerRoutes(mux, db)
@@ -246,7 +247,7 @@ func main() {
 	// A request's headers come within a deadline, so nobody holds a
 	// connection open by trickling them; bodies, streams and tunnels take
 	// as long as their routes allow (a webhook's delivery has its own).
-	srv := &http.Server{Handler: egress.wrap(auth.protect(guardFlows(db, mux))), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: egress.wrap(auth.protect(enterProject(db, guardFlows(db, mux)))), ReadHeaderTimeout: 10 * time.Second}
 	log.Fatal(srv.Serve(l))
 }
 

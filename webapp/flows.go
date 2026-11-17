@@ -238,15 +238,15 @@ func getFlow(ctx context.Context, db *sql.DB, id int64) (flow, error) {
 	return f, nil
 }
 
-// Every flow the user sees, each as getFlow has it, with how far they may
-// go with it, by name: a query for all of them each, rather than some for
-// each, so a long list comes as quickly as a short one.
-func listFlows(ctx context.Context, db *sql.DB, u *user) ([]flow, error) {
+// Every flow of the project the user sees, each as getFlow has it, with how
+// far they may go with it, by name: a query for all of them each, rather
+// than some for each, so a long list comes as quickly as a short one.
+func listFlows(ctx context.Context, db *sql.DB, u *user, project int64) ([]flow, error) {
 	see, seeArgs := visibleFlows(u)
 	edit, editArgs := editableFlows(u)
 	fs := []flow{}
 	err := scanAll(ctx, db, "SELECT f.id, f.name, f.module, f.is_struct, f.settings, f.created_at, "+ownerColumns+", "+edit+
-		" FROM flows f WHERE "+see+" ORDER BY f.name, f.id", func(rows *sql.Rows) error {
+		" FROM flows f WHERE f.project_id = ? AND "+see+" ORDER BY f.name, f.id", func(rows *sql.Rows) error {
 		var f flow
 		var ownerUser, ownerTeam sql.NullInt64
 		var ownerName string
@@ -259,7 +259,7 @@ func listFlows(ctx context.Context, db *sql.DB, u *user) ([]flow, error) {
 		}
 		fs = append(fs, f)
 		return err
-	}, append(editArgs, seeArgs...)...)
+	}, append(append(editArgs, project), seeArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -268,35 +268,35 @@ func listFlows(ctx context.Context, db *sql.DB, u *user) ([]flow, error) {
 	called, used := map[int64]int{}, map[int64]int{}
 	err = scanAll(ctx, db, `SELECT CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) AS called, COUNT(DISTINCT p.flow_id) FROM processes p
 		JOIN flows f ON f.id = p.flow_id AND `+liveFlows+`
-		WHERE p.kind = ? AND p.flow_id <> CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) GROUP BY called`, func(rows *sql.Rows) error {
+		WHERE p.kind = ? AND p.project_id = ? AND p.flow_id <> CAST(JSON_EXTRACT(p.settings, '$.flow') AS SIGNED) GROUP BY called`, func(rows *sql.Rows) error {
 		var id int64
 		var n int
 		err := rows.Scan(&id, &n)
 		called[id] = n
 		return err
-	}, kindSubflow)
+	}, kindSubflow, project)
 	if err != nil {
 		return nil, err
 	}
 	err = scanAll(ctx, db, `SELECT src.flow_id, COUNT(DISTINCT o.flow_id) FROM objects o JOIN objects src ON src.id = o.source_id
 		JOIN flows f ON f.id = o.flow_id AND `+liveFlows+`
-		WHERE o.flow_id <> src.flow_id GROUP BY src.flow_id`, func(rows *sql.Rows) error {
+		WHERE o.project_id = ? AND o.flow_id <> src.flow_id GROUP BY src.flow_id`, func(rows *sql.Rows) error {
 		var id int64
 		var n int
 		err := rows.Scan(&id, &n)
 		used[id] = n
 		return err
-	})
+	}, project)
 	if err != nil {
 		return nil, err
 	}
 	last := map[int64]*run{}
-	err = scanAll(ctx, db, "SELECT "+runColumns+" FROM (SELECT MAX(id) AS last_id FROM runs WHERE parent_run_id IS NULL AND trial_of IS NULL GROUP BY flow_id) l JOIN runs ON runs.id = l.last_id", func(rows *sql.Rows) error {
+	err = scanAll(ctx, db, "SELECT "+runColumns+" FROM (SELECT MAX(id) AS last_id FROM runs WHERE project_id = ? AND parent_run_id IS NULL AND trial_of IS NULL GROUP BY flow_id) l JOIN runs ON runs.id = l.last_id", func(rows *sql.Rows) error {
 		var rn run
 		err := scanRun(rows, &rn)
 		last[rn.Flow] = &rn
 		return err
-	})
+	}, project)
 	if err != nil {
 		return nil, err
 	}
@@ -333,8 +333,12 @@ func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// What refers to the flow and its versions by keys naming its project
+	// too, which MySQL can't null as they go (00053), is nulled first.
 	stmts := []string{
-		"UPDATE flows SET version_id = NULL WHERE id = ?",
+		"UPDATE flows SET version_id = NULL, published_version_id = NULL WHERE id = ?",
+		"UPDATE task_board_columns SET struct_id = NULL WHERE struct_id = ?",
+		"UPDATE task_board_columns SET flow_id = NULL WHERE flow_id = ?",
 		"DELETE FROM runs WHERE flow_id = ?",
 		// The processes inside flow processes, and the objects on their boards, go with them.
 		"DELETE FROM processes WHERE flow_id = ? AND parent_id IS NULL",
@@ -355,7 +359,7 @@ func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
 func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 	// The flows the user sees; see owners.go.
 	mux.HandleFunc("GET /api/flows", func(w http.ResponseWriter, r *http.Request) {
-		fs, err := listFlows(r.Context(), db, requestUser(r))
+		fs, err := listFlows(r.Context(), db, requestUser(r), requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -412,7 +416,7 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "a struct holds an object, not processes to run, so it can't be a procedure", http.StatusBadRequest)
 			return
 		}
-		ownerUser, ownerTeam, msg, err := newOwner(r.Context(), db, requestUser(r), body.Owner)
+		ownerUser, ownerTeam, msg, err := newOwner(r.Context(), db, requestUser(r), body.Owner, requestProject(r))
 		if err != nil {
 			serverError(w, err)
 			return
@@ -427,8 +431,9 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module, is_struct, owner_user_id, owner_team_id) VALUES (?, ?, ?, ?, ?)",
-			body.Name, body.Module, body.Struct, ownerUser, ownerTeam)
+		project := requestProject(r)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO flows (name, module, is_struct, owner_user_id, owner_team_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+			body.Name, body.Module, body.Struct, ownerUser, ownerTeam, project)
 		if mysqlErrorIs(err, mysqlErrForeignKey) {
 			http.Error(w, "no such owner", http.StatusBadRequest)
 			return
@@ -442,12 +447,12 @@ func registerFlowListRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		if _, err := tx.ExecContext(r.Context(), "INSERT INTO flow_starts (flow_id, x, y) VALUES (?, 40, 40)", id); err != nil {
+		if _, err := tx.ExecContext(r.Context(), "INSERT INTO flow_starts (flow_id, x, y, project_id) VALUES (?, 40, 40, ?)", id, project); err != nil {
 			serverError(w, err)
 			return
 		}
 		if body.Struct {
-			if _, err := tx.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y) VALUES (?, ?, 40, 40)", id, body.Name); err != nil {
+			if _, err := tx.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y, project_id) VALUES (?, ?, 40, 40, ?)", id, body.Name, project); err != nil {
 				serverError(w, err)
 				return
 			}

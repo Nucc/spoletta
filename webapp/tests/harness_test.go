@@ -345,6 +345,9 @@ type app struct {
 	client *http.Client
 	// Its process.
 	proc *webapp
+	// The project its requests name, if not Legacy, as the browser's tab
+	// on a project does; see projects_e2e_test.go.
+	project int64
 }
 
 func newApp(t *testing.T) *app {
@@ -398,6 +401,9 @@ func (a *app) do(method, path string, body any) (int, []byte) {
 		a.t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if a.project != 0 {
+		req.Header.Set("X-Spoletta-Project", fmt.Sprint(a.project))
+	}
 	resp, err := a.client.Do(req)
 	if err != nil {
 		a.t.Fatalf("%s %s: %v", method, path, err)

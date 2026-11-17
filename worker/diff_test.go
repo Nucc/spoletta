@@ -24,7 +24,7 @@ func TestDiffOfAStepsCommits(t *testing.T) {
 	}
 	const url, branch = "https://example.invalid/acme/api.git", "flow/test/run-7"
 	sharedWithBranch(t, url, branch)
-	repo := sharedRepo(url)
+	repo := sharedRepo(0, url)
 	before := git(t, repo, "rev-parse", "refs/heads/"+branch)
 
 	src := t.TempDir()

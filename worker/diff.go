@@ -17,8 +17,15 @@ import (
 // patch. It is read from the shared repository, where the runs' branches
 // are brought back, never from a checkout a step had (see workspace.go),
 // and as a diff of two trees, which needs none of the history the shared
-// repository doesn't keep.
+// repository doesn't keep. The shared repository is that of the project
+// the workspace's kept meta says, never one a request names, so a diff
+// reaches only commits the workspace's own project has; the request names
+// its project too, which must be that one, so a webapp asking about another
+// project's workspace is refused rather than shown it.
 type diffRequest struct {
+	// The project the step's run is of; 0, a request from before projects,
+	// is Legacy.
+	Project int64 `json:"project,omitempty"`
 	// The workspace the step worked in, such as run-42, whose kept meta says
 	// which repository the name is.
 	Workspace  string `json:"workspace"`
@@ -58,11 +65,17 @@ const (
 	diffTimeout      = 30 * time.Second
 )
 
-var errUnknownWorkspace = errors.New("the worker keeps no such repository of the workspace")
+var (
+	errUnknownWorkspace = errors.New("the worker keeps no such repository of the workspace")
+	errOtherProject     = errors.New("the workspace isn't the project's")
+)
 
 func diffWorkspace(ctx context.Context, req diffRequest) (repoDiff, error) {
 	if !safeID.MatchString(req.Workspace) || !safeName.MatchString(req.Repository) {
 		return repoDiff{}, errors.New("invalid workspace or repository")
+	}
+	if req.Project < 0 {
+		return repoDiff{}, errors.New("invalid project")
 	}
 	if !commitID.MatchString(req.Before) || !commitID.MatchString(req.After) {
 		return repoDiff{}, errors.New("invalid commit")
@@ -75,9 +88,12 @@ func diffWorkspace(ctx context.Context, req diffRequest) (repoDiff, error) {
 	if !ok {
 		return repoDiff{}, errUnknownWorkspace
 	}
+	if meta.project() != projectOrLegacy(req.Project) {
+		return repoDiff{}, errOtherProject
+	}
 	ctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	return diffCommits(ctx, sharedRepo(url), req.Before, req.After)
+	return diffCommits(ctx, sharedRepo(meta.project(), url), req.Before, req.After)
 }
 
 // The worker's own git config may say otherwise; a diff here is always the same.

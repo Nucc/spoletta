@@ -465,7 +465,10 @@ func main() {
 		}
 	})
 
-	// Deletes the workspaces of runs: {"runs": [ids]}.
+	// Deletes the workspaces of runs: {"runs": [ids]}. Run ids are unique
+	// across projects, and each workspace's branches are deleted from the
+	// shared repositories of the project its meta keeps, so runs of several
+	// projects may be named together; see deleteWorkspace.
 	mux.HandleFunc("POST /workspaces/delete", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Runs []int64 `json:"runs"`
@@ -482,7 +485,8 @@ func main() {
 	})
 
 	// Releases the workspaces of runs that are over, keeping their branches
-	// and sessions: {"runs": [ids]}; see releaseWorkspaces.
+	// and sessions: {"runs": [ids]}, of whichever projects, each brought
+	// back into its own project's shared repositories; see releaseWorkspaces.
 	mux.HandleFunc("POST /workspaces/release", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Runs []int64 `json:"runs"`
@@ -503,7 +507,8 @@ func main() {
 	})
 
 	// What a step changed in one of its workspace's repositories, between two
-	// commits: {"workspace", "repository", "before", "after"}; see diff.go.
+	// commits: {"project", "workspace", "repository", "before", "after"},
+	// the project being the run's, which must be the workspace's; see diff.go.
 	mux.HandleFunc("POST /workspaces/diff", func(w http.ResponseWriter, r *http.Request) {
 		var body diffRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {

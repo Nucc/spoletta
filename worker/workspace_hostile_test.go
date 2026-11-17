@@ -84,7 +84,7 @@ func TestWhatAStepLeavesInItsGitDoesntRunOutsideTheSandbox(t *testing.T) {
 	if len(res.Commits) != 1 || len(res.Commits[0].Commits) != 1 || !strings.HasSuffix(res.Commits[0].Commits[0], "Fix it") {
 		t.Errorf("commits = %+v, want the step's", res.Commits)
 	}
-	if got := git(t, sharedRepo(url), "log", "-1", "--format=%s", "refs/heads/"+branch); got != "Fix it" {
+	if got := git(t, sharedRepo(0, url), "log", "-1", "--format=%s", "refs/heads/"+branch); got != "Fix it" {
 		t.Errorf("the shared branch is at %q", got)
 	}
 
@@ -106,7 +106,7 @@ func TestALinkedCheckoutIsntBroughtBack(t *testing.T) {
 	gitSetUp(t)
 	const url, branch = "https://example.invalid/acme/api.git", "flow/test/run-10"
 	sharedWithBranch(t, url, branch)
-	other := sharedRepo(url)
+	other := sharedRepo(0, url)
 	before := git(t, other, "rev-parse", "refs/heads/"+branch)
 	var ran []sandboxSpec
 	steps = idleSandbox{&ran}
@@ -151,7 +151,7 @@ func TestAMalformedCommitIsntBroughtBack(t *testing.T) {
 	gitSetUp(t)
 	const url, branch = "https://example.invalid/acme/api.git", "flow/test/run-11"
 	sharedWithBranch(t, url, branch)
-	shared := sharedRepo(url)
+	shared := sharedRepo(0, url)
 	var ran []sandboxSpec
 	steps = idleSandbox{&ran}
 	t.Cleanup(func() { steps = processSandbox{} })
@@ -231,7 +231,7 @@ func TestAWorktreeFromBeforeIsMadeAgainAsAClone(t *testing.T) {
 	gitSetUp(t)
 	const url, branch = "https://example.invalid/acme/api.git", "flow/test/run-11"
 	sharedWithBranch(t, url, branch)
-	repo := sharedRepo(url)
+	repo := sharedRepo(0, url)
 	dir := filepath.Join(workspacesRoot, "run-11")
 	os.MkdirAll(dir, 0o700)
 	git(t, repo, "worktree", "add", "--quiet", filepath.Join(dir, "api"), branch)

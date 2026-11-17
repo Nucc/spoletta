@@ -75,7 +75,7 @@ func TestCheckoutIsOnTheNamedBranch(t *testing.T) {
 	if len(res.Commits) != 1 || res.Commits[0].Before != feature || res.Commits[0].After == feature {
 		t.Fatalf("commits = %+v, want the step's commit on top of %s", res.Commits, feature)
 	}
-	repo := sharedRepo(url)
+	repo := sharedRepo(0, url)
 	if got := git(t, repo, "rev-parse", "refs/heads/flow/fix/run-7"); got != res.Commits[0].After {
 		t.Errorf("the run's branch is at %s, want %s", got, res.Commits[0].After)
 	}

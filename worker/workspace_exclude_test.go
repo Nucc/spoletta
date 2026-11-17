@@ -35,7 +35,7 @@ func TestCheckoutLeavesOutPaths(t *testing.T) {
 	git(t, src, "add", "--all")
 	git(t, src, "commit", "--quiet", "-m", "Start")
 	big := git(t, src, "rev-parse", "HEAD:vendor/cache/big.gem")
-	repo := sharedRepo(url)
+	repo := sharedRepo(0, url)
 	os.MkdirAll(repo, 0o777)
 	git(t, repo, "init", "--quiet", "--bare")
 	git(t, src, "push", "--quiet", repo, "HEAD:refs/heads/"+branch)

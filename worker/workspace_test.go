@@ -20,8 +20,14 @@ func git(t *testing.T, dir string, args ...string) string {
 }
 
 // A shared repository for url with the run's branch already in it, as a run
-// that worked once leaves it; nothing needs fetching.
+// that worked once leaves it; nothing needs fetching. Legacy's.
 func sharedWithBranch(t *testing.T, url, branch string) {
+	t.Helper()
+	sharedWithBranchOf(t, 0, url, branch)
+}
+
+// The same in the project's shared repository, returning where the branch is.
+func sharedWithBranchOf(t *testing.T, project int64, url, branch string) string {
 	t.Helper()
 	src := t.TempDir()
 	git(t, src, "init", "--quiet")
@@ -29,12 +35,13 @@ func sharedWithBranch(t *testing.T, url, branch string) {
 	os.WriteFile(filepath.Join(src, ".gitignore"), []byte("node_modules/\n"), 0o644)
 	git(t, src, "add", "--all")
 	git(t, src, "commit", "--quiet", "-m", "Start")
-	repo := sharedRepo(url)
+	repo := sharedRepo(project, url)
 	if err := os.MkdirAll(repo, 0o777); err != nil {
 		t.Fatal(err)
 	}
 	git(t, repo, "init", "--quiet", "--bare")
 	git(t, src, "push", "--quiet", repo, "HEAD:refs/heads/"+branch)
+	return git(t, repo, "rev-parse", "refs/heads/"+branch)
 }
 
 // What a step leaves uncommitted is committed, naming its run, step and

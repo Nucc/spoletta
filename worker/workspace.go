@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,19 @@ import (
 // now. The runs' branches live in the shared repository too, so one run's
 // branch can start from another's.
 //
+// A project is a tenant, and nothing a step of one project fetched may be
+// read by a step of another, so each project shares its repositories among
+// its own runs alone (see sharedRepo): two projects may reach the same URL
+// with different tokens, and a run's branch, or a commit a re-run starts
+// from, is looked for only in its own project's repository. A workspace is
+// told its project (workspaceSpec.Project) and keeps it in .meta, bound to
+// it from its first step on, so what it brings back, releases, deletes and
+// diffs goes to its own project's repository, whoever asks. A spec naming
+// no project is Legacy's, the project everything from before projects
+// belongs to. Workspaces, their sessions, the checkouts being made in
+// .adding and runs' homes are named after runs alone, which are unique
+// across projects, so they need no project in their paths.
+//
 // A checkout is a clone rather than a worktree of the shared repository so
 // that a sandbox (see sandbox.go) can be given it alone: a worktree's git
 // lives in the shared repository. Its origin is the repository's own URL,
@@ -46,8 +60,13 @@ import (
 // workspaces, where no step reaches.
 type workspaceSpec struct {
 	// Names the workspace's directory, such as run-42.
-	ID     string `json:"id"`
-	Branch string `json:"branch"`
+	ID string `json:"id"`
+	// The project the run is of, whose shared repositories the workspace's
+	// checkouts come from and go back to; 0, a spec from before projects,
+	// is Legacy. A workspace is one project's: a spec of another for it is
+	// refused.
+	Project int64  `json:"project,omitempty"`
+	Branch  string `json:"branch"`
 	// The branch its checkouts are on instead, when the run's flow names it
 	// after what the run works on, such as feature/PROJ-123: the run's
 	// branch starts from origin's latest commit of it if origin has it, and
@@ -88,6 +107,21 @@ func (ws *workspaceSpec) checkoutBranch() string {
 		return ws.Named
 	}
 	return ws.Branch
+}
+
+// The project the workspace is of, Legacy for a spec naming none.
+func (ws *workspaceSpec) project() int64 { return projectOrLegacy(ws.Project) }
+
+// The project everything from before projects belongs to, and so a request
+// naming none.
+const legacyProject = 1
+
+// The project an id names, none (0) being Legacy.
+func projectOrLegacy(id int64) int64 {
+	if id == 0 {
+		return legacyProject
+	}
+	return id
 }
 
 // Where workspaces live, a volume of their own.
@@ -176,6 +210,9 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 	if !safeID.MatchString(ws.ID) {
 		return nil, fmt.Errorf("invalid workspace %q", ws.ID)
 	}
+	if ws.Project < 0 {
+		return nil, fmt.Errorf("invalid project %d", ws.Project)
+	}
 	if err := gitOK(ctx, "", "check-ref-format", "--branch", ws.Branch); err != nil {
 		return nil, fmt.Errorf("invalid branch %q", ws.Branch)
 	}
@@ -202,6 +239,18 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 	}
 	dir := filepath.Join(workspacesRoot, ws.ID)
 	unlock := lockSaying(dir, l, ws.ID, "another step of the run working in it")
+	// The workspace is the project's its first step named, kept in its
+	// meta, and a meta from before projects is Legacy's: another project's
+	// step would bring its branch into, and clone from, the wrong project's
+	// repositories.
+	meta, err := readMeta(ws.ID)
+	if err == nil && meta.kept && meta.project() != ws.project() {
+		err = fmt.Errorf("the workspace %s is another project's", ws.ID)
+	}
+	if err != nil {
+		unlock()
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		unlock()
 		return nil, err
@@ -210,15 +259,11 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 		unlock()
 		return nil, err
 	}
-	meta, err := readMeta(ws.ID)
-	if err == nil {
-		meta.Branch, meta.Named = ws.Branch, ws.Named
-		for _, r := range ws.Repositories {
-			meta.Repositories[r.Name] = r.URL
-		}
-		err = writeMeta(ws.ID, meta)
+	meta.Branch, meta.Named, meta.Project = ws.Branch, ws.Named, ws.project()
+	for _, r := range ws.Repositories {
+		meta.Repositories[r.Name] = r.URL
 	}
-	if err != nil {
+	if err := writeMeta(ws.ID, meta); err != nil {
 		unlock()
 		return nil, err
 	}
@@ -234,7 +279,7 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 		if recreated {
 			t.recreated = append(t.recreated, r.Name)
 		}
-		head, err := gitOut(pctx, sharedRepo(r.URL), "rev-parse", "refs/heads/"+ws.Branch)
+		head, err := gitOut(pctx, sharedRepo(ws.project(), r.URL), "rev-parse", "refs/heads/"+ws.Branch)
 		if err != nil {
 			unlock()
 			return nil, fmt.Errorf("repository %s: %w", r.Name, err)
@@ -246,9 +291,9 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 
 // Records in res what the step did to each repository, and gives the
 // workspace back: what the step left uncommitted is committed, and the
-// branch brought back into the shared repository, where what it did is
-// read. A repository whose checkout is gone, such as one the step deleted,
-// is left out.
+// branch brought back into its project's shared repository, where what it
+// did is read. A repository whose checkout is gone, such as one the step
+// deleted, is left out.
 func (t *takenWorkspace) done(res *runResult) {
 	defer t.release()
 	// The step's context may be over; this doesn't take long.
@@ -265,7 +310,7 @@ func (t *takenWorkspace) done(res *runResult) {
 		if err != nil {
 			t.log.errorf("commit what was left uncommitted in %s: %v", r.Name, err)
 		}
-		repo := sharedRepo(r.URL)
+		repo := sharedRepo(t.spec.project(), r.URL)
 		if err := bringBack(ctx, dest, repo, t.spec.checkoutBranch(), t.spec.Branch); err != nil {
 			if _, statErr := os.Lstat(dest); statErr == nil {
 				t.log.errorf("bring back what the step did in %s: %v", r.Name, err)
@@ -377,9 +422,10 @@ func bringBack(ctx context.Context, dest, repo, local, branch string) error {
 }
 
 // Clones the run's branch of the repository into the workspace, unless it
-// is there. The branch starts from the base branch as just fetched, or the
-// repository's start commit if it has one, or stays as it is if it exists
-// already: then nothing is fetched, as the checkout is only made again, the
+// is there, from the repository the run's project shares, where the branch
+// and a start commit are looked for. The branch starts from the base branch
+// as just fetched, or the repository's start commit if it has one, or stays
+// as it is if it exists already: then nothing is fetched, as the checkout is only made again, the
 // workspace having been released. Says whether it was. With a name, the
 // branch starts from origin's latest commit of that name instead if origin
 // has it, and the checkout is on the name (see workspaceSpec.Named); the
@@ -408,7 +454,7 @@ func checkout(ctx context.Context, l *stepLogger, dir string, ws *workspaceSpec,
 		return false, err
 	}
 	started := time.Now()
-	repo := sharedRepo(r.URL)
+	repo := sharedRepo(ws.project(), r.URL)
 	unlock := lockSaying(repo, l, r.Name, "another step fetching "+shownURL(r.URL))
 	exists := false
 	if _, err := os.Stat(repo); err == nil {
@@ -562,10 +608,22 @@ func sparse(ctx context.Context, dir, branch string, exclude []string) error {
 	return nil
 }
 
-// Where the repository behind url is shared from.
-func sharedRepo(url string) string {
+// Where the repository behind url is shared from for the project's runs.
+// Each project has its own: two projects may reach the same URL with
+// different tokens, and a step of one must get nothing the other's steps
+// fetched, nor reach its runs' branches, which could even be named alike.
+// Legacy's stay where every shared repository was before projects, in
+// .repos, so the branches of runs from then, and re-runs of them, are found
+// as they were without moving anything. Every other project's are in a
+// directory of its own, .projects/<id>/repos, which no workspace can be, as
+// a workspace's name never starts with a dot.
+func sharedRepo(project int64, url string) string {
 	sum := sha256.Sum256([]byte(url))
-	return filepath.Join(workspacesRoot, ".repos", hex.EncodeToString(sum[:8])+".git")
+	name := hex.EncodeToString(sum[:8]) + ".git"
+	if project = projectOrLegacy(project); project == legacyProject {
+		return filepath.Join(workspacesRoot, ".repos", name)
+	}
+	return filepath.Join(workspacesRoot, ".projects", strconv.FormatInt(project, 10), "repos", name)
 }
 
 // Brings the base branch, or else the default one, up to date in the shared
@@ -666,7 +724,8 @@ func onNamed(ctx context.Context, dir, branch, named string) error {
 	return nil
 }
 
-// Makes the shared repository, beside its place and moved in once ready.
+// Makes the shared repository, beside its place and moved in once ready,
+// making its project's directory the first time.
 func makeShared(ctx context.Context, repo, url string) error {
 	if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
 		return err
@@ -766,7 +825,8 @@ func sessionArgs(run runRequest) ([]string, error) {
 // Releases the workspaces of runs that are over, run-<id> and the ones of its
 // items, run-<id>-*, to save their space: what each checkout holds
 // uncommitted is committed, the branch brought back into its shared
-// repository, and the checkouts are removed, but the branches stay, and the
+// repository, of the project the workspace's meta keeps, as runs of every
+// project may be released together, and the checkouts are removed, but the branches stay, and the
 // pi sessions beside them, so a follow-up or a re-run makes the checkouts
 // again from the branches; see checkout. A workspace a step is using is
 // left as it is; what asked for the release asks again once it is over.
@@ -836,7 +896,7 @@ func releaseWorkspace(dir string) (bool, error) {
 		}
 		_, err := commitLeftovers(ctx, wt, "Commit what was left uncommitted as the workspace was released", nil)
 		if err == nil {
-			err = bringBack(ctx, wt, sharedRepo(url), meta.checkoutBranch(), meta.Branch)
+			err = bringBack(ctx, wt, sharedRepo(meta.project(), url), meta.checkoutBranch(), meta.Branch)
 		}
 		if err != nil {
 			log.Printf("release %s: %v; keeping it", wt, err)
@@ -876,7 +936,8 @@ func deleteWorkspaces(runs []int64) error {
 }
 
 // Deletes the workspace's branch from each repository it had a checkout
-// of, then the workspace and what the worker kept of it.
+// of, in its project's shared repositories, then the workspace and what the
+// worker kept of it.
 func deleteWorkspace(dir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -896,7 +957,7 @@ func deleteWorkspace(dir string) error {
 	}
 	if meta.Branch != "" {
 		for _, url := range meta.Repositories {
-			repo := sharedRepo(url)
+			repo := sharedRepo(meta.project(), url)
 			unlock := lockPath(repo)
 			if gitOK(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+meta.Branch) == nil {
 				err = gitOK(ctx, repo, "branch", "--quiet", "-D", "--", meta.Branch)
@@ -916,15 +977,24 @@ func deleteWorkspace(dir string) error {
 	return nil
 }
 
-// What the worker keeps of a workspace, outside it: the branch its
-// checkouts are on, and each one's repository, by name.
+// What the worker keeps of a workspace, outside it: the project it is of,
+// the branch its checkouts are on, and each one's repository, by name.
 type workspaceMeta struct {
 	Branch string `json:"branch"`
 	// The branch its checkouts are on, if the run names it; see
 	// workspaceSpec.Named.
-	Named        string            `json:"named,omitempty"`
+	Named string `json:"named,omitempty"`
+	// The project its first step's spec named, whose shared repositories
+	// are its own; none in a meta from before projects, which is Legacy's.
+	Project      int64             `json:"project,omitempty"`
 	Repositories map[string]string `json:"repositories"`
+	// Whether the worker kept a meta of the workspace yet, and so the
+	// project it is bound to; not kept itself.
+	kept bool
 }
+
+// The project the workspace is of.
+func (m workspaceMeta) project() int64 { return projectOrLegacy(m.Project) }
 
 // The branch its checkouts are on.
 func (m workspaceMeta) checkoutBranch() string {
@@ -947,6 +1017,7 @@ func readMeta(id string) (workspaceMeta, error) {
 	}
 	if err == nil {
 		err = json.Unmarshal(b, &m)
+		m.kept = true
 	}
 	if m.Repositories == nil {
 		m.Repositories = map[string]string{}
@@ -980,7 +1051,8 @@ func legacyWorktree(wt string) bool {
 
 // Commits what a worktree from before holds uncommitted and removes it,
 // keeping its branch. These were written by steps that ran as the worker
-// itself, before sandboxes, so the worker's git runs in them.
+// itself, before sandboxes, so the worker's git runs in them; and before
+// projects, so the shared repository their git names is Legacy's.
 func releaseLegacy(ctx context.Context, wt string) error {
 	repo, err := gitOut(ctx, wt, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {

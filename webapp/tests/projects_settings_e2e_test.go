@@ -612,25 +612,32 @@ func TestProjectStepsReachOnlyTheirProjectsThings(t *testing.T) {
 	}
 	a.project = 0
 
-	// A process naming another project's things by id fails, as if they
-	// were none; a connector process so can't even start, the board's
-	// problems saying its connector was removed.
+	// A process can't be given another project's things by id; one naming
+	// them all the same, as only writing its row can make one, fails as if
+	// they were none, and a connector process so can't even start, the
+	// board's problems saying its connector was removed.
 	for _, c := range []struct {
 		name     string
-		process  map[string]any
+		kind     string
+		settings map[string]any
 		failsFor string
 	}{
-		{"Stray server", map[string]any{"kind": kindAgent, "prompt": "Work.", "settings": map[string]any{"mcpServers": []int64{w.pServer}}}, "MCP server the process uses was removed"},
-		{"Stray credential", map[string]any{"kind": kindAgent, "prompt": "Work.", "settings": map[string]any{"credentials": []int64{w.pCred.ID}}}, "credential the process uses was removed"},
-		{"Stray skill", map[string]any{"kind": kindAgent, "prompt": "Work.", "settings": map[string]any{"skills": []int64{w.pSkill}}}, "skill the process uses was deleted"},
-		{"Stray connector", map[string]any{"kind": kindConnector, "settings": map[string]any{"connector": map[string]any{"server": w.pSlack, "operation": "post_message"}}}, "uses was removed"},
+		{"Stray server", kindAgent, map[string]any{"mcpServers": []int64{w.pServer}}, "MCP server the process uses was removed"},
+		{"Stray credential", kindAgent, map[string]any{"credentials": []int64{w.pCred.ID}}, "credential the process uses was removed"},
+		{"Stray skill", kindAgent, map[string]any{"skills": []int64{w.pSkill}}, "skill the process uses was deleted"},
+		{"Stray connector", kindConnector, map[string]any{"connector": map[string]any{"server": w.pSlack, "operation": "post_message"}}, "uses was removed"},
 	} {
 		stray := a.newFlow(c.name)
-		c.process["name"] = c.name
-		a.startAt(stray.ID, a.newProcess(stray.ID, c.process).ID)
+		p := a.newProcess(stray.ID, map[string]any{"name": c.name, "kind": c.kind, "prompt": "Work."})
+		a.refused("PATCH", fmt.Sprintf("/api/processes/%d", p.ID), map[string]any{"settings": c.settings}, http.StatusBadRequest, "no such")
+		settings, _ := json.Marshal(c.settings)
+		if _, err := db.Exec("UPDATE processes SET settings = ? WHERE id = ?", settings, p.ID); err != nil {
+			t.Fatal(err)
+		}
+		a.startAt(stray.ID, p.ID)
 		a.worker.onAgent(c.name, handsIn(data("strayed")))
 		status, body := a.do("POST", fmt.Sprintf("/api/runs?flow=%d", stray.ID), nil)
-		if c.process["kind"] == kindConnector {
+		if c.kind == kindConnector {
 			if status != http.StatusConflict || !strings.Contains(string(body), c.failsFor) {
 				t.Errorf("%s: starting it got %d %s", c.name, status, body)
 			}

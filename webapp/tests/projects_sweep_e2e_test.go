@@ -683,6 +683,7 @@ func sweepSend(t *testing.T, s sweeper, method, path string, body any) (int, str
 }
 
 func TestProjectsSweepEveryRoute(t *testing.T) {
+	parallel(t)
 	routes := webappRoutes(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)

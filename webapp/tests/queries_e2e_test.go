@@ -18,6 +18,7 @@ import (
 // querying an object it yields too neither waits for it nor has it carried
 // over.
 func TestQueryLinkTakesStoredRecords(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Reviews")
 	write := a.newProcess(f.ID, map[string]any{"name": "Write", "kind": kindScript, "script": "cat $INPUTS/Review"})
@@ -90,6 +91,7 @@ func TestQueryLinkTakesStoredRecords(t *testing.T) {
 
 // What a query link can't be.
 func TestQueryLinkRefusals(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Bad queries")
 	agent := a.agent(f.ID, "Triage", "Triage it.")
@@ -136,6 +138,7 @@ func TestQueryLinkRefusals(t *testing.T) {
 // A query is part of the board: a version restored keeps it, and a setup
 // file carries it out and back in.
 func TestQueryLinkIsKept(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("q%d", time.Now().UnixNano())
 	f := a.newFlow(prefix + " Lookup")

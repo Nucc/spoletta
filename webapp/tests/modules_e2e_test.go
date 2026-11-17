@@ -103,6 +103,7 @@ func modAttrNames(o modObject) string {
 // A flow is made a module, or becomes one once another runs it, and stays
 // one while any does.
 func TestModules(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var lib modFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Fix exceptions", "module": true}, http.StatusCreated, &lib)
@@ -151,6 +152,7 @@ func TestModules(t *testing.T) {
 // its name, how many it is, its states, attributes and parts, keeping the
 // ids the caller's links and stored values use. Only the module changes it.
 func TestModuleCopiesFollow(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	lib := a.newFlow("Ticketing")
 	ticket := a.newObject(lib.ID, "Jira ticket")
@@ -279,6 +281,7 @@ func TestModuleCopiesFollow(t *testing.T) {
 // A module's object copied into another module, which a flow runs, reaches
 // that flow too, and follows the first module there.
 func TestModuleCopiesFollowThroughModules(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tickets := a.newFlow("Ticketing")
 	ticket := a.newObject(tickets.ID, "Jira ticket")

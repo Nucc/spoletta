@@ -66,6 +66,7 @@ func loopsFailing(a *app, loops int, rework func(context.Context, agentRun) runR
 // going on lets it run as many more times, and stopping fails the run
 // without what handles its failure running again.
 func TestFailureLoopAsksWhetherItGoesOn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f, _ := loopsFailing(a, 2, humanCounting("issue"))
 
@@ -110,6 +111,7 @@ func TestFailureLoopAsksWhetherItGoesOn(t *testing.T) {
 // at once, however many loops it has left; once someone lets it go on, it
 // asks only when its loops are used up.
 func TestLoopGettingNowhereAsksAtOnce(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f, rework := loopsFailing(a, 4, handsIn(data("the same issue")))
 	failuresSettings(a, rework.ID, processSettings{Loops: ptr(maxLoops)})
@@ -137,6 +139,7 @@ func TestLoopGettingNowhereAsksAtOnce(t *testing.T) {
 // sending work back as often as they like, and a critic sending it back
 // while its rounds last.
 func TestBoundLoopsDontAsk(t *testing.T) {
+	parallel(t)
 	t.Run("a person sends it back", func(t *testing.T) {
 		a := newApp(t)
 		f := a.newFlow("Reviewed")
@@ -180,6 +183,7 @@ func TestBoundLoopsDontAsk(t *testing.T) {
 
 // A process's loops are bounded.
 func TestLoopsAreBounded(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Bounded")
 	p := a.agent(f.ID, "Fix", "Fix it.")

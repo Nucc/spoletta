@@ -58,6 +58,7 @@ flows:
 // themselves, and the process taking all three runs once every one came,
 // with each by its name.
 func TestStructCopiesNamedForThemselves(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	ids := map[string]int64{}
 	for _, f := range setupImportOK(a, reviewersFile).Flows {
@@ -118,6 +119,7 @@ func TestStructCopiesNamedForThemselves(t *testing.T) {
 // struct changes, and follows the struct's name again once named as it
 // is. Its parts, and a copy of a procedure's object, keep theirs.
 func TestRenamingStructCopies(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Review Comment", "struct": true}, http.StatusCreated, &s)

@@ -132,6 +132,7 @@ func verAttribute(a *app, object int64, name string) attribute {
 // Saving always adds a version on top of the current one; jumping back and
 // saving again branches off the older one. Versions are each flow's own.
 func TestVersionChain(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Chain of versions")
 	other := a.newFlow("Other flow")
@@ -184,6 +185,7 @@ func TestVersionChain(t *testing.T) {
 // A run saves the board as a new version only if it changed since its
 // current one, moving a box included; otherwise it runs on that version.
 func TestRunSavesAVersionOnlyWhenTheBoardChanged(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Run versions")
 	p := a.agent(f.ID, "Draft", "Draft it.")
@@ -231,6 +233,7 @@ func TestRunSavesAVersionOnlyWhenTheBoardChanged(t *testing.T) {
 // Jumping back to a version puts back everything on the board, keeping
 // every id, whatever was changed, deleted or added since.
 func TestRestoreBringsBackTheWholeBoard(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	callee := a.newFlow("Summarizing")
 	sum := a.newObject(callee.ID, "Summary")
@@ -340,6 +343,7 @@ func TestRestoreBringsBackTheWholeBoard(t *testing.T) {
 // Runs keep the ids of processes deleted since, and jumping back to the
 // version a run ran on brings them back under the same ids.
 func TestRunsKeepDeletedProcesses(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Deleted processes")
 	gone := a.agent(f.ID, "Gone", "Do it.")
@@ -376,6 +380,7 @@ func TestRunsKeepDeletedProcesses(t *testing.T) {
 // A run of the board holds it: it can't be brought back to another version
 // while the run goes, though the run reads its own version.
 func TestRestoreRefusedWhileRunning(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Busy")
 	review := a.newProcess(f.ID, map[string]any{"name": "Review", "kind": kindHuman})
@@ -403,6 +408,7 @@ func TestRestoreRefusedWhileRunning(t *testing.T) {
 
 // Flow settings are tidied and checked, and name the branches runs work on.
 func TestFlowSettings(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Bump Deps!")
 	if f.Settings.Repositories == nil || len(f.Settings.Repositories) != 0 || f.Settings.BranchPrefix != "" {
@@ -485,6 +491,7 @@ func TestFlowSettings(t *testing.T) {
 // Deleting a flow deletes all in it, inner boards, versions and runs
 // included, and leaves other flows as they were.
 func TestDeletingAFlowLeavesOthersAlone(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	build := func(name string) (flow, int64, int64) {
 		f := a.newFlow(name)
@@ -539,6 +546,7 @@ func TestDeletingAFlowLeavesOthersAlone(t *testing.T) {
 // A flow's last run is its latest run of the whole flow, not a run of it a
 // subflow process made, nor a recording flow process's.
 func TestFlowLastRunIsTheLatestTopLevelRun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	callee := a.newFlow("Callee")
 	work := a.agent(callee.ID, "Work", "Work.")
@@ -586,6 +594,7 @@ func TestFlowLastRunIsTheLatestTopLevelRun(t *testing.T) {
 // No flow runs itself, however many subflows apart, whether the subflow
 // process is made so or turned into one later.
 func TestSubflowCycleChecks(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	fa, fb, fc := a.newFlow("A"), a.newFlow("B"), a.newFlow("C")
 	sub := func(f, callee int64, name string) map[string]any {
@@ -624,6 +633,7 @@ func TestSubflowCycleChecks(t *testing.T) {
 // as objects it generates, copying what they are made of, or reusing an
 // object of the same name there.
 func TestSubflowBringsOutcomes(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	callee := a.newFlow("Summarize")
 	summary := a.newObject(callee.ID, "Summary")
@@ -773,6 +783,7 @@ func verBuildSubflow(a *app) verSubflow {
 // in the states of the same names; the callee runs as a run of its own, on
 // a version of its board saved when it changed; its outcomes come out.
 func TestSubflowRunPassesObjectsByName(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := verBuildSubflow(a)
 	a.worker.onAgent("Fix", handsIn(data("the fix")))
@@ -828,6 +839,7 @@ func TestSubflowRunPassesObjectsByName(t *testing.T) {
 // A callee taking the ticket only once closed gets nothing from a caller
 // giving it open, so nothing comes out, and what takes the outcome never runs.
 func TestSubflowStateNamesMustMatch(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := verBuildSubflow(a)
 	// The callee's Fix now takes the ticket closed.
@@ -863,6 +875,7 @@ func TestSubflowStateNamesMustMatch(t *testing.T) {
 // What goes wrong in or around the flow a subflow process runs fails the
 // caller's branch, saying why.
 func TestSubflowFailures(t *testing.T) {
+	parallel(t)
 	t.Run("callee fails", func(t *testing.T) {
 		a := newApp(t)
 		s := verBuildSubflow(a)

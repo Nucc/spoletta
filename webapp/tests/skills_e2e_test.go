@@ -65,6 +65,7 @@ func skillsFlow(a *app, prompt string, settings map[string]any) (flow, process) 
 // prompt names are spelled out before what it takes is added; a /word
 // naming no command stays. A deleted skill fails the step.
 func TestSkillsAndCommandsInRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	notes := skillsNew(a, "skills", map[string]any{"name": skillsName("notes"), "description": "Writes notes: use for any note.", "content": "Keep notes short."})
 	review := skillsNew(a, "commands", map[string]any{"name": skillsName("review"), "argumentHint": "[focus]", "content": "Review it. Focus on ${1:-correctness}.\n"})
@@ -121,6 +122,7 @@ func TestSkillsAndCommandsInRuns(t *testing.T) {
 // or everyone; only those they belong to see and change them. A flow uses
 // only what its owner may, which its board is offered.
 func TestSkillsAreTheirOwners(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob, carl := usersNewPerson("Bob"), usersNewPerson("Carl")
@@ -219,6 +221,7 @@ func TestSkillsAreTheirOwners(t *testing.T) {
 // skill the app hasn't is refused; the assistant is told the skills and
 // commands its flow may use.
 func TestSkillsInTheSetupFile(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("skills%d", time.Now().UnixNano())
 	s := skillsNew(a, "skills", map[string]any{"name": skillsName("notes"), "description": "Writes notes.", "content": "Keep notes short."})
@@ -266,6 +269,7 @@ flows:
 // out, and import adds the ones the app lacks, as everyone's, and makes over
 // the ones it has by name.
 func TestSkillsAndCommandsInTheSetupFile(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("setup%d", time.Now().UnixNano())
 	skillsNew(a, "skills", map[string]any{"name": prefix + "-notes", "description": "Writes notes.", "content": "Keep notes short.\nSay why."})

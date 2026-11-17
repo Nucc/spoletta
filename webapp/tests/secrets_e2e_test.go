@@ -7,31 +7,18 @@ package tests
 
 import (
 	"database/sql"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-sql-driver/mysql"
 )
 
-// The test database, as the webapp sees it.
+// The test's database, as its webapp sees it.
 func secretsDB(t *testing.T) *sql.DB {
 	t.Helper()
-	cfg := mysql.NewConfig()
-	cfg.Net = "tcp"
-	cfg.Addr = net.JoinHostPort(testDB.host, testDB.port)
-	cfg.DBName = testDB.name
-	cfg.User, cfg.Passwd = testDB.user, testDB.password
-	db, err := sql.Open("mysql", cfg.FormatDSN())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return openDB(t, database(t))
 }
 
 func secretsStored(t *testing.T, db *sql.DB, q string, args ...any) string {
@@ -44,6 +31,7 @@ func secretsStored(t *testing.T, db *sql.DB, q string, args ...any) string {
 }
 
 func TestSecretsSealed(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	t.Cleanup(func() {
@@ -97,14 +85,14 @@ func TestSecretsSealed(t *testing.T) {
 
 	// Without the key they were sealed with, the webapp doesn't start.
 	for _, key := range []string{"SECRET_KEY=", "SECRET_KEY=another-key-0123456789abcdef01234567"} {
-		if w, err := startWebapp(a.worker.url, 30*time.Second, key); err == nil {
+		if w, err := startWebapp(database(t), a.worker.url, 30*time.Second, key); err == nil {
 			w.stop()
 			t.Errorf("started with %s", key)
 		} else if !strings.Contains(err.Error(), "SECRET_KEY") {
 			t.Errorf("with %s: %v", key, err)
 		}
 	}
-	if _, err := startWebapp(a.worker.url, 30*time.Second, "SECRET_KEY=short"); err == nil || !strings.Contains(err.Error(), "at least 32") {
+	if _, err := startWebapp(database(t), a.worker.url, 30*time.Second, "SECRET_KEY=short"); err == nil || !strings.Contains(err.Error(), "at least 32") {
 		t.Errorf("with a short key: %v", err)
 	}
 }
@@ -117,7 +105,7 @@ func secretsSeal(t *testing.T, primary, secondary string) (string, error) {
 		"PATH=" + os.Getenv("PATH"),
 		"DB_HOST=" + testDB.host,
 		"DB_PORT=" + testDB.port,
-		"DB_NAME=" + testDB.name,
+		"DB_NAME=" + database(t),
 		"DB_USER=" + testDB.user,
 		"DB_PASSWORD=" + testDB.password,
 		"SECRET_KEY=" + primary,
@@ -131,6 +119,7 @@ func secretsSeal(t *testing.T, primary, secondary string) (string, error) {
 // with it, and then it alone is SECRET_KEY, which webapps start with while
 // the old key no longer does.
 func TestSecretsRotate(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	t.Cleanup(func() { db.Exec("DELETE FROM model_keys WHERE env = 'OPENAI_API_KEY'") })
@@ -165,7 +154,7 @@ func TestSecretsRotate(t *testing.T) {
 		t.Errorf("the key is kept as %q, %q before", after, before)
 	}
 
-	if w, err := startWebapp(a.worker.url, 30*time.Second, "SECRET_KEY="+testSecretKey); err == nil {
+	if w, err := startWebapp(database(t), a.worker.url, 30*time.Second, "SECRET_KEY="+testSecretKey); err == nil {
 		w.stop()
 		t.Errorf("a webapp with only the old key started")
 	}
@@ -188,6 +177,7 @@ func TestSecretsRotate(t *testing.T) {
 // The key can be in a file SECRET_KEY_FILE names, as secret stores mounting
 // secrets as files hand it over, but not in both.
 func TestSecretsKeyFile(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	path := t.TempDir() + "/secret-key"
 	if err := os.WriteFile(path, []byte(testSecretKey+"\n"), 0o600); err != nil {
@@ -195,7 +185,7 @@ func TestSecretsKeyFile(t *testing.T) {
 	}
 	b := startApp(t, a.worker.url, "SECRET_KEY=", "SECRET_KEY_FILE="+path)
 	b.call("GET", "/api/model-keys", nil, http.StatusOK, nil)
-	if _, err := startWebapp(a.worker.url, 30*time.Second, "SECRET_KEY_FILE="+path); err == nil || !strings.Contains(err.Error(), "both set") {
+	if _, err := startWebapp(database(t), a.worker.url, 30*time.Second, "SECRET_KEY_FILE="+path); err == nil || !strings.Contains(err.Error(), "both set") {
 		t.Errorf("with the key in both: %v", err)
 	}
 }

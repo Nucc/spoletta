@@ -27,6 +27,7 @@ func histRedo(a *app, f int64) history   { a.t.Helper(); return histCall(a, f, "
 // Undoing goes back through the changes one by one, ids and all, and
 // redoing forward again, until a change drops what was undone.
 func TestUndoAndRedo(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Undo")
 	other := a.newFlow("Other")

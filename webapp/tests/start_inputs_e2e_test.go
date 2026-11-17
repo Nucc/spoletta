@@ -43,6 +43,7 @@ func inputNames(in handInputs) string {
 // What a person gives reaches the process taking it, checked as the API
 // checks it, and the run is theirs, as any run from the board.
 func TestStartingWithInputsByHand(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 
@@ -95,6 +96,7 @@ func TestStartingWithInputsByHand(t *testing.T) {
 // which the board as it is may no longer take, and the errors that refuse
 // Run refuse it too.
 func TestStartingThePublishedVersionWithInputs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 	published := pubPublish(a, tf.flow.ID, "")

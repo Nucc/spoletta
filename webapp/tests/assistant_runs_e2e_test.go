@@ -34,6 +34,7 @@ func promptSection(prompt, tag string) string {
 }
 
 func TestAssistantIsToldTheRunsAskedAbout(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	b := humanNewReviewBoard(a)
 	a.worker.onAgent("Assistant", func(context.Context, agentRun) runResult {
@@ -154,6 +155,7 @@ func TestAssistantIsToldTheRunsAskedAbout(t *testing.T) {
 // Only this flow's runs are told; a trial is left out of the latest runs,
 // but told of when named.
 func TestAssistantIsToldOnlyThisFlowsRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Told")
 	count := a.newProcess(f.ID, map[string]any{"name": "Count", "kind": "script", "script": "wc -c"})
@@ -207,6 +209,7 @@ func TestAssistantIsToldOnlyThisFlowsRuns(t *testing.T) {
 // A procedure's runs are started by subflow processes in runs of other
 // flows: its assistant counts and tells them, the caller's tells none.
 func TestAssistantOfAProcedureIsToldItsRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	callee := a.newFlow("Summarize")
 	ticketThere := a.newObject(callee.ID, "Ticket")

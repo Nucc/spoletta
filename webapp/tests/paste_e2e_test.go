@@ -25,6 +25,7 @@ func pasteInto(a *app, from int64, processes, objects []int64, to int64, board *
 // Pasting into another flow copies what was selected with all it takes
 // along, and leaves what was copied as it was.
 func TestPasteIntoAnotherFlow(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	src := a.newFlow("Copied from")
 	outer := editFlowProcess(a, src.ID, "Outer")
@@ -142,6 +143,7 @@ func TestPasteIntoAnotherFlow(t *testing.T) {
 // Pasted into its own flow, an object keeps what it specializes; a subflow
 // process can't be pasted into the flow it runs.
 func TestPasteIntoTheSameFlow(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Same")
 	vehicle := a.newObject(f.ID, "Vehicle")
@@ -181,6 +183,7 @@ func allObjects(a *app, f int64) []object {
 // A subflow process pasted with its outcome generates the copy of it, not
 // the namesake already on the board.
 func TestPasteASubflowProcessWithItsOutcome(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	module := a.newFlow("Makes results")
 	result := a.newObject(module.ID, "Result")

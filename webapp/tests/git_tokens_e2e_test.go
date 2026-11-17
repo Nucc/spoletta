@@ -43,6 +43,7 @@ func gitTokensFlows(a *app, url string) (fixes, plain flow) {
 }
 
 func TestStepsGetTheInstancesGitToken(t *testing.T) {
+	parallel(t)
 	fw := newFakeWorker(t)
 	a := startApp(t, fw.url, "GIT_TOKEN=static-e2e-token")
 	a.worker = fw
@@ -78,6 +79,7 @@ func TestStepsGetTheInstancesGitToken(t *testing.T) {
 }
 
 func TestStepsGetAGitHubAppsTokenForTheirRepositories(t *testing.T) {
+	parallel(t)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)

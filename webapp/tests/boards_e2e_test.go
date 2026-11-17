@@ -9,6 +9,7 @@ import (
 )
 
 func TestFlowLifecycle(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.refused("POST", "/api/flows", map[string]any{"name": "  "}, http.StatusBadRequest, "name is required")
 
@@ -48,6 +49,7 @@ func TestFlowLifecycle(t *testing.T) {
 
 // What can't be drawn on a board is refused, saying why.
 func TestBoardRefusesWhatCantBe(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Rules")
 	other := a.newFlow("Elsewhere")
@@ -91,6 +93,7 @@ func TestBoardRefusesWhatCantBe(t *testing.T) {
 
 // Deleting a process takes its links and connections with it.
 func TestDeletingAProcessTakesItsEdges(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Deleting")
 	draft := a.agent(f.ID, "Draft", "Draft it.")
@@ -115,6 +118,7 @@ func TestDeletingAProcessTakesItsEdges(t *testing.T) {
 
 // Jumping back to a version puts the board back as it was saved.
 func TestRestoringAVersion(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Versions")
 	draft := a.agent(f.ID, "Draft", "Draft it.")
@@ -163,6 +167,7 @@ func TestRestoringAVersion(t *testing.T) {
 // An agent generating objects with attributes hands in each object's fields,
 // and each object holds its own part.
 func TestOutputSplitsIntoObjectsWithAttributes(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Attributes")
 	triage := a.agent(f.ID, "Triage", "Triage the crash.")

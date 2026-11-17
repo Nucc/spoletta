@@ -84,6 +84,7 @@ func coreDone(t *testing.T, d runDetail) {
 // A process taking several objects runs once all of them exist, once, with
 // all of them; objects nothing generates count as existing from the start.
 func TestEngineJoinWaitsForAllPlainInputs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Join")
 	seed := a.agent(f.ID, "Seed", "Seed.")
@@ -137,6 +138,7 @@ func TestEngineJoinWaitsForAllPlainInputs(t *testing.T) {
 // Only objects make a process run: one taking nothing, that the start doesn't
 // point at, never runs, nor does one taking only objects nothing generates.
 func TestEngineProcessesWithoutTriggersDontRun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Untriggered")
 	first := a.agent(f.ID, "First", "First.")
@@ -158,6 +160,7 @@ func TestEngineProcessesWithoutTriggersDontRun(t *testing.T) {
 // Run refuses a board whose start points nowhere; a run started on it
 // otherwise, over the API, ends done at once.
 func TestEngineNoStartTarget(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Startless")
 	a.agent(f.ID, "Idle", "Idle.")
@@ -174,6 +177,7 @@ func TestEngineNoStartTarget(t *testing.T) {
 // exist yet, with whatever of it exists; that process doesn't run again in
 // the pass once it does.
 func TestEngineStartAtProcessWithInputs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Start with inputs")
 	first := a.agent(f.ID, "First", "First.")
@@ -199,6 +203,7 @@ func TestEngineStartAtProcessWithInputs(t *testing.T) {
 // One output feeding two processes runs both at once; one failing fails the
 // run, while the other branch still goes on to its end.
 func TestEngineParallelBranches(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Branches")
 	seed := a.agent(f.ID, "Seed", "Seed.")
@@ -260,6 +265,7 @@ func TestEngineParallelBranches(t *testing.T) {
 // Generating an object in a state runs only the processes taking it in that
 // state; a process taking it in several states runs on any of them.
 func TestEngineStateConditionsPickTakers(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		state string
 		ran   []string
@@ -318,6 +324,7 @@ func TestEngineStateConditionsPickTakers(t *testing.T) {
 // generating an object in a state runs the processes linked to it without one
 // too.
 func TestEnginePlainLinkTakesObjectInAnyState(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Plain link, stated object")
 	judge := a.agent(f.ID, "Judge", "Judge.")
@@ -342,6 +349,7 @@ func TestEnginePlainLinkTakesObjectInAnyState(t *testing.T) {
 // object enters the state, with those that exist, the conditioning one
 // included, whichever way it was reached first.
 func TestEngineStateLinkWithPlainInputs(t *testing.T) {
+	parallel(t)
 	for i := range 5 {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			a := newApp(t)
@@ -374,6 +382,7 @@ func TestEngineStateLinkWithPlainInputs(t *testing.T) {
 // too takes the object when it is in that state, whether the connection or
 // the object entering the state ran it first.
 func TestEngineStateLinkWithConnection(t *testing.T) {
+	parallel(t)
 	for i := range 5 {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			a := newApp(t)
@@ -403,6 +412,7 @@ func TestEngineStateLinkWithConnection(t *testing.T) {
 // A direct connection runs its target right after its source succeeds, and
 // not after it fails; a cycle of connections runs each process once.
 func TestEngineConnections(t *testing.T) {
+	parallel(t)
 	t.Run("after success", func(t *testing.T) {
 		a := newApp(t)
 		f := a.newFlow("Connected")
@@ -477,6 +487,7 @@ func TestEngineConnections(t *testing.T) {
 // What's wrong with a process itself fails its step, saying why, without
 // asking the worker.
 func TestEngineStepErrors(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		name    string
 		build   func(a *app, f int64) process
@@ -556,6 +567,7 @@ func TestEngineStepErrors(t *testing.T) {
 
 // A worker that can't be reached, or refuses, fails the step saying so.
 func TestEngineWorkerUnavailable(t *testing.T) {
+	parallel(t)
 	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "worker overloaded", http.StatusServiceUnavailable)
 	}))
@@ -590,6 +602,7 @@ func TestEngineWorkerUnavailable(t *testing.T) {
 // Stopping one step fails it and ends its branch; the rest of the run goes
 // on. Only a step going can be stopped.
 func TestEngineStopOneStep(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Stop a step")
 	seed := a.agent(f.ID, "Seed", "Seed.")
@@ -638,6 +651,7 @@ func TestEngineStopOneStep(t *testing.T) {
 // Inputs go into the prompt each tagged with its name and state, escaped, and
 // the step records them as given.
 func TestEngineInputsInPrompt(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Escaping")
 	mk := a.agent(f.ID, "Make", "Make.")
@@ -669,6 +683,7 @@ func TestEngineInputsInPrompt(t *testing.T) {
 // A script gets its inputs as files rather than in its script, and the step
 // records the script as its prompt.
 func TestEngineScriptInputs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Script inputs")
 	mk := a.agent(f.ID, "Make", "Make.")
@@ -708,6 +723,7 @@ func TestEngineScriptInputs(t *testing.T) {
 
 // No more steps than the engine has slots for go at once; the rest wait.
 func TestEngineParallelStepsLimit(t *testing.T) {
+	parallel(t)
 	a := newApp(t) // 3 slots
 	f := a.newFlow("Slots")
 	seed := a.agent(f.ID, "Seed", "Seed.")
@@ -773,6 +789,7 @@ func TestEngineParallelStepsLimit(t *testing.T) {
 // A run walks the board as it was when it started: what is added to the
 // board meanwhile doesn't run.
 func TestEngineRunWalksTheBoardItStartedOn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Snapshot")
 	first := a.agent(f.ID, "First", "First.")
@@ -809,6 +826,7 @@ func TestEngineRunWalksTheBoardItStartedOn(t *testing.T) {
 
 // The runs API: listing a flow's runs newest first, and what it refuses.
 func TestEngineRunsAPI(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Runs API")
 	p := a.agent(f.ID, "P", "Go.")

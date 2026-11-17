@@ -90,6 +90,7 @@ func cellOf(r dataRow, name string) *dataCell {
 // Each run is a row holding what it generated of each object, and the
 // objects come with their attributes in the order they were added.
 func TestDataHoldsWhatEachRunGenerated(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Triage")
 	triage := a.agent(f.ID, "Triage", "Triage the crash.")
@@ -145,6 +146,7 @@ func TestDataHoldsWhatEachRunGenerated(t *testing.T) {
 // A run of one item of a list holds the item it was given beside what its
 // steps generated, and the outer run the lists.
 func TestDataHoldsTheItemOfAnItemRun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedLists(t, a, true, true)
 	a.worker.onAgent("Find", handsIn(nestedTitles("A", "B")))
@@ -189,6 +191,7 @@ func TestDataHoldsTheItemOfAnItemRun(t *testing.T) {
 // and sorted by any of it. A facet's counts leave out what the query ticks
 // of it.
 func TestDataSearchesEveryRun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Triage")
 	triage := a.agent(f.ID, "Triage", "Triage the crash.")

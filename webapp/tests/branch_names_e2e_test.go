@@ -57,6 +57,7 @@ func runOnTicket(a *app, f int64, key string) runDetail {
 // told, while the worker keeps the run's own branch; a follow-up and a
 // re-run work on it too.
 func TestRunsWorkOnTheBranchTheirFlowNames(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f, _ := newBranchFlow(a, "feature/{@Ticket.key}")
 	d := runOnTicket(a, f.ID, "PROJ-123")
@@ -106,6 +107,7 @@ func TestRunsWorkOnTheBranchTheirFlowNames(t *testing.T) {
 // A rule that isn't one is refused; one naming what runs don't hold is
 // warned of, and its runs work on branches of their own, saying why.
 func TestBranchRulesNamingNothingLeaveRunsOnTheirOwn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f, _ := newBranchFlow(a, "feature/{@Ticket.key}")
 	a.refused("PATCH", fmt.Sprintf("/api/flows/%d", f.ID), map[string]any{"settings": map[string]any{
@@ -155,6 +157,7 @@ func TestBranchRulesNamingNothingLeaveRunsOnTheirOwn(t *testing.T) {
 // so does a run a person or a task board started on a record of a flow
 // querying the tickets, which isn't given the record as it starts.
 func TestBranchesAreNamedAfterRecords(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s, picking, ticket := pickTickets(a, "Fix picked tickets")
 	branchRule(a, picking.ID, "fix/{@Ticket.id}", http.StatusOK)
@@ -231,6 +234,7 @@ func TestBranchesAreNamedAfterRecords(t *testing.T) {
 // A subflow process's run works on the branch its procedure names after
 // what the process gives it.
 func TestSubflowsNameTheirOwnBranch(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	lib := a.newFlow("Fix a ticket")
 	branchRule(a, lib.ID, "feature/{@Ticket.key}", http.StatusOK)

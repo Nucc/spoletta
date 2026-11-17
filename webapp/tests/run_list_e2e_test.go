@@ -27,6 +27,7 @@ func listedRuns(a *app, f int64, query string) []int64 {
 // runs a page at a time; a re-run shows whether or not the run it re-runs
 // does.
 func TestRunListFiltersByStatusAndStart(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Listed")
 	draft := a.agent(f.ID, "Draft", "Write a ticket.")
@@ -133,6 +134,7 @@ func TestRunListFiltersByStatusAndStart(t *testing.T) {
 // a slot: with one slot, of two processes going at once one waits for the
 // other to end.
 func TestStepsRecordTriesAndSlotWaits(t *testing.T) {
+	parallel(t)
 	fw := newFakeWorker(t)
 	a := startApp(t, fw.url, "PARALLEL_STEPS=1")
 	a.worker = fw

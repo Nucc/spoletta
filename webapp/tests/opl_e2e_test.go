@@ -11,6 +11,7 @@ import (
 )
 
 func TestOPLOfAFlow(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Described")
 	write := a.agent(f.ID, "Write", "Write it.")

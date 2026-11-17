@@ -72,6 +72,7 @@ func pickAdd(a *app, s int64, id, state string) int64 {
 // step, and a re-run takes the record again as it is then. A process
 // generating it without taking it is an error on the board.
 func TestPickedRecords(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s, f, ticket := pickTickets(a, "Work tickets")
 	note := a.newObject(f.ID, "Note")
@@ -238,6 +239,7 @@ func TestPickedRecords(t *testing.T) {
 // took, and a run started on a record takes that one, whatever the pick
 // selects; the Records page offers the flow by its pick.
 func TestPickedRecordReviewed(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s, f, ticket := pickTickets(a, "Review tickets")
 	a.call("PUT", fmt.Sprintf("/api/objects/%d/pick", ticket.ID), map[string]any{"pick": map[string]any{"state": "open"}}, http.StatusNoContent, nil)
@@ -282,6 +284,7 @@ func TestPickedRecordReviewed(t *testing.T) {
 // each take a ticket of their own, and once every ticket is held the next
 // run isn't started.
 func TestPickedRecordsRace(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s, f1, t1 := pickTickets(a, "Work tickets")
 	f2 := a.newFlow("Work tickets too")
@@ -378,6 +381,7 @@ func TestPickedRecordsRace(t *testing.T) {
 // still follows the struct. A setup file says how many each copy is, one if
 // it says nothing.
 func TestStructCopiesSayHowMany(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	file := `spoletta: 1
 structs:
@@ -549,6 +553,7 @@ flows:
 // state the object lacks among them is refused, and a pick naming the one
 // state as picks once did still reads.
 func TestPickedRecordInStates(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s, f, ticket := pickTickets(a, "Tickets in states")
 	pick := func(p any) (int, string) {

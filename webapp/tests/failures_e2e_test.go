@@ -46,6 +46,7 @@ func ptr[T any](v T) *T { return &v }
 // A failed step is tried again, as a step of its own each time, as many
 // times as its retries say; once one succeeds the branch goes on.
 func TestFailedStepIsRetried(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		name           string
 		flakes, steps  int
@@ -82,6 +83,7 @@ func TestFailedStepIsRetried(t *testing.T) {
 // what the failed process took and what went wrong, in a fresh pass, so it
 // runs even if it ran already.
 func TestFailureConnectionHandlesTheFailure(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Handled")
 	seed := a.agent(f.ID, "Seed", "Seed.")
@@ -127,6 +129,7 @@ func TestFailureConnectionHandlesTheFailure(t *testing.T) {
 // A failure is handled once the retries are used up, and a human can handle
 // it, deciding what comes next.
 func TestFailureHandledAfterRetriesByAHuman(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Escalated")
 	fix := a.agent(f.ID, "Fix", "Fix it.")
@@ -150,6 +153,7 @@ func TestFailureHandledAfterRetriesByAHuman(t *testing.T) {
 
 // A critic out of rounds fails, which its failure connection handles.
 func TestFailureConnectionHandlesARoundsLimit(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	l := decisionsNewLoop(a, "weak")
 	escalate := a.agent(l.flow.ID, "Escalate", "Ask an editor.")
@@ -169,6 +173,7 @@ func TestFailureConnectionHandlesARoundsLimit(t *testing.T) {
 
 // A step stopped by a person is neither retried nor handled.
 func TestStoppedStepIsNotRetriedNorHandled(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Stopped")
 	slow := a.agent(f.ID, "Slow", "Slow.")
@@ -192,6 +197,7 @@ func TestStoppedStepIsNotRetriedNorHandled(t *testing.T) {
 
 // A process's timeout goes to the worker, which ends the step then.
 func TestStepTimeoutGoesToTheWorker(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Timeouts")
 	agent := a.agent(f.ID, "Agent", "Think.")
@@ -229,6 +235,7 @@ func TestStepTimeoutGoesToTheWorker(t *testing.T) {
 // What can't be: failure connections only from processes that fail, of a
 // known kind, and settings in range; a version keeps the connection's kind.
 func TestFailureRefusals(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Refusals")
 	fix := a.agent(f.ID, "Fix", "Fix it.")

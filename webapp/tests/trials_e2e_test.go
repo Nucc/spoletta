@@ -121,6 +121,7 @@ func describeSamples(samples []trialSample) string {
 // its failure when it fails. The trial is marked as one, is no last run of
 // the flow, and isn't re-run.
 func TestTrialRunsOnlyTheProcess(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	fix := a.agent(r.f.ID, "Fix", "Fix the count.")
@@ -224,6 +225,7 @@ func TestTrialRunsOnlyTheProcess(t *testing.T) {
 // run that reached it, giving what it took there. A run of another flow is
 // neither offered nor read.
 func TestTrialStartsFromTheFlowsRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 
@@ -285,6 +287,7 @@ func TestTrialStartsFromTheFlowsRuns(t *testing.T) {
 // Trying a process on every sample starts a trial of it on each, in the
 // order they were saved; one without samples has nothing to try it on.
 func TestTrialOnEverySample(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	path := fmt.Sprintf("/api/processes/%d/trial/samples", r.count.ID)
@@ -336,6 +339,7 @@ func dataRunIDs(d flowData) []int64 {
 // Only an agent, script or connector process is tried, on objects it
 // takes, in states they have.
 func TestTrialRefusals(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	review := a.newProcess(r.f.ID, map[string]any{"name": "Review", "kind": kindHuman})
@@ -357,6 +361,7 @@ func TestTrialRefusals(t *testing.T) {
 // cursor carried from run to run doesn't move. Nor does it write a shared
 // struct's records.
 func TestTrialStoresNothingRealRunsSee(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 
 	f := a.newFlow("Open tickets")
@@ -447,6 +452,7 @@ func TestTrialStoresNothingRealRunsSee(t *testing.T) {
 
 // A process on a flow process's board is tried on that board.
 func TestTrialInsideAFlowProcess(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Nested trial")
 	outer := nestedFlowProcess(a, f.ID, "Handle", false)
@@ -473,6 +479,7 @@ func TestTrialInsideAFlowProcess(t *testing.T) {
 // versions and history keep them, and pasting copies them along with the
 // objects they give.
 func TestTrialSamples(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	a.newState(r.ticket.ID, "draft")
@@ -547,6 +554,7 @@ func TestTrialSamples(t *testing.T) {
 // states they give; importing one without samples for a process keeps
 // those it has, as the assistant's replies do.
 func TestTrialSamplesInSetup(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	f := a.newFlow("Sampled")
 	count := a.newProcess(f.ID, map[string]any{"name": "Count", "kind": kindScript, "script": "wc -c"})
@@ -613,6 +621,7 @@ func withoutKey(t *testing.T, file, key string) string {
 // process failing; what a trial spent still counts toward what its flow
 // spent, as it cost that money.
 func TestTrialsCountAsNoRuns(t *testing.T) {
+	parallel(t)
 	a, db := activityApp(t, newApp)
 	f := a.newFlow("Trialled")
 	build := a.agent(f.ID, "Build", "Build it.")
@@ -701,6 +710,7 @@ func sumCost(xs []float64) float64 {
 // published a version of it. Samples changed since a version show in its
 // diff, but don't make the board a draft of what it published.
 func TestTrialsTryTheDraft(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	published := pubPublish(a, r.f.ID, "counting characters")

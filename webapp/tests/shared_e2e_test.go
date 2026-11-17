@@ -43,6 +43,7 @@ func sharedRecords(a *app, s int64) map[string]sharedRecord {
 // it and leaves it completed, the completing flow's query then passes it
 // over, and a run of it that fails changes nothing.
 func TestSharedRecordsAcrossFlows(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Exception", "struct": true}, http.StatusCreated, &s)
@@ -240,6 +241,7 @@ func TestSharedRecordsAcrossFlows(t *testing.T) {
 // A setup file shares a struct's object, which needs a unique attribute,
 // lets a copy of it be queried, and exports it shared again.
 func TestSharedStructInSetup(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	const file = `spoletta: 1
 structs:
@@ -289,6 +291,7 @@ flows:
 // output link, and an agent querying one new record decides the state it
 // comes out in, which a rule on every record doesn't undo.
 func TestSharedListDecidedByAnAgent(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Issue", "struct": true}, http.StatusCreated, &s)
@@ -390,6 +393,7 @@ func TestSharedListDecidedByAnAgent(t *testing.T) {
 // out, and deletes them, one or many. A unique value another record holds
 // is refused, and a run generating an edited record later refreshes it.
 func TestSharedRecordsEditedByHand(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Bug", "struct": true}, http.StatusCreated, &s)

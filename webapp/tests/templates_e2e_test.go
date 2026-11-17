@@ -240,6 +240,7 @@ func noSlackInstalled(a *app) {
 // connectors, whether installed, and its roles, which without sign-in
 // anyone holds.
 func TestTemplatesListWhatTheyNeed(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	noSlackInstalled(a)
 	ts := tplList(a)
@@ -276,6 +277,7 @@ func TestTemplatesListWhatTheyNeed(t *testing.T) {
 // end, with what it needs given: its errors, if any, are only what is the
 // app's to set up, and once that is, Run starts it.
 func TestEachTemplateRuns(t *testing.T) {
+	parallel(t)
 	t.Run("triage a ticket", func(t *testing.T) {
 		a := newApp(t)
 		f := tplUse(a, "triage-a-ticket", nil)
@@ -463,6 +465,7 @@ func TestEachTemplateRuns(t *testing.T) {
 // whoever's it is, which stays as it was; or as the person names it. A
 // version is saved of it as made from the template.
 func TestTemplateMakesANewFlow(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tp := tplFind(a, "expense-claim")
 	have := a.newFlow(tp.Flow)
@@ -497,6 +500,7 @@ func TestTemplateMakesANewFlow(t *testing.T) {
 // board says is an error until an admin installs the connector and it is
 // picked; the flow's setup file carries them, and imports again.
 func TestTemplateWithoutItsConnector(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	noSlackInstalled(a)
 	if n := tplFind(a, "daily-digest-to-slack").Needs; len(n) != 1 || n[0].Met {
@@ -541,6 +545,7 @@ func TestTemplateWithoutItsConnector(t *testing.T) {
 // say; its roles are met once someone holds them, and until then its board
 // warns that only admins decide.
 func TestTemplatesWithSignIn(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob := usersNewPerson("Bob")

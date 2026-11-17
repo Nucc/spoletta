@@ -231,6 +231,7 @@ func playCardRun(b playBoard, key string) (string, playRun) {
 // it where it was, is stuck and started no more until a person tries it
 // again.
 func TestPlayingATaskBoard(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := taskStruct(a, "Bug", nil, "id", []string{"title"}, "new", "triaged", "fixed")
 	triage := movingFlow(a, s, "Triage", "new", "triaged")
@@ -364,6 +365,7 @@ func TestPlayingATaskBoard(t *testing.T) {
 // names, but not one a flow names, nor those of a column letting its
 // records rest.
 func TestTaskBoardPicksTheFlowTakingAState(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := taskStruct(a, "Bug", nil, "id", []string{"title"}, "new", "triaged", "fixed")
 	movingFlow(a, s, "Triage", "new", "triaged")
@@ -424,6 +426,7 @@ func TestTaskBoardPicksTheFlowTakingAState(t *testing.T) {
 // A board's runs are for whoever pressed Play; once they are removed, it
 // stops playing and says why.
 func TestTaskBoardPlayedFor(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob := usersNewPerson("Bob")
@@ -468,6 +471,7 @@ func TestTaskBoardPlayedFor(t *testing.T) {
 // state's records to, and the run going on a card, by name only if they
 // see the flow.
 func TestTaskBoardNamesOnlyFlowsSeen(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob, carol := usersNewPerson("Bob"), usersNewPerson("Carol")
@@ -521,6 +525,7 @@ func TestTaskBoardNamesOnlyFlowsSeen(t *testing.T) {
 // many as its own limit, the runs waiting their turn; a column whose flow
 // whoever would run it can't start says why.
 func TestTaskBoardLimits(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := taskStruct(a, "Bug", nil, "id", []string{"title"}, "new", "triaged", "fixed")
 	triage := movingFlow(a, s, "Triage", "new", "triaged")
@@ -592,6 +597,7 @@ func (ps *playScripts) count(call string) int {
 // running a flow on it from its card, or trying it again, starts its tries
 // anew, the run they started being the first.
 func TestTaskBoardTriesRecordsAgain(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := taskStruct(a, "Pull request", nil, "id", []string{"title"}, "draft", "ready")
 	check := movingFlow(a, s, "Check", "draft", "ready")

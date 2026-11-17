@@ -3,7 +3,6 @@ package tests
 import (
 	"database/sql"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-sql-driver/mysql"
 )
 
 // A database from the days of a single board, long before migrations, is
@@ -22,13 +19,9 @@ import (
 // with its process on it, and it ends with the columns a new database gets
 // from the schema migration.
 func TestMigrateDatabaseFromBeforeMigrations(t *testing.T) {
+	parallel(t)
 	needDB(t)
-	root := secretsDB(t)
-	name := fmt.Sprintf("%s%d_old", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
+	name := emptyDatabase(t, "_old")
 	old := openDB(t, name)
 	for _, s := range []string{
 		`CREATE TABLE processes (
@@ -86,7 +79,7 @@ func TestMigrateDatabaseFromBeforeMigrations(t *testing.T) {
 		t.Fatalf("migrations recorded = %v, want 1, 2 and on", versions)
 	}
 
-	upgraded, fresh := columns(t, old), columns(t, openDB(t, testDB.name))
+	upgraded, fresh := columns(t, old), columns(t, openDB(t, database(t)))
 	for _, c := range fresh {
 		if !slices.Contains(upgraded, c) {
 			t.Errorf("the upgraded database lacks %s", c)
@@ -103,8 +96,9 @@ func TestMigrateDatabaseFromBeforeMigrations(t *testing.T) {
 // down-to` refuses to go below the schema migration, which can't be undone,
 // and undoes nothing.
 func TestMigrateCommand(t *testing.T) {
+	parallel(t)
 	needDB(t)
-	migrate := func(args ...string) (string, error) { return migrateDB(testDB.name, args...) }
+	migrate := func(args ...string) (string, error) { return migrateDB(database(t), args...) }
 
 	out, err := migrate("status")
 	if err != nil {
@@ -159,13 +153,9 @@ func migrateDBWith(name string, env []string, args ...string) (string, error) {
 // a LOCAL_MIGRATIONS that isn't there stops the webapp before it migrates
 // anything.
 func TestLocalMigrations(t *testing.T) {
+	parallel(t)
 	needDB(t)
-	root := secretsDB(t)
-	name := fmt.Sprintf("%s%d_local", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
+	name := emptyDatabase(t, "_local")
 	db := openDB(t, name)
 
 	dir := t.TempDir()
@@ -184,7 +174,7 @@ func TestLocalMigrations(t *testing.T) {
 	}
 	local := "LOCAL_MIGRATIONS=" + dir
 
-	if _, err := startWebapp(newFakeWorker(t).url, 30*time.Second, "DB_NAME="+name, "LOCAL_MIGRATIONS="+filepath.Join(dir, "missing")); err == nil || !strings.Contains(err.Error(), "LOCAL_MIGRATIONS") {
+	if _, err := startWebapp(name, newFakeWorker(t).url, 30*time.Second, "LOCAL_MIGRATIONS="+filepath.Join(dir, "missing")); err == nil || !strings.Contains(err.Error(), "LOCAL_MIGRATIONS") {
 		t.Fatalf("started with LOCAL_MIGRATIONS naming no directory: %v, want it to stop saying so", err)
 	}
 	var tables int
@@ -272,13 +262,9 @@ func TestLocalMigrations(t *testing.T) {
 // and the webapp starting again brings it back up to the columns a new
 // database has.
 func TestMigrationsGoDownAndUpAgain(t *testing.T) {
+	parallel(t)
 	needDB(t)
-	root := secretsDB(t)
-	name := fmt.Sprintf("%s%d_down", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
+	name := emptyDatabase(t, "_down")
 	db := openDB(t, name)
 	startApp(t, newFakeWorker(t).url, "DB_NAME="+name).proc.stop()
 	up := columns(t, db)
@@ -304,12 +290,7 @@ func TestMigrationsGoDownAndUpAgain(t *testing.T) {
 
 func openDB(t *testing.T, name string) *sql.DB {
 	t.Helper()
-	cfg := mysql.NewConfig()
-	cfg.Net = "tcp"
-	cfg.Addr = net.JoinHostPort(testDB.host, testDB.port)
-	cfg.DBName = name
-	cfg.User, cfg.Passwd = testDB.user, testDB.password
-	db, err := sql.Open("mysql", cfg.FormatDSN())
+	db, err := sql.Open("mysql", testDSN(name))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -179,6 +179,7 @@ func newNestedTriage(t *testing.T, a *app, recording bool) nestedTriage {
 // its start's process, and what the processes inside generate of what it
 // generates comes out, and only that.
 func TestFlowProcessRunsItsBoardInTheRun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedTriage(t, a, false)
 
@@ -230,6 +231,7 @@ func TestFlowProcessRunsItsBoardInTheRun(t *testing.T) {
 // An object a flow process generates in a state comes out in that state,
 // unless the process inside generated it in one of its own.
 func TestFlowProcessOutputState(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		name string
 		// The state the process inside generates it in, if any.
@@ -285,6 +287,7 @@ func TestFlowProcessOutputState(t *testing.T) {
 // A process inside failing fails the flow process and the run; nothing
 // comes out of it.
 func TestFailureInsideAFlowProcess(t *testing.T) {
+	parallel(t)
 	for _, recording := range []bool{false, true} {
 		t.Run(fmt.Sprintf("recording %v", recording), func(t *testing.T) {
 			a := newApp(t)
@@ -320,6 +323,7 @@ func TestFailureInsideAFlowProcess(t *testing.T) {
 // A recording flow process runs its board as a run of its own, in the run
 // it is in, whose steps are that run's.
 func TestRecordingFlowProcessRunsAsItsOwnRun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedTriage(t, a, true)
 
@@ -359,6 +363,7 @@ func TestRecordingFlowProcessRunsAsItsOwnRun(t *testing.T) {
 // run inside: for a recording flow process only its own run, so the rest of
 // the outer run goes on; otherwise the outer run.
 func TestDuplicateInsideAFlowProcess(t *testing.T) {
+	parallel(t)
 	for _, recording := range []bool{false, true} {
 		t.Run(fmt.Sprintf("recording %v", recording), func(t *testing.T) {
 			a := newApp(t)
@@ -423,6 +428,7 @@ func TestDuplicateInsideAFlowProcess(t *testing.T) {
 // A flow process inside a flow process runs its board too, all as steps of
 // the one run.
 func TestNestedFlowProcesses(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Nesting").ID
 	write := a.agent(f, "Write", "Write a ticket.")
@@ -512,6 +518,7 @@ func nestedTitles(keys ...string) []map[string]any {
 // What a process generates of a list is a JSON array of as many items as the
 // list says; one that isn't fails its step after one more try.
 func TestListMustHoldItsQuantity(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		name    string
 		replies []any
@@ -569,6 +576,7 @@ func TestListMustHoldItsQuantity(t *testing.T) {
 // A flow process taking a list runs its board once per item, each with its
 // item, and gathers what they generate into its lists in the items' order.
 func TestFlowProcessRunsOncePerItem(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedLists(t, a, false, false)
 	a.worker.onAgent("Find", handsIn(nestedTitles("A", "B", "C")))
@@ -621,6 +629,7 @@ func TestFlowProcessRunsOncePerItem(t *testing.T) {
 // What tells a recording flow process's item runs apart: the list's first
 // unique attribute's value, or else the item's place.
 func TestItemRunsAreKeyed(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		unique bool
 		keys   []string
@@ -659,6 +668,7 @@ func TestItemRunsAreKeyed(t *testing.T) {
 
 // An empty list runs nothing, and what the flow process gathers is empty.
 func TestFlowProcessOnAnEmptyList(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedLists(t, a, false, false)
 	a.worker.onAgent("Find", handsIn([]any{}))
@@ -674,6 +684,7 @@ func TestFlowProcessOnAnEmptyList(t *testing.T) {
 
 // A flow process takes items of one list at a time.
 func TestFlowProcessTakingTwoLists(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedLists(t, a, false, false)
 	more := a.newObject(n.flow.ID, "More")
@@ -725,6 +736,7 @@ func nestedBug(id string) func(context.Context, agentRun) runResult {
 // step is a duplicate, saying which run stored it, and nothing after it runs.
 // Values count as the same whatever their case and spacing.
 func TestUniqueValueStoredTerminatesLaterRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedBugs(t, a)
 
@@ -757,6 +769,7 @@ func TestUniqueValueStoredTerminatesLaterRuns(t *testing.T) {
 
 // A run terminated by a duplicate ends the reviews it still waits on.
 func TestDuplicateEndsWaitingReviews(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedBugs(t, a)
 	kick := a.agent(n.flow.ID, "Kick", "Start.")
@@ -803,6 +816,7 @@ func TestDuplicateEndsWaitingReviews(t *testing.T) {
 // Only a run that ends done keeps what it stored: one failing or stopped
 // afterwards releases it, so a later run can store it again.
 func TestRunNotDoneReleasesItsValues(t *testing.T) {
+	parallel(t)
 	for _, end := range []string{runFailed, runInterrupted} {
 		t.Run(end, func(t *testing.T) {
 			a := newApp(t)
@@ -845,6 +859,7 @@ func TestRunNotDoneReleasesItsValues(t *testing.T) {
 // run skips those another run holds, saying so, and runs those a run ending
 // otherwise than done released.
 func TestStoredListItemsAreClaimedOnce(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedLists(t, a, true, true)
 	nestedPatchObject(a, n.issues.ID, map[string]any{"persistent": true})

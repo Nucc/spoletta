@@ -272,6 +272,7 @@ type usersMe struct {
 // Without a session only signing in and the MCP proxy, which steps reach
 // with tokens of their own, answer.
 func TestUsersSignInNeeded(t *testing.T) {
+	parallel(t)
 	a, _ := usersApp(t)
 	a.refused("GET", "/api/flows", nil, http.StatusUnauthorized, "sign in first")
 	a.refused("GET", "/api/me", nil, http.StatusUnauthorized, "sign in first")
@@ -289,6 +290,7 @@ func TestUsersSignInNeeded(t *testing.T) {
 
 // Signing in comes back to the page asked for, signed in; signing out ends it.
 func TestUsersSignInAndOut(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	var me usersMe
@@ -320,6 +322,7 @@ func TestUsersSignInAndOut(t *testing.T) {
 // Only admins and people at an allowed domain sign in, with an email the
 // provider doesn't say it didn't check.
 func TestUsersWhoMaySignIn(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	no := false
 	for _, c := range []struct {
@@ -352,6 +355,7 @@ func TestUsersWhoMaySignIn(t *testing.T) {
 // An ID token for another sign-in, client or issuer, or one expired, signs
 // nobody in.
 func TestUsersRefusedIDTokens(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	for _, c := range []struct {
 		name   string
@@ -385,6 +389,7 @@ func TestUsersRefusedIDTokens(t *testing.T) {
 
 // A run says who started it, and a review who decided it.
 func TestUsersRecordWhoStartedAndDecided(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	b := humanNewReviewBoard(a)
@@ -416,6 +421,7 @@ func TestUsersRecordWhoStartedAndDecided(t *testing.T) {
 
 // Without a provider nobody signs in, and everything answers as before.
 func TestUsersNoSignIn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var me usersMe
 	a.call("GET", "/api/me", nil, http.StatusOK, &me)
@@ -465,6 +471,7 @@ func usersAdd(a *app, email string, roles ...string) usersPersonRow {
 // Only someone holding the role a human object names decides the reviews of
 // the process it handles; an admin decides any.
 func TestUsersRolesDecideReviews(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	b := humanNewReviewBoard(a)
@@ -513,6 +520,7 @@ func TestUsersRolesDecideReviews(t *testing.T) {
 // A review nobody handles is anyone's; one on a board inside a flow process
 // is its human object's.
 func TestUsersRolesWhereReviewsAre(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	f := a.newFlow("Nested review").ID
@@ -577,6 +585,7 @@ func TestUsersRolesWhereReviewsAre(t *testing.T) {
 // Admins add people, who then sign in from any domain, make others admins,
 // and see the roles boards name; nobody else does.
 func TestUsersAdminsManagePeople(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	f := a.newFlow("Roles")
@@ -644,6 +653,7 @@ func usersTwoProviderApp(t *testing.T) (*app, *fakeProvider, *fakeProvider) {
 // With two providers signing in asks which, and either signs the same
 // person in as the same user, known to each by its own subject.
 func TestUsersSignInWithEitherProvider(t *testing.T) {
+	parallel(t)
 	a, company, google := usersTwoProviderApp(t)
 
 	resp, err := http.Get(a.url + "/api/auth/login?next=" + url.QueryEscape("/flows/7"))

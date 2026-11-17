@@ -49,6 +49,7 @@ func decisionsState(state string) map[string]any { return map[string]any{"state"
 // A triage agent generates a ticket in the state it decides, and only the
 // processes taking the ticket in that state run.
 func TestAgentDecidesTheStateItGeneratesIn(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct{ state, next string }{{"bug", "Fix"}, {"feature", "Plan"}} {
 		t.Run(c.state, func(t *testing.T) {
 			a := newApp(t)
@@ -112,6 +113,7 @@ func TestAgentDecidesTheStateItGeneratesIn(t *testing.T) {
 // decision, the object keeps what it held, and its instructions go to the
 // process taking it in that state as a change request.
 func TestAgentReviewsWhatItTakes(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Critique")
 	write := a.agent(f.ID, "Write", "Write the post.")
@@ -167,6 +169,7 @@ func TestAgentReviewsWhatItTakes(t *testing.T) {
 // A decision that isn't one of the link's states, or comes with the wrong
 // keys, is handed back once, as any reply breaking the contract is.
 func TestAgentDecisionMustBeOneOfTheStates(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		name  string
 		first any
@@ -219,6 +222,7 @@ func TestAgentDecisionMustBeOneOfTheStates(t *testing.T) {
 // human; switching an agent to another kind leaves its links generating
 // the object as it is.
 func TestAgentDecisionLinks(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Links")
 	triage := a.agent(f.ID, "Triage", "Triage it.")
@@ -272,6 +276,7 @@ func TestAgentDecisionLinks(t *testing.T) {
 // The prompt of an agent generating an object and deciding another's state
 // says where each goes.
 func TestAgentDecisionPrompt(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Prompt")
 	triage := a.agent(f.ID, "Triage", "Triage it.")
@@ -349,6 +354,7 @@ func decisionsNewLoop(a *app, verdicts ...string) decisionsLoop {
 
 // It is satisfied on its last round by default, which still publishes.
 func TestAgentReviewLoopRepeatsUntilSatisfied(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	l := decisionsNewLoop(a, "weak", "weak", "good")
 	d := a.finish(a.startRun(l.flow.ID).ID)
@@ -375,6 +381,7 @@ func TestAgentReviewLoopRepeatsUntilSatisfied(t *testing.T) {
 // Once the critic has run as many rounds as it may, sending the post back
 // once more fails it, which fails the run.
 func TestAgentReviewLoopEndsAfterItsRounds(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	l := decisionsNewLoop(a, "weak")
 	rounds := 2

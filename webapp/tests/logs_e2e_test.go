@@ -47,6 +47,7 @@ func logLineWith(t *testing.T, lines []runLogLine, text string) runLogLine {
 // and ending, what the worker logged of each, what went wrong, and how it
 // finished; its lines go in order, and after gives only the newer ones.
 func TestRunLogsTellWhatHappened(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	f := a.newFlow("Logged")
@@ -121,6 +122,7 @@ func TestRunLogsTellWhatHappened(t *testing.T) {
 // A run started without anyone signing in says so, and a re-run names the
 // run it re-runs.
 func TestRunLogsOfReruns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Logged again")
 	draft := a.agent(f.ID, "Draft", "Write a ticket.")
@@ -141,11 +143,12 @@ func TestRunLogsOfReruns(t *testing.T) {
 // migrations, the worker answering, and where it listens; and that the
 // worker doesn't answer, as a warning, without failing to start.
 func TestWebappLogsItsStart(t *testing.T) {
+	parallel(t)
 	if testDB.skip != "" {
 		t.Skip(testDB.skip)
 	}
 	fw := newFakeWorker(t)
-	w, err := startWebapp(fw.url, 30*time.Second)
+	w, err := startWebapp(database(t), fw.url, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +160,7 @@ func TestWebappLogsItsStart(t *testing.T) {
 	out := w.stop()
 	for _, want := range []string{
 		"starting in the development environment",
-		"connected to the database " + testDB.name,
+		"connected to the database " + database(t),
 		"the database is at version",
 		"the worker answers, offering 1 models, by default fake/model",
 		"started; listening on 127.0.0.1:",
@@ -170,7 +173,7 @@ func TestWebappLogsItsStart(t *testing.T) {
 		t.Errorf("the webapp logged the database's password:\n%s", out)
 	}
 
-	w, err = startWebapp("http://127.0.0.1:1", 30*time.Second)
+	w, err = startWebapp(database(t), "http://127.0.0.1:1", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

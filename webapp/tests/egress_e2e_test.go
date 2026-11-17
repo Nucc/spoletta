@@ -37,6 +37,7 @@ func throughEgress(t *testing.T, a *app, access *egressAccess, target string) in
 }
 
 func TestStepsReachOnlyTheHostsAllowed(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	var hosts []map[string]any

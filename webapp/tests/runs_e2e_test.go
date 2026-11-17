@@ -13,6 +13,7 @@ import (
 // An agent's output goes to the script taking it, and the run records both
 // steps, what they generated and the board it ran on.
 func TestRunPassesOutputsDownTheChain(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Chain")
 	draft := a.agent(f.ID, "Draft", "Write a ticket.")
@@ -77,6 +78,7 @@ func TestRunPassesOutputsDownTheChain(t *testing.T) {
 
 // A failing step fails the run, and what would take its output never runs.
 func TestFailedStepEndsItsBranch(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Failing")
 	draft := a.agent(f.ID, "Draft", "Write a ticket.")
@@ -109,6 +111,7 @@ func TestFailedStepEndsItsBranch(t *testing.T) {
 // An agent that doesn't hand in its output through submit_output is asked
 // once more; failing again fails its step.
 func TestAgentNotHandingInIsAskedOnce(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		name    string
 		replies []runResult
@@ -158,6 +161,7 @@ func TestAgentNotHandingInIsAskedOnce(t *testing.T) {
 // A person reviewing a draft sends it back with instructions, which reach
 // the agent as a change request; approving it goes on to publishing.
 func TestHumanReviewSendsChangesBack(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Review")
 	draft := a.agent(f.ID, "Draft", "Write the release notes.")
@@ -232,6 +236,7 @@ func TestHumanReviewSendsChangesBack(t *testing.T) {
 // Stopping a run cancels the step going on; while it runs, the flow can be
 // neither deleted nor switched to another version.
 func TestStoppingARun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Stopping")
 	slow := a.agent(f.ID, "Slow", "Take your time.")
@@ -277,6 +282,7 @@ func TestStoppingARun(t *testing.T) {
 // A subflow process runs another flow with the objects it takes, as a run of
 // that flow, and what that flow leaves at its end comes out of it.
 func TestSubflowOutcomesComeOut(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	callee := a.newFlow("Summarize")
 	ticketThere := a.newObject(callee.ID, "Ticket")

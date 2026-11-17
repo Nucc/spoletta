@@ -66,6 +66,7 @@ func listed(a *app, id int64) flow {
 // favourite of theirs, without sign-in everyone's; the list says how the
 // flow's runs of its own go of late. Tags and favourites go with the flow.
 func TestFlowListTagsFavouritesAndHealth(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	f, _ := buildsFlow(a, "Tagged", func(n int) bool { return n == 1 })
@@ -164,6 +165,7 @@ func listedLatest(a *app, id int64) []runMark {
 // how each went, a run waiting for a person told apart, and no trial
 // among them.
 func TestFlowListLatestRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f, build := buildsFlow(a, "Strip", func(n int) bool { return n == 2 })
 	if l := listedLatest(a, f.ID); l == nil || len(l) != 0 {
@@ -197,6 +199,7 @@ func TestFlowListLatestRuns(t *testing.T) {
 // their inbox lists them: the reviews their roles decide, not those of
 // another role, and a loop question only for those who may edit the flow.
 func TestFlowListCountsWhatWaitsOnEachPerson(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	b := humanNewReviewBoard(a)
@@ -231,6 +234,7 @@ func TestFlowListCountsWhatWaitsOnEachPerson(t *testing.T) {
 // Someone who only decides a flow's reviews stars it for themselves, but
 // doesn't tag it; someone who doesn't see it does neither.
 func TestFlowListReviewersStarButDontTag(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob, carl := usersNewPerson("Bob"), usersNewPerson("Carl")

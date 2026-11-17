@@ -136,6 +136,7 @@ func refusedForNoDefault(err error) bool {
 // row inserted must name it, but those above the projects; a new table
 // forgetting it fails here.
 func TestProjectsEveryTableNamesItsProject(t *testing.T) {
+	parallel(t)
 	needDB(t)
 	db := secretsDB(t)
 	rows, err := db.Query(`SELECT t.TABLE_NAME, COALESCE(c.COLUMN_TYPE, ''), COALESCE(c.IS_NULLABLE, ''), c.COLUMN_DEFAULT IS NOT NULL
@@ -178,13 +179,9 @@ func TestProjectsEveryTableNamesItsProject(t *testing.T) {
 // owner, others as editors, and someone removed, who still owns things,
 // removed from it too.
 func TestProjectsMigrateEverythingIntoLegacy(t *testing.T) {
+	parallel(t)
 	needDB(t)
-	root := secretsDB(t)
-	name := fmt.Sprintf("%s%d_legacy", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
+	name := emptyDatabase(t, "_legacy")
 	db := openDB(t, name)
 	startApp(t, newFakeWorker(t).url, "DB_NAME="+name).proc.stop()
 	if out, err := migrateDB(name, "down-to", "48"); err != nil {
@@ -274,6 +271,7 @@ func TestProjectsMigrateEverythingIntoLegacy(t *testing.T) {
 // boards and trash are its own: neither project lists the other's, nor
 // reaches them by id.
 func TestProjectsKeepFlowsAndTaskBoardsApart(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := time.Now().UnixNano()
 	legacyFlow := a.newFlow(fmt.Sprintf("Legacy flow %d", n))
@@ -425,6 +423,7 @@ func TestProjectsKeepFlowsAndTaskBoardsApart(t *testing.T) {
 // makes no projects, which a super admin does, entering any project as its
 // owner. Someone given none has no access at all.
 func TestProjectsLevels(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	db := secretsDB(t)
@@ -543,6 +542,7 @@ func TestProjectsLevels(t *testing.T) {
 // in none; a project and a level an admin adds them with give it to them
 // at once, with roles there, which are given only so.
 func TestProjectsSuperAdminsEnterEveryProject(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	p := newProject(a, "Supered")
@@ -622,6 +622,7 @@ func TestProjectsSuperAdminsEnterEveryProject(t *testing.T) {
 // them in at once, as a member from their group; taking it away takes them
 // out, leaving what they made.
 func TestProjectsGroupsGiveAccessAtOnce(t *testing.T) {
+	parallel(t)
 	a, prov := peopleApp(t)
 	gina := usersNewPerson("Gina")
 	usersSignIn(a, prov, gina)
@@ -675,6 +676,7 @@ func TestProjectsGroupsGiveAccessAtOnce(t *testing.T) {
 // What a project lets anyone signed in do: nothing, seeing, or changing;
 // those who came in that way are removed as it goes back.
 func TestProjectsOthersAccess(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	frank := usersNewPerson("Frank")
 	usersSignIn(a, prov, frank)
@@ -725,6 +727,7 @@ func TestProjectsOthersAccess(t *testing.T) {
 // projects would be, is refused, as are an owner of the flow outside its
 // project, a team or a person.
 func TestProjectsCompositeKeysRefuseAnotherProject(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	p := newProject(a, "Keys")
@@ -779,6 +782,7 @@ func TestProjectsCompositeKeysRefuseAnotherProject(t *testing.T) {
 // it for good, once archived, takes everything in it, and both are
 // recorded above the projects. Legacy is never deleted.
 func TestProjectsArchiveAndDelete(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	p := newProject(a, "Doomed")
@@ -843,6 +847,7 @@ func TestProjectsArchiveAndDelete(t *testing.T) {
 // An archived project is listed to a super admin alone, and entered by
 // them alone, who may bring it back.
 func TestProjectsArchivedOnlyForSuperAdmins(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	p := newProject(a, "Shelved")
@@ -873,13 +878,9 @@ func TestProjectsArchivedOnlyForSuperAdmins(t *testing.T) {
 // Legacy alone it goes down, and the webapp starting brings it up again as
 // it was.
 func TestProjectsMigrateDownWithLegacyAlone(t *testing.T) {
+	parallel(t)
 	needDB(t)
-	root := secretsDB(t)
-	name := fmt.Sprintf("%s%d_projects_down", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
+	name := emptyDatabase(t, "_projects_down")
 	db := openDB(t, name)
 	startApp(t, newFakeWorker(t).url, "DB_NAME="+name).proc.stop()
 	up := columns(t, db)

@@ -36,6 +36,7 @@ type repoChanges struct {
 // repository it committed nothing to isn't asked about, and what the worker
 // can't read is told by repository.
 func TestStepChanges(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Fixes")
 	a.call("PATCH", fmt.Sprintf("/api/flows/%d", f.ID), map[string]any{"settings": map[string]any{

@@ -2,7 +2,6 @@ package tests
 
 import (
 	"bytes"
-	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,35 +17,12 @@ import (
 // name, as the other tests' flows do.
 func setupApp(t *testing.T) *app {
 	t.Helper()
-	switch {
-	case testDB.fail != "":
-		t.Fatal(testDB.fail)
-	case testDB.skip != "":
-		t.Skip(testDB.skip)
-	}
-	cfg := mysql.NewConfig()
-	cfg.Net, cfg.Addr, cfg.User, cfg.Passwd = "tcp", testDB.host+":"+testDB.port, testDB.user, testDB.password
-	if strings.Contains(testDB.host, ":") {
-		cfg.Addr = "[" + testDB.host + "]:" + testDB.port
-	}
-	root, err := sql.Open("mysql", cfg.FormatDSN())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Close() })
-	name := fmt.Sprintf("%s%d", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
-	shared := testDB.name
-	testDB.name = name
-	defer func() { testDB.name = shared }()
+	useDatabase(t, newDatabase(t, "_setup"))
 	return newApp(t)
 }
 
-// The tests share a database, so each names what it imports with a prefix
-// of its own and keeps only that of what an export holds.
+// Tests take turns on a database, so each names what it imports with a
+// prefix of its own and keeps only that of what an export holds.
 
 func setupExport(a *app, prefix string) string {
 	a.t.Helper()
@@ -131,6 +106,7 @@ func setupImportOK(a *app, file string) setupImported {
 // who isn't an admin neither takes it out nor brings one in; nothing of a
 // file they send is imported.
 func TestSetupOnlyAdmins(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob := usersNewPerson("Bob")
@@ -258,6 +234,7 @@ flows:
 `
 
 func TestSetupRoundTrips(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("rt%d", time.Now().UnixNano())
 	written := strings.ReplaceAll(setupWritten, "PFX", prefix)
@@ -327,6 +304,7 @@ func TestSetupRoundTrips(t *testing.T) {
 }
 
 func TestSetupImportMakesOverWhatChanged(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("mo%d", time.Now().UnixNano())
 	res := setupImportOK(a, strings.ReplaceAll(setupWritten, "PFX", prefix))
@@ -389,6 +367,7 @@ func TestSetupImportMakesOverWhatChanged(t *testing.T) {
 }
 
 func TestSetupImportRefusesWhatIsWrong(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("bad%d", time.Now().UnixNano())
 	for _, c := range []struct{ file, msg string }{
@@ -419,6 +398,7 @@ func TestSetupImportRefusesWhatIsWrong(t *testing.T) {
 // alone, naming the procedure, struct and MCP server it uses rather than
 // writing them out, and imported back it changes nothing.
 func TestSetupOfAFlow(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("fs%d", time.Now().UnixNano())
 	res := setupImportOK(a, strings.ReplaceAll(setupWritten, "PFX", prefix))

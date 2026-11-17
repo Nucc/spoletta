@@ -59,6 +59,7 @@ func (a *app) waitScheduledRuns(f, s int64, n int) []run {
 // A schedule runs its flow on its own, a run each time it comes round, and
 // stops once disabled.
 func TestScheduleRunsItsFlow(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Tick")
 	tick := a.newProcess(f.ID, map[string]any{"name": "Tick", "kind": kindScript, "script": "date"})
@@ -113,6 +114,7 @@ func TestScheduleRunsItsFlow(t *testing.T) {
 // While a scheduled run is still going, the times the schedule comes round
 // are skipped, rather than piling runs up; once it ends, runs start again.
 func TestScheduleSkipsWhileItsRunGoes(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Slow")
 	work := a.agent(f.ID, "Work", "Take your time.")
@@ -151,6 +153,7 @@ func TestScheduleSkipsWhileItsRunGoes(t *testing.T) {
 // ended done started, so they can fetch only what changed since; a failed
 // run doesn't move it on, and a run started by hand isn't told.
 func TestScheduleTellsScriptsSince(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Poll")
 	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindScript, "script": "echo $SINCE"})
@@ -209,6 +212,7 @@ func TestScheduleTellsScriptsSince(t *testing.T) {
 // by hand, then when its last run that ended done started. The step keeps
 // the prompt as the agent got it.
 func TestScheduleFillsAgentPromptsSince(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Digest")
 	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindAgent,
@@ -266,6 +270,7 @@ func show(p *int64) any {
 
 // Only what can come round is saved, for a flow that runs.
 func TestScheduleRefusals(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Job")
 	post := func(body map[string]any, want int, msg string) {

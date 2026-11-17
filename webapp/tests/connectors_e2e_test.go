@@ -94,6 +94,7 @@ func connectorsServers(a *app) map[string]connectorsServer {
 // set, with arguments made of what its step takes, and generates what the
 // service answers as its object's attributes.
 func TestConnectorProcesses(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	g := newConnectorsGitHub(t)
 	res := setupImportOK(a, `spoletta: 1
@@ -264,6 +265,7 @@ func connectorsMCP(ctx context.Context, run agentRun, server, body string) strin
 // process picks others, and of any MCP server only those it picks, if it
 // picks some.
 func TestConnectorsForAgents(t *testing.T) {
+	parallel(t)
 	forgetMCPServers(t, "ca_gh", "ca_tracker")
 	a, p := usersApp(t)
 	g := newConnectorsGitHub(t)

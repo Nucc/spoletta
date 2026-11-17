@@ -59,6 +59,7 @@ func (a *app) audit(query string, n int) auditLog {
 }
 
 func TestTheAuditLogRecordsWhatStepsWereHanded(t *testing.T) {
+	parallel(t)
 	fw := newFakeWorker(t)
 	a := startApp(t, fw.url, "GIT_TOKEN=static-audit-token")
 	a.worker = fw
@@ -95,6 +96,7 @@ func TestTheAuditLogRecordsWhatStepsWereHanded(t *testing.T) {
 }
 
 func TestOnlyAdminsReadTheAuditLog(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	// An amount earlier tests are unlikely to have set, so the event found

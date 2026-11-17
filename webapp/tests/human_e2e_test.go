@@ -112,6 +112,7 @@ func humanNewReviewBoard(a *app) humanReviewBoard {
 // The waiting review shows what it reviews, without the person carrying it
 // out, and each state goes to the processes taking the object in it.
 func TestHumanReviewRoutesEachState(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		state string
 		// The process that runs next, and whether the draft is revised.
@@ -192,6 +193,7 @@ func TestHumanReviewRoutesEachState(t *testing.T) {
 // Instructions become a change request for an agent taking the object in
 // the state set; a person taking it in that state gets the object itself.
 func TestHumanInstructionsGoToAgentsAsChangeRequests(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	b := humanNewReviewBoard(a)
 	// A second reviewer also takes the notes sent back for changes.
@@ -247,6 +249,7 @@ func TestHumanInstructionsGoToAgentsAsChangeRequests(t *testing.T) {
 
 // Sending the work back repeats the loop for as long as the person does.
 func TestHumanReviewLoopRepeats(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	b := humanNewReviewBoard(a)
 	rn := a.startRun(b.flow.ID)
@@ -276,6 +279,7 @@ func TestHumanReviewLoopRepeats(t *testing.T) {
 // Two reviews waiting at once can be decided in either order, and each
 // decision goes on its own way.
 func TestHumanParallelReviews(t *testing.T) {
+	parallel(t)
 	for _, order := range [][]string{{"Legal", "Product"}, {"Product", "Legal"}} {
 		t.Run(strings.Join(order, " then "), func(t *testing.T) {
 			a := newApp(t)
@@ -325,6 +329,7 @@ func TestHumanParallelReviews(t *testing.T) {
 // A decision that can't be taken is refused, saying why, and leaves the
 // review waiting.
 func TestHumanRefusedDecisions(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	b := humanNewReviewBoard(a)
 	stranger := a.newState(a.newObject(b.flow.ID, "Other").ID, "done")
@@ -395,6 +400,7 @@ func humanRaw(a *app, method, path, body string) (int, string) {
 
 // Stopping a run ends the reviews waiting in it, which can't be decided then.
 func TestHumanStoppingEndsWaitingReviews(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	b := humanNewReviewBoard(a)
 	rn := a.startRun(b.flow.ID)
@@ -419,6 +425,7 @@ func TestHumanStoppingEndsWaitingReviews(t *testing.T) {
 // A step elsewhere in the run finding its value already stored terminates
 // the run, which ends the review waiting beside it.
 func TestHumanTerminatedRunEndsWaitingReviews(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Terminate")
 	fetch := a.agent(f.ID, "Fetch", "Fetch the issue.")
@@ -482,6 +489,7 @@ func TestHumanTerminatedRunEndsWaitingReviews(t *testing.T) {
 // A run starting at a person filling in a ticket goes on with what they
 // entered, checked against the ticket's attributes.
 func TestHumanEntriesStartARun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Entries")
 	request := humanHuman(a, f.ID, "Request")
@@ -564,6 +572,7 @@ func humanOrdered(s string, parts ...string) bool {
 // What can be entered of objects without attributes, lists and files, and
 // several objects at once.
 func TestHumanEntryShapes(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Shapes")
 	enter := humanHuman(a, f.ID, "Enter")
@@ -630,6 +639,7 @@ func TestHumanEntryShapes(t *testing.T) {
 
 // A file can't be entered by hand, since no step wrote it.
 func TestHumanFileCantBeEntered(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Files")
 	enter := humanHuman(a, f.ID, "Upload")
@@ -650,6 +660,7 @@ func TestHumanFileCantBeEntered(t *testing.T) {
 // A review can set the object it reviews to a state and fill in another
 // object in one decision; each goes its own way.
 func TestHumanEntriesWithADecision(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Both")
 	draft := a.agent(f.ID, "Draft", "Draft it.")
@@ -708,6 +719,7 @@ func TestHumanEntriesWithADecision(t *testing.T) {
 // What a person fills in of a persistent object is stored; entering a
 // unique value another run stored terminates the run.
 func TestHumanEntriesOfPersistentObjects(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Persistent")
 	request := humanHuman(a, f.ID, "Request")
@@ -752,6 +764,7 @@ func TestHumanEntriesOfPersistentObjects(t *testing.T) {
 // A person carries out only a human process; when the process stops being
 // human, the person's link goes, as do the states it decided between.
 func TestHumanAgentLinks(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Agent links")
 	review := humanHuman(a, f.ID, "Review")

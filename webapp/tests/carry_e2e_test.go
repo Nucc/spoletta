@@ -14,6 +14,7 @@ import (
 // done stored of it, and before any did, the process runs without it. A
 // process taking it after the one moving it on gets the new value.
 func TestRunsCarryACursorOver(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Cursor")
 	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindScript, "script": "cat $INPUTS/Cursor"})

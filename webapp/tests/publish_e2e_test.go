@@ -115,6 +115,7 @@ func (p *pubPrompts) latest(t *testing.T, want string) {
 // published, while the Run button runs the board as it is; what the draft
 // deleted still runs in the version published.
 func TestPublishedVersionRunsWhileTheBoardIsADraft(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Newsletter")
 	write := a.agent(f.ID, "Write", "Write the first issue.")
@@ -203,6 +204,7 @@ func TestPublishedVersionRunsWhileTheBoardIsADraft(t *testing.T) {
 // What the API says a flow takes, and what it checks a request against, is
 // what the version published takes.
 func TestAPIDescribesThePublishedVersion(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Briefing")
 	write := a.agent(f.ID, "Write", "Write the briefing.")
@@ -243,6 +245,7 @@ func TestAPIDescribesThePublishedVersion(t *testing.T) {
 
 // A schedule runs the version published.
 func TestSchedulesRunThePublishedVersion(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Nightly")
 	tick := a.newProcess(f.ID, map[string]any{"name": "Tick", "kind": kindScript, "script": "echo published"})
@@ -274,6 +277,7 @@ func TestSchedulesRunThePublishedVersion(t *testing.T) {
 // A run started on a record runs the version published, and the flows
 // offered for records query as that version does.
 func TestRecordRunsRunThePublishedVersion(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := recordStruct(a, fmt.Sprintf("Bug %d", time.Now().UnixNano()), "open", "fixed")
 	f := a.newFlow("Fix bugs")
@@ -335,6 +339,7 @@ func TestRecordRunsRunThePublishedVersion(t *testing.T) {
 // it has one, and its board as it is otherwise; a run of the board runs the
 // procedure's board as it is.
 func TestPublishedRunsTakeProceduresPublished(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := verBuildSubflow(a)
 	var prompts pubPrompts
@@ -364,6 +369,7 @@ func TestPublishedRunsTakeProceduresPublished(t *testing.T) {
 // back to it, and bringing the board back to a version leaves what is
 // published.
 func TestPublishingLeavesTheBoard(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Rollback")
 	write := a.agent(f.ID, "Write", "First.")
@@ -414,6 +420,7 @@ func TestPublishingLeavesTheBoard(t *testing.T) {
 // the board holds it as before. A review in the run published is decided on
 // the states of its version.
 func TestPublishedRunsDontHoldTheBoard(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	b := humanNewReviewBoard(a)
 	k := apiNewKey(a, "reviews")
@@ -449,6 +456,7 @@ func TestPublishedRunsDontHoldTheBoard(t *testing.T) {
 // Versions keep the note a person saves them with, and say what saved them
 // on their own.
 func TestVersionNotes(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Noted")
 	write := a.agent(f.ID, "Write", "Write.")
@@ -486,6 +494,7 @@ func TestVersionNotes(t *testing.T) {
 // What changed from a version to the board as it is, or to another version,
 // worked out on the server; a version of another flow can't be compared.
 func TestVersionDiffs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Compared")
 	write := a.agent(f.ID, "Write", "Write it.")
@@ -549,6 +558,7 @@ func TestVersionDiffs(t *testing.T) {
 // A board a setup file made over by name is compared by name where its ids
 // changed: a process renamed in the file is new, the rest the same.
 func TestVersionDiffsAfterImport(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprintf("Imported %d", time.Now().UnixNano())
 	setup := func(processes string) {
@@ -579,6 +589,7 @@ func TestVersionDiffsAfterImport(t *testing.T) {
 // After the assistant changed the flow, its reply names the version saved
 // before, which the board compares with to show what it changed.
 func TestAssistantChangesShowAgainstTheVersionBefore(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprintf("Assisted %d", time.Now().UnixNano())
 	f := a.newFlow(name)
@@ -612,6 +623,7 @@ func TestAssistantChangesShowAgainstTheVersionBefore(t *testing.T) {
 // the version published, and of a run of the board waiting on them. The
 // review is decided by the role its run's version names, not the draft's.
 func TestRoleHoldersKeepTheReviewsOfTheirVersions(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	carl, dora := usersNewPerson("Carl"), usersNewPerson("Dora")

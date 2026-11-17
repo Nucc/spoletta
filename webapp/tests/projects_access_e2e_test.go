@@ -23,6 +23,7 @@ import (
 // once they are a viewer, saying why, though the key still reads what a
 // viewer reads; and they delete their key all the same.
 func TestProjectsWhatTheyStartDoesNoMoreThanTheyMayNow(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	db := secretsDB(t)
@@ -89,6 +90,7 @@ func TestProjectsWhatTheyStartDoesNoMoreThanTheyMayNow(t *testing.T) {
 // editor may. Someone asking about a project they may not enter is told
 // whom to ask, as someone in none is.
 func TestProjectsViewersConnectNothingAndOutsidersAreToldWhomToAsk(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	m := newSettingsMCP(t)

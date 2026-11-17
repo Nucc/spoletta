@@ -10,6 +10,7 @@ import (
 // every request; a webapp with another token gets nothing run, and its
 // steps fail saying why.
 func TestWorkerTakesRequestsOnlyWithItsToken(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Asked with the token")
 	draft := a.agent(f.ID, "Draft", "Write a ticket.")

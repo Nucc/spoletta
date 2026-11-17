@@ -12,6 +12,7 @@ import (
 // generates may. Names are compared as file names, so Jira Ticket and
 // Jira_Ticket are the same.
 func TestProcessTellsItsObjectsApartByName(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Names")
 	fetch := a.newProcess(f.ID, map[string]any{"name": "Fetch", "kind": kindScript, "script": "cat $INPUTS/*"})
@@ -55,6 +56,7 @@ func TestProcessTellsItsObjectsApartByName(t *testing.T) {
 // A process taking an object both plainly and when it enters a state takes
 // it once, so its step doesn't see two objects of one name.
 func TestProcessTakesAnObjectOnceWhateverLinksItTakesItBy(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Once")
 	file := a.newProcess(f.ID, map[string]any{"name": "File", "kind": kindScript, "script": "echo"})

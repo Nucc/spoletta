@@ -22,6 +22,7 @@ func conditionsOn(a *app, process, object, state int64) link {
 // skipped, and so is what takes only its report, while the merge goes on
 // with the change alone.
 func TestConditionSkipsAndTheFlowGoesOn(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		kind    string
 		reviews bool
@@ -86,6 +87,7 @@ func TestConditionSkipsAndTheFlowGoesOn(t *testing.T) {
 
 // A process started on, whose condition doesn't hold, is skipped too.
 func TestConditionOfTheFirstProcess(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("First")
 	gate := a.newObject(f.ID, "Gate")
@@ -102,6 +104,7 @@ func TestConditionOfTheFirstProcess(t *testing.T) {
 // Three reviewers approve or reject; the merge needs two approvals. It runs
 // once two came, or is skipped once that can no longer be.
 func TestQuorumOfConditions(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		verdicts []string
 		merges   bool
@@ -161,6 +164,7 @@ func TestQuorumOfConditions(t *testing.T) {
 // Only an input link naming a state is a condition; quorums are positive;
 // a version keeps conditions.
 func TestConditionRefusals(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Condition refusals")
 	p := a.agent(f.ID, "P", "P.")

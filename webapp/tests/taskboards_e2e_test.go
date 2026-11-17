@@ -121,6 +121,7 @@ func taskBoardIn(bs []taskBoard, id int64) (taskBoard, bool) {
 // says, and follow a record as it moves on; a column of a struct in the
 // trash, or deleted for good, says so in place of its records.
 func TestTaskBoardColumnsHoldRecords(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := time.Now().UnixNano()
 	ticket := taskStruct(a, fmt.Sprint("Ticket", n), nil, "key", []string{"summary", "url"}, "new", "review", "done")
@@ -289,6 +290,7 @@ func TestTaskBoardColumnsHoldRecords(t *testing.T) {
 // adds none of a struct they don't see. A team owning a board stays until
 // it goes elsewhere.
 func TestTaskBoardOwners(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob, carl, dave := usersNewPerson("Bob"), usersNewPerson("Carl"), usersNewPerson("Dave")

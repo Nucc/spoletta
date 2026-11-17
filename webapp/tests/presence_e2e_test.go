@@ -57,6 +57,7 @@ func presenceRecord(a *app, f int64, client string) {
 }
 
 func TestPresenceOnABoard(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	ada := a.client
@@ -150,6 +151,7 @@ func TestPresenceOnABoard(t *testing.T) {
 // Without sign-in there are no people to show, but a tab is still told of
 // another tab's change.
 func TestPresenceWithoutSignIn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprint("Presence alone ", time.Now().UnixNano())
 	f := a.newFlow(name)
@@ -178,6 +180,7 @@ func TestPresenceWithoutSignIn(t *testing.T) {
 
 // One replica answers for the tabs another heard from.
 func TestPresenceAcrossReplicas(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	other := startApp(t, a.worker.url,
 		"OIDC_ISSUER="+p.srv.URL,

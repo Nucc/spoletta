@@ -75,6 +75,7 @@ type trashListedProcess struct {
 // for another, until it is restored, under another name if it was taken,
 // with its runs, tags, favourite and schedules; then deleted for good.
 func TestTrashHidesAFlowUntilRestored(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprint("Trashed ", time.Now().UnixNano())
 	f := a.newFlow(name)
@@ -182,6 +183,7 @@ func TestTrashHidesAFlowUntilRestored(t *testing.T) {
 // Runs going on in a flow are stopped as it goes to the trash, which is
 // asked for first; so are the reviews waiting in them, which leave the inbox.
 func TestTrashStopsRunsGoingOn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow(trashUnique("Dawdling"))
 	slow := a.agent(f.ID, "Dawdle", "Take your time.")
@@ -253,6 +255,7 @@ func TestTrashStopsRunsGoingOn(t *testing.T) {
 // shows broken; its callers can still be changed, but none can pick it.
 // Restored, it runs again.
 func TestTrashBreaksCallsOfAProcedure(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := verBuildSubflow(a)
 	started := make(chan struct{}, 1)
@@ -320,6 +323,7 @@ func TestTrashBreaksCallsOfAProcedure(t *testing.T) {
 // as deleting it for good does, and they keep working on them, a shared
 // one on its records; restored, the copies follow it again.
 func TestTrashLeavesStructCopiesTheirOwn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprint("Ticket ", time.Now().UnixNano())
 	var s structFlow
@@ -407,6 +411,7 @@ func TestTrashLeavesStructCopiesTheirOwn(t *testing.T) {
 // back at their next time once it is restored, and the API and its
 // webhooks answer as for a flow that doesn't exist.
 func TestTrashStartsNoRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	f := a.newFlow(trashUnique("Ticking"))
@@ -459,6 +464,7 @@ func TestTrashStartsNoRuns(t *testing.T) {
 // The trash empties itself of what it kept long enough, each flow once
 // across replicas, with its runs.
 func TestTrashEmptiesItself(t *testing.T) {
+	parallel(t)
 	var other *app
 	a, db := activityApp(t, func(t *testing.T) *app {
 		fw := newFakeWorker(t)
@@ -510,6 +516,7 @@ func TestTrashEmptiesItself(t *testing.T) {
 // those deciding its reviews included, and a team owning one there isn't
 // deleted.
 func TestTrashIsTheirsWhoMayChangeIt(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob, carl, dora := usersNewPerson("Bob"), usersNewPerson("Carl"), usersNewPerson("Dora")
@@ -579,6 +586,7 @@ func TestTrashIsTheirsWhoMayChangeIt(t *testing.T) {
 // The Activity page leaves a flow in the trash out, for those who see
 // every flow too.
 func TestTrashLeavesActivity(t *testing.T) {
+	parallel(t)
 	a, _ := activityApp(t, newApp)
 	run := func(name string) flow {
 		f := a.newFlow(name)
@@ -602,6 +610,7 @@ func TestTrashLeavesActivity(t *testing.T) {
 // flow there sharing a name with another doesn't stop the export, and
 // importing a flow of its name makes a new one.
 func TestTrashLeavesSetupFiles(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	gone := a.newFlow("Same name")
 	trashMove(a, gone.ID)
@@ -624,6 +633,7 @@ func TestTrashLeavesSetupFiles(t *testing.T) {
 // so the board asks before a delete it couldn't undo: a run of the board as
 // it is does, and so does a trial, but not a run of the version published.
 func TestTrashHistorySaysWhetherARunHoldsTheBoard(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow(trashUnique("Held"))
 	slow := a.agent(f.ID, "Hold", "Hold on.")
@@ -674,6 +684,7 @@ func TestTrashHistorySaysWhetherARunHoldsTheBoard(t *testing.T) {
 // them out, and imported back keeps the subflow process running the one and
 // the copy following the other, so restoring them links them again.
 func TestTrashKeepsLinksThroughSetupFiles(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	s := verBuildSubflow(a)
 	var st structFlow
@@ -712,6 +723,7 @@ func TestTrashKeepsLinksThroughSetupFiles(t *testing.T) {
 // A flow made from a template takes the template's name again once the one
 // that had it is in the trash, rather than a number after it.
 func TestTrashFreesTemplatesNames(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	first := tplUse(a, "expense-claim", nil)
 	if second := tplUse(a, "expense-claim", nil); second.Name != first.Name+" 2" {

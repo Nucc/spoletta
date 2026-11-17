@@ -56,6 +56,7 @@ func notesTexts(ns []boardNote) []string {
 // pointing at nothing, and a flow process going takes the notes on its
 // board with it.
 func TestNotesOnBoards(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Board notes")
 	fetch := a.agent(f.ID, "Fetch", "Fetch it.")
@@ -115,6 +116,7 @@ func TestNotesOnBoards(t *testing.T) {
 
 // Versions and undo keep notes as the rest of the board, ids and all.
 func TestNotesInVersionsAndHistory(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Board notes history")
 	fetch := a.agent(f.ID, "Fetch", "Fetch it.")
@@ -167,6 +169,7 @@ func TestNotesInVersionsAndHistory(t *testing.T) {
 // Notes copied go with what is copied, pointing at what they pointed at if
 // that went along, and the notes on a flow process's board go with it.
 func TestNotesPasted(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	src := a.newFlow("Board notes from")
 	fetch := a.agent(src.ID, "Fetch", "Fetch it.")
@@ -220,6 +223,7 @@ func TestNotesPasted(t *testing.T) {
 // leaving them out keeps those the board has, and an empty list clears
 // them. A note keeping its text keeps its id.
 func TestNotesInSetupFiles(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprint("Board notes setup ", time.Now().UnixNano())
 	f := a.newFlow(name)
@@ -305,6 +309,7 @@ flows:
 // A note added, changed or removed shows in the diff, but a change to notes
 // alone leaves the board what it published.
 func TestNotesInDiffs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Board notes diff")
 	fetch := a.agent(f.ID, "Fetch", "Fetch it.")
@@ -345,6 +350,7 @@ func TestNotesInDiffs(t *testing.T) {
 // The assistant sees a board's notes in the flow's setup file, and a reply
 // leaving them out keeps them, as one writing them changes them.
 func TestNotesSeenByTheAssistant(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprint("Board notes assisted ", time.Now().UnixNano())
 	f := a.newFlow(name)

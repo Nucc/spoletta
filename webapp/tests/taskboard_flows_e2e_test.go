@@ -65,6 +65,7 @@ func queryingProcess(a *app, f int64, s structFlow, name, kind, from string) (pr
 }
 
 func TestTaskBoardDrawsWhereFlowsLeaveRecords(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s := taskStruct(a, "Bug", nil, "id", []string{"title"}, "new", "triaged", "fixed")
 	triage := movingFlow(a, s, "Triage", "new", "triaged")

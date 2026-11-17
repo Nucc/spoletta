@@ -112,6 +112,7 @@ func newAPITicketFlow(a *app) apiTicketFlow {
 // A key starts a flow given the objects its first process takes, which
 // reach it, and reads back what the run left at the end.
 func TestAPIStartsFlowWithInputs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 	k := apiNewKey(a, "Helpdesk")
@@ -203,6 +204,7 @@ func TestAPIStartsFlowWithInputs(t *testing.T) {
 // A request sent again with the same idempotency key gets the run the first
 // started, rather than another.
 func TestAPIIdempotencyKey(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 	other := newAPITicketFlow(a)
@@ -226,6 +228,7 @@ func TestAPIIdempotencyKey(t *testing.T) {
 
 // A flow whose processes start from nothing takes nothing, and refuses inputs.
 func TestAPIFlowWithoutInputs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Fetch on its own")
 	fetch := a.agent(f.ID, "Fetch", "Fetch the news.")
@@ -252,6 +255,7 @@ func TestAPIFlowWithoutInputs(t *testing.T) {
 // A persistent object given holding a unique value another run stored ends
 // the run before it starts, so an event sent twice is handled once.
 func TestAPIGivenTwice(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 	nestedPatchObject(a, tf.ticket.ID, map[string]any{"persistent": true})
@@ -276,6 +280,7 @@ func TestAPIGivenTwice(t *testing.T) {
 // A key is its maker's: it starts only the flows they may run, as them, and
 // stops working once they are removed.
 func TestAPIKeysArePeoples(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob := usersNewPerson("Bob")

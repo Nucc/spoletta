@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -56,6 +55,7 @@ func refAddPR(a *app, s int64, id, ticket string) int64 {
 // dialog lists the pull requests referring to it, and the setup file and
 // OPL keep the reference and the follow.
 func TestRecordReferences(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tickets, f, ticket := pickTickets(a, "Merge pull requests")
 	prs, pr := refPullRequests(a, tickets, f.ID)
@@ -90,17 +90,16 @@ func TestRecordReferences(t *testing.T) {
 	a.link(map[string]any{"process": move.ID, "object": ticket.ID, "direction": directionOutput, "state": pickState(t, ticket, "review")})
 	a.startAt(f.ID, move.ID)
 
-	var mu sync.Mutex
-	var given []string
+	// The ticket each step of Move was given, as the worker gets it, which
+	// may be a moment after its step shows as going.
+	given := make(chan string, 2)
 	release := make(chan struct{})
 	a.worker.onScript("Move", func(ctx context.Context, run scriptRun) runResult {
 		fields, err := pickGiven(run)
 		if err != nil {
 			return runResult{Error: err.Error()}
 		}
-		mu.Lock()
-		given = append(given, fields["id"])
-		mu.Unlock()
+		given <- fields["id"]
 		select {
 		case <-release:
 		case <-ctx.Done():
@@ -117,11 +116,9 @@ func TestRecordReferences(t *testing.T) {
 	a.waitStep(rn1.ID, "Move", stepActive)
 	rn2 := a.startRun(f.ID)
 	a.waitStep(rn2.ID, "Move", stepActive)
-	mu.Lock()
-	if len(given) != 2 || given[0] != "T-1" || given[1] != "T-1" {
-		t.Errorf("Move was given %v, want T-1 twice", given)
+	if first, second := receive(t, given, "Move's first step"), receive(t, given, "Move's second step"); first != "T-1" || second != "T-1" {
+		t.Errorf("Move was given %s and %s, want T-1 twice", first, second)
 	}
-	mu.Unlock()
 
 	// T-1's dialog lists both pull requests, each with its run going.
 	var groups []struct {
@@ -251,6 +248,7 @@ func TestRecordReferences(t *testing.T) {
 // an object follows, and importing it makes a board with no problems with
 // them, which exports as it was written.
 func TestRecordReferencesSetup(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	file := `spoletta: 1
 structs:
@@ -315,6 +313,7 @@ flows:
 // before the run starts, a run given nothing has nothing to follow, and a
 // step generating such an object naming no ticket fails.
 func TestFollowGivenReference(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tickets, f, ticket := pickTickets(a, "Triage an entered ticket")
 	ticketRoot := modObjects(a, tickets.ID)[0]

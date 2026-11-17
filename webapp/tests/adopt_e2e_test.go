@@ -29,18 +29,7 @@ type adoptDB struct {
 
 func newAdoptDB(t *testing.T) *adoptDB {
 	t.Helper()
-	switch {
-	case testDB.fail != "":
-		t.Fatal(testDB.fail)
-	case testDB.skip != "":
-		t.Skip(testDB.skip)
-	}
-	root := secretsDB(t)
-	name := fmt.Sprintf("%s%d", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
+	name := newDatabase(t, "_adopt")
 	return &adoptDB{t: t, name: name, worker: newFakeWorker(t), db: openDB(t, name)}
 }
 
@@ -187,6 +176,7 @@ func (b adoptReview) check(t *testing.T, d runDetail, review int64, comment stri
 // then decides there. One decided while no replica walks the run, its
 // replica killed, is taken in as decided once another takes it over.
 func TestAReviewOutlivesItsReplica(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
 	b := newAdoptReview(a, "Reviewed across restarts")
@@ -228,6 +218,7 @@ func TestAReviewOutlivesItsReplica(t *testing.T) {
 // A review's time limit goes on as it was set when its run moves: it fails
 // once it has waited that long, and its failure connection handles it.
 func TestAReviewsTimeLimitOutlivesItsReplica(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
 	b := newAdoptReview(a, "Timed out across a restart")
@@ -285,6 +276,7 @@ func adoptLostOnce(name string, started chan<- int64) func(context.Context, agen
 // without, it fails as any step does, and its failure connection handles
 // it.
 func TestAStepGoingIsTriedAgainOnAnotherReplica(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
 	b := d.start(adoptTimeout)
@@ -363,6 +355,7 @@ func TestAStepGoingIsTriedAgainOnAnotherReplica(t *testing.T) {
 // A flow process's board goes on from where it was, whether it runs in the
 // run or records a run of its own, which moves with it.
 func TestAFlowProcessBoardIsTakenOver(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	walking := d.start(adoptTimeout)
 	started := make(chan int64, 4)
@@ -421,6 +414,7 @@ func TestAFlowProcessBoardIsTakenOver(t *testing.T) {
 // a run of its own or in the run: those done stay done, and the one going
 // when its replica was killed goes again.
 func TestItemsAreTakenOver(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	walking := d.start(adoptTimeout)
 	for _, recording := range []bool{true, false} {
@@ -496,6 +490,7 @@ func TestItemsAreTakenOver(t *testing.T) {
 // Two replicas alive taking over the runs of one killed take each run over
 // once: each moves once, and each step it lost goes again once.
 func TestTwoReplicasTakeOverEachRunOnce(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
 	f := a.newFlow("Raced for")
@@ -553,6 +548,7 @@ func TestTwoReplicasTakeOverEachRunOnce(t *testing.T) {
 // and goes on on the version of that flow it started on, though the flow
 // changed meanwhile.
 func TestASubflowsRunIsTakenOver(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
 	s := verBuildSubflow(a)
@@ -595,6 +591,7 @@ func TestASubflowsRunIsTakenOver(t *testing.T) {
 // A re-run moves as any run: it goes on from the process it re-runs from,
 // on what was put in its place, without copying anew.
 func TestARerunIsTakenOver(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
 	r := newRerunFlow(a)
@@ -650,6 +647,7 @@ func TestARerunIsTakenOver(t *testing.T) {
 // counting as it did: let go on there, it asks again only once its process
 // used up as many more rounds.
 func TestALoopsQuestionOutlivesItsReplica(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
 	f, _ := loopsFailing(a, 2, humanCounting("issue"))

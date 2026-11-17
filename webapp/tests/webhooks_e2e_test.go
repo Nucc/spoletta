@@ -161,6 +161,7 @@ func hookIssue(number int, title, action string) map[string]any {
 // secret start nothing; every delivery is listed and audited, and the
 // secret is neither, nor in the webapp's log.
 func TestWebhooksStartRunsFromGitHub(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 	db := secretsDB(t)
@@ -355,6 +356,7 @@ func TestWebhooksStartRunsFromGitHub(t *testing.T) {
 // same delivery sent again starts a run. What the flow starts from is
 // checked as the API checks a request.
 func TestWebhooksRefusedDeliveriesTakeNothing(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 	fields := map[string]any{"name": "Issues", "kind": "github", "events": []string{"issues"},
@@ -432,6 +434,7 @@ func TestWebhooksRefusedDeliveriesTakeNothing(t *testing.T) {
 // signing secret, and each event, signed with its timestamp, starts a run
 // once, however often Slack retries it; one signed long ago is refused.
 func TestWebhooksTakeSlackEvents(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Answer mentions")
 	answer := a.agent(f.ID, "Answer", "Answer the mention.")
@@ -492,6 +495,7 @@ func TestWebhooksTakeSlackEvents(t *testing.T) {
 // the header it names, takes a delivery once by the id another header
 // holds, and gives the whole payload, JSON or text.
 func TestWebhooksGeneric(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Handle alerts")
 	handle := a.agent(f.ID, "Handle", "Handle the alert.")
@@ -577,6 +581,7 @@ func TestWebhooksGeneric(t *testing.T) {
 // A webhook's run takes the version the flow published, as the API's
 // does, and what it starts from is that version's.
 func TestWebhooksRunThePublishedVersion(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 	published := pubPublish(a, tf.flow.ID, "the ticket and the note")
@@ -603,6 +608,7 @@ func TestWebhooksRunThePublishedVersion(t *testing.T) {
 // person may run the flow, and only those who may change the flow see and
 // change its webhooks.
 func TestWebhooksArePeoples(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob := usersNewPerson("Bob")

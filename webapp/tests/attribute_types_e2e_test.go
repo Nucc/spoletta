@@ -18,6 +18,7 @@ import (
 // An attribute's type and pattern are set as it is added or changed, a
 // pattern alone making it text, and what can't go together is refused.
 func TestAttributeTypesAreEdited(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Typed tickets")
 	ticket := a.newObject(f.ID, "Ticket")
@@ -73,6 +74,7 @@ func TestAttributeTypesAreEdited(t *testing.T) {
 // A script printing a value of another type fails its step, saying which
 // and why; one printing values of their types goes on.
 func TestTypedOutputsAreChecked(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Typed estimates")
 	estimate := a.newProcess(f.ID, map[string]any{"name": "Estimate", "kind": kindScript, "script": "echo"})
@@ -108,6 +110,7 @@ func TestTypedOutputsAreChecked(t *testing.T) {
 // What a run starts from is described with each value's type, and a value
 // of another type is refused before the run starts.
 func TestTypedInputsAreChecked(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tf := newAPITicketFlow(a)
 	a.call("PATCH", fmt.Sprintf("/api/attributes/%d", tf.id.ID), map[string]any{"type": "text", "pattern": `T-\d+`}, http.StatusOK, nil)
@@ -134,6 +137,7 @@ func TestTypedInputsAreChecked(t *testing.T) {
 // a value of another type; a number written as text is refused, saying to
 // write it as JSON.
 func TestTypedRecordsWrittenByHand(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s flow
 	a.call("POST", "/api/flows", map[string]any{"name": "Typed story", "struct": true}, http.StatusCreated, &s)
@@ -155,6 +159,7 @@ func TestTypedRecordsWrittenByHand(t *testing.T) {
 // The setup file carries an attribute's type and pattern, a pattern alone
 // making it text, and refuses a type there isn't.
 func TestSetupCarriesAttributeTypes(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("typed%d", time.Now().UnixNano())
 	file := strings.ReplaceAll(`spoletta: 1
@@ -187,6 +192,7 @@ flows:
 // them, and follows the struct when one changes, so runs on the copy check
 // what the struct says.
 func TestStructCopiesFollowAttributeTypes(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s flow
 	a.call("POST", "/api/flows", map[string]any{"name": "Typed bug", "struct": true}, http.StatusCreated, &s)

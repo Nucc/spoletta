@@ -10,6 +10,7 @@ import (
 )
 
 func TestAgentsReachTheirModelsThroughTheProxy(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	t.Cleanup(func() { db.Exec("DELETE FROM model_keys WHERE env = 'OPENAI_API_KEY'") })

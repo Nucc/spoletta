@@ -50,6 +50,7 @@ func callModel(llm *llmAccess, provider string) (int, string) {
 // what was read from and written to the cache among what they took in, not
 // what its model's replies said.
 func TestAStepsUsageIsWhatTheProxyRecorded(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.worker.quiet = true
 	f := a.newFlow("Counted")
@@ -70,6 +71,7 @@ func TestAStepsUsageIsWhatTheProxyRecorded(t *testing.T) {
 }
 
 func TestARunThatSpendsWhatItMayIsStopped(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.worker.quiet = true
 	// Two calls' worth, less a little: the second call passes the limit.
@@ -150,6 +152,7 @@ func TestARunThatSpendsWhatItMayIsStopped(t *testing.T) {
 // saying the run is out of budget, in the words of Anthropic's errors, which
 // neither pi nor Claude Code tries again.
 func TestAFlowsLimitAndRefusedCalls(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.worker.quiet = true
 	setLimits(t, a, limitsBody{RunSpend: 1})
@@ -223,6 +226,7 @@ func TestAFlowsLimitAndRefusedCalls(t *testing.T) {
 // Someone who spent what they may this month has their calls refused, and
 // sees what they spent; others' spending is for admins.
 func TestAPersonsMonthlyLimit(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	a.worker.quiet = true
 	usersSignIn(a, p, usersAda)
@@ -266,6 +270,7 @@ func TestAPersonsMonthlyLimit(t *testing.T) {
 // A person's runs have no more steps going at once than an admin lets
 // them; the rest wait their turn, taking none of the engine's slots.
 func TestAPersonsStepsAtOnce(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	a.call("PUT", "/api/limits", map[string]any{"userParallelSteps": 1}, http.StatusOK, nil)
@@ -309,6 +314,7 @@ func TestAPersonsStepsAtOnce(t *testing.T) {
 // The worker is told the most disk a run may take, which it checks after
 // each step; a step that leaves its run over it fails saying so.
 func TestTheWorkerIsToldARunsDiskLimit(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.call("PUT", "/api/limits", map[string]any{"runDiskMb": 5}, http.StatusOK, nil)
 	t.Cleanup(func() { secretsDB(t).Exec("DELETE FROM limits") })

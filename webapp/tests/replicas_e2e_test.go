@@ -22,6 +22,7 @@ import (
 // its MCP servers and the internet through another replica too, as long
 // as the step goes.
 func TestTokensReachEveryReplica(t *testing.T) {
+	parallel(t)
 	forgetMCPServers(t, "rp_all", "rp_some")
 	a := newApp(t)
 	other := startApp(t, a.worker.url)
@@ -110,6 +111,7 @@ func TestTokensReachEveryReplica(t *testing.T) {
 // A flow's assistant replies with its model reached through whichever
 // replica its calls come to, not only the one it was asked at.
 func TestAssistantReachesItsModelThroughEveryReplica(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	other := startApp(t, a.worker.url)
 	db := secretsDB(t)
@@ -156,6 +158,7 @@ func replicasSlow(release <-chan struct{}) func(context.Context, agentRun) runRe
 // A replica starting, as in a rolling update, leaves the runs another walks
 // going.
 func TestStartingAReplicaLeavesAnothersRunsGoing(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Rolled over")
 	a.startAt(f.ID, a.agent(f.ID, "Work", "Work.").ID)
@@ -179,6 +182,7 @@ func TestStartingAReplicaLeavesAnothersRunsGoing(t *testing.T) {
 // to, as another replica finds it left, and once it hasn't said it is
 // alive for the timeout when it is killed.
 func TestAStoppedReplicasRunsEnd(t *testing.T) {
+	parallel(t)
 	const timeout, ending = "REPLICA_TIMEOUT=3s", "RESUME_RUNS=false"
 	fw := newFakeWorker(t)
 	a := startApp(t, fw.url, timeout, ending)
@@ -221,6 +225,7 @@ func TestAStoppedReplicasRunsEnd(t *testing.T) {
 // and deciding a review, take effect at the replica running it whichever
 // replica the request reaches.
 func TestReplicasActOnWhatAnotherRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	other := startApp(t, a.worker.url)
 	// Each agent says when it starts, so it is stopped while it works,
@@ -338,6 +343,7 @@ func TestReplicasActOnWhatAnotherRuns(t *testing.T) {
 // A run whose calls through another replica spend what it may is stopped
 // at the replica running it, once.
 func TestARunOverspentThroughAnotherReplicaIsStopped(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.worker.quiet = true
 	other := startApp(t, a.worker.url)
@@ -385,6 +391,7 @@ func TestARunOverspentThroughAnotherReplicaIsStopped(t *testing.T) {
 // A person's runs have as many steps going at once as they may across
 // every replica, not at each.
 func TestAPersonsStepsAtOnceAcrossReplicas(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	a.call("PUT", "/api/limits", map[string]any{"userParallelSteps": 1}, http.StatusOK, nil)
@@ -442,6 +449,7 @@ func TestAPersonsStepsAtOnceAcrossReplicas(t *testing.T) {
 // The replica a person's browser comes back to from an MCP server's
 // sign-in finishes it, whichever replica started it.
 func TestAnMCPSignInFinishesAtAnotherReplica(t *testing.T) {
+	parallel(t)
 	forgetMCPServers(t, "rp_tracker")
 	a, p := usersApp(t)
 	other := startApp(t, a.worker.url,
@@ -483,6 +491,7 @@ func TestAnMCPSignInFinishesAtAnotherReplica(t *testing.T) {
 
 // Limits an admin saves at one replica reach the others soon after.
 func TestLimitsReachEveryReplica(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	other := startApp(t, a.worker.url)
 	setLimits(t, a, limitsBody{RunSpend: 1.5})
@@ -504,6 +513,7 @@ func TestLimitsReachEveryReplica(t *testing.T) {
 // once, so a server rotating refresh tokens, which takes each once, keeps
 // the person connected.
 func TestReplicasRefreshAConnectionOnce(t *testing.T) {
+	parallel(t)
 	forgetMCPServers(t, "rp_rotating")
 	a, p := usersApp(t)
 	other := startApp(t, a.worker.url,

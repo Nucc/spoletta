@@ -142,6 +142,7 @@ func psProjectsOf(t *testing.T, db *sql.DB, q string, args ...any) []int64 {
 // environment as a provider's key. What is changed in it is in its own
 // audit log; that it was made, in the instance's events.
 func TestProjectSettingsStartEmptyAndAreTheirOwn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -341,6 +342,7 @@ func TestProjectSettingsStartEmptyAndAreTheirOwn(t *testing.T) {
 // set, and hold over what they set before; what holds is the least of
 // the two, which the worker and the proxy are held to.
 func TestProjectLimitsUnderTheCeilings(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	t.Cleanup(func() {
@@ -510,6 +512,7 @@ func psCallCredential(u, token string) int {
 // is in Legacy's records alone. A call with a token no grant has is the
 // instance's to know of.
 func TestProjectStepsReachOnlyTheirProjectsThings(t *testing.T) {
+	parallel(t)
 	fw := newFakeWorker(t)
 	a := startApp(t, fw.url, "GIT_TOKEN=instance-git-e2e")
 	a.worker = fw
@@ -671,6 +674,7 @@ func TestProjectStepsReachOnlyTheirProjectsThings(t *testing.T) {
 // is in the project's records. The grants are planted as a step of the
 // project would be given them.
 func TestProjectGrantsReachOnlyTheirProjects(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	w := newPSWorld(t, a)
@@ -764,6 +768,7 @@ func TestProjectGrantsReachOnlyTheirProjects(t *testing.T) {
 // a second project, which the engine's part of phase 2 makes: until then
 // it skips.
 func TestProjectStepsOfASecondProjectReachTheirOwn(t *testing.T) {
+	parallel(t)
 	fw := newFakeWorker(t)
 	a := startApp(t, fw.url, "GIT_TOKEN=instance-git-e2e")
 	a.worker = fw
@@ -862,6 +867,7 @@ func TestProjectStepsOfASecondProjectReachTheirOwn(t *testing.T) {
 // What a person spends and has going in one project counts toward the
 // limits of that project alone.
 func TestProjectSpendingAndStepsCountPerProject(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	db := secretsDB(t)
@@ -941,6 +947,7 @@ func TestProjectSpendingAndStepsCountPerProject(t *testing.T) {
 // their own, another project's settings are nowhere to be found by id. The
 // instance's routes are a super admin's alone.
 func TestProjectSettingsAreItsOwnersAlone(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	db := secretsDB(t)
@@ -1032,6 +1039,7 @@ func TestProjectSettingsAreItsOwnersAlone(t *testing.T) {
 // there for whoever started it alone, while they may still enter the
 // project and the server is still in it.
 func TestProjectMCPSignInIsBoundToItsProject(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	db := secretsDB(t)

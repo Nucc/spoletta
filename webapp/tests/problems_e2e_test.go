@@ -11,6 +11,7 @@ import (
 // an error or a warning; Run refuses a board with errors, saying them, and
 // runs it once they are gone.
 func TestProblemsOfABoard(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Problems")
 	ps := prbGet(a, f.ID)
@@ -80,6 +81,7 @@ func TestProblemsOfABoard(t *testing.T) {
 // and the API run it; Run with {"published": true} refuses it, while the
 // board, fixed since, runs.
 func TestProblemsOfThePublishedVersion(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Published problems")
 	fetch := a.agent(f.ID, "Fetch", "Fetch.")

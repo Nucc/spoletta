@@ -125,6 +125,7 @@ func peopleProjectWithFlow(a *app, p *fakeProvider, name string) (projectRow, fl
 // the group away, or their next sign-in no longer carrying it, takes them
 // out.
 func TestProjectsPeopleGroupsFromSignIn(t *testing.T) {
+	parallel(t)
 	a, p := peopleApp(t)
 	db := secretsDB(t)
 	pr, shared := peopleProjectWithFlow(a, p, "Grouped")
@@ -169,6 +170,7 @@ func TestProjectsPeopleGroupsFromSignIn(t *testing.T) {
 // token or, where the ID token leaves it out, in userinfo; one that is
 // neither stops the sign-in, saying so.
 func TestProjectsPeopleGroupsClaimShapes(t *testing.T) {
+	parallel(t)
 	a, p := peopleApp(t)
 	db := secretsDB(t)
 	pr, shared := peopleProjectWithFlow(a, p, "Claims")
@@ -214,6 +216,7 @@ func TestProjectsPeopleGroupsClaimShapes(t *testing.T) {
 // Signing in with Google carries no groups, so it leaves the person in
 // none; nor does the company's provider without OIDC_GROUPS_CLAIM.
 func TestProjectsPeopleGroupsNoneWithoutTheClaim(t *testing.T) {
+	parallel(t)
 	company, google := newFakeProvider(t), newFakeProvider(t)
 	for _, p := range []*fakeProvider{company, google} {
 		p.groupsClaim, p.groupsIn = "groups", "id_token"
@@ -264,6 +267,7 @@ func TestProjectsPeopleGroupsNoneWithoutTheClaim(t *testing.T) {
 // what it gave them without signing in again; a session the provider
 // refuses to refresh ends.
 func TestProjectsPeopleGroupsReadAgainWithRefreshTokens(t *testing.T) {
+	parallel(t)
 	a, p := peopleApp(t)
 	db := secretsDB(t)
 	p.mu.Lock()
@@ -319,6 +323,7 @@ func TestProjectsPeopleGroupsReadAgainWithRefreshTokens(t *testing.T) {
 // groups ends when they are older than GROUPS_MAX_AGE, so they sign in
 // again, while someone in no group stays signed in.
 func TestProjectsPeopleGroupsMaxAge(t *testing.T) {
+	parallel(t)
 	a, p := peopleApp(t)
 	db := secretsDB(t)
 	p.mu.Lock()
@@ -400,6 +405,7 @@ type peopleTeam struct {
 // members roles and lists only those who may enter it, and adds a member
 // by email.
 func TestProjectsPeopleTeamsAndRolesPerProject(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	one, two := newProject(a, "Teams one"), newProject(a, "Teams two")
@@ -517,6 +523,7 @@ func TestProjectsPeopleTeamsAndRolesPerProject(t *testing.T) {
 // none, and asking for it is answered plainly, whether making it or giving
 // it on.
 func TestProjectsPeopleGivenOnlyToTheirProjectsTeams(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	one, two := newProject(a, "Given one"), newProject(a, "Given two")
@@ -553,6 +560,7 @@ func TestProjectsPeopleGivenOnlyToTheirProjectsTeams(t *testing.T) {
 // Someone who may enter no project is told whom to ask: the instance's
 // admins, by name.
 func TestProjectsPeopleWhomToAsk(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	lone := usersNewPerson("Lone")
@@ -630,6 +638,7 @@ type inboxItemOf struct {
 // someone in one project has only its steps. A role held in one project
 // decides no review of another, nor sees its flow.
 func TestProjectsPeopleInboxAcrossProjects(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	two := newProject(a, "Inbox two")
@@ -711,6 +720,7 @@ func peopleMe(a *app) int64 {
 // With nobody signing in, the inbox, the Activity page and the flow list's
 // health and counts are the request's project's.
 func TestProjectsPeopleInboxActivityAndHealthWithoutSignIn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	two := newProject(a, "Unsigned two")
 	legacy, legacyRun, legacyStep := peopleReview(a, "Stays", "", nil)
@@ -750,6 +760,7 @@ func TestProjectsPeopleInboxActivityAndHealthWithoutSignIn(t *testing.T) {
 // The Activity page of a project's owner, signed in, and the waiting count
 // of its flow list, are its own.
 func TestProjectsPeopleActivityOfAnOwner(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	two := newProject(a, "Owned two")
@@ -779,6 +790,7 @@ func TestProjectsPeopleActivityOfAnOwner(t *testing.T) {
 // roles they hold there, through its own Slack connector, with links
 // naming the project.
 func TestProjectsPeopleNoticesKeepToTheProject(t *testing.T) {
+	parallel(t)
 	p := newFakeProvider(t)
 	smtp, slack := newInboxSMTP(t), newInboxSlack(t)
 	a := inboxApp(t, p, "", smtp.env()...)

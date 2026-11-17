@@ -296,6 +296,7 @@ func (src *routeSources) text(e ast.Expr) string {
 // The routes read are those the webapp serves: each kind of pattern is
 // read, the loops over methods and the skills' and commands' routes too.
 func TestWebappRoutesAreRead(t *testing.T) {
+	parallel(t)
 	routes := webappRoutes(t)
 	for _, want := range []string{
 		"GET /api/flows", "PATCH /api/processes/{id}", "POST /hooks/{token}",

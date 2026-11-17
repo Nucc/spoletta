@@ -20,6 +20,7 @@ type reviewComment struct {
 // comment on it while it waits, in order; Carl, who doesn't see the flow,
 // can't. Once it is decided it takes no more, but keeps them.
 func TestCommentsOnAWaitingReview(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	b := humanNewReviewBoard(a)

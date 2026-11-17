@@ -91,6 +91,7 @@ func describeChanges(cs []recordChange) string {
 // Fetching the same again, or a step writing it back as it was, adds none,
 // nor does trying a process. A record deleted has no history.
 func TestRecordChanges(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Exception", "struct": true}, http.StatusCreated, &s)
@@ -266,6 +267,7 @@ func TestRecordChanges(t *testing.T) {
 // change of it, the step's; written back as it was before the step, it is
 // none.
 func TestRecordChangesOfAList(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Issue", "struct": true}, http.StatusCreated, &s)
@@ -317,6 +319,7 @@ func TestRecordChangesOfAList(t *testing.T) {
 // change, and a procedure's step writing a record changes it in the run
 // that called the procedure, inside the procedure's own run.
 func TestRecordChangesByReviewsAndProcedures(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	s, f, ticket := pickTickets(a, "Review tickets")
 	a.call("PUT", fmt.Sprintf("/api/objects/%d/pick", ticket.ID), map[string]any{"pick": map[string]any{"state": "open"}}, http.StatusNoContent, nil)
@@ -402,6 +405,7 @@ func TestRecordChangesByReviewsAndProcedures(t *testing.T) {
 // who decided it; whoever sees the flow is told all of it. A correction by
 // hand names who made it, as the struct is theirs to see.
 func TestRecordChangesOfFlowsNotSeen(t *testing.T) {
+	parallel(t)
 	p := newFakeProvider(t)
 	a := inboxApp(t, p, "")
 	usersSignIn(a, p, usersAda)

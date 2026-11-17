@@ -110,6 +110,7 @@ func editBoards(a *app, f int64) []innerBoard {
 }
 
 func TestEditProcessFields(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Process fields")
 
@@ -217,6 +218,7 @@ func TestEditProcessFields(t *testing.T) {
 
 // Becoming or ceasing to be a human drops the edges the new kind can't have.
 func TestEditSwitchingToAndFromHumanDropsEdges(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Switching kinds")
 	draft := a.agent(f.ID, "Draft", "Draft it.")
@@ -286,6 +288,7 @@ func TestEditSwitchingToAndFromHumanDropsEdges(t *testing.T) {
 
 // A process becoming a flow process gets a board; going back keeps it.
 func TestEditFlowProcessBoards(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Boards")
 	outer := editFlowProcess(a, f.ID, "Outer")
@@ -358,6 +361,7 @@ func TestEditFlowProcessBoards(t *testing.T) {
 // Deleting a process takes its links and connections, and the start
 // pointing at it lets go.
 func TestEditDeletingAProcess(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Deleting processes")
 	first := a.agent(f.ID, "First", "")
@@ -391,6 +395,7 @@ func TestEditDeletingAProcess(t *testing.T) {
 }
 
 func TestEditObjectFields(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Object fields")
 	var o object
@@ -458,6 +463,7 @@ func TestEditObjectFields(t *testing.T) {
 
 // A person carries out only a human process, and doesn't lead into an end.
 func TestEditPersons(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Persons")
 	review := a.newProcess(f.ID, map[string]any{"name": "Review", "kind": kindHuman})
@@ -484,6 +490,7 @@ func TestEditPersons(t *testing.T) {
 
 // Deleting an object takes its links, states and attributes, and what makes it up.
 func TestEditDeletingAnObject(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Deleting objects")
 	draft := a.agent(f.ID, "Draft", "")
@@ -513,6 +520,7 @@ func TestEditDeletingAnObject(t *testing.T) {
 
 // Objects making up others, and objects specializing others.
 func TestEditStructure(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Structure")
 	person := a.newObject(f.ID, "Person")
@@ -619,6 +627,7 @@ func TestEditStructure(t *testing.T) {
 }
 
 func TestEditStates(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("States")
 	issue := a.newObject(f.ID, "Issue")
@@ -669,6 +678,7 @@ func TestEditStates(t *testing.T) {
 }
 
 func TestEditAttributes(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Attributes")
 	issue := a.newObject(f.ID, "Issue")
@@ -729,6 +739,7 @@ func TestEditAttributes(t *testing.T) {
 // An attribute is created as the board stores it: what a create says it is
 // must be what a reload shows.
 func TestEditAttributeCreateReplyMatchesStored(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Attribute flags")
 	o := a.newObject(f.ID, "Issue")
@@ -741,6 +752,7 @@ func TestEditAttributeCreateReplyMatchesStored(t *testing.T) {
 }
 
 func TestEditLinks(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Links")
 	draft := a.agent(f.ID, "Draft", "")
@@ -861,6 +873,7 @@ func TestEditLinks(t *testing.T) {
 }
 
 func TestEditConnections(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Connections")
 	first := a.agent(f.ID, "First", "")
@@ -886,6 +899,7 @@ func TestEditConnections(t *testing.T) {
 }
 
 func TestEditStartAndEnd(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Start and end")
 	first := a.agent(f.ID, "First", "")
@@ -976,6 +990,7 @@ func TestEditStartAndEnd(t *testing.T) {
 // Wrapping processes moves them, and the objects only they link to, into a
 // new flow process taking their place.
 func TestEditWrap(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Wrapping")
 	given := a.newObject(f.ID, "Given")

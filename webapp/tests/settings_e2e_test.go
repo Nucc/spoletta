@@ -34,6 +34,7 @@ type settingsKeys struct {
 // whoever started its run, over the webapp's environment's. Keys aren't
 // shown again.
 func TestSettingsModelKeys(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	db := secretsDB(t)
 	t.Cleanup(func() { db.Exec("DELETE FROM model_keys WHERE env IN ('GATEWAY_KEY', 'OPENAI_API_KEY')") })
@@ -159,6 +160,7 @@ func settingsConnected(a *app, id int64) bool {
 // Only an admin configures MCP servers; each person connects them for
 // themselves, and an agent reaches a server as whoever its run is for.
 func TestSettingsMCPConnections(t *testing.T) {
+	parallel(t)
 	forgetMCPServers(t, "tracker", "mine")
 	a, p := usersApp(t)
 	m := newSettingsMCP(t)

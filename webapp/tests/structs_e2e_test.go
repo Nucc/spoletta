@@ -25,6 +25,7 @@ func structFlowOf(a *app, id int64) structFlow {
 // A struct is made with its object, named after it, and holds nothing else
 // but what makes that object up.
 func TestStructs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Jira ticket", "struct": true}, http.StatusCreated, &s)

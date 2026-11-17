@@ -235,6 +235,7 @@ func credentialsURL(t *testing.T, creds []credentialAccess, name string) string 
 // the step's token, on a path under its base URL; the secret is never
 // listed, logged or audited, and the token ends with the step.
 func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	svc := newCredentialsService(t)
 	db := secretsDB(t)
@@ -503,6 +504,7 @@ func TestCredentialsReachTheirServicesThroughTheProxy(t *testing.T) {
 // URL-encoded in lower case or in base64, whole or in pieces, hands back
 // none of it.
 func TestCredentialsBlankOutEchoesCutShort(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	svc := newCredentialsService(t)
 	secret := `Zq8Lw2Xv9Kp4&Rt6<Ym1>Nc"Wd'5`
@@ -561,6 +563,7 @@ func TestCredentialsBlankOutEchoesCutShort(t *testing.T) {
 // no further; one in ISO-8859-1 has the secret blanked out of it as that
 // writes it.
 func TestCredentialsRefuseAnswersInOtherCharsets(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	svc := newCredentialsService(t)
 	secret := "pässwörd-Zq8Lw2Xv9Kp4"
@@ -609,6 +612,7 @@ func TestCredentialsRefuseAnswersInOtherCharsets(t *testing.T) {
 // An agent is told the services it calls through the proxy, by their
 // variables, and its request to the worker never holds a secret.
 func TestAgentsAreToldTheirCredentials(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	svc := newCredentialsService(t)
 	secret := "agent-secret-0123456789"
@@ -651,6 +655,7 @@ func TestAgentsAreToldTheirCredentials(t *testing.T) {
 // A grant made by the replica running the step reaches the service through
 // another replica too, until the step ends.
 func TestCredentialsReachEveryReplica(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	other := startApp(t, a.worker.url)
 	svc := newCredentialsService(t)
@@ -684,6 +689,7 @@ func TestCredentialsReachEveryReplica(t *testing.T) {
 // fails, and a credential taken from a team no longer reaches its service
 // for the steps going.
 func TestCredentialsAreForTheTeamsGivenThem(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	svc := newCredentialsService(t)
@@ -765,6 +771,7 @@ func TestCredentialsAreForTheTeamsGivenThem(t *testing.T) {
 // themselves; importing one naming a credential the app hasn't is
 // refused, and the assistant is told those its flow may use.
 func TestCredentialsInTheSetupFile(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	svc := newCredentialsService(t)
 	prefix := fmt.Sprintf("creds%d", time.Now().UnixNano())
@@ -819,6 +826,7 @@ flows:
 // A follow-up of an agent step gets its process's credentials anew, as its
 // run's version picked them, with a token of its own that ends with it.
 func TestFollowUpsGetTheirProcessesCredentials(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	svc := newCredentialsService(t)
 	secret := "followup-secret-0123456789"
@@ -869,6 +877,7 @@ func TestFollowUpsGetTheirProcessesCredentials(t *testing.T) {
 // which a run of the board as it is takes, and the version's diff names
 // the change.
 func TestCredentialsComeFromTheRunsVersion(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	svc := newCredentialsService(t)
 	published := credentialsAdd(a, map[string]any{"name": credentialsName(t, "Published"), "baseUrl": svc.srv.URL + "/a", "auth": "header", "secret": "published-secret-0123", "everyone": true})

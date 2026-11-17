@@ -161,6 +161,7 @@ func projSetupNames(t *testing.T, file string) map[string][]string {
 // row of it is the project's. What it refers to, the structs it copies and
 // the procedure it runs, is the project's too.
 func TestProjectsBoardsBuiltInAnotherProject(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -327,6 +328,7 @@ func TestProjectsBoardsBuiltInAnotherProject(t *testing.T) {
 // general, a struct referred to, a process a note points at, is left out;
 // one naming another flow's process is refused, changing nothing there.
 func TestProjectsRestoreKeepsToTheFlowsProject(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -472,6 +474,7 @@ func TestProjectsRestoreKeepsToTheFlowsProject(t *testing.T) {
 // one picking, one specialized, what a note points at, the MCP servers a
 // process uses and what is pasted are refused.
 func TestProjectsRefuseReferencesAcross(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := time.Now().UnixNano()
 	legacyStruct := recordStruct(a, fmt.Sprintf("Legacy ticket %d", n), "open")
@@ -539,6 +542,7 @@ func TestProjectsRefuseReferencesAcross(t *testing.T) {
 // has a flow of a name in it, makes that one over and nothing elsewhere.
 // What it names, a credential say, is looked for in the project alone.
 func TestProjectsSetupFilesKeepToTheirProject(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	prefix := fmt.Sprintf("pj%d", time.Now().UnixNano())
@@ -654,6 +658,7 @@ func TestProjectsSetupFilesKeepToTheirProject(t *testing.T) {
 // too: it is told what that project has, and what it replies with is
 // imported there.
 func TestProjectsTemplatesAndTheAssistant(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -710,6 +715,7 @@ func TestProjectsTemplatesAndTheAssistant(t *testing.T) {
 // project referring to another's: a copy's source, a general, and what a
 // note points at.
 func TestProjectsBoardReferenceKeys(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -751,6 +757,7 @@ func TestProjectsBoardReferenceKeys(t *testing.T) {
 // Who has a board open and who changed it are its project's, and a tab is
 // told of them alone.
 func TestProjectsPresenceKeepsToTheProject(t *testing.T) {
+	parallel(t)
 	a, provider := usersApp(t)
 	usersSignIn(a, provider, usersAda)
 	db := secretsDB(t)

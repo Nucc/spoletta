@@ -98,6 +98,7 @@ func inboxApp(t *testing.T, p *fakeProvider, workerURL string, extra ...string) 
 // the loop questions of flows they may edit, newest first, and nothing of
 // flows they don't see; an admin's lists everything.
 func TestInboxListsWhatWaitsOnEachPerson(t *testing.T) {
+	parallel(t)
 	p := newFakeProvider(t)
 	a := inboxApp(t, p, "")
 	usersSignIn(a, p, usersAda)
@@ -151,6 +152,7 @@ func TestInboxListsWhatWaitsOnEachPerson(t *testing.T) {
 // Without sign-in everyone decides everything, so the inbox lists every
 // step waiting, and an input says it is one.
 func TestInboxWithoutSignIn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Ask for a ticket")
 	ask := humanHuman(a, f.ID, "Ask")
@@ -343,6 +345,7 @@ func inboxEventually(t *testing.T, what string, cond func() bool) {
 // it. Each person picks how they are told, and whether of their runs
 // failing.
 func TestNotifyWhoMayDecide(t *testing.T) {
+	parallel(t)
 	p := newFakeProvider(t)
 	smtp, slack := newInboxSMTP(t), newInboxSlack(t)
 	a := inboxApp(t, p, "", smtp.env()...)
@@ -451,6 +454,7 @@ func TestNotifyWhoMayDecide(t *testing.T) {
 // decided; past its time limit it fails, once, never reminding at or after
 // it, and a failure connection handles it.
 func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
+	parallel(t)
 	p := newFakeProvider(t)
 	smtp := newInboxSMTP(t)
 	a := inboxApp(t, p, "", smtp.env()...)
@@ -589,6 +593,7 @@ func TestReviewRemindsAndTimesOutOnce(t *testing.T) {
 // its reviews, nor from seeing it in their inbox: who may change a flow
 // owned by a person, asked of someone in a team, is no, never unknown.
 func TestNotifyPastPeopleInTeams(t *testing.T) {
+	parallel(t)
 	p := newFakeProvider(t)
 	smtp := newInboxSMTP(t)
 	a := inboxApp(t, p, "", smtp.env()...)
@@ -618,6 +623,7 @@ func TestNotifyPastPeopleInTeams(t *testing.T) {
 // seeing its flow though they saw nothing of it before, and only they are
 // told, as it is handed on to them; those who could decide it still may.
 func TestReviewIsHandedOnOnce(t *testing.T) {
+	parallel(t)
 	p := newFakeProvider(t)
 	smtp := newInboxSMTP(t)
 	a := inboxApp(t, p, "", smtp.env()...)
@@ -695,6 +701,7 @@ func TestReviewIsHandedOnOnce(t *testing.T) {
 // A message a replica claimed but didn't send before it stopped is sent by
 // another; one sent isn't sent again.
 func TestNotifySendsWhatAStoppedReplicaClaimed(t *testing.T) {
+	parallel(t)
 	p := newFakeProvider(t)
 	smtp := newInboxSMTP(t)
 	a := inboxApp(t, p, "", smtp.env()...)
@@ -735,6 +742,7 @@ func TestNotifySendsWhatAStoppedReplicaClaimed(t *testing.T) {
 // A process becoming human keeps what handles its failure, as it can fail
 // past its time limit, but not what runs right after it.
 func TestHumanKeepsItsFailureConnections(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Becoming human")
 	check := a.agent(f.ID, "Check", "Check it.")
@@ -753,6 +761,7 @@ func TestHumanKeepsItsFailureConnections(t *testing.T) {
 // A review's time limit and instructions are its run's version's: a run of
 // the version published keeps them while the draft has dropped them.
 func TestReviewWaitsAsItsVersionSays(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Versioned review")
 	draft := a.agent(f.ID, "Draft", "Draft it.")

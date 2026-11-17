@@ -40,6 +40,7 @@ func waitReleased(t *testing.T, a *app, run int64, want int) {
 // and again after a follow-up, which works in it under the step's name. A
 // run without repositories has none to release.
 func TestWorkspacesAreReleasedOnceOver(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	plain := a.newFlow("Plain")
 	note := a.agent(plain.ID, "Note", "Write a note.")

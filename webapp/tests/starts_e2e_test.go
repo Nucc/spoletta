@@ -26,6 +26,7 @@ func startTargets(s startNode) []int64 {
 // again. The sentences, the setup file, versions and grouping processes into
 // a flow process keep every one.
 func TestStartsWithSeveral(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Review together")
 	pr := a.newObject(f.ID, "Pull Request")
@@ -139,6 +140,7 @@ func TestStartsWithSeveral(t *testing.T) {
 // A setup file names the processes a board starts with as a list, with a
 // route to each under routes; one alone keeps its route as it was.
 func TestStartsWithSeveralInSetupFiles(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	file := `{"spoletta": 1, "flows": [{"name": "Fan out", "start": {"next": ["A", "B"], "routes": {"B": [1, 2]}},
 		"processes": [{"name": "A", "kind": "script", "script": "a", "yields": ["X"]}, {"name": "B", "kind": "script", "script": "b", "yields": ["Y"]}],

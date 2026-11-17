@@ -212,6 +212,7 @@ flows:
 // history too, the worker is told the project with each workspace and
 // diff, and Legacy reaches none of it.
 func TestProjectsRunAFlowInASecondProject(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -374,6 +375,7 @@ func prPlant(t *testing.T, db *sql.DB, stmt string, args ...any) {
 // the second project, each naming its own, and only the one reference is
 // planted.
 func TestProjectsRunsReachNoOtherProject(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -485,6 +487,7 @@ func TestProjectsRunsReachNoOtherProject(t *testing.T) {
 // run of the procedure: the engine checks as it walks, whatever let the run
 // start.
 func TestProjectsSubflowOfAnotherProjectFailsAsTheRunComesToIt(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	legacy := verBuildSubflow(a)
@@ -536,6 +539,7 @@ func TestProjectsSubflowOfAnotherProjectFailsAsTheRunComesToIt(t *testing.T) {
 // somehow naming another project's, planted as no route lets anyone, names
 // none of them.
 func TestProjectsTrialNamesNoOtherProjectsServers(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -578,6 +582,7 @@ func prIssueFlow(a *app, name string) flow {
 // project is archived none of them, nor a person, nor a record's Run,
 // starts anything there, and the board stops saying why.
 func TestProjectsStartRunsInTheirOwnProject(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
@@ -720,6 +725,7 @@ func TestProjectsStartRunsInTheirOwnProject(t *testing.T) {
 // from the run, and what it records of the run's moves and steps from
 // then on is in the project too.
 func TestProjectsTakenOverRunKeepsItsProject(t *testing.T) {
+	parallel(t)
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
 	p := newProject(a, "Moving")
@@ -750,6 +756,7 @@ func TestProjectsTakenOverRunKeepsItsProject(t *testing.T) {
 // project: started by them there while they may enter it, and refused, or
 // the board stopped, saying why, once they no longer may.
 func TestProjectsRunsAreForTheirMakerAsTheyAreInTheProject(t *testing.T) {
+	parallel(t)
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
 	db := secretsDB(t)

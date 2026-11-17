@@ -113,6 +113,7 @@ func callAsClaudeCode(llm *llmAccess, provider string) []int {
 // for one that says none, and which models Claude Code may use: those of a
 // provider speaking Anthropic's API.
 func TestClaudeCodeModelsOffered(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var models agentModels
 	a.call("GET", "/api/models", nil, http.StatusOK, &models)
@@ -137,6 +138,7 @@ func TestClaudeCodeModelsOffered(t *testing.T) {
 // carries the session on with Claude Code even once the process runs with
 // pi again, and the next run is pi's.
 func TestClaudeCodeStepAndFollowUp(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.worker.quiet = true
 	g := newClaudeGateway(t)
@@ -244,6 +246,7 @@ func TestClaudeCodeStepAndFollowUp(t *testing.T) {
 // board as it is runs with pi. Neither step keeps a session, so each says
 // what its run's version set.
 func TestClaudeCodeKeepsTheVersionPublished(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Claude published")
 	write := a.newProcess(f.ID, map[string]any{"name": "Write", "kind": "agent", "prompt": "Write.", "model": "anthropic/claude-sonnet-4-6",
@@ -278,6 +281,7 @@ func TestClaudeCodeKeepsTheVersionPublished(t *testing.T) {
 // the worker sees it: without a model of its own, on the default, said in
 // words of its own; with one, naming it.
 func TestClaudeCodeFailsOnModelsItCantUse(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var models agentModels
 	a.call("GET", "/api/models", nil, http.StatusOK, &models)
@@ -308,6 +312,7 @@ func TestClaudeCodeFailsOnModelsItCantUse(t *testing.T) {
 // its follow-up, while pi's processes keep the default model; it goes once
 // its provider does, and the board warns of the default model again.
 func TestClaudeCodeDefaultModel(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.worker.quiet = true
 	addClaudeGateway(t, a, newClaudeGateway(t))
@@ -402,6 +407,7 @@ func TestClaudeCodeDefaultModel(t *testing.T) {
 // Only an agent process runs with Claude Code, judged by the kind it has
 // after a change; pi is kept as none, and nothing else is a harness.
 func TestClaudeCodeOnlyOnAgents(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Harnesses")
 	a.refused("POST", "/api/processes", map[string]any{"flow": f.ID, "name": "Lint", "kind": "script", "settings": map[string]any{"harness": "claude"}},
@@ -442,6 +448,7 @@ func TestClaudeCodeOnlyOnAgents(t *testing.T) {
 // The setup file has harness: claude on an agent process running with
 // Claude Code, and brings it back in.
 func TestClaudeCodeInTheSetupFile(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	imported := setupImportOK(a, "spoletta: 1\nflows:\n  - name: Claude setup\n    processes:\n      - name: Fix\n        model: anthropic/claude-sonnet-4-6\n        harness: claude\n      - name: Review\n        harness: pi\n")
 	var ps []process
@@ -475,6 +482,7 @@ func TestClaudeCodeInTheSetupFile(t *testing.T) {
 // doesn't offer it, or on a model it can't use, and of neither once the
 // worker offers it and the model is Anthropic's.
 func TestClaudeCodeProblems(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Claude problems")
 	p := a.newProcess(f.ID, map[string]any{"name": "Fix", "kind": "agent", "prompt": "Fix.", "model": "fake/model", "settings": map[string]any{"harness": "claude"}})
@@ -501,6 +509,7 @@ func TestClaudeCodeProblems(t *testing.T) {
 // No MCP server may be called as the one a Claude Code step hands in its
 // output through, in any case, nor be renamed so or brought in so.
 func TestClaudeCodeOutputServerName(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	forgetMCPServers(t, "docs")
 	const says = "flow_output is kept for the server agents hand in their output through."

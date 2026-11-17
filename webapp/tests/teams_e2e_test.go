@@ -41,6 +41,7 @@ func teamsFlows(a *app) []int64 {
 // Admins make team managers, who make teams; anyone sees the teams, but
 // nobody else makes or changes them.
 func TestTeamsManagersMakeTeams(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob, carl := usersNewPerson("Bob"), usersNewPerson("Carl")
@@ -87,6 +88,7 @@ func TestTeamsManagersMakeTeams(t *testing.T) {
 // see it; made global, everyone does. Whatever is in a flow nobody else sees
 // is as if it didn't exist.
 func TestTeamsFlowOwners(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	adaClient := a.client
@@ -293,6 +295,7 @@ func TestTeamsFlowOwners(t *testing.T) {
 // An admin removes someone: their flows go to the admin, they can't sign in
 // until added back, and their runs still say they started them.
 func TestTeamsRemoveSomeone(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	var me usersMe
@@ -346,6 +349,7 @@ func TestTeamsRemoveSomeone(t *testing.T) {
 // Someone holding the role a flow's human object names sees the flow and its
 // runs, to decide its reviews, but changes nothing in it.
 func TestTeamsReviewersSeeFlows(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob := usersNewPerson("Bob")
@@ -376,6 +380,7 @@ func TestTeamsReviewersSeeFlows(t *testing.T) {
 // A new flow is its maker's team's when they are in one only; otherwise
 // theirs, unless they give it to a team of theirs or everyone as they make it.
 func TestTeamsNewFlowOwner(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob := usersNewPerson("Bob")

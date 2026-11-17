@@ -22,6 +22,7 @@ type outputChunk struct {
 // its own run; its log lines arrive as they come too, and its stdout is
 // still its output.
 func TestScriptOutputWhileItRuns(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Printing")
 	count := a.newProcess(f.ID, map[string]any{"name": "Count", "kind": kindScript, "script": "echo counting; wc -c"})

@@ -35,6 +35,7 @@ type settingsProviders struct {
 // and reaches them through the proxy with the keys saved here or the
 // vault's. Only an admin sees and changes them.
 func TestModelProviders(t *testing.T) {
+	parallel(t)
 	db := secretsDB(t)
 	t.Cleanup(func() {
 		db.Exec("DELETE FROM model_providers")

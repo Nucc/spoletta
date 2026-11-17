@@ -79,6 +79,7 @@ func newRerunFlow(a *app) rerunFlow {
 // Draft and Label generated without running them again, and runs Count and
 // Publish anew.
 func TestRerunFromAProcessCopiesWhatCameBefore(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	first := a.finish(a.startRun(r.f.ID).ID)
@@ -140,6 +141,7 @@ func TestRerunFromAProcessCopiesWhatCameBefore(t *testing.T) {
 // A re-run takes over the values its run stored, so generating the same
 // unique value again isn't a duplicate.
 func TestRerunTakesOverStoredValues(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	nestedPatchObject(a, r.ticket.ID, map[string]any{"persistent": true})
@@ -165,6 +167,7 @@ func TestRerunTakesOverStoredValues(t *testing.T) {
 // Only an ended run of the whole flow, from a process still on its top board,
 // with what the process takes.
 func TestRerunRefusals(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	first := a.finish(a.startRun(r.f.ID).ID)
@@ -183,6 +186,7 @@ func TestRerunRefusals(t *testing.T) {
 // A re-run's branch starts where the run's branch was as the process it
 // re-runs from started: with what came before committed, and nothing after.
 func TestRerunBranchStartsWhereTheProcessStarted(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	r := newRerunFlow(a)
 	a.call("PATCH", fmt.Sprintf("/api/flows/%d", r.f.ID), map[string]any{"settings": map[string]any{
@@ -241,6 +245,7 @@ func TestRerunBranchStartsWhereTheProcessStarted(t *testing.T) {
 // which may store the same unique values the flow process's run did: that
 // run's work is being redone, so its values are released with the run's.
 func TestRerunFromARecordingFlowProcess(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedTriage(t, a, true)
 	nestedPatchObject(a, n.summary.ID, map[string]any{"persistent": true})
@@ -268,6 +273,7 @@ func TestRerunFromARecordingFlowProcess(t *testing.T) {
 // process took, which the process its board starts from takes too. A re-run
 // of that is given the same.
 func TestRerunInsideAFlowProcessRun(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	n := newNestedTriage(t, a, true)
 	first := nestedFinish(t, a, a.startRun(n.flow.ID).ID, runDone)

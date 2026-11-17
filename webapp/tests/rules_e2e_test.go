@@ -20,6 +20,7 @@ func rulesState(a *app, object int64, name, rule string) objectState {
 // An assessment comes out confident or unsure by its confidence, and goes
 // to what takes it in that state, with no agent deciding.
 func TestRuleRoutesByWhatTheObjectHolds(t *testing.T) {
+	parallel(t)
 	for _, c := range []struct {
 		confidence float64
 		state      string
@@ -60,6 +61,7 @@ func TestRuleRoutesByWhatTheObjectHolds(t *testing.T) {
 
 // What a person fills in comes out in the state its rules say.
 func TestRuleOfWhatAPersonFillsIn(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Rules by hand")
 	intake := humanHuman(a, f.ID, "Intake")
@@ -85,6 +87,7 @@ func TestRuleOfWhatAPersonFillsIn(t *testing.T) {
 // A rule must read as comparisons; one can be changed on its own, and
 // cleared; a version keeps it.
 func TestRuleRefusals(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Rule refusals")
 	o := a.newObject(f.ID, "O")
@@ -120,6 +123,7 @@ func TestRuleRefusals(t *testing.T) {
 // its model's replies used, what they read from the cache among what they
 // took in.
 func TestAgentStepUsage(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	a.worker.quiet = true
 	f := a.newFlow("Usage")
@@ -147,6 +151,7 @@ func TestAgentStepUsage(t *testing.T) {
 
 // A copy of a struct's object has its states' rules, and follows them.
 func TestRulesFollowStructCopies(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Score", "struct": true}, http.StatusCreated, &s)

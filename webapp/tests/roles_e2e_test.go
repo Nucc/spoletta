@@ -30,6 +30,7 @@ func rolesInput(t *testing.T, s step, name string) runInput {
 // An instrument and an affected object go to the agent marked so, and it is
 // told what each means.
 func TestInstrumentAndAffectedInputs(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Roles")
 	seed := a.agent(f.ID, "Seed", "Seed.")
@@ -88,6 +89,7 @@ func TestInstrumentAndAffectedInputs(t *testing.T) {
 // An object consumed is gone once its process takes it: a process waiting
 // for it with something that comes later never runs on it.
 func TestConsumedObjectIsGone(t *testing.T) {
+	parallel(t)
 	for _, consumed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("consumed %v", consumed), func(t *testing.T) {
 			a := newApp(t)
@@ -128,6 +130,7 @@ func TestConsumedObjectIsGone(t *testing.T) {
 // Roles are only an input's, a person has none, and one process consumes an
 // object at most; a version keeps roles.
 func TestRoleRefusals(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow("Role refusals")
 	use := a.agent(f.ID, "Use", "Use it.")

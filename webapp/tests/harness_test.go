@@ -6,12 +6,20 @@ package tests
 // tells them to, by process name, and every request the worker gets is kept
 // for the test to check.
 //
-// They need the compose MySQL; its root account creates a database of their
+// They need the compose MySQL; its root account creates databases of their
 // own, dropped once they are done. TEST_DB_ADDR, TEST_DB_USER and
 // TEST_DB_PASSWORD say where and as whom, by default 127.0.0.1:3306 as root
 // with compose's default password. Without a MySQL listening there they are
 // skipped; with one refusing them they fail. Run with -race, the webapp is
 // built with the race detector too, and a race it reports fails the test.
+//
+// They run side by side, as many at once as -parallel says (the number of
+// CPUs unless told), each on a database no other test uses while it runs:
+// a test starts with parallel(t), which takes one from a pool of as many,
+// made as they are first needed, and gives it back once the test and its
+// webapps are done. A database is used by one test after another, so each
+// test still finds what earlier ones left there. One database is migrated
+// as the tests start, and every other is a copy of it, which is quicker.
 
 import (
 	"bytes"
@@ -20,6 +28,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -29,9 +38,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -52,12 +64,36 @@ const testSecretKey = "e2e-secret-key-0123456789abcdef0123"
 const testWorkerToken = "e2e-worker-token"
 
 var testDB struct {
-	// Where the webapp finds its database, and the webapp built.
-	host, port, name, user, password string
-	binary                           string
+	// Where the webapp finds its databases, and the webapp built.
+	host, port, user, password string
+	binary                     string
 	// Why the tests can't run: a reason to skip them, or to fail.
 	skip, fail string
 }
+
+// The databases tests run on, one per test going at once.
+var testDBs struct {
+	// Those no test is using, and how many may be made.
+	free chan string
+	size int
+	// What names them, and its root connection, which makes them.
+	prefix string
+	root   *sql.DB
+	// A database migrated as the tests start, which no test works on, and
+	// its tables: every other the tests work on but those starting empty
+	// (emptyDatabase) is a copy of it.
+	template string
+	tables   []templateTable
+
+	mu sync.Mutex
+	// Every database made, to drop once the tests are done.
+	made []string
+	// The database each test going works on, by the test's name.
+	taken map[string]string
+}
+
+// Tells databases made apart, such as tests' own, made at once.
+var testDBSeq atomic.Int64
 
 // A model provider every provider of the tests' webapps is reached at,
 // /<provider>/ for each, which answers with the key it was reached with, and
@@ -91,6 +127,8 @@ func testUpstreams() string {
 }
 
 func TestMain(m *testing.M) {
+	// For -parallel, which says how many databases the tests may need.
+	flag.Parse()
 	cleanup := setUp()
 	code := m.Run()
 	cleanup()
@@ -157,27 +195,272 @@ func setUp() func() {
 
 	sweepTestDBs(root)
 	testDB.host, testDB.port, testDB.user, testDB.password = host, port, cfg.User, cfg.Passwd
-	testDB.name = fmt.Sprintf("%s%d", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + testDB.name); err != nil {
-		testDB.fail = "create test database: " + err.Error()
-		return func() { root.Close(); removeDir() }
+	testDBs.size = 1
+	if f := flag.Lookup("test.parallel"); f != nil {
+		if n, err := strconv.Atoi(f.Value.String()); err == nil && n > 1 {
+			testDBs.size = n
+		}
 	}
+	testDBs.free = make(chan string, testDBs.size)
+	testDBs.taken = map[string]string{}
+	testDBs.prefix = fmt.Sprintf("%s%d", testDBPrefix, time.Now().UnixNano())
+	testDBs.root = root
 	undo := func() {
-		if _, err := root.Exec("DROP DATABASE IF EXISTS " + testDB.name); err != nil {
-			log.Printf("drop test database: %v", err)
+		testDBs.mu.Lock()
+		made := testDBs.made
+		testDBs.mu.Unlock()
+		for _, name := range made {
+			if _, err := root.Exec("DROP DATABASE IF EXISTS " + name); err != nil {
+				log.Printf("drop test database: %v", err)
+			}
 		}
 		root.Close()
 		removeDir()
 	}
-	// The first start migrates the database, which takes a while; the tests'
-	// own starts then find it done.
-	srv, err := startWebapp("http://127.0.0.1:1", time.Minute)
+	// The template is migrated, by starting the webapp on it once, which
+	// takes a while; a migration failing fails every test, saying why.
+	testDBs.template = testDBs.prefix + "_template"
+	testDBs.made = append(testDBs.made, testDBs.template)
+	if _, err := root.Exec("CREATE DATABASE " + testDBs.template); err != nil {
+		testDB.fail = "create the template database: " + err.Error()
+		return undo
+	}
+	srv, err := startWebapp(testDBs.template, "http://127.0.0.1:1", time.Minute)
 	if err != nil {
 		testDB.fail = "migrate: " + err.Error()
 		return undo
 	}
 	srv.stop()
+	if testDBs.tables, err = readTemplate(testDBs.template); err != nil {
+		testDB.fail = "read the template database: " + err.Error()
+	}
 	return undo
+}
+
+// A table of the template, as copyTemplate makes it again.
+type templateTable struct {
+	name string
+	// What makes it, as SHOW CREATE TABLE says, but where its AUTO_INCREMENT
+	// was, which the rows copied set, as on a database just migrated.
+	create string
+	// The columns its rows are copied by, without generated ones, which
+	// MySQL works out again; none when it has no rows.
+	columns string
+}
+
+var autoIncrement = regexp.MustCompile(` AUTO_INCREMENT=\d+`)
+
+// Reads the tables of the migrated database name, refusing what the copy
+// leaves out, as a copy would then differ from a database migrated.
+func readTemplate(name string) ([]templateTable, error) {
+	var others int
+	if err := testDBs.root.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM information_schema.VIEWS WHERE TABLE_SCHEMA = ?) +
+		(SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = ?) +
+		(SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = ?) +
+		(SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA = ?)`, name, name, name, name).Scan(&others); err != nil {
+		return nil, err
+	}
+	if others > 0 {
+		return nil, errors.New("the migrations make views, triggers, routines or events, which copyTemplate in harness_test.go doesn't copy yet")
+	}
+	rows, err := testDBs.root.Query(`SELECT TABLE_NAME, COLUMN_NAME, GENERATION_EXPRESSION FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE')
+		ORDER BY TABLE_NAME, ORDINAL_POSITION`, name, name)
+	if err != nil {
+		return nil, err
+	}
+	var tables []templateTable
+	for rows.Next() {
+		var table, column, generated string
+		if err := rows.Scan(&table, &column, &generated); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if len(tables) == 0 || tables[len(tables)-1].name != table {
+			tables = append(tables, templateTable{name: table})
+		}
+		if generated == "" {
+			last := &tables[len(tables)-1]
+			if last.columns != "" {
+				last.columns += ", "
+			}
+			last.columns += "`" + column + "`"
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range tables {
+		tt := &tables[i]
+		var table string
+		if err := testDBs.root.QueryRow(fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", name, tt.name)).Scan(&table, &tt.create); err != nil {
+			return nil, err
+		}
+		tt.create = autoIncrement.ReplaceAllString(tt.create, "")
+		var some bool
+		if err := testDBs.root.QueryRow(fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM `%s`.`%s`)", name, tt.name)).Scan(&some); err != nil {
+			return nil, err
+		}
+		if !some {
+			tt.columns = ""
+		}
+	}
+	return tables, nil
+}
+
+// Makes a database by that name as the template is, its tables and their
+// rows, which is quicker than migrating it.
+func copyTemplate(name string) error {
+	if _, err := testDBs.root.Exec("CREATE DATABASE " + name); err != nil {
+		return fmt.Errorf("create test database: %v", err)
+	}
+	db, err := sql.Open("mysql", testDSN(name))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	// One connection throughout, so the rows go in with its foreign key
+	// checks off, in whatever order.
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
+		return err
+	}
+	for _, tt := range testDBs.tables {
+		if _, err := conn.ExecContext(ctx, tt.create); err != nil {
+			return fmt.Errorf("copy the template's %s: %v", tt.name, err)
+		}
+	}
+	for _, tt := range testDBs.tables {
+		if tt.columns == "" {
+			continue
+		}
+		q := fmt.Sprintf("INSERT INTO `%s` (%s) SELECT %s FROM `%s`.`%s`", tt.name, tt.columns, tt.columns, testDBs.template, tt.name)
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("copy the template's %s: %v", tt.name, err)
+		}
+	}
+	return nil
+}
+
+// Where a connection to the named database goes, as the webapp's.
+func testDSN(name string) string {
+	cfg := mysql.NewConfig()
+	cfg.Net = "tcp"
+	cfg.Addr = net.JoinHostPort(testDB.host, testDB.port)
+	cfg.DBName = name
+	cfg.User, cfg.Passwd = testDB.user, testDB.password
+	return cfg.FormatDSN()
+}
+
+// Takes a database no test going uses: one free, else a new one while
+// fewer were made than tests may run at once, else the first given back.
+// Each test going holds one at most, so one is always given back in time.
+func takeTestDB() (string, error) {
+	select {
+	case name := <-testDBs.free:
+		return name, nil
+	default:
+	}
+	testDBs.mu.Lock()
+	// The template is one of those made, but no test takes it.
+	if len(testDBs.made)-1 >= testDBs.size {
+		testDBs.mu.Unlock()
+		return <-testDBs.free, nil
+	}
+	name := fmt.Sprintf("%s_%d", testDBs.prefix, len(testDBs.made))
+	testDBs.made = append(testDBs.made, name)
+	testDBs.mu.Unlock()
+	return name, copyTemplate(name)
+}
+
+// Runs the test beside others, on a database it takes for as long as it
+// runs, which no other test uses meanwhile; see database. Every test that
+// uses the database starts with it.
+func parallel(t *testing.T) {
+	t.Helper()
+	if strings.Contains(t.Name(), "/") {
+		t.Fatal("parallel(t) is for a test, not a subtest: subtests run one after another, on their test's database")
+	}
+	t.Parallel()
+	if testDB.fail != "" || testDB.skip != "" {
+		// database says why, to a test that needs one.
+		return
+	}
+	name, err := takeTestDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testDBs.mu.Lock()
+	testDBs.taken[t.Name()] = name
+	testDBs.mu.Unlock()
+	// Before anything else, so it is given back last, once the test's
+	// webapps stopped and its cleanups are done with it.
+	t.Cleanup(func() {
+		testDBs.mu.Lock()
+		delete(testDBs.taken, t.Name())
+		testDBs.mu.Unlock()
+		testDBs.free <- name
+	})
+}
+
+// The name of the database the test, or the test a subtest is of, works
+// on: the one it took starting (parallel), or the one it said since
+// (useDatabase).
+func database(t *testing.T) string {
+	t.Helper()
+	needDB(t)
+	test, _, _ := strings.Cut(t.Name(), "/")
+	testDBs.mu.Lock()
+	name, ok := testDBs.taken[test]
+	testDBs.mu.Unlock()
+	if !ok {
+		t.Fatal("the test uses the database without having taken one: start it with parallel(t)")
+	}
+	return name
+}
+
+// Has the test work on the named database from here on, such as one of its
+// own (newDatabase), rather than the one it took.
+func useDatabase(t *testing.T, name string) {
+	t.Helper()
+	database(t)
+	test, _, _ := strings.Cut(t.Name(), "/")
+	testDBs.mu.Lock()
+	testDBs.taken[test] = name
+	testDBs.mu.Unlock()
+}
+
+// Makes a database for the test alone, its name ending in suffix, as a
+// database just migrated is, and drops it once the test is done.
+func newDatabase(t *testing.T, suffix string) string {
+	t.Helper()
+	needDB(t)
+	name := fmt.Sprintf("%s%d_%d%s", testDBPrefix, time.Now().UnixNano(), testDBSeq.Add(1), suffix)
+	t.Cleanup(func() { testDBs.root.Exec("DROP DATABASE IF EXISTS " + name) })
+	if err := copyTemplate(name); err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
+
+// Makes an empty database for the test alone, its name ending in suffix,
+// and drops it once the test is done. A webapp started on it migrates it.
+func emptyDatabase(t *testing.T, suffix string) string {
+	t.Helper()
+	needDB(t)
+	name := fmt.Sprintf("%s%d_%d%s", testDBPrefix, time.Now().UnixNano(), testDBSeq.Add(1), suffix)
+	if _, err := testDBs.root.Exec("CREATE DATABASE " + name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { testDBs.root.Exec("DROP DATABASE IF EXISTS " + name) })
+	return name
 }
 
 // Drops the databases of test runs that went down before dropping theirs,
@@ -229,9 +512,22 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// Starts the webapp on the test database with its worker at workerURL, and
-// the environment variables in extra, and waits for it to answer.
-func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp, error) {
+// Starts the webapp on the named database with its worker at workerURL, and
+// the environment variables in extra, which may name another database, and
+// waits for it to answer.
+func startWebapp(db, workerURL string, wait time.Duration, extra ...string) (*webapp, error) {
+	for tries := 1; ; tries++ {
+		w, err := startWebappOnce(db, workerURL, wait, extra...)
+		// The port it was given, free a moment before, was taken by another
+		// test's webapp or server starting meanwhile.
+		if err != nil && tries < 3 && strings.Contains(err.Error(), "address already in use") {
+			continue
+		}
+		return w, err
+	}
+}
+
+func startWebappOnce(db, workerURL string, wait time.Duration, extra ...string) (*webapp, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -251,7 +547,7 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 		"HOME=" + os.Getenv("HOME"),
 		"DB_HOST=" + testDB.host,
 		"DB_PORT=" + testDB.port,
-		"DB_NAME=" + testDB.name,
+		"DB_NAME=" + db,
 		"DB_USER=" + testDB.user,
 		"DB_PASSWORD=" + testDB.password,
 		"PORT=" + port,
@@ -274,10 +570,10 @@ func startWebapp(workerURL string, wait time.Duration, extra ...string) (*webapp
 		// Told to stop, it exits at once, without the race detector's
 		// second of waiting for reports; races are reported as they happen.
 		"GORACE=atexit_sleep_ms=0",
-		// Tests share the database and leave runs going as they end, which
-		// the next test's webapp would take over and carry on with its own
-		// fake worker; so they end, unless a test takes runs over on a
-		// database of its own (see adopt_e2e_test.go).
+		// Tests take turns on a database and leave runs going as they end,
+		// which the next test's webapp would take over and carry on with
+		// its own fake worker; so they end, unless a test takes runs over
+		// on a database of its own (see adopt_e2e_test.go).
 		"RESUME_RUNS=false",
 	}
 	w.cmd.Env = append(w.cmd.Env, extra...)
@@ -334,8 +630,8 @@ func (w *webapp) kill() {
 	<-w.exited
 }
 
-// The webapp of a test, with a fake worker of its own. Tests share the
-// database, so each works in flows of its own.
+// The webapp of a test, with a fake worker of its own. A test finds what
+// earlier tests left on its database, so each works in flows of its own.
 type app struct {
 	t      *testing.T
 	url    string
@@ -363,13 +659,9 @@ func newApp(t *testing.T) *app {
 // going end first.
 func startApp(t *testing.T, workerURL string, extra ...string) *app {
 	t.Helper()
-	switch {
-	case testDB.fail != "":
-		t.Fatal(testDB.fail)
-	case testDB.skip != "":
-		t.Skip(testDB.skip)
-	}
-	w, err := startWebapp(workerURL, 30*time.Second, extra...)
+	// A start on an empty database (emptyDatabase) migrates it first,
+	// which, with other tests' webapps going, may take a while.
+	w, err := startWebapp(database(t), workerURL, 2*time.Minute, extra...)
 	if err != nil {
 		t.Fatal(err)
 	}

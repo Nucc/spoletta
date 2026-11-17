@@ -128,21 +128,7 @@ func approxEqual(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 // most of every flow's; and that database, to change what was done in it.
 func activityApp(t *testing.T, start func(*testing.T) *app) (*app, *sql.DB) {
 	t.Helper()
-	switch {
-	case testDB.fail != "":
-		t.Fatal(testDB.fail)
-	case testDB.skip != "":
-		t.Skip(testDB.skip)
-	}
-	root := secretsDB(t)
-	name := fmt.Sprintf("%s%d", testDBPrefix, time.Now().UnixNano())
-	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
-	shared := testDB.name
-	testDB.name = name
-	defer func() { testDB.name = shared }()
+	useDatabase(t, newDatabase(t, "_activity"))
 	return start(t), secretsDB(t)
 }
 
@@ -152,6 +138,7 @@ func activityApp(t *testing.T, start func(*testing.T) *app) (*app, *sql.DB) {
 // inside another isn't a run of its own flow, but its steps count toward
 // the process they ran in.
 func TestActivityRunsFailuresAndCost(t *testing.T) {
+	parallel(t)
 	a, db := activityApp(t, newApp)
 	f, build := buildsFlow(a, "Builds", func(n int) bool { return n == 2 })
 	var runs []run
@@ -286,6 +273,7 @@ func sum(xs []int) int {
 // long the review took, how many asked for changes, and how many rounds
 // it went in the run.
 func TestActivityReviews(t *testing.T) {
+	parallel(t)
 	a, db := activityApp(t, newApp)
 	b := humanNewReviewBoard(a)
 	rn := a.startRun(b.flow.ID)
@@ -327,6 +315,7 @@ func TestActivityReviews(t *testing.T) {
 // decision, so it counts apart from those decided, and a review that only
 // ever timed out is listed too.
 func TestActivityReviewsTimingOut(t *testing.T) {
+	parallel(t)
 	a, _ := activityApp(t, newApp)
 	b := humanNewReviewBoard(a)
 	rn := a.startRun(b.flow.ID)
@@ -369,6 +358,7 @@ func TestActivityReviewsTimingOut(t *testing.T) {
 // Nobody sees anything of a flow they don't see on the page; an admin sees
 // everything.
 func TestActivityOnlyFlowsSeen(t *testing.T) {
+	parallel(t)
 	var p *fakeProvider
 	a, _ := activityApp(t, func(t *testing.T) *app {
 		a, provider := usersApp(t)

@@ -44,6 +44,7 @@ func answersOn(t *testing.T, base, host string) bool {
 }
 
 func TestListenWithoutSignInOnlyOnThisMachine(t *testing.T) {
+	parallel(t)
 	outside := outsideAddress(t)
 	a := newApp(t)
 	if code, _ := a.do("GET", "/health", nil); code != http.StatusOK {
@@ -55,6 +56,7 @@ func TestListenWithoutSignInOnlyOnThisMachine(t *testing.T) {
 }
 
 func TestListenWithoutSignInWhereHostSays(t *testing.T) {
+	parallel(t)
 	outside := outsideAddress(t)
 	a := startApp(t, newFakeWorker(t).url, "HOST=0.0.0.0")
 	if !answersOn(t, a.url, outside) {
@@ -63,6 +65,7 @@ func TestListenWithoutSignInWhereHostSays(t *testing.T) {
 }
 
 func TestListenWithSignInEverywhere(t *testing.T) {
+	parallel(t)
 	outside := outsideAddress(t)
 	a, _ := usersApp(t)
 	if !answersOn(t, a.url, outside) {

@@ -15,6 +15,7 @@ import (
 // password put in that file since: rotated in MySQL and in the file while
 // it runs, the connections it opens next use the new one.
 func TestDatabaseConfigRotate(t *testing.T) {
+	parallel(t)
 	needDB(t)
 	fw := newFakeWorker(t)
 	root := secretsDB(t)
@@ -23,7 +24,7 @@ func TestDatabaseConfigRotate(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { root.Exec(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", user)) })
-	if _, err := root.Exec(fmt.Sprintf("GRANT ALL ON `%s`.* TO '%s'@'%%'", testDB.name, user)); err != nil {
+	if _, err := root.Exec(fmt.Sprintf("GRANT ALL ON `%s`.* TO '%s'@'%%'", database(t), user)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,9 +102,10 @@ staging:
 // A configuration naming no environment APP_ENV picks stops the webapp
 // starting, saying why.
 func TestDatabaseConfigUnknownEnvironment(t *testing.T) {
+	parallel(t)
 	needDB(t)
 	fw := newFakeWorker(t)
-	_, err := startWebapp(fw.url, 30*time.Second, "APP_ENV=qa")
+	_, err := startWebapp(database(t), fw.url, 30*time.Second, "APP_ENV=qa")
 	if err == nil || !strings.Contains(err.Error(), `no environment "qa"`) {
 		t.Errorf("started with APP_ENV=qa: %v", err)
 	}

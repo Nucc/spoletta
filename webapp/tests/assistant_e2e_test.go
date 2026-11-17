@@ -70,6 +70,7 @@ const jiraProcesses = `"start": {"next": "Fetch"},
 	"objects": [{"name": "Ticket"}, {"name": "Summary", "end": true}]`
 
 func TestAssistantBuildsTheFlow(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprintf("Jira %d", time.Now().UnixNano())
 	f := a.newFlow(name)
@@ -159,6 +160,7 @@ func TestAssistantBuildsTheFlow(t *testing.T) {
 }
 
 func TestAssistantHandsBackWhatTheAppRefuses(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	name := fmt.Sprintf("Refused %d", time.Now().UnixNano())
 	f := a.newFlow(name)
@@ -210,6 +212,7 @@ func TestAssistantHandsBackWhatTheAppRefuses(t *testing.T) {
 }
 
 func TestAssistantRepliesOneAtATime(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	f := a.newFlow(fmt.Sprintf("Waiting %d", time.Now().UnixNano()))
 	a.worker.onAgent("Assistant", func(ctx context.Context, _ agentRun) runResult {
@@ -241,6 +244,7 @@ func TestAssistantRepliesOneAtATime(t *testing.T) {
 // What the flow uses that the app has is shown apart, and repeating it as it
 // is, as an agent may, changes nothing and needs no retry.
 func TestAssistantLeavesWhatTheFlowUsesBe(t *testing.T) {
+	parallel(t)
 	a := setupApp(t)
 	prefix := fmt.Sprintf("uses%d", time.Now().UnixNano())
 	name := prefix + " Triage"

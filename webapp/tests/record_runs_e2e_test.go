@@ -17,6 +17,7 @@ import (
 // they're told which records the query wouldn't select and which have a
 // run going on them already.
 func TestRunsOnRecords(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	var s structFlow
 	a.call("POST", "/api/flows", map[string]any{"name": "Ticket", "struct": true}, http.StatusCreated, &s)
@@ -268,6 +269,7 @@ func recordsGiven(run scriptRun, object string) []string {
 // started on, as one on the top board does, while a query of another
 // struct's records in the same run reads what it selects.
 func TestRunsOnRecordsInsideBoards(t *testing.T) {
+	parallel(t)
 	a := newApp(t)
 	tickets := recordStruct(a, "Ticket", "open", "done")
 	customers := recordStruct(a, "Customer")
@@ -324,6 +326,7 @@ func TestRunsOnRecordsInsideBoards(t *testing.T) {
 // Only the flows a person may change are offered and started on records,
 // and a struct they don't see has no records to start them on.
 func TestRunsOnRecordsWhoMay(t *testing.T) {
+	parallel(t)
 	a, p := usersApp(t)
 	usersSignIn(a, p, usersAda)
 	bob := usersNewPerson("Bob")

@@ -1,6 +1,6 @@
 # The bases name their patch releases, so a base cached from before a
 # security release can't stand in for the one patched.
-FROM docker.io/library/node:22.23.4-alpine AS frontend
+FROM docker.io/library/node:22.23.5-alpine AS frontend
 
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./

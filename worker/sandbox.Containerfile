@@ -7,7 +7,7 @@
 # (installing into the step's home, as the root is read-only). Nothing
 # of the worker's: it stays in the worker's image. Node
 # names its patch release, as in the worker's image.
-FROM docker.io/library/node:22.23.4-alpine
+FROM docker.io/library/node:22.23.5-alpine
 
 RUN apk add --no-cache bash curl git jq \
     ripgrep fd tree file less \

@@ -52,11 +52,12 @@ of the model's API, so a release that takes the worker's flags or prints its
 output otherwise fails there first.
 
 Set it only if you accept Anthropic's terms for running Claude Code in a
-product. Anthropic's legal page says doing so "requires agreeing to our
-Commercial Terms", that "The Claude Code binary must not be modified", and
-that "Customers may not pay for, resell, or intermediate Claude usage on
-their end users' behalf"; it may not use Claude.ai (Free, Pro, Max) sign-ins
-on behalf of users. What it allows is an organisation using keys it
+product. [Anthropic's legal page](https://code.claude.com/docs/en/legal-and-compliance)
+says doing so "requires agreeing to our Commercial Terms of Service", that
+"The Claude Code binary must not be modified", and that "Customers may not
+pay for, resell, or intermediate Claude usage on their end users' behalf";
+nor may it "route requests through Free, Pro, Max, or Ultra plan
+credentials on behalf of their users". What it allows is an organisation using keys it
 provisions for its own authorised users, billed to it. So here Claude Code
 signs in only with the step's token, standing in for a key configured for
 its project (Anthropic's API key, an Anthropic-API gateway's added under

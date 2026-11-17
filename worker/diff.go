@@ -21,11 +21,17 @@ import (
 // the workspace's kept meta says, never one a request names, so a diff
 // reaches only commits the workspace's own project has; the request names
 // its project too, which must be that one, so a webapp asking about another
-// project's workspace is refused rather than shown it.
+// project's workspace is refused rather than shown it. Its git runs with
+// the worker's own git config only for a project inheriting the instance's
+// configuration, as a step's git does (env.go).
 type diffRequest struct {
 	// The project the step's run is of; 0, a request from before projects,
 	// is Legacy.
 	Project int64 `json:"project,omitempty"`
+	// Whether the project inherits the instance's configuration; see
+	// inheritsInstance, which withholds it from a request naming a project
+	// and saying nothing.
+	InheritsInstance *bool `json:"inheritsInstance"`
 	// The workspace the step worked in, such as run-42, whose kept meta says
 	// which repository the name is.
 	Workspace  string `json:"workspace"`
@@ -91,6 +97,7 @@ func diffWorkspace(ctx context.Context, req diffRequest) (repoDiff, error) {
 	if meta.project() != projectOrLegacy(req.Project) {
 		return repoDiff{}, errOtherProject
 	}
+	ctx = withInheritance(ctx, inheritsInstance(req.InheritsInstance, req.Project, nil))
 	ctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
 	return diffCommits(ctx, sharedRepo(meta.project(), url), req.Before, req.After)
@@ -251,7 +258,7 @@ func gitLimited(ctx context.Context, dir string, limit int64, args ...string) ([
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = childEnv()
+	cmd.Env = workerEnv(ctx)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()

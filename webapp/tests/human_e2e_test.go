@@ -383,6 +383,7 @@ func humanRaw(a *app, method, path, body string) (int, string) {
 	if err != nil {
 		a.t.Fatal(err)
 	}
+	a.inProject(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		a.t.Fatal(err)

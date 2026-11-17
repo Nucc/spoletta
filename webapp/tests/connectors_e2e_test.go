@@ -346,7 +346,7 @@ func TestConnectorsForAgents(t *testing.T) {
 	if s := connectorsServers(a)["ca_gh"]; !s.Connected {
 		t.Errorf("the connector isn't connected for bob: %+v", s)
 	}
-	resp, err := a.client.Get(fmt.Sprintf("%s/api/mcp-servers/%d/connect", a.url, github.ID))
+	resp, err := a.client.Get(a.pageURL(fmt.Sprintf("/api/mcp-servers/%d/connect", github.ID)))
 	if err != nil {
 		t.Fatal(err)
 	}

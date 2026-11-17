@@ -218,14 +218,20 @@ func tplArg(a *app, p tplProcess, name, value string) {
 	a.call("PATCH", fmt.Sprintf("/api/processes/%d", p.ID), map[string]any{"settings": map[string]any{"connector": cs}}, http.StatusOK, nil)
 }
 
-func noSlackInstalled(t *testing.T) {
-	t.Helper()
+// Fails the test if the app's project has a Slack connector installed, by
+// another test; another project's is none of its own.
+func noSlackInstalled(a *app) {
+	a.t.Helper()
+	project := a.project
+	if project == 0 {
+		project = 1
+	}
 	var n int
-	if err := secretsDB(t).QueryRow("SELECT COUNT(*) FROM mcp_servers WHERE connector = 'slack'").Scan(&n); err != nil {
-		t.Fatal(err)
+	if err := secretsDB(a.t).QueryRow("SELECT COUNT(*) FROM mcp_servers WHERE connector = 'slack' AND project_id = ?", project).Scan(&n); err != nil {
+		a.t.Fatal(err)
 	}
 	if n != 0 {
-		t.Fatalf("%d Slack connectors are installed by other tests", n)
+		a.t.Fatalf("%d Slack connectors are installed in project %d by other tests", n, project)
 	}
 }
 
@@ -235,7 +241,7 @@ func noSlackInstalled(t *testing.T) {
 // anyone holds.
 func TestTemplatesListWhatTheyNeed(t *testing.T) {
 	a := newApp(t)
-	noSlackInstalled(t)
+	noSlackInstalled(a)
 	ts := tplList(a)
 	if len(ts) < 5 || len(ts) > 7 {
 		t.Fatalf("%d templates", len(ts))
@@ -492,7 +498,7 @@ func TestTemplateMakesANewFlow(t *testing.T) {
 // picked; the flow's setup file carries them, and imports again.
 func TestTemplateWithoutItsConnector(t *testing.T) {
 	a := newApp(t)
-	noSlackInstalled(t)
+	noSlackInstalled(a)
 	if n := tplFind(a, "daily-digest-to-slack").Needs; len(n) != 1 || n[0].Met {
 		t.Errorf("without Slack the digest needs %+v", n)
 	}

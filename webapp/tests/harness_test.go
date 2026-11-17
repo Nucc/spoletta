@@ -345,8 +345,8 @@ type app struct {
 	client *http.Client
 	// Its process.
 	proc *webapp
-	// The project its requests name, if not Legacy, as the browser's tab
-	// on a project does; see projects_e2e_test.go.
+	// The project its requests name, as the browser's tab on a project
+	// does, every one of them; 0 is Legacy. See projects_e2e_test.go.
 	project int64
 }
 
@@ -378,6 +378,15 @@ func startApp(t *testing.T, workerURL string, extra ...string) *app {
 		switch {
 		case strings.Contains(out, "WARNING: DATA RACE"):
 			t.Errorf("the webapp reported a data race:\n%s", out)
+		// Such as a handler asking for the project of a request that
+		// names none (requestProject).
+		case strings.Contains(out, "http: panic serving"):
+			t.Errorf("the webapp panicked serving a request:\n%s", out)
+		// A row inserted without naming its project, which has no default
+		// (migration 00090), as what the webapp does in the background
+		// only logs.
+		case strings.Contains(out, "doesn't have a default value"):
+			t.Errorf("the webapp inserted a row without a column it must name:\n%s", out)
 		case t.Failed():
 			t.Logf("the webapp logged:\n%s", out)
 		}
@@ -401,9 +410,7 @@ func (a *app) do(method, path string, body any) (int, []byte) {
 		a.t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if a.project != 0 {
-		req.Header.Set("X-Spoletta-Project", fmt.Sprint(a.project))
-	}
+	a.inProject(req)
 	resp, err := a.client.Do(req)
 	if err != nil {
 		a.t.Fatalf("%s %s: %v", method, path, err)
@@ -414,6 +421,33 @@ func (a *app) do(method, path string, body any) (int, []byte) {
 		a.t.Fatal(err)
 	}
 	return resp.StatusCode, reply
+}
+
+// The project the app's requests name: the one the test says, else Legacy,
+// project 1, where most tests work.
+func (a *app) projectID() int64 {
+	if a.project != 0 {
+		return a.project
+	}
+	return 1
+}
+
+// Names the app's project in the request, as the browser's tab on it does
+// with every request to /api/; for a request the test sends itself rather
+// than through do.
+func (a *app) inProject(req *http.Request) {
+	req.Header.Set("X-Spoletta-Project", fmt.Sprint(a.projectID()))
+}
+
+// The address of a page of the app's at path that the browser opens, such
+// as an MCP server's sign-in window: it can't send the header, so it names
+// the app's project in its query instead.
+func (a *app) pageURL(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return fmt.Sprintf("%s%s%sproject=%d", a.url, path, sep, a.projectID())
 }
 
 // Sends a request that must get status want, and decodes the reply into out, if given.

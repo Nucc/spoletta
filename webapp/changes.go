@@ -52,13 +52,16 @@ const changesTimeout = time.Minute
 // What the worker is asked for a diff: the run's project, whose shared
 // repository it reads, which must be the workspace's, the workspace named
 // after the last part of the step's branch (see flowRun.workspace), the
-// repository and the two commits.
+// repository and the two commits; and whether the project inherits the
+// instance's configuration, without which the worker's git reads the diff
+// without its own git config, as a step's git does (worker/env.go).
 type diffRequest struct {
-	Project    int64  `json:"project"`
-	Workspace  string `json:"workspace"`
-	Repository string `json:"repository"`
-	Before     string `json:"before"`
-	After      string `json:"after"`
+	Project          int64  `json:"project"`
+	InheritsInstance bool   `json:"inheritsInstance"`
+	Workspace        string `json:"workspace"`
+	Repository       string `json:"repository"`
+	Before           string `json:"before"`
+	After            string `json:"after"`
 }
 
 // What the step and its ended follow-ups did to each repository, in the
@@ -110,6 +113,11 @@ func registerChangeRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		if spans == nil {
 			spans = []repoChanges{}
 		}
+		inherits, err := inheritsInstance(r.Context(), db, project)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), changesTimeout)
 		defer cancel()
 		for i := range spans {
@@ -123,7 +131,7 @@ func registerChangeRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 				Error string       `json:"error"`
 			}
 			err := callWorker(ctx, http.MethodPost, workerURL+"/workspaces/diff", diffRequest{
-				Project: project, Workspace: path.Base(branch), Repository: s.Name, Before: s.Before, After: s.After,
+				Project: project, InheritsInstance: inherits, Workspace: path.Base(branch), Repository: s.Name, Before: s.Before, After: s.After,
 			}, &res)
 			switch {
 			case err != nil:

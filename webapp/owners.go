@@ -171,12 +171,26 @@ func flowAccess(ctx context.Context, db querier, u *user, flow int64) (string, e
 // as commenting on it (comments.go).
 var decidePattern = regexp.MustCompile(`^/api/runs/\d+/steps/\d+$`)
 
+// Connecting an MCP server, which the browser opens as a page, so with GET,
+// yet changes what the project's steps use on its person's behalf.
+var connectPattern = regexp.MustCompile(`^/api/mcp-servers/\d+/connect$`)
+
+// Deleting an API key of one's own, which anyone may do whatever they may
+// now, so a key outlives no one's wish to stop it (api.go).
+var ownKeyPattern = regexp.MustCompile(`^/api/api-keys/\d+$`)
+
 // The access a request needs to the flows it is about. Starring a flow as
 // a favourite, or saying one has its board open, changes nothing in it, so
-// seeing it is enough.
+// seeing it is enough; nor does deleting one's own API key need more.
+// Connecting an MCP server, though asked with GET, changes what may be
+// done.
 func neededAccess(r *http.Request) string {
+	if r.Method == http.MethodGet && connectPattern.MatchString(r.URL.Path) {
+		return accessEdit
+	}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead || (r.Method == http.MethodPatch && decidePattern.MatchString(r.URL.Path)) ||
 		(r.Method == http.MethodPost && commentPattern.MatchString(r.URL.Path)) ||
+		(r.Method == http.MethodDelete && ownKeyPattern.MatchString(r.URL.Path)) ||
 		favouritePattern.MatchString(r.URL.Path) || presencePattern.MatchString(r.URL.Path) {
 		return accessReview
 	}
@@ -467,7 +481,13 @@ func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 			}
 		}
 		need := neededAccess(r)
-		project := requestProject(r)
+		// A request outside the projects naming none (projects.go) names
+		// nothing in one either, which it must to be about it.
+		project, named := requestProjectIf(r)
+		if !named && len(refs) > 0 {
+			http.Error(w, noProjectNamed, http.StatusBadRequest)
+			return
+		}
 		for _, rf := range refs {
 			var flow sql.NullInt64
 			var in int64

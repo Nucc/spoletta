@@ -464,11 +464,9 @@ func psConnect(a *app, m *settingsMCP, project, server int64, token string) {
 	m.mu.Lock()
 	m.next = token
 	m.mu.Unlock()
-	u := fmt.Sprintf("%s/api/mcp-servers/%d/connect", a.url, server)
-	if project != 0 {
-		u += fmt.Sprintf("?project=%d", project)
-	}
-	resp, err := a.client.Get(u)
+	in := *a
+	in.project = project
+	resp, err := a.client.Get(in.pageURL(fmt.Sprintf("/api/mcp-servers/%d/connect", server)))
 	if err != nil {
 		a.t.Fatal(err)
 	}
@@ -1013,7 +1011,7 @@ func TestProjectSettingsAreItsOwnersAlone(t *testing.T) {
 	a.refused("PUT", fmt.Sprintf("/api/credentials/%d", legacyCred.ID), map[string]any{"name": "Taken", "baseUrl": "https://tracker.example.com",
 		"auth": "header", "everyone": true}, http.StatusNotFound, "credential not found")
 	a.refused("DELETE", fmt.Sprintf("/api/credentials/%d", legacyCred.ID), nil, http.StatusNotFound, "credential not found")
-	a.call("DELETE", fmt.Sprintf("/api/mcp-servers/%d", legacyServer), nil, http.StatusNoContent, nil)
+	a.refused("DELETE", fmt.Sprintf("/api/mcp-servers/%d", legacyServer), nil, http.StatusNotFound, "server not found")
 	var left int
 	db.QueryRow("SELECT COUNT(*) FROM mcp_servers WHERE id = ?", legacyServer).Scan(&left)
 	if left != 1 {
@@ -1064,15 +1062,25 @@ func TestProjectMCPSignInIsBoundToItsProject(t *testing.T) {
 	if project, ok := connected(o.ID); !ok || project != p.ID {
 		t.Errorf("olga's connection is in project %d (found %v)", project, ok)
 	}
-	// Without naming it, the window is Legacy's, where the server isn't.
+	// Without naming it, the window is refused; naming Legacy, where the
+	// server isn't, it finds none.
 	resp, err := a.client.Get(fmt.Sprintf("%s/api/mcp-servers/%d/connect", a.url, server))
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "doesn&#39;t exist") {
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "names no project") {
 		t.Errorf("the window naming no project ended with %d: %s", resp.StatusCode, body)
+	}
+	resp, err = a.client.Get(fmt.Sprintf("%s/api/mcp-servers/%d/connect?project=1", a.url, server))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(body), "doesn&#39;t exist") {
+		t.Errorf("the window naming Legacy ended with %d: %s", resp.StatusCode, body)
 	}
 	// Someone who may not enter the project can't open it.
 	usersSignIn(a, prov, bob)

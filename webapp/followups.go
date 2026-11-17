@@ -304,9 +304,14 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	run.Prompt = followUpPrompt(message)
 	run.Workspace = s.Workspace
 	// The run's project, whatever the session kept, as one kept before
-	// projects names none.
+	// projects names none; and the run, which one kept before workspaces
+	// named their run lacks, and which its git token is had for
+	// (gitTokens.forWorkspace), so it is never another project's.
 	if run.Workspace != nil {
 		run.Workspace.Project = project
+		if run.Workspace.Run == 0 {
+			run.Workspace.Run = runID
+		}
 	}
 	run.Project = project
 	run.DiskLimit = limitsIn(project).diskBytes()

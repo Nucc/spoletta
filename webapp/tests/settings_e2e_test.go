@@ -132,7 +132,7 @@ func (m *settingsMCP) connect(a *app, server int64, token string) {
 	m.mu.Lock()
 	m.next = token
 	m.mu.Unlock()
-	resp, err := a.client.Get(fmt.Sprintf("%s/api/mcp-servers/%d/connect", a.url, server))
+	resp, err := a.client.Get(a.pageURL(fmt.Sprintf("/api/mcp-servers/%d/connect", server)))
 	if err != nil {
 		a.t.Fatal(err)
 	}

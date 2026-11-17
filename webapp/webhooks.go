@@ -845,7 +845,7 @@ func recordDelivery(ctx context.Context, db *sql.DB, h webhookRow, d webhookDeli
 	if why := cmp.Or(d.audit, d.Reason); why != "" {
 		detail += ", " + why
 	}
-	audit("webhook.delivery", who, run, 0, "%s", detail)
+	auditIn(h.project, "webhook.delivery", who, run, 0, "%s", detail)
 }
 
 // How many requests to /hooks/ an address may send: a second's worth, and
@@ -987,7 +987,7 @@ func receiveWebhook(db *sql.DB, eng *engine, signIn bool) http.HandlerFunc {
 				if h.createdBy.Valid {
 					who = &h.createdBy.Int64
 				}
-				audit("webhook.refused", who, 0, 0, "the webhook %s of flow %d refused %d requests not signed with its secret, since the last such event at this replica",
+				auditIn(h.project, "webhook.refused", who, 0, 0, "the webhook %s of flow %d refused %d requests not signed with its secret, since the last such event at this replica",
 					quote(h.name), h.flow, n)
 			}
 			http.Error(w, msg, status)

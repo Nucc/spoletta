@@ -18,6 +18,8 @@ func TestNamedRuns(t *testing.T) {
 		{"What went wrong in #412", []int64{412}, nil},
 		{"Compare runs 412, 413 and #414 or 415", []int64{412, 413, 414, 415}, nil},
 		{"See http://localhost:8080/#/flows/3/runs/412/steps/9876 and #/flows/3/runs/7", []int64{412, 7}, []int64{9876}},
+		// A link naming its project, as a project's pages have it.
+		{"See http://localhost:8080/#/p/2/flows/3/runs/412/steps/9876 and #/p/12/flows/3/runs/7", []int64{412, 7}, []int64{9876}},
 		// Named twice, told once, in the order first named.
 		{"#9 then run 8, then run #9 again", []int64{9, 8}, nil},
 		// Not runs: a character reference, a word with a number, a heading.

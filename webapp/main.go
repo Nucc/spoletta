@@ -200,7 +200,7 @@ func main() {
 	registerWebhookRoutes(mux, db, eng, auth != nil)
 	registerDataRoutes(mux, db)
 	registerScheduleRoutes(mux, db)
-	go runSchedules(context.Background(), db, eng, time.Second)
+	go runSchedules(context.Background(), db, eng, time.Second, auth != nil)
 	go playTaskBoards(context.Background(), db, eng, auth != nil)
 	registerMessageRoutes(mux, db)
 	registerChangeRoutes(mux, db, workerURL)

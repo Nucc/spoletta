@@ -105,6 +105,9 @@ func registerScriptOutputRoutes(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		if !stepOfRun(w, r, db, runID, id) {
+			return
+		}
 		chunks := []outputChunk{}
 		err := scanAll(r.Context(), db,
 			`SELECT o.id, o.stream, o.text, o.created_at FROM run_step_output o

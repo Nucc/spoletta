@@ -467,7 +467,7 @@ func TestAnMCPSignInFinishesAtAnotherReplica(t *testing.T) {
 	m.mu.Lock()
 	m.next = "ada-token"
 	m.mu.Unlock()
-	resp, err := browser.Get(fmt.Sprintf("%s/api/mcp-servers/%d/connect", a.url, server.ID))
+	resp, err := browser.Get(a.pageURL(fmt.Sprintf("/api/mcp-servers/%d/connect", server.ID)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +560,7 @@ func TestReplicasRefreshAConnectionOnce(t *testing.T) {
 	other.client = a.client
 	var server settingsServer
 	a.call("POST", "/api/mcp-servers", map[string]any{"name": "rp_rotating", "url": srv.URL + "/mcp"}, http.StatusCreated, &server)
-	resp, err := a.client.Get(fmt.Sprintf("%s/api/mcp-servers/%d/connect", a.url, server.ID))
+	resp, err := a.client.Get(a.pageURL(fmt.Sprintf("/api/mcp-servers/%d/connect", server.ID)))
 	if err != nil {
 		t.Fatal(err)
 	}

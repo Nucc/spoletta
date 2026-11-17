@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -124,12 +125,20 @@ func refusedByForeignKey(err error) bool {
 	return errors.As(err, &my) && my.Number == 1452
 }
 
-// Every table names its project, never null, but those above the projects;
-// a new table forgetting it fails here.
+// Whether err is MySQL's refusing a row that leaves out a column with no
+// default, as project_id is.
+func refusedForNoDefault(err error) bool {
+	var my *mysql.MySQLError
+	return errors.As(err, &my) && my.Number == 1364
+}
+
+// Every table names its project, never null and with no default, so every
+// row inserted must name it, but those above the projects; a new table
+// forgetting it fails here.
 func TestProjectsEveryTableNamesItsProject(t *testing.T) {
 	needDB(t)
 	db := secretsDB(t)
-	rows, err := db.Query(`SELECT t.TABLE_NAME, COALESCE(c.COLUMN_TYPE, ''), COALESCE(c.IS_NULLABLE, '')
+	rows, err := db.Query(`SELECT t.TABLE_NAME, COALESCE(c.COLUMN_TYPE, ''), COALESCE(c.IS_NULLABLE, ''), c.COLUMN_DEFAULT IS NOT NULL
 		FROM information_schema.TABLES t LEFT JOIN information_schema.COLUMNS c
 			ON c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME AND c.COLUMN_NAME = 'project_id'
 		WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_TYPE = 'BASE TABLE' ORDER BY t.TABLE_NAME`)
@@ -140,7 +149,8 @@ func TestProjectsEveryTableNamesItsProject(t *testing.T) {
 	var tables []string
 	for rows.Next() {
 		var table, typ, null string
-		if err := rows.Scan(&table, &typ, &null); err != nil {
+		var defaulted bool
+		if err := rows.Scan(&table, &typ, &null, &defaulted); err != nil {
 			t.Fatal(err)
 		}
 		tables = append(tables, table)
@@ -152,6 +162,8 @@ func TestProjectsEveryTableNamesItsProject(t *testing.T) {
 			t.Errorf("%s names no project: give it project_id BIGINT NOT NULL, or say why it is above projects", table)
 		case typ != "bigint" || null != "NO":
 			t.Errorf("%s.project_id is %s, nullable %s; want bigint, not null", table, typ, null)
+		case defaulted:
+			t.Errorf("%s.project_id has a default, so a row inserted without naming its project lands in some project: drop it", table)
 		}
 	}
 	for _, above := range aboveProjects {
@@ -362,18 +374,49 @@ func TestProjectsKeepFlowsAndTaskBoardsApart(t *testing.T) {
 	a.project = 1 << 40
 	a.refused("GET", "/api/flows", nil, http.StatusNotFound, "no such project")
 	a.project = 0
-	req, err := http.NewRequest("GET", a.url+"/api/flows", nil)
-	if err != nil {
-		t.Fatal(err)
+	send := func(method, path, header string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, a.url+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header != "" {
+			req.Header.Set("X-Spoletta-Project", header)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
 	}
-	req.Header.Set("X-Spoletta-Project", "Legacy")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	if status, _ := send("GET", "/api/flows", "Legacy"); status != http.StatusBadRequest {
+		t.Errorf("a header naming no id got %d, want 400", status)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("a header naming no id got %d, want 400", resp.StatusCode)
+
+	// A request about what is in a project names it, by the header or, a
+	// page the browser opens, by its address; Legacy is no default.
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/flows"}, {"POST", "/api/flows"}, {"GET", fmt.Sprintf("/api/flows/%d", legacyFlow.ID)},
+		{"GET", "/api/runs"}, {"GET", "/api/taskboards"}, {"DELETE", fmt.Sprintf("/api/taskboards/%d", legacyBoard.ID)},
+	} {
+		if status, body := send(c.method, c.path, ""); status != http.StatusBadRequest || !strings.Contains(body, "names no project") {
+			t.Errorf("%s %s naming no project = %d %s, want 400", c.method, c.path, status, body)
+		}
+	}
+	if status, body := send("GET", fmt.Sprintf("/api/flows/%d?project=1", legacyFlow.ID), ""); status != http.StatusOK {
+		t.Errorf("a GET naming Legacy in its address = %d %s", status, body)
+	}
+	if status, body := send("GET", fmt.Sprintf("/api/flows/%d?project=%d", legacyFlow.ID, p.ID), ""); status != http.StatusNotFound {
+		t.Errorf("a GET of Legacy's flow naming another project in its address = %d %s", status, body)
+	}
+	// Requests about the person, the projects and the instance name none;
+	// the inbox is the person's, in every project.
+	for _, path := range []string{"/api/me", "/api/inbox", "/api/projects", "/api/instance/limits", "/api/instance/events"} {
+		if status, body := send("GET", path, ""); status != http.StatusOK {
+			t.Errorf("GET %s naming no project = %d %s, want 200", path, status, body)
+		}
 	}
 }
 
@@ -387,7 +430,14 @@ func TestProjectsLevels(t *testing.T) {
 	db := secretsDB(t)
 	p := newProject(a, "Levels")
 	vera, ed, olga, nobu := usersNewPerson("Vera"), usersNewPerson("Ed"), usersNewPerson("Olga"), usersNewPerson("Nobu")
-	v, e, o := usersAdd(a, vera.email), usersAdd(a, ed.email), usersAdd(a, olga.email)
+	// Added with no project, they are in none until given this one.
+	var v, e, o usersPersonRow
+	for _, c := range []struct {
+		email string
+		row   *usersPersonRow
+	}{{vera.email, &v}, {ed.email, &e}, {olga.email, &o}} {
+		a.call("POST", "/api/users", map[string]any{"email": c.email}, http.StatusCreated, c.row)
+	}
 
 	a.project = p.ID
 	seen := a.newFlow(fmt.Sprintf("Seen %d", time.Now().UnixNano()))
@@ -465,12 +515,13 @@ func TestProjectsLevels(t *testing.T) {
 	if me.Super || !me.User.Admin {
 		t.Errorf("the owner's me in her project = %+v, want its admin, not super", me)
 	}
-	// In Legacy, which she joined as she was added, she is an editor.
+	// Legacy, which nobody gave her, she may not enter.
 	a.project = 0
 	a.call("GET", "/api/me", nil, http.StatusOK, &me)
-	if mine, ok := projectIn(me.Projects, 1); me.User.Admin || !ok || mine.Level != "editor" {
-		t.Errorf("the owner's me in Legacy = %+v", me)
+	if _, ok := projectIn(me.Projects, 1); me.User.Admin || ok || len(me.Projects) != 1 {
+		t.Errorf("the owner's me in Legacy = %+v, want her in her project alone", me)
 	}
+	a.refused("GET", "/api/flows", nil, http.StatusForbidden, "no access to this project")
 
 	// Someone signing in who was given none of it has no access to it.
 	usersSignIn(a, prov, nobu)
@@ -485,46 +536,86 @@ func TestProjectsLevels(t *testing.T) {
 	}
 }
 
-// While projects come in, the instance's admins own Legacy, as they had
-// everything before: someone made an admin no longer is its owner no more,
-// as they were no admin, and made one again, or added back as one, is
-// again.
-func TestProjectsAdminsOwnLegacy(t *testing.T) {
+// The instance's admins enter every project as its owner, Legacy too,
+// without being anyone's member; made an admin no more, someone has only
+// what they were given by hand, which being made one or no more never
+// touched. Someone signing in the first time, or added with no project, is
+// in none; a project and a level an admin adds them with give it to them
+// at once, with roles there, which are given only so.
+func TestProjectsSuperAdminsEnterEveryProject(t *testing.T) {
 	a, prov := usersApp(t)
 	usersSignIn(a, prov, usersAda)
+	p := newProject(a, "Supered")
 	amy := usersNewPerson("Amy")
 	var row usersPersonRow
 	a.call("POST", "/api/users", map[string]any{"email": amy.email, "admin": true}, http.StatusCreated, &row)
-	legacyAdmin := func(want bool) {
+	levels := func(want map[int64]string) {
 		t.Helper()
 		usersSignIn(a, prov, amy)
 		var me projectsMe
 		a.call("GET", "/api/me", nil, http.StatusOK, &me)
-		level := "editor"
-		if want {
-			level = "owner"
+		for _, id := range []int64{1, p.ID} {
+			l, _ := projectIn(me.Projects, id)
+			if l.Level != want[id] {
+				t.Errorf("amy's level in project %d = %q, want %q (me %+v)", id, l.Level, want[id], me)
+			}
 		}
-		if l, _ := projectIn(me.Projects, 1); me.Super != want || me.User.Admin != want || l.Level != level {
-			t.Errorf("amy's me = %+v, want super and Legacy's admin %v, %s", me, want, level)
+		for _, id := range []int64{1, p.ID} {
+			a.project = id
+			switch want[id] {
+			case "owner":
+				a.call("GET", "/api/model-keys", nil, http.StatusOK, nil)
+			case "":
+				a.refused("GET", "/api/model-keys", nil, http.StatusForbidden, "no access to this project")
+			default:
+				a.refused("GET", "/api/model-keys", nil, http.StatusForbidden, "only an admin")
+			}
 		}
-		if want {
-			a.call("GET", "/api/model-keys", nil, http.StatusOK, nil)
-		} else {
-			a.refused("GET", "/api/model-keys", nil, http.StatusForbidden, "only an admin")
-		}
+		a.project = 0
 		usersSignIn(a, prov, usersAda)
 	}
-	legacyAdmin(true)
+	levels(map[int64]string{1: "owner", p.ID: "owner"})
 	a.call("PATCH", fmt.Sprintf("/api/users/%d", row.ID), map[string]any{"admin": false}, http.StatusOK, nil)
-	legacyAdmin(false)
+	levels(map[int64]string{})
+	// Given the project as a viewer by hand, she keeps that through being
+	// made an admin and no more.
+	a.call("PUT", fmt.Sprintf("/api/projects/%d/members", p.ID), []map[string]any{{"user": row.ID, "level": "viewer"}}, http.StatusOK, nil)
+	levels(map[int64]string{p.ID: "viewer"})
 	a.call("PATCH", fmt.Sprintf("/api/users/%d", row.ID), map[string]any{"admin": true}, http.StatusOK, nil)
-	legacyAdmin(true)
-	a.call("DELETE", fmt.Sprintf("/api/users/%d", row.ID), nil, http.StatusNoContent, nil)
-	a.call("POST", "/api/users", map[string]any{"email": amy.email}, http.StatusCreated, nil)
-	legacyAdmin(false)
-	a.call("DELETE", fmt.Sprintf("/api/users/%d", row.ID), nil, http.StatusNoContent, nil)
-	a.call("POST", "/api/users", map[string]any{"email": amy.email, "admin": true}, http.StatusCreated, nil)
-	legacyAdmin(true)
+	levels(map[int64]string{1: "owner", p.ID: "owner"})
+	a.call("PATCH", fmt.Sprintf("/api/users/%d", row.ID), map[string]any{"admin": false}, http.StatusOK, nil)
+	levels(map[int64]string{p.ID: "viewer"})
+
+	// Someone signing in the first time is in no project.
+	nell := usersNewPerson("Nell")
+	usersSignIn(a, prov, nell)
+	var me projectsMe
+	a.call("GET", "/api/me", nil, http.StatusOK, &me)
+	if me.Super || len(me.Projects) != 0 {
+		t.Errorf("someone signing in the first time = %+v, want in no project", me)
+	}
+	a.refused("GET", "/api/flows", nil, http.StatusForbidden, "no access to this project")
+
+	// Added with a project and a level, someone is in it at once, holding
+	// the roles given there; roles or a level without a project are none.
+	usersSignIn(a, prov, usersAda)
+	olive := usersNewPerson("Olive")
+	a.refused("POST", "/api/users", map[string]any{"email": olive.email, "roles": []string{"Finance"}}, http.StatusBadRequest, "name it too")
+	a.refused("POST", "/api/users", map[string]any{"email": olive.email, "level": "editor"}, http.StatusBadRequest, "name it too")
+	a.refused("POST", "/api/users", map[string]any{"email": olive.email, "project": p.ID, "level": "boss"}, http.StatusBadRequest, "level")
+	a.refused("POST", "/api/users", map[string]any{"email": olive.email, "project": 1 << 40, "level": "editor"}, http.StatusBadRequest, "no such project")
+	var added usersPersonRow
+	a.call("POST", "/api/users", map[string]any{"email": olive.email, "project": p.ID, "level": "editor", "roles": []string{"Finance"}}, http.StatusCreated, &added)
+	if !slices.Equal(added.Roles, []string{"Finance"}) {
+		t.Errorf("olive added with the roles %q, want Finance", added.Roles)
+	}
+	usersSignIn(a, prov, olive)
+	a.call("GET", "/api/me", nil, http.StatusOK, &me)
+	if l, ok := projectIn(me.Projects, p.ID); !ok || l.Level != "editor" || len(me.Projects) != 1 {
+		t.Errorf("olive's projects = %+v, want the one she was added to, as an editor", me.Projects)
+	}
+	a.project = p.ID
+	a.call("GET", "/api/flows", nil, http.StatusOK, nil)
 }
 
 // A group the identity provider puts people in, given to a project, lets
@@ -640,13 +731,16 @@ func TestProjectsCompositeKeysRefuseAnotherProject(t *testing.T) {
 	a.project = p.ID
 	f := a.newFlow(fmt.Sprintf("Keyed %d", time.Now().UnixNano()))
 
-	if _, err := db.Exec("INSERT INTO processes (flow_id, name, prompt, script) VALUES (?, 'Stray', '', '')", f.ID); !refusedByForeignKey(err) {
+	if _, err := db.Exec("INSERT INTO processes (flow_id, name, prompt, script) VALUES (?, 'Stray', '', '')", f.ID); !refusedForNoDefault(err) {
+		t.Errorf("a process naming no project: %v, want refused for naming none", err)
+	}
+	if _, err := db.Exec("INSERT INTO processes (flow_id, name, prompt, script, project_id) VALUES (?, 'Stray', '', '', 1)", f.ID); !refusedByForeignKey(err) {
 		t.Errorf("a process of Legacy in the project's flow: %v, want refused", err)
 	}
 	if _, err := db.Exec("INSERT INTO processes (flow_id, name, prompt, script, project_id) VALUES (?, 'Kept', '', '', ?)", f.ID, p.ID); err != nil {
 		t.Errorf("a process of the flow's project: %v", err)
 	}
-	res, err := db.Exec("INSERT INTO teams (name) VALUES (?)", fmt.Sprintf("Legacy team %d", time.Now().UnixNano()))
+	res, err := db.Exec("INSERT INTO teams (name, project_id) VALUES (?, 1)", fmt.Sprintf("Legacy team %d", time.Now().UnixNano()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +756,7 @@ func TestProjectsCompositeKeysRefuseAnotherProject(t *testing.T) {
 	if _, err := db.Exec("UPDATE flows SET owner_user_id = ? WHERE id = ?", outsider, f.ID); !refusedByForeignKey(err) {
 		t.Errorf("someone outside the project owning its flow: %v, want refused", err)
 	}
-	if _, err := db.Exec("INSERT INTO team_members (team_id, user_id) VALUES (?, ?)", team, outsider); !refusedByForeignKey(err) {
+	if _, err := db.Exec("INSERT INTO team_members (team_id, user_id, project_id) VALUES (?, ?, 1)", team, outsider); !refusedByForeignKey(err) {
 		t.Errorf("someone outside Legacy in its team: %v, want refused", err)
 	}
 	board := taskBoardCall(a, "POST", "/api/taskboards", map[string]any{"name": fmt.Sprintf("Keyed board %d", time.Now().UnixNano())}, http.StatusCreated)
@@ -671,6 +765,13 @@ func TestProjectsCompositeKeysRefuseAnotherProject(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO task_board_columns (board_id, position, name, struct_id, query, project_id) VALUES (?, 0, 'Theirs', ?, '', ?)",
 		board.ID, legacy.ID, p.ID); !refusedByForeignKey(err) {
 		t.Errorf("a column holding another project's struct: %v, want refused", err)
+	}
+	// Nor does a run of the project start on another project's record
+	// (migration 00091).
+	tickets := taskStruct(a, fmt.Sprintf("Legacy tickets %d", time.Now().UnixNano()), nil, "id", nil, "open")
+	record := taskRecord(a, tickets.ID, map[string]any{"id": "T-1"}, "open")
+	if _, err := db.Exec("INSERT INTO runs (flow_id, status, record_id, project_id) VALUES (?, 'done', ?, ?)", f.ID, record.ID, p.ID); !refusedByForeignKey(err) {
+		t.Errorf("a run of the project on another project's record: %v, want refused", err)
 	}
 }
 

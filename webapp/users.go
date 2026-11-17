@@ -605,9 +605,9 @@ func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims, groups []s
 			if _, err = tx.ExecContext(ctx, "INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)", p.issuer, c.Subject, id); err != nil {
 				return err
 			}
-			if err := joinLegacy(ctx, tx, id, admin); err != nil {
-				return err
-			}
+			// They are in no project but what their groups, a project
+			// letting anyone in, or being an admin give them, until someone
+			// gives them one by hand (projects.go).
 			return setGroups(ctx, tx, id, groups)
 		case err != nil:
 			return err
@@ -641,17 +641,19 @@ func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims, groups []s
 
 func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 	// Who is signed in, with their roles and teams in the project the
-	// request names, and whether anyone signs in at all; whether they are
-	// the instance's admin (super), and the projects they may enter, each
-	// with their level there. Their admin is whether they own the project
-	// the request names (see projects.go). Someone who may enter none is
-	// told whom to ask: the instance's admins, by name (admins). Without
-	// sign-in everyone may do anything, in any project.
+	// request names, none if it names none, and whether anyone signs in at
+	// all; whether they are the instance's admin (super), and the projects
+	// they may enter, each with their level there. Their admin is whether
+	// they own the project the request names (see projects.go). Someone who
+	// may enter none, or not the one the request names, is told whom to
+	// ask: the instance's admins, by name (admins). Without sign-in everyone
+	// may do anything, in any project.
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		u := requestUser(r)
 		me := map[string]any{"signIn": a != nil, "user": nil, "super": u == nil || u.Super}
+		project, named := requestProjectIf(r)
 		if u != nil {
-			p, err := getPerson(r.Context(), db, u.ID, requestProject(r))
+			p, err := getPerson(r.Context(), db, u.ID, project)
 			if err != nil {
 				serverError(w, err)
 				return
@@ -665,7 +667,8 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			return
 		}
 		me["projects"] = projects
-		if u != nil && len(projects) == 0 {
+		enters := slices.ContainsFunc(projects, func(p projectView) bool { return p.ID == project })
+		if u != nil && (len(projects) == 0 || named && !enters) {
 			admins := []string{}
 			err := scanAll(r.Context(), db, "SELECT COALESCE(NULLIF(name, ''), email) FROM users WHERE admin AND removed_at IS NULL ORDER BY 1", func(rows *sql.Rows) error {
 				var n string

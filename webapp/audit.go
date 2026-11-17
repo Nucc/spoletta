@@ -44,8 +44,7 @@ type auditEvent struct {
 	kind      string
 	detail    string
 	// The project whose log it goes in: aboveProjects for the instance's
-	// events, and 0 for its run's, or Legacy's for none, as events not yet
-	// naming theirs are while projects come in (see projects.go).
+	// events, and 0 for its run's.
 	project int64
 }
 
@@ -56,8 +55,9 @@ const auditBacklog = 4096
 
 var auditEvents = make(chan auditEvent, auditBacklog)
 
-// Records an event, for whom, run and step (0 for none), in the
-// background, in the log of the run's project, or Legacy's without one.
+// Records an event of a run, for whom, run and step (0 for none), in the
+// background, in the log of the run's project; an event of no run names
+// its project with auditIn.
 func audit(kind string, who *int64, run, step int64, format string, args ...any) {
 	auditIn(0, kind, who, run, step, format, args...)
 }
@@ -125,10 +125,15 @@ func writeAudit(db *sql.DB) {
 			_, err = db.ExecContext(ctx, "INSERT INTO instance_events (at, user_id, kind, detail) VALUES (?, ?, ?, ?)",
 				e.at.UTC(), e.user, kind, detail)
 		case 0:
-			// The run's project, or Legacy's for an event of no run.
-			_, err = db.ExecContext(ctx, `INSERT INTO audit_events (at, user_id, run_id, step_id, kind, detail, project_id)
-				VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT r.project_id FROM runs r WHERE r.id = ?), ?))`,
-				e.at.UTC(), e.user, run, step, kind, detail, run, legacyProject)
+			// The run's project; an event of no run there is has none, which
+			// is a mistake, said rather than put in some project's log.
+			var res sql.Result
+			res, err = db.ExecContext(ctx, `INSERT INTO audit_events (at, user_id, run_id, step_id, kind, detail, project_id)
+				SELECT ?, ?, ?, ?, ?, ?, r.project_id FROM runs r WHERE r.id = ?`,
+				e.at.UTC(), e.user, run, step, kind, detail, run)
+			if n, _ := res.RowsAffected(); err == nil && n == 0 {
+				err = fmt.Errorf("it names no run of a project (run %v)", run)
+			}
 		default:
 			_, err = db.ExecContext(ctx, "INSERT INTO audit_events (at, user_id, run_id, step_id, kind, detail, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
 				e.at.UTC(), e.user, run, step, kind, detail, e.project)

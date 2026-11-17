@@ -102,7 +102,7 @@ func TestStepChanges(t *testing.T) {
 		t.Fatalf("worker asked for %v, want api's and web's", diffs)
 	}
 	workspace := fmt.Sprintf("run-%d", d.ID)
-	if want := (map[string]string{"project": "1", "workspace": workspace, "repository": "api", "before": commit(1), "after": commit(3)}); fmt.Sprint(diffs[0]) != fmt.Sprint(want) {
+	if want := (map[string]string{"project": "1", "inheritsInstance": "true", "workspace": workspace, "repository": "api", "before": commit(1), "after": commit(3)}); fmt.Sprint(diffs[0]) != fmt.Sprint(want) {
 		t.Errorf("asked for %v, want %v", diffs[0], want)
 	}
 

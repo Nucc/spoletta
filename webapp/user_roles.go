@@ -331,9 +331,11 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		writeJSON(w, http.StatusOK, people)
 	})
 
-	// Adds someone by their email, so they can sign in, and hold roles in
-	// the request's project, which they must then may enter, before they
-	// first do. An instance admin's.
+	// Adds someone by their email, so they can sign in, before they first
+	// do. They are in no project until given one (projects.go), which a
+	// project and a level here give them at once, by hand, with roles in
+	// it: {"email", "project", "level", "roles"}; roles only so, as roles
+	// are a project's. An instance admin's.
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
 		if refuseNonSuper(w, r) {
 			return
@@ -343,6 +345,8 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			Name        string   `json:"name"`
 			Admin       bool     `json:"admin"`
 			TeamManager bool     `json:"teamManager"`
+			Project     int64    `json:"project"`
+			Level       string   `json:"level"`
 			Roles       []string `json:"roles"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -359,7 +363,23 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		project := requestProject(r)
+		switch {
+		case body.Project == 0 && (body.Level != "" || len(roles) > 0):
+			http.Error(w, "a level and roles are given in a project: name it too", http.StatusBadRequest)
+			return
+		case body.Project != 0 && levelRank[body.Level] == 0:
+			http.Error(w, `the level given in the project is "owner", "editor" or "viewer"`, http.StatusBadRequest)
+			return
+		}
+		if body.Project != 0 {
+			if _, found, err := projectOf(r.Context(), db, requestUser(r), body.Project); err != nil {
+				serverError(w, err)
+				return
+			} else if !found {
+				http.Error(w, "no such project", http.StatusBadRequest)
+				return
+			}
+		}
 		var id int64
 		err := inTx(r.Context(), db, func(tx *sql.Tx) error {
 			// Someone removed comes back as they were, with their runs and
@@ -377,13 +397,14 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 					id, err = res.LastInsertId()
 				}
 			}
-			if err == nil {
-				err = joinLegacy(r.Context(), tx, id, body.Admin)
-			}
-			if err != nil {
+			if err != nil || body.Project == 0 {
 				return err
 			}
-			return setRoles(r.Context(), tx, id, project, roles)
+			if _, err := tx.ExecContext(r.Context(), `INSERT INTO project_members (project_id, user_id, level, source) VALUES (?, ?, ?, ?) AS given
+				ON DUPLICATE KEY UPDATE level = given.level, source = given.source, removed_at = NULL`, body.Project, id, body.Level, sourceManual); err != nil {
+				return err
+			}
+			return setRoles(r.Context(), tx, id, body.Project, roles)
 		})
 		if mysqlErrorIs(err, mysqlErrDuplicate) {
 			http.Error(w, "someone with that email is already added", http.StatusConflict)
@@ -395,6 +416,11 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		}
 		if body.Admin {
 			instanceEvent(r.Context(), db, requestUserID(r), "user.super", "added %s as an admin", email)
+		}
+		project := requestProject(r)
+		if body.Project != 0 {
+			project = body.Project
+			auditProject(project, "project.members", requestUserID(r), "gave the project by hand to %s as %s, adding them", email, body.Level)
 		}
 		p, err := getPerson(r.Context(), db, id, project)
 		if err != nil {
@@ -461,10 +487,9 @@ func registerUserRoleRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 				if n, err := res.RowsAffected(); err != nil {
 					return err
 				} else if n > 0 {
+					// Their level in each project stays as it was given:
+					// an admin enters every one as its owner anyway.
 					madeSuper = patch.Admin
-					if err := followAdminInLegacy(r.Context(), tx, id, *patch.Admin); err != nil {
-						return err
-					}
 				}
 			}
 			if patch.TeamManager != nil {

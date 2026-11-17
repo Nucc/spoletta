@@ -55,13 +55,15 @@ type inboxItem struct {
 }
 
 // The projects whose steps wait on whoever asks: every one they may enter,
-// as they are there; with nobody signing in, the request's.
+// as they are there; with nobody signing in, the request's, or every one
+// if it names none, as a page outside the projects asks.
 func inboxProjects(ctx context.Context, db *sql.DB, r *http.Request) ([]projectView, error) {
 	u := requestUser(r)
-	if u != nil {
+	project, named := requestProjectIf(r)
+	if u != nil || !named {
 		return enterableProjects(ctx, db, u)
 	}
-	v, found, err := projectOf(ctx, db, nil, requestProject(r))
+	v, found, err := projectOf(ctx, db, nil, project)
 	if err != nil || !found {
 		return nil, err
 	}
@@ -229,8 +231,11 @@ type noticeSettings struct {
 }
 
 // The person's settings, and whether the webapp can tell them of what is in
-// the project, whose Slack connector tells them there.
-func getNoticeSettings(ctx context.Context, db *sql.DB, n *notifier, id, project int64) (noticeSettings, error) {
+// the project the request names, whose Slack connector tells them there;
+// none on Slack if it names none.
+func getNoticeSettings(r *http.Request, db *sql.DB, n *notifier, id int64) (noticeSettings, error) {
+	ctx := r.Context()
+	project, _ := requestProjectIf(r)
 	var s noticeSettings
 	err := db.QueryRowContext(ctx, "SELECT notify_email, notify_slack, notify_failures FROM users WHERE id = ?", id).Scan(&s.Email, &s.Slack, &s.Failures)
 	if err != nil {
@@ -261,7 +266,7 @@ func registerInboxRoutes(mux *http.ServeMux, db *sql.DB, n *notifier, a *auth) {
 	}
 
 	mux.HandleFunc("GET /api/me/notifications", func(w http.ResponseWriter, r *http.Request) {
-		s, err := getNoticeSettings(r.Context(), db, n, requestUser(r).ID, requestProject(r))
+		s, err := getNoticeSettings(r, db, n, requestUser(r).ID)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -294,7 +299,7 @@ func registerInboxRoutes(mux *http.ServeMux, db *sql.DB, n *notifier, a *auth) {
 				return
 			}
 		}
-		s, err := getNoticeSettings(r.Context(), db, n, id, requestProject(r))
+		s, err := getNoticeSettings(r, db, n, id)
 		if err != nil {
 			serverError(w, err)
 			return

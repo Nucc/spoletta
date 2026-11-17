@@ -227,3 +227,46 @@ func TestDiffReadsItsWorkspacesProject(t *testing.T) {
 		t.Error("a negative project diffed")
 	}
 }
+
+// The worker's own git config reaches a diff only for a project inheriting
+// the instance's configuration, as it reaches only such a project's steps
+// (env.go): for another, or a request naming its project and saying
+// nothing, git reads the diff as if the worker had none.
+func TestDiffWithholdsTheWorkersGitConfig(t *testing.T) {
+	gitSetUp(t)
+	const url, branch = "https://example.invalid/acme/api.git", "flow/test/run-40"
+	before := sharedWithBranchOf(t, 2, url, branch)
+	repo := sharedRepo(2, url)
+	src := t.TempDir()
+	git(t, src, "clone", "--quiet", "--branch", branch, repo, ".")
+	os.WriteFile(filepath.Join(src, "README"), []byte("hello\nworld\n"), 0o644)
+	git(t, src, "commit", "--quiet", "--all", "-m", "Greet the world")
+	git(t, src, "push", "--quiet", repo, "HEAD:refs/heads/"+branch)
+	after := git(t, repo, "rev-parse", "refs/heads/"+branch)
+	if err := writeMeta("run-40", workspaceMeta{Project: 2, Branch: branch, Repositories: map[string]string{"api": url}}); err != nil {
+		t.Fatal(err)
+	}
+	// The worker's own config shows no lines around a change.
+	config := filepath.Join(t.TempDir(), "instance.gitconfig")
+	if err := os.WriteFile(config, []byte("[diff]\n\tcontext = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	yes, no := true, false
+	for _, c := range []struct {
+		name     string
+		inherits *bool
+		context  bool
+	}{{"inheriting", &yes, false}, {"not inheriting", &no, true}, {"saying nothing", nil, true}} {
+		d, err := diffWorkspace(context.Background(), diffRequest{Project: 2, InheritsInstance: c.inherits, Workspace: "run-40", Repository: "api", Before: before, After: after})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if len(d.Files) != 1 || !strings.Contains(d.Files[0].Patch, "+world") {
+			t.Fatalf("%s: the diff lists %+v", c.name, d.Files)
+		}
+		if got := strings.Contains(d.Files[0].Patch, "\n hello\n"); got != c.context {
+			t.Errorf("%s: the patch shows the line around the change %v, want %v:\n%s", c.name, got, c.context, d.Files[0].Patch)
+		}
+	}
+}

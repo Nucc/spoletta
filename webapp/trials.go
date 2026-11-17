@@ -373,17 +373,23 @@ func (t trialTarget) runValues(ctx context.Context, db querier, run int64) ([]tr
 
 // What the process does outside the flow, as a person trying it should
 // know: the operation a connector carries out, the MCP servers an agent
-// may use, the repositories it works on.
+// may use, the repositories it works on. Only its flow's project's
+// connectors and servers are named; another project's, which a board never
+// names but one somehow might, is none, as a run reaches none of it.
 func (t trialTarget) effects(ctx context.Context, db *sql.Tx) ([]string, error) {
 	effects := []string{}
 	s := t.process.Settings
+	project, err := flowProject(ctx, db, t.flow)
+	if err != nil {
+		return nil, err
+	}
 	switch t.process.Kind {
 	case kindConnector:
 		if s.Connector == nil {
 			break
 		}
 		var name, kind string
-		err := db.QueryRowContext(ctx, "SELECT name, connector FROM mcp_servers WHERE id = ?", s.Connector.Server).Scan(&name, &kind)
+		err := db.QueryRowContext(ctx, "SELECT name, connector FROM mcp_servers WHERE id = ? AND project_id = ?", s.Connector.Server, project).Scan(&name, &kind)
 		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
@@ -402,13 +408,13 @@ func (t trialTarget) effects(ctx context.Context, db *sql.Tx) ([]string, error) 
 	case kindAgent:
 		if len(s.MCPServers) > 0 {
 			var names []string
-			err := scanAll(ctx, db, "SELECT name FROM mcp_servers WHERE id IN "+placeholders(len(s.MCPServers))+" ORDER BY name",
+			err := scanAll(ctx, db, "SELECT name FROM mcp_servers WHERE project_id = ? AND id IN "+placeholders(len(s.MCPServers))+" ORDER BY name",
 				func(rows *sql.Rows) error {
 					var n string
 					err := rows.Scan(&n)
 					names = append(names, n)
 					return err
-				}, int64Args(s.MCPServers)...)
+				}, append([]any{project}, int64Args(s.MCPServers)...)...)
 			if err != nil {
 				return nil, err
 			}

@@ -104,6 +104,7 @@ func setupImport(a *app, file string) (int, []byte) {
 		a.t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/yaml")
+	a.inProject(req)
 	resp, err := a.client.Do(req)
 	if err != nil {
 		a.t.Fatal(err)

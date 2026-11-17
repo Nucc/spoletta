@@ -672,3 +672,59 @@ func TestProjectsTakenOverRunKeepsItsProject(t *testing.T) {
 	next.project = 0
 	next.refused("GET", fmt.Sprintf("/api/runs/%d", rn.ID), nil, http.StatusNotFound, "not found")
 }
+
+// An API key's, a webhook's and a playing task board's runs are for whoever
+// made the key, added the webhook or pressed Play, as they are in the
+// project: started by them there while they may enter it, and refused, or
+// the board stopped, saying why, once they no longer may.
+func TestProjectsRunsAreForTheirMakerAsTheyAreInTheProject(t *testing.T) {
+	a, prov := usersApp(t)
+	usersSignIn(a, prov, usersAda)
+	db := secretsDB(t)
+	n := time.Now().UnixNano()
+	a.worker.onScript("Handle", func(context.Context, scriptRun) runResult { return runResult{OK: true, Output: `{"data": "handled"}`} })
+	bob := usersNewPerson("Bob")
+	bobRow := usersAdd(a, bob.email)
+	issues := prIssueFlow(a, fmt.Sprintf("Bob's issues %d", n))
+	usersShare(a, issues.ID)
+	pubPublish(a, issues.ID, "issues")
+	p := newProject(a, "Bob's")
+	a.call("PUT", fmt.Sprintf("/api/projects/%d/members", p.ID), []map[string]any{{"user": bobRow.ID, "level": "editor"}}, http.StatusOK, nil)
+	prMove(t, db, p.ID, issues.ID)
+
+	usersSignIn(a, prov, bob)
+	key := apiNewKey(a, "Bob's")
+	if _, err := db.Exec("UPDATE api_keys SET project_id = ? WHERE id = ?", p.ID, key.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.project = p.ID
+	body := map[string]any{"inputs": map[string]any{"Issue": "Printer jam"}}
+	rn := apiStart(a, key.Key, issues.ID, body, http.StatusCreated)
+	if d := a.finish(rn.ID); d.Status != runDone || d.StartedBy != "Bob" {
+		t.Errorf("the key's run ended %s, started by %q; want done, Bob's", d.Status, d.StartedBy)
+	}
+	h := hooksAdd(a, issues.ID, map[string]any{"name": "Issues", "kind": "github", "events": []string{"issues"},
+		"mapping": map[string]any{"Issue": map[string]any{"path": "issue.title"}}})
+	status, reply := hookGitHub(a, h, h.Secret, "issues", "b-1", hookIssue(1, "Jam", "opened"))
+	if d := a.finish(hookRun(a, status, reply, http.StatusAccepted)); d.StartedBy != "Bob" {
+		t.Errorf("the webhook's run was started by %q, want Bob", d.StartedBy)
+	}
+	var board playBoard
+	a.call("POST", "/api/taskboards", map[string]any{"name": "Bob's board"}, http.StatusCreated, &board)
+	t.Cleanup(func() { db.Exec("UPDATE task_boards SET playing = FALSE WHERE id = ?", board.ID) })
+	a.call("POST", fmt.Sprintf("/api/taskboards/%d/play", board.ID), nil, http.StatusOK, &board)
+
+	// Bob is no longer given the project.
+	usersSignIn(a, prov, usersAda)
+	a.call("PUT", fmt.Sprintf("/api/projects/%d/members", p.ID), []map[string]any{}, http.StatusOK, nil)
+	apiRefused(a, key.Key, "POST", fmt.Sprintf("/v1/flows/%d/runs", issues.ID), body, http.StatusUnauthorized, "may no longer enter its project")
+	apiRefused(a, key.Key, "GET", fmt.Sprintf("/v1/runs/%d", rn.ID), nil, http.StatusUnauthorized, "may no longer enter its project")
+	if status, reply := hookGitHub(a, h, h.Secret, "issues", "b-2", hookIssue(2, "Smoke", "opened")); status != http.StatusForbidden ||
+		!strings.Contains(string(reply), "may no longer enter the project") {
+		t.Errorf("a delivery to Bob's webhook = %d %s, want it refused as he may no longer enter the project", status, reply)
+	}
+	b := waitBoard(a, board.ID, "the board to stop", func(b playBoard) bool { return !b.Playing })
+	if !strings.Contains(b.Stopped, "may no longer enter the project") {
+		t.Errorf("the board stopped saying %q", b.Stopped)
+	}
+}

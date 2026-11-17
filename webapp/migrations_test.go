@@ -20,6 +20,7 @@ func TestCheckReversible(t *testing.T) {
 	status := func(version int64, typ goose.MigrationType, name string, state goose.State) *goose.MigrationStatus {
 		return &goose.MigrationStatus{Source: &goose.Source{Type: typ, Path: name, Version: version}, State: state}
 	}
+	set := &migrationSet{files: files}
 	statuses := []*goose.MigrationStatus{
 		status(1, goose.TypeGo, "", goose.StateApplied),
 		status(2, goose.TypeSQL, "00002_schema.sql", goose.StateApplied),
@@ -35,7 +36,7 @@ func TestCheckReversible(t *testing.T) {
 		{1, "00002_schema.sql"},
 		{0, "00002_schema.sql"},
 	} {
-		err := checkReversible(files, statuses, c.target)
+		err := set.checkReversible(statuses, c.target)
 		switch {
 		case c.refused == "" && err != nil:
 			t.Errorf("down to %d: %v", c.target, err)
@@ -45,10 +46,16 @@ func TestCheckReversible(t *testing.T) {
 	}
 
 	statuses[3].State = goose.StateApplied
-	if err := checkReversible(files, statuses, 3); err == nil || !strings.Contains(err.Error(), "00004_empty_down.sql") {
+	if err := set.checkReversible(statuses, 3); err == nil || !strings.Contains(err.Error(), "00004_empty_down.sql") {
 		t.Errorf("down past a Down of comments only: %v, want it refused", err)
 	}
-	if err := checkReversible(files, statuses[:1], 0); err == nil || !strings.Contains(err.Error(), "before migrations") {
+	if err := set.checkReversible(statuses[:1], 0); err == nil || !strings.Contains(err.Error(), "before migrations") {
 		t.Errorf("down past the Go migration: %v, want it refused", err)
+	}
+
+	// Local migrations are refused the same, saying they are local.
+	local := &migrationSet{files: files, local: "local "}
+	if err := local.checkReversible(statuses[1:], 3); err == nil || err.Error() != "can't migrate down to local version 3: local 00004_empty_down.sql has no -- +goose Down to undo it" {
+		t.Errorf("down past a local migration without a Down: %v, want it refused as local", err)
 	}
 }

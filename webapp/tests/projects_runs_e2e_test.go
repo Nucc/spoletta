@@ -451,18 +451,16 @@ func TestProjectsRunsReachNoOtherProject(t *testing.T) {
 	prMove(t, db, p.ID, sub.caller.ID, picking.ID, querying.ID, referring.ID)
 	a.project = p.ID
 
-	// The procedure is Legacy's: its subflow process's step fails.
-	d := a.finish(a.startRun(sub.caller.ID).ID)
-	if call := onlyStep(t, d, "Call"); d.Status != runFailed || !strings.Contains(call.Error, "another project's") || call.ChildRun != nil {
-		t.Errorf("the run calling Legacy's procedure ended %s, Call %q with run %v; want it failed, running none", d.Status, call.Error, call.ChildRun)
-	}
+	// The procedure is Legacy's, so for this project the subflow process
+	// runs none there is: the board has a problem and isn't run.
+	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", sub.caller.ID), nil, http.StatusConflict, "pick another in its panel")
 	var called int
 	if err := db.QueryRow("SELECT COUNT(*) FROM runs WHERE flow_id = ? AND parent_run_id IS NOT NULL", sub.callee.ID).Scan(&called); err != nil || called != 0 {
 		t.Errorf("Legacy's procedure ran %d times for another project's run (%v)", called, err)
 	}
 	// Legacy's tickets are none to pick, or to query.
 	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", picking.ID), nil, http.StatusConflict, "another project's struct")
-	d = a.finish(a.startRun(querying.ID).ID)
+	d := a.finish(a.startRun(querying.ID).ID)
 	if s := onlyStep(t, d, "Look"); d.Status != runFailed || !strings.Contains(s.Error, "another project's struct") {
 		t.Errorf("the run querying Legacy's tickets ended %s, Look %q; want it failed", d.Status, s.Error)
 	}
@@ -499,8 +497,8 @@ func TestProjectsRunsReachNoOtherProject(t *testing.T) {
 		runs = append(runs, id)
 	}
 	rows.Close()
-	if len(runs) != 2 {
-		t.Fatalf("the callers ran %v, want the caller's and the querying flow's", runs)
+	if len(runs) != 1 {
+		t.Fatalf("the callers ran %v, want the querying flow's alone", runs)
 	}
 	prRowsOf(t, db, p.ID, runs)
 }

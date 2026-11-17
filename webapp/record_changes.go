@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -43,11 +44,13 @@ const (
 // How many changes a record's history lists, the latest first.
 const maxRecordChanges = 500
 
-// Who or what changed a record: a run's step, or a person by hand with step
-// 0. The step's run, the run at its top, which a person, a schedule, a board
-// or the API started, its process and kind, and the person deciding it, if a
-// person did.
+// Who or what changed a record, in which project: a run's step, or a person
+// by hand with step 0. The step's run, the run at its top, which a person, a
+// schedule, a board or the API started, its process and kind, and the
+// person deciding it, if a person did. What it writes is in its project,
+// the run's or the request's.
 type recordChanger struct {
+	project        int64
 	run, top, step int64
 	process, kind  string
 	user           int64
@@ -57,8 +60,8 @@ type recordChanger struct {
 func stepChanger(ctx context.Context, db querier, step int64) (recordChanger, error) {
 	by := recordChanger{step: step}
 	var user sql.NullInt64
-	err := db.QueryRowContext(ctx, "SELECT run_id, process_name, kind, decided_by FROM run_steps WHERE id = ?", step).
-		Scan(&by.run, &by.process, &by.kind, &user)
+	err := db.QueryRowContext(ctx, "SELECT project_id, run_id, process_name, kind, decided_by FROM run_steps WHERE id = ?", step).
+		Scan(&by.project, &by.run, &by.process, &by.kind, &user)
 	if err != nil {
 		return by, err
 	}
@@ -93,12 +96,17 @@ func topRun(ctx context.Context, db querier, run int64) (int64, error) {
 // change left it, or was deleted.
 func noteRecordChange(ctx context.Context, tx *sql.Tx, record int64, by recordChanger, kind string) error {
 	var content, state string
-	err := tx.QueryRowContext(ctx, "SELECT content, state FROM shared_records WHERE id = ? AND deleted_at IS NULL FOR UPDATE", record).Scan(&content, &state)
+	var project int64
+	err := tx.QueryRowContext(ctx, "SELECT content, state, project_id FROM shared_records WHERE id = ? AND deleted_at IS NULL FOR UPDATE", record).
+		Scan(&content, &state, &project)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if by.project != 0 && by.project != project {
+		return fmt.Errorf("record %d is another project's than what changes it", record)
 	}
 	type change struct {
 		id             int64
@@ -129,9 +137,10 @@ func noteRecordChange(ctx context.Context, tx *sql.Tx, record int64, by recordCh
 	if len(last) > 0 && same(last[0]) {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO record_changes (record_id, content, state, kind, run_id, top_run_id, step_id, process_name, step_kind, user_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		record, content, state, kind, nullID(by.run), nullID(by.top), nullID(by.step), by.process, by.kind, nullID(by.user))
+	// In the record's project, which is the changer's.
+	_, err = tx.ExecContext(ctx, `INSERT INTO record_changes (record_id, content, state, kind, run_id, top_run_id, step_id, process_name, step_kind, user_id, project_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record, content, state, kind, nullID(by.run), nullID(by.top), nullID(by.step), by.process, by.kind, nullID(by.user), project)
 	return err
 }
 

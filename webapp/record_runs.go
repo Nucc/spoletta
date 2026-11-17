@@ -46,7 +46,8 @@ func (fr *flowRun) pinnedRecord(ctx context.Context, db *sql.DB, object int64) (
 	}
 	var of int64
 	var content string
-	err := db.QueryRowContext(ctx, "SELECT object_id, content FROM shared_records WHERE id = ? AND deleted_at IS NULL", fr.record).Scan(&of, &content)
+	err := db.QueryRowContext(ctx, "SELECT object_id, content FROM shared_records WHERE id = ? AND project_id = ? AND deleted_at IS NULL", fr.record, fr.project).
+		Scan(&of, &content)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, fmt.Errorf("record %d, which the run was started on, was deleted", fr.record)
 	}
@@ -119,11 +120,12 @@ func recordLeaves(b *runBoard, store int64) []string {
 // The states each flow publishing no version leaves the store's records in
 // on its board as it is, by flow: what recordLeaves reads of a board, its
 // objects of the store with their links and states, read for every such
-// flow at once.
+// flow of the store's project at once.
 func unpublishedLeaves(ctx context.Context, db *sql.DB, store int64) (map[int64][]string, error) {
 	of := func(object string) string {
 		return ` JOIN objects o ON o.id = ` + object + ` JOIN flows f ON f.id = o.flow_id
-			WHERE o.store_id = ? AND ` + liveFlows + ` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL`
+			WHERE o.store_id = ? AND f.project_id = (SELECT s.project_id FROM objects s WHERE s.id = o.store_id)
+				AND ` + liveFlows + ` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL`
 	}
 	boards := map[int64]*snapshot{}
 	board := func(flow int64) *snapshot {
@@ -186,11 +188,17 @@ func unpublishedLeaves(ctx context.Context, db *sql.DB, store int64) (map[int64]
 // picking one (see picks.go), which the user may start, by name, with a
 // pick read as the query taking the one record it selects. A flow that
 // published a version runs that on records (see publish.go), so its queries
-// and picks are that version's.
+// and picks are that version's. Only flows of the store's project, whoever
+// asks, nobody signing in too.
 func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*recordFlow, error) {
+	project, err := objectProject(ctx, db, store)
+	if err != nil {
+		return nil, err
+	}
 	var fs []*recordFlow
-	err := scanAll(ctx, db, `SELECT f.id, f.name, v.snapshot FROM flows f JOIN flow_versions v ON v.id = f.published_version_id
-		WHERE `+liveFlows+` AND NOT f.is_struct AND NOT f.module AND JSON_CONTAINS(JSON_EXTRACT(v.snapshot, '$.objects[*].store'), CAST(? AS JSON))`,
+	err = scanAll(ctx, db, `SELECT f.id, f.name, v.snapshot FROM flows f JOIN flow_versions v ON v.id = f.published_version_id
+		WHERE `+liveFlows+` AND f.project_id = ? AND NOT f.is_struct AND NOT f.module
+			AND JSON_CONTAINS(JSON_EXTRACT(v.snapshot, '$.objects[*].store'), CAST(? AS JSON))`,
 		func(rows *sql.Rows) error {
 			f := &recordFlow{Off: map[string]string{}}
 			var body []byte
@@ -217,7 +225,7 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 				fs = append(fs, f)
 			}
 			return nil
-		}, strconv.FormatInt(store, 10))
+		}, project, strconv.FormatInt(store, 10))
 	if err != nil {
 		return nil, err
 	}
@@ -225,9 +233,9 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 	err = scanAll(ctx, db, `SELECT f.id, f.name, l.query, NULL FROM objects o
 			JOIN object_links l ON l.object_id = o.id AND l.direction = 'input' AND l.query IS NOT NULL
 			JOIN flows f ON f.id = o.flow_id
-		WHERE o.store_id = ? AND `+liveFlows+` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL
+		WHERE o.store_id = ? AND f.project_id = ? AND `+liveFlows+` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL
 		UNION ALL SELECT f.id, f.name, NULL, o.pick FROM objects o JOIN flows f ON f.id = o.flow_id
-		WHERE o.store_id = ? AND o.pick IS NOT NULL AND o.parent_id IS NULL AND o.owner_id IS NULL AND NOT o.many
+		WHERE o.store_id = ? AND f.project_id = ? AND o.pick IS NOT NULL AND o.parent_id IS NULL AND o.owner_id IS NULL AND NOT o.many
 			AND `+liveFlows+` AND NOT f.is_struct AND NOT f.module AND f.published_version_id IS NULL`, func(rows *sql.Rows) error {
 		var id int64
 		var name string
@@ -257,7 +265,7 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 		}
 		f.queries = append(f.queries, qs...)
 		return nil
-	}, store, store)
+	}, store, project, store, project)
 	if err != nil {
 		return nil, err
 	}
@@ -422,8 +430,8 @@ func startRecordRun(ctx context.Context, db *sql.DB, eng *engine, flow, record, 
 	}
 	nr.record = record
 	if board != 0 {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO task_board_runs (run_id, board_id, record_id, state, by_hand)
-			SELECT ?, ?, id, state, TRUE FROM shared_records WHERE id = ?`, nr.id, board, record); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO task_board_runs (run_id, board_id, record_id, state, by_hand, project_id)
+			SELECT ?, ?, id, state, TRUE, ? FROM shared_records WHERE id = ? AND project_id = ?`, nr.id, board, nr.project, record, nr.project); err != nil {
 			return 0, err
 		}
 	}
@@ -568,6 +576,10 @@ func registerRecordRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			var none *nothingToTake
 			if errors.As(err, &none) {
 				http.Error(w, "nothing to run on: "+none.Error(), http.StatusConflict)
+				return
+			}
+			if errors.Is(err, errProjectArchived) {
+				http.Error(w, archivedRuns, http.StatusConflict)
 				return
 			}
 			if err != nil {

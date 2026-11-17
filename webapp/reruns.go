@@ -116,7 +116,7 @@ func planRerun(ctx context.Context, tx *sql.Tx, src run, stepID int64, board sna
 	if p.given, err = givenTo(ctx, tx, src, board, states); err != nil {
 		return p, "", err
 	}
-	p.w = newWalk(ctx, nil, 0, nil, newFlowRun(src.Flow, 0, board, nil, ""), on, p.given, nil)
+	p.w = newWalk(ctx, nil, 0, nil, newFlowRun(0, src.Flow, 0, board, nil, ""), on, p.given, nil)
 	p.after = p.w.after(p.process)
 	for _, in := range p.w.inputs[p.process] {
 		// Objects nothing generates hold nothing a process takes.
@@ -368,11 +368,11 @@ func (w *walk) after(p int64) map[int64]bool {
 	return objects
 }
 
-// Records what the re-run copied as its first step, and stores the
-// persistent objects among it as the re-run's, taking them over from the run
-// it re-runs, from the step on. Returns a unique value another run holds, which stops the
-// re-run.
-func recordCopied(ctx context.Context, tx *sql.Tx, src, stepID, rerun int64, p rerunPlan) (*duplicate, error) {
+// Records what the re-run copied as its first step, in its project, and
+// stores the persistent objects among it as the re-run's, taking them over
+// from the run it re-runs, from the step on. Returns a unique value another
+// run holds, which stops the re-run.
+func recordCopied(ctx context.Context, tx *sql.Tx, project, src, stepID, rerun int64, p rerunPlan) (*duplicate, error) {
 	if err := releaseRun(ctx, tx, src); err != nil {
 		return nil, err
 	}
@@ -391,9 +391,9 @@ func recordCopied(ctx context.Context, tx *sql.Tx, src, stepID, rerun int64, p r
 		return nil, nil
 	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO run_steps (run_id, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at)
-		VALUES (?, ?, ?, '', '[]', ?, '', '', '', CURRENT_TIMESTAMP(3))`,
-		rerun, "Copied from run #"+strconv.FormatInt(src, 10), kindCopied, stepDone)
+		`INSERT INTO run_steps (run_id, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at, project_id)
+		VALUES (?, ?, ?, '', '[]', ?, '', '', '', CURRENT_TIMESTAMP(3), ?)`,
+		rerun, "Copied from run #"+strconv.FormatInt(src, 10), kindCopied, stepDone, project)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +407,10 @@ func recordCopied(ctx context.Context, tx *sql.Tx, src, stepID, rerun int64, p r
 			return nil, err
 		}
 	}
-	return storeInstances(ctx, tx, p.w.fr.rb, rerun, copied)
+	// The plan's board is only looked at; what it stores is the re-run's.
+	b := *p.w.fr.rb
+	b.project = project
+	return storeInstances(ctx, tx, &b, rerun, copied)
 }
 
 // The run and step a re-run route is about, or false once it answered.
@@ -495,6 +498,10 @@ func registerRerunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		defer tx.Rollback()
 		nr, err := newRun(r.Context(), tx, src.Flow, nil, requestUserID(r), false)
+		if errors.Is(err, errProjectArchived) {
+			http.Error(w, archivedRuns, http.StatusConflict)
+			return
+		}
 		if err != nil {
 			serverError(w, err)
 			return
@@ -540,13 +547,14 @@ func registerRerunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			return
 		}
 		// It works on the records the run took, as they are now; see picks.go.
-		if _, err := tx.ExecContext(r.Context(), `INSERT INTO taken_records (run_id, object_ref, record_id, state, followed)
-			SELECT ?, t.object_ref, t.record_id, sr.state, t.followed FROM taken_records t JOIN shared_records sr ON sr.id = t.record_id AND sr.deleted_at IS NULL WHERE t.run_id = ?`,
-			nr.id, src.ID); err != nil {
+		if _, err := tx.ExecContext(r.Context(), `INSERT INTO taken_records (run_id, object_ref, record_id, state, followed, project_id)
+			SELECT ?, t.object_ref, t.record_id, sr.state, t.followed, ? FROM taken_records t
+				JOIN shared_records sr ON sr.id = t.record_id AND sr.deleted_at IS NULL AND sr.project_id = ? WHERE t.run_id = ?`,
+			nr.id, nr.project, nr.project, src.ID); err != nil {
 			serverError(w, err)
 			return
 		}
-		dup, err := recordCopied(r.Context(), tx, src.ID, stepID, nr.id, p)
+		dup, err := recordCopied(r.Context(), tx, nr.project, src.ID, stepID, nr.id, p)
 		if err != nil {
 			serverError(w, err)
 			return

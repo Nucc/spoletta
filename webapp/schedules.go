@@ -225,9 +225,12 @@ func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error 
 	}
 	var dues []due
 	// A flow in the trash runs nothing; its schedules come round again once
-	// it is restored (trash.go).
+	// it is restored (trash.go). Nor does one of an archived project, which
+	// starts no runs; its schedules come round again once it is brought
+	// back. Each runs in its flow's project (newRun).
 	rows, err := db.QueryContext(ctx, `SELECT s.id, s.flow_id, s.cron, s.timezone, s.next_run_at FROM schedules s
-		JOIN flows f ON f.id = s.flow_id AND `+liveFlows+` WHERE s.enabled AND s.next_run_at <= ?`, now.UTC())
+		JOIN flows f ON f.id = s.flow_id AND `+liveFlows+` JOIN projects p ON p.id = f.project_id AND p.archived_at IS NULL
+		WHERE s.enabled AND s.next_run_at <= ?`, now.UTC())
 	if err != nil {
 		return err
 	}

@@ -99,9 +99,9 @@ func checkRecordEdit(ctx context.Context, db rowQuerier, store int64, e recordEd
 	return e, "", nil
 }
 
-// Keys a record by the unique values content holds, refusing one another
-// record of the store holds.
-func keyRecord(ctx context.Context, tx *sql.Tx, store, record int64, attrs []attribute, content string) (string, error) {
+// Keys a record of the store, in its project, by the unique values content
+// holds, refusing one another record of the store holds.
+func keyRecord(ctx context.Context, tx *sql.Tx, project, store, record int64, attrs []attribute, content string) (string, error) {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM shared_keys WHERE record_id = ?", record); err != nil {
 		return "", err
 	}
@@ -120,7 +120,8 @@ func keyRecord(ctx context.Context, tx *sql.Tx, store, record int64, attrs []att
 		if !errors.Is(err, sql.ErrNoRows) {
 			return "", err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO shared_keys (object_id, attribute_id, value_hash, record_id) VALUES (?, ?, ?, ?)", store, a.ID, hash, record)
+		_, err = tx.ExecContext(ctx, "INSERT INTO shared_keys (object_id, attribute_id, value_hash, record_id, project_id) VALUES (?, ?, ?, ?, ?)",
+			store, a.ID, hash, record, project)
 		if mysqlErrorIs(err, mysqlErrDuplicate) {
 			return fmt.Sprintf("another record holds that %s already", a.Name), nil
 		}
@@ -157,9 +158,11 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 	}
 
 	// Writes a record of the store in a transaction: a new one with record
-	// 0, keyed by its unique values.
+	// 0, keyed by its unique values. It is in the request's project, which
+	// the guard found the struct in.
 	write := func(w http.ResponseWriter, r *http.Request, store, record int64, e recordEdit) {
 		ctx := r.Context()
+		project := requestProject(r)
 		e, msg, err := checkRecordEdit(ctx, db, store, e)
 		if err != nil {
 			serverError(w, err)
@@ -177,8 +180,8 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 		defer tx.Rollback()
 		status := http.StatusOK
 		if record == 0 {
-			res, err := tx.ExecContext(ctx, "INSERT INTO shared_records (object_id, content, state, edited_by, edited_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3))",
-				store, string(e.Content), e.State, requestUserID(r))
+			res, err := tx.ExecContext(ctx, "INSERT INTO shared_records (object_id, content, state, edited_by, edited_at, project_id) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3), ?)",
+				store, string(e.Content), e.State, requestUserID(r), project)
 			if err != nil {
 				serverError(w, err)
 				return
@@ -214,14 +217,14 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		if msg, err := danglingRefs(ctx, tx, store, string(e.Content)); err != nil {
+		if msg, err := danglingRefs(ctx, tx, project, store, string(e.Content)); err != nil {
 			serverError(w, err)
 			return
 		} else if msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		if msg, err := keyRecord(ctx, tx, store, record, attrs, string(e.Content)); err != nil {
+		if msg, err := keyRecord(ctx, tx, project, store, record, attrs, string(e.Content)); err != nil {
 			serverError(w, err)
 			return
 		} else if msg != "" {
@@ -229,7 +232,7 @@ func registerRecordEditRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		// The person's change in the record's history; see record_changes.go.
-		by, kind := recordChanger{}, changeEdited
+		by, kind := recordChanger{project: project}, changeEdited
 		if id := requestUserID(r); id != nil {
 			by.user = *id
 		}
@@ -338,8 +341,8 @@ func deleteRecords(ctx context.Context, db *sql.DB, store int64, ids []int64, us
 	if _, err := tx.ExecContext(ctx, "DELETE FROM shared_keys WHERE record_id IN "+in, args...); err != nil {
 		return 0, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO record_changes (record_id, content, state, kind, user_id)
-		SELECT id, content, state, ?, ? FROM shared_records WHERE id IN `+in, append([]any{changeDeleted, user}, args...)...)
+	_, err = tx.ExecContext(ctx, `INSERT INTO record_changes (record_id, content, state, kind, user_id, project_id)
+		SELECT id, content, state, ?, ?, project_id FROM shared_records WHERE id IN `+in, append([]any{changeDeleted, user}, args...)...)
 	if err != nil {
 		return 0, err
 	}

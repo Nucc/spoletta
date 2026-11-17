@@ -52,7 +52,7 @@ func callerBoard() snapshot {
 }
 
 func TestCalleeTopObjectAndState(t *testing.T) {
-	fr := newFlowRun(2, 1, calleeBoard(), nil, "")
+	fr := newFlowRun(1, 2, 1, calleeBoard(), nil, "")
 	for name, want := range map[string]int64{"Brief": 101, "Report": 150, "Part": 0, "Draft": 0} {
 		if got := fr.topObject(name); got != want {
 			t.Errorf("topObject(%q) = %d, want %d", name, got, want)
@@ -74,7 +74,7 @@ func TestCalleeTopObjectAndState(t *testing.T) {
 // isn't given.
 func TestToCallee(t *testing.T) {
 	w := walkOn(callerBoard(), nil, nil)
-	callee := newFlowRun(2, 1, calleeBoard(), nil, "")
+	callee := newFlowRun(1, 2, 1, calleeBoard(), nil, "")
 	for _, c := range []struct {
 		given map[int64]value
 		want  map[int64]value
@@ -95,7 +95,7 @@ func TestToCallee(t *testing.T) {
 // namesake here, or else in the state the link names.
 func TestFromCallee(t *testing.T) {
 	w := walkOn(callerBoard(), nil, nil)
-	callee := newFlowRun(2, 1, calleeBoard(), nil, "")
+	callee := newFlowRun(1, 2, 1, calleeBoard(), nil, "")
 	inner := walkOn(calleeBoard(), nil, nil)
 	inner.values[150] = value{content: "r", state: 151}
 	inner.values[160] = value{content: "s"}

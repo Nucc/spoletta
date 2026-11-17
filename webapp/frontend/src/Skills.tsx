@@ -23,8 +23,10 @@ import { pageHash } from './address'
 
 // Skills and commands, written for agents in the settings: a skill an agent
 // process picks, a command its prompt names as /name. Each is its maker's
-// until they share it with a team or everyone, as a flow is.
-export function SkillsSection({ onError }: { onError: (err: unknown) => void }) {
+// until they share it with a team or everyone, as a flow is. Someone who
+// only sees the project reads those they see there (readOnly), and writes,
+// changes and deletes none.
+export function SkillsSection({ readOnly = false, onError }: { readOnly?: boolean; onError: (err: unknown) => void }) {
   const me = useMe()
   const [teams, setTeams] = useState<Team[]>([])
   useEffect(() => {
@@ -32,8 +34,8 @@ export function SkillsSection({ onError }: { onError: (err: unknown) => void }) 
   }, [me, onError])
   return (
     <>
-      <SkillList kind="skill" me={me} teams={teams} onError={onError} />
-      <SkillList kind="command" me={me} teams={teams} onError={onError} />
+      <SkillList kind="skill" me={me} teams={teams} readOnly={readOnly} onError={onError} />
+      <SkillList kind="command" me={me} teams={teams} readOnly={readOnly} onError={onError} />
     </>
   )
 }
@@ -74,10 +76,25 @@ const WORDS: Record<SkillKind, { title: string; one: string; lead: ReactNode; mo
   },
 }
 
-function SkillList({ kind, me, teams, onError }: { kind: SkillKind; me: Me | null; teams: Team[]; onError: (err: unknown) => void }) {
+function SkillList({
+  kind,
+  me,
+  teams,
+  readOnly,
+  onError,
+}: {
+  kind: SkillKind
+  me: Me | null
+  teams: Team[]
+  readOnly: boolean
+  onError: (err: unknown) => void
+}) {
   const [items, setItems] = useState<Skill[] | null>(null)
   // What is being written: a new one, or the one of this id.
   const [editing, setEditing] = useState<number | 'new' | null>(null)
+  // The one whose instructions or prompt are being read, where it can't be
+  // changed.
+  const [reading, setReading] = useState<number | null>(null)
   const [confirm, confirmDialog] = useConfirm()
   const words = WORDS[kind]
 
@@ -130,7 +147,7 @@ function SkillList({ kind, me, teams, onError }: { kind: SkillKind; me: Me | nul
     }
   }
 
-  const add = (
+  const add = !readOnly && (
     <button type="button" className="settings-new" onClick={() => setEditing('new')}>
       <PlusIcon /> New {words.one}
     </button>
@@ -147,7 +164,9 @@ function SkillList({ kind, me, teams, onError }: { kind: SkillKind; me: Me | nul
       {items === null ? (
         <p className="flows-note">Loading…</p>
       ) : items.length === 0 ? (
-        editing !== 'new' && <SettingsEmpty action={add}>{words.empty}</SettingsEmpty>
+        editing !== 'new' && (
+          <SettingsEmpty action={add}>{readOnly ? `None you see in this project.` : words.empty}</SettingsEmpty>
+        )
       ) : (
         <ul className="flow-list skill-list">
           {items.map((s) =>
@@ -167,13 +186,26 @@ function SkillList({ kind, me, teams, onError }: { kind: SkillKind; me: Me | nul
                     <span className="flows-note">{s.description || firstLine(s.content)}</span>
                   </span>
                   <OwnerPicker flow={{ name: s.name, owner: s.owner, access: 'edit' }} me={me} teams={teams} compact onChange={(o) => give(s, o)} />
-                  <button type="button" onClick={() => setEditing(s.id)}>
-                    Edit
-                  </button>
-                  <button type="button" className="danger" onClick={() => remove(s)}>
-                    Delete
-                  </button>
+                  {readOnly ? (
+                    <button
+                      type="button"
+                      aria-expanded={reading === s.id}
+                      onClick={() => setReading(reading === s.id ? null : s.id)}
+                    >
+                      {reading === s.id ? 'Hide' : 'Read'}
+                    </button>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => setEditing(s.id)}>
+                        Edit
+                      </button>
+                      <button type="button" className="danger" onClick={() => remove(s)}>
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
+                {reading === s.id && <pre className="skill-content">{s.content}</pre>}
               </li>
             ),
           )}

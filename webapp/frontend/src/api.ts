@@ -256,7 +256,7 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/webhooks', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials', '/api/taskboards', '/api/projects']
+const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/webhooks', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials', '/api/taskboards', '/api/projects', '/api/git-token', '/api/limits', '/api/instance']
 
 // Every request to /api/ names the project of the page making it in this
 // header, so each tab works in its own (see docs/PROJECTS.md); signing in
@@ -303,6 +303,25 @@ function withProject(url: string, headers: HeadersInit | undefined, project: num
 // than what is in a project, which go on whatever their project; the
 // server's outsideProjects.
 const outsideProjects = (url: string) => /^\/api\/(me|projects)(?=$|[/?])/.test(url)
+
+// An address under /api/ that the browser opens itself, as a window or a
+// link, rather than the page asking for it: it can't carry the header, so
+// it names its project in its query instead, which the server reads on a
+// GET. Outside any project, or for an address that isn't the webapp's, it
+// is left as it is.
+export function inProjectLink(url: string, project: number | null): string {
+  if (project === null || !url.startsWith('/api/') || url.startsWith('/api/auth/') || outsideProjects(url)) return url
+  const [path, hash = ''] = url.split('#', 2)
+  const [base, query = ''] = path.split('?', 2)
+  const params = new URLSearchParams(query)
+  params.set('project', String(project))
+  return `${base}?${params.toString()}${hash ? `#${hash}` : ''}`
+}
+
+// The address under /api/ the browser opens itself, as a window or a link,
+// in the project of the page opening it: every such address the app writes
+// goes through here, as every request goes through answer.
+export const apiLink = (url: string) => inProjectLink(url, sendingFor ? sendingFor.project : projectOfPage())
 
 const REFUSED_HERE = 'project-refused'
 
@@ -620,14 +639,39 @@ export type FlowSettings = {
   runSpendLimit?: number
 }
 
-// Where the git tokens steps reach repositories with come from: a GitHub
-// App's, for the run's repositories and lasting an hour; the instance's
-// GIT_TOKEN, which isn't short-lived; or none. otherHosts says GIT_TOKEN
-// covers repositories off the app's GitHub.
-export type GitAccess = { source: 'app' | 'token' | 'none'; otherHosts: boolean }
+// Where the git tokens the steps of the page's project reach repositories
+// with come from: a GitHub App's, for the run's repositories and lasting an
+// hour; the token the project's owners set in its settings; the instance's
+// GIT_TOKEN, which isn't short-lived; or none. The GitHub App and GIT_TOKEN
+// are what the instance is configured with outside the app, so only a
+// project inheriting that has them. otherHosts says repositories off the
+// app's GitHub get the project's own token, or else GIT_TOKEN.
+export type GitAccess = { source: 'app' | 'project' | 'token' | 'none'; otherHosts: boolean }
 
 export function getGitAccess(): Promise<GitAccess> {
   return request('/api/git-access')
+}
+
+// The git token the project's owners set, as its settings show it: whether
+// there is one, the username it goes with, its last four characters when
+// it is long enough for them to say little, and when it was set; never the
+// token itself.
+export type ProjectGitToken = { set: boolean; username?: string; hint?: string; updatedAt?: string }
+
+// The project's own git token; its owners'.
+export function getProjectGitToken(): Promise<ProjectGitToken> {
+  return request('/api/git-token')
+}
+
+// Sets the project's own git token, in place of any it had, with the
+// username it goes with, x-access-token when none is given; its owners'.
+export function setProjectGitToken(token: string, username: string): Promise<ProjectGitToken> {
+  return request('/api/git-token', { method: 'PUT', body: JSON.stringify({ token, username }) })
+}
+
+// Removes the project's own git token; its owners'.
+export function deleteProjectGitToken(): Promise<void> {
+  return request('/api/git-token', { method: 'DELETE' })
 }
 
 // The prefix runs' branches get when the flow sets none.
@@ -813,6 +857,15 @@ export type AuditLog = { events: AuditEvent[] } & SearchResult
 export function getAuditLog(search?: Search): Promise<AuditLog> {
   const p = searchParams(search)
   return request(`/api/audit${p ? '?' + p : ''}`)
+}
+
+// The latest of what happened above the projects that the search matches,
+// such as a project made or deleted, a ceiling set or someone made an admin
+// of Spoletta; for its admins. They are no run's, so run, flow and step are
+// null.
+export function getInstanceEvents(search?: Search): Promise<AuditLog> {
+  const p = searchParams(search)
+  return request(`/api/instance/events${p ? '?' + p : ''}`)
 }
 
 // A shared struct's records, the latest written first or as sorted, with
@@ -1669,9 +1722,10 @@ export function disconnectMCPServer(id: number): Promise<void> {
 
 // Signs in to the server in a window of its own, which tells this one when
 // it is done with a "mcp-sign-in" message. Call it straight from a click, so
-// the window isn't blocked.
+// the window isn't blocked. The window names the page's project in its
+// address, as it can't send the header.
 export function connectMCPServer(id: number) {
-  window.open(`/api/mcp-servers/${id}/connect`, `mcp-sign-in-${id}`, 'popup,width=560,height=720')
+  window.open(apiLink(`/api/mcp-servers/${id}/connect`), `mcp-sign-in-${id}`, 'popup,width=560,height=720')
 }
 
 // An object the process takes as input, with what the process that generated
@@ -1857,7 +1911,8 @@ export type RunObject = {
   files: string[]
 }
 
-export const fileUrl = (path: string) => `/api/files?path=${encodeURIComponent(path)}`
+// A run's file, opened as a link in the project of the page showing it.
+export const fileUrl = (path: string) => apiLink(`/api/files?path=${encodeURIComponent(path)}`)
 
 // A time the run moved to another replica of the webapp, as the one walking
 // it stopped: from which replica to which, the host it went to, and the
@@ -2654,8 +2709,11 @@ export type User = {
 // as everyone is without sign-in; and the projects they may enter, by name.
 // Their user's admin says whether they own the project the request named,
 // which is the open tab's only by chance, so pages read the level of their
-// own project from projects instead (levelIn in Account.tsx).
-export type Me = { signIn: boolean; user: User | null; super: boolean; projects: Project[] }
+// own project from projects instead (levelIn in Account.tsx). Their roles
+// and teams are those of the project the request named too, so a page
+// showing them asks again in its own. Someone signed in who may enter no
+// project is told whom to ask: the instance's admins, by name (admins).
+export type Me = { signIn: boolean; user: User | null; super: boolean; projects: Project[]; admins?: string[] }
 
 export function getMe(): Promise<Me> {
   return request('/api/me')
@@ -2781,7 +2839,10 @@ export async function signOut(): Promise<void> {
   window.location.href = '/api/auth/signed-out'
 }
 
-// Everyone who signs in or an admin added; for admins.
+// The people to pick from in the page's project, to give access, roles or
+// a team, each with the roles and teams they hold there: everyone who signs
+// in or was added, for the instance's admins; those who may enter the
+// project, for its owners and team managers.
 export function listUsers(): Promise<User[]> {
   return request('/api/users')
 }
@@ -2790,7 +2851,12 @@ export function addUser(user: { email: string; name?: string; admin?: boolean; r
   return request('/api/users', { method: 'POST', body: JSON.stringify(user) })
 }
 
-export function updateUser(id: number, patch: { admin?: boolean; teamManager?: boolean; roles?: string[] }): Promise<User> {
+// Makes someone an admin of Spoletta or a team manager, or not, which only
+// its admins do; or gives them the roles they hold in the page's project in
+// place of those they held, which its owners do for those who may enter it.
+// The two go apart: roles sent with either of the others need an admin of
+// Spoletta.
+export function updateUser(id: number, patch: { admin?: boolean; teamManager?: boolean } | { roles: string[] }): Promise<User> {
   return request(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
 }
 
@@ -2946,7 +3012,8 @@ export function listProviderModels(input: ProviderInput): Promise<{ models: stri
   return request('/api/model-providers/models', { method: 'POST', body: JSON.stringify(input) })
 }
 
-// The roles boards name and people hold, to pick from.
+// The roles the project's boards name and its people hold, to pick from;
+// its owners'.
 export function listRoles(): Promise<string[]> {
   return request('/api/roles')
 }
@@ -3267,19 +3334,38 @@ export function removeEgressHost(host: string): Promise<void> {
   return request(`/api/egress-hosts/${encodeURIComponent(host)}`, { method: 'DELETE' })
 }
 
-// What the instance lets runs and people use, 0 for no limit: what a run
-// and a person in a month (UTC) may spend on models, in dollars (a run that
-// spends its limit is stopped and fails; someone who spends theirs has their
-// agents' calls refused until the next month), how many steps a person's
-// runs may have going at once, and how much disk a run may take, in MB.
+// What a project lets its runs and people use, or a ceiling over every
+// project's, 0 for no limit: what a run and a person in a month (UTC) may
+// spend on models, in dollars (a run that spends its limit is stopped and
+// fails; someone who spends theirs has their agents' calls refused until
+// the next month), how many steps a person's runs may have going at once,
+// and how much disk a run may take, in MB.
 export type Limits = { runSpend: number; userMonthSpend: number; userParallelSteps: number; runDiskMb: number }
 
-export function getLimits(): Promise<Limits> {
+// The project's limits: its own, as its owners set them, 0 for none of its
+// own; the ceilings the instance's admin sets above every project's, 0 for
+// none; and what holds of the two, the lesser of each, which runs and
+// people are held to.
+export type ProjectLimits = Limits & { ceilings: Limits; holding: Limits }
+
+// Everyone in the project may see what they may use there.
+export function getLimits(): Promise<ProjectLimits> {
   return request('/api/limits')
 }
 
-export function saveLimits(l: Limits): Promise<Limits> {
+// Sets the project's own limits, each at most its ceiling, which the
+// server refuses saying so; its owners'.
+export function saveLimits(l: Limits): Promise<ProjectLimits> {
   return request('/api/limits', { method: 'PUT', body: JSON.stringify(l) })
+}
+
+// The ceilings no project's limits may go over; the instance's admins'.
+export function getCeilings(): Promise<Limits> {
+  return request('/api/instance/limits')
+}
+
+export function saveCeilings(l: Limits): Promise<Limits> {
+  return request('/api/instance/limits', { method: 'PUT', body: JSON.stringify(l) })
 }
 
 // What was spent on models in a month: by each person (unpriced counts the

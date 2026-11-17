@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import {
+  getMe,
   getNotificationSettings,
   listMCPServers,
   updateNotificationSettings,
@@ -7,7 +8,7 @@ import {
   type Me,
   type NotificationSettings,
 } from './api'
-import { configures, levelIn, managesPeople, managesProjects, onlySees, useMe } from './Account'
+import { configures, inheritsInstance, levelIn, managesPeople, managesProjects, onlySees, useMe } from './Account'
 import { AccessSection } from './Access'
 import { HomeCrumb, LEVEL_WORDS } from './Projects'
 import { pageHash } from './address'
@@ -20,7 +21,8 @@ import { APIKeysSection } from './APIKeys'
 import { SkillsSection } from './Skills'
 import { EgressSection } from './Egress'
 import { CredentialsSection } from './Credentials'
-import { SpendingSection } from './Spending'
+import { CeilingsSection, SpendingSection } from './Spending'
+import { GitAccessSection } from './GitAccess'
 import { AuditLogSection } from './Audit'
 import { SettingsHead } from './SettingsHead'
 import ErrorBanner from './ErrorBanner'
@@ -33,6 +35,7 @@ export type SettingsTab =
   | 'keys'
   | 'connectors'
   | 'mcp'
+  | 'git'
   | 'egress'
   | 'credentials'
   | 'spending'
@@ -41,6 +44,11 @@ export type SettingsTab =
   | 'people'
   | 'teams'
   | 'audit'
+  | 'ceilings'
+  | 'events'
+
+// The tabs as wide as the window, holding a table.
+const WIDE: SettingsTab[] = ['audit', 'events']
 
 // The groups the tabs show in down the side, each under its heading: the
 // person's own, what runs use, keeping watch over them, all the project's;
@@ -55,27 +63,32 @@ const GROUPS: { id: SettingsGroup; label: string }[] = [
 ]
 
 // The tabs whoever is signed in sees: their own settings, the project's
-// owners' over the project, and the instance's admin's over its people.
-// Without sign-in, there are only the project's. Someone who only sees the
-// project has nothing of theirs to make there: no API keys, MCP
-// connections or skills. The command palette offers the same, leaving out
-// the groups.
+// owners' over the project, and the instance's admin's over its people,
+// the ceilings over every project's limits and what happened above the
+// projects. Without sign-in, there are the project's and the instance's.
+// Someone who only sees the project sees what the server lets them read,
+// changing nothing: their API keys, the connectors, MCP servers, skills
+// and commands, the spending and the teams; what only its owners may read
+// isn't shown. The command palette offers the same, leaving out the
+// groups.
 export function tabsFor(me: Me): { id: SettingsTab; label: string; group: SettingsGroup }[] {
   const tabs: { id: SettingsTab; label: string; group: SettingsGroup }[] = []
-  const sees = onlySees(me)
   if (me.user) tabs.push({ id: 'account', label: 'Account', group: 'you' })
-  if (!sees) tabs.push({ id: 'api', label: 'API keys', group: 'you' })
+  tabs.push({ id: 'api', label: 'API keys', group: 'you' })
   if (configures(me)) tabs.push({ id: 'keys', label: 'Model providers', group: 'runs' })
-  if (!sees) tabs.push({ id: 'connectors', label: 'Connectors', group: 'runs' })
-  if (!sees) tabs.push({ id: 'mcp', label: 'MCP servers', group: 'runs' })
-  if (!sees) tabs.push({ id: 'skills', label: 'Skills & commands', group: 'runs' })
+  tabs.push({ id: 'connectors', label: 'Connectors', group: 'runs' })
+  tabs.push({ id: 'mcp', label: 'MCP servers', group: 'runs' })
+  tabs.push({ id: 'skills', label: 'Skills & commands', group: 'runs' })
   if (configures(me)) tabs.push({ id: 'credentials', label: 'Credentials', group: 'runs' })
+  if (configures(me)) tabs.push({ id: 'git', label: 'Git access', group: 'runs' })
   if (configures(me)) tabs.push({ id: 'egress', label: 'Internet access', group: 'runs' })
   if (me.user && configures(me)) tabs.push({ id: 'access', label: 'Access', group: 'oversight' })
   tabs.push({ id: 'spending', label: 'Spending & limits', group: 'oversight' })
   if (me.user) tabs.push({ id: 'teams', label: 'Teams', group: 'oversight' })
   if (configures(me)) tabs.push({ id: 'audit', label: 'Audit log', group: 'oversight' })
   if (managesPeople(me)) tabs.push({ id: 'people', label: 'People', group: 'instance' })
+  if (managesProjects(me)) tabs.push({ id: 'ceilings', label: 'Ceilings', group: 'instance' })
+  if (managesProjects(me)) tabs.push({ id: 'events', label: 'Instance events', group: 'instance' })
   return tabs
 }
 
@@ -85,9 +98,13 @@ function landingTab(tabs: { id: SettingsTab; group: SettingsGroup }[]): Settings
   return (tabs.find((t) => t.id === 'account') ?? tabs.find((t) => t.group === 'runs') ?? tabs[0])?.id
 }
 
-// Where everyone keeps their MCP connections, skills and commands, and admins
-// and team managers configure the instance: its model providers and MCP
-// servers, who signs in, and the teams.
+// The settings of the project the page is in: where everyone keeps their
+// MCP connections, skills and commands, its owners configure it (its model
+// providers, MCP servers, credentials, git token, limits, who enters it and
+// the roles they hold) and team managers make its teams; and, in the
+// Instance group, where the instance's admins keep its people, the
+// ceilings over every project's limits and what happened above the
+// projects.
 export default function Settings({ tab }: { tab: SettingsTab | null }) {
   const me = useMe()
   const [error, setError] = useState<string | null>(null)
@@ -97,8 +114,10 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
   const shown = tabs.find((t) => t.id === tab)?.id ?? landingTab(tabs)
 
   useEffect(() => {
-    document.title = shown === 'audit' ? 'Audit log · Spoletta' : 'Settings · Spoletta'
+    document.title =
+      shown === 'audit' ? 'Audit log · Spoletta' : shown === 'events' ? 'Instance events · Spoletta' : 'Settings · Spoletta'
   }, [shown])
+  const sees = onlySees(me)
 
   return (
     <div className="flows-page">
@@ -113,7 +132,7 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
       </header>
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {me && (
-        <div className={shown === 'audit' ? 'settings wide' : 'settings'}>
+        <div className={shown && WIDE.includes(shown) ? 'settings wide' : 'settings'}>
           <nav className="settings-tabs" aria-label="Settings">
             {GROUPS.filter((g) => tabs.some((t) => t.group === g.id) || (g.id === 'instance' && managesProjects(me))).map((g) => (
               <Fragment key={g.id}>
@@ -142,24 +161,27 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
           <main className="settings-main">
             {shown === 'account' && (
               <>
-                <AccountSection me={me} />
+                <AccountSection me={me} onError={report} />
                 <NotificationsSection onError={report} />
               </>
             )}
-            {shown === 'keys' && <ModelProvidersSection onError={report} />}
-            {shown === 'connectors' && <DirectorySection canConfigure={configures(me)} onError={report} />}
+            {shown === 'keys' && <ModelProvidersSection inherits={inheritsInstance(me)} onError={report} />}
+            {shown === 'connectors' && <DirectorySection canConfigure={configures(me)} canConnect={!sees} onError={report} />}
             {shown === 'mcp' && <MCPSection me={me} onError={report} />}
+            {shown === 'git' && <GitAccessSection inherits={inheritsInstance(me)} onError={report} />}
             {shown === 'egress' && <EgressSection onError={report} />}
             {shown === 'credentials' && <CredentialsSection onError={report} />}
             {shown === 'spending' && <SpendingSection admin={configures(me)} onError={report} />}
-            {shown === 'skills' && <SkillsSection onError={report} />}
-            {shown === 'api' && <APIKeysSection onError={report} />}
+            {shown === 'skills' && <SkillsSection readOnly={sees} onError={report} />}
+            {shown === 'api' && <APIKeysSection readOnly={sees} onError={report} />}
             {shown === 'access' && <AccessSection onError={report} />}
             {shown === 'teams' && (
-              <TeamsSection canManage={!onlySees(me) && (configures(me) || !!me.user?.teamManager)} onError={report} />
+              <TeamsSection canManage={!sees && (configures(me) || !!me.user?.teamManager)} onError={report} />
             )}
             {shown === 'people' && <PeopleSection onError={report} />}
             {shown === 'audit' && <AuditLogSection />}
+            {shown === 'ceilings' && <CeilingsSection onError={report} />}
+            {shown === 'events' && <AuditLogSection key="events" instance />}
           </main>
         </div>
       )}
@@ -167,8 +189,16 @@ export default function Settings({ tab }: { tab: SettingsTab | null }) {
   )
 }
 
-function AccountSection({ me }: { me: Me }) {
-  const u = me.user!
+// The person signed in, as they are in the project the settings are in:
+// their level there and the teams and roles they hold there, asked again
+// in it, as the person was first asked for in whichever project the page
+// opened in; and the projects they may enter.
+function AccountSection({ me, onError }: { me: Me; onError: (err: unknown) => void }) {
+  const [here, setHere] = useState<Me | null>(null)
+  useEffect(() => {
+    getMe().then(setHere, onError)
+  }, [onError])
+  const u = here?.user ?? me.user!
   const level = levelIn(me)
   return (
     <section className="flow-section" aria-label="Account">
@@ -190,11 +220,15 @@ function AccountSection({ me }: { me: Me }) {
           {me.projects.length > 0 ? me.projects.map((p) => `${p.name} (${LEVEL_WORDS[p.level].label.toLowerCase()})`).join(', ') : 'None'}
           {me.super && '; as an admin of Spoletta you make projects, enter each as an owner and manage people'}
         </dd>
-        <dt>Teams</dt>
-        <dd>{u.teams.length > 0 ? u.teams.map((t) => t.name).join(', ') : 'None'}</dd>
-        <dt>Roles</dt>
+        <dt>Teams here</dt>
+        <dd>{here === null ? '…' : u.teams.length > 0 ? u.teams.map((t) => t.name).join(', ') : 'None'}</dd>
+        <dt>Roles here</dt>
         <dd>
-          {u.roles.length > 0 ? `${u.roles.join(', ')}: you decide the reviews of the processes these handle` : 'None'}
+          {here === null
+            ? '…'
+            : u.roles.length > 0
+              ? `${u.roles.join(', ')}: you decide the reviews of the processes these handle in this project`
+              : 'None'}
         </dd>
       </dl>
     </section>
@@ -251,8 +285,10 @@ function NotificationsSection({ onError }: { onError: (err: unknown) => void }) 
   )
 }
 
-// The MCP servers, each connected by everyone for themselves; admins add,
-// change and remove them.
+// The MCP servers, each connected by everyone for themselves; the project's
+// owners add, change and remove them. Someone who only sees the project
+// sees them and whether they connected them, and connects none, as they
+// run nothing there.
 function MCPSection({ me, onError }: { me: Me; onError: (err: unknown) => void }) {
   const [servers, setServers] = useState<MCPServer[]>([])
   const refresh = useCallback(() => listMCPServers().then(setServers, onError), [onError])
@@ -268,7 +304,7 @@ function MCPSection({ me, onError }: { me: Me; onError: (err: unknown) => void }
     <section className="flow-section settings-mcp" aria-label="MCP servers">
       <SettingsHead
         title="MCP servers"
-        lead="The servers agents reach tools through, each connected by signing in, or for one taking a token, by an admin."
+        lead="The servers agents reach tools through, each connected by signing in, or for one taking a token, by an owner of the project."
         more={
           <>
             Pick, in an agent process's panel, the servers it may use and, if you like, which of their tools. Agents use
@@ -279,7 +315,14 @@ function MCPSection({ me, onError }: { me: Me; onError: (err: unknown) => void }
           </>
         }
       />
-      <MCPServers servers={servers} canConfigure={configures(me)} onChanged={refresh} onError={onError} note={false} />
+      <MCPServers
+        servers={servers}
+        canConfigure={configures(me)}
+        canConnect={!onlySees(me)}
+        onChanged={refresh}
+        onError={onError}
+        note={false}
+      />
     </section>
   )
 }

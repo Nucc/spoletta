@@ -29,13 +29,17 @@ import { ModelPicker } from './ModelPicker'
 import { PlusIcon } from './icons'
 import { SettingsEmpty, SettingsHead } from './SettingsHead'
 
-// Where agents' models come from, which admins set up: the providers added
-// here, each with the models picked of it and its key, saved here or kept
-// in a vault that puts it in the webapp's environment; the default model,
-// and Claude Code's when the worker has it; and the keys of the worker's own
-// pi config. Agents never get the keys:
-// they reach their models through the webapp, which holds them.
-export function ModelProvidersSection({ onError }: { onError: (err: unknown) => void }) {
+// Where agents' models come from, which the project's owners set up: the
+// providers added here, each with the models picked of it and its key,
+// saved here or kept in a vault that puts it in the webapp's environment;
+// the default model, and Claude Code's when the worker has it; and the keys
+// of the worker's own pi config. Agents never get the keys: they reach
+// their models through the webapp, which holds them. The worker's own
+// models and the webapp's environment are what the instance is configured
+// with outside the app, so a project that doesn't inherit that (Legacy
+// does) has neither: only the providers added here, each with its key
+// saved here.
+export function ModelProvidersSection({ inherits, onError }: { inherits: boolean; onError: (err: unknown) => void }) {
   const [providers, setProviders] = useState<ModelProviders | null>(null)
   const [models, setModels] = useState<Models | null>(null)
   const [editing, setEditing] = useState<ModelProvider | 'new' | null>(null)
@@ -92,8 +96,13 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
       <SettingsHead
         title="Model providers"
         lead="Where agents' models come from, and the model they use unless their process picks one."
-        more="Add a provider pi knows with its key, or your own AI gateway as a custom provider. Its key is saved here, or kept in a vault that puts it in the webapp's environment, and never shows again. Agents reach their models through the webapp and never see a key."
+        more={
+          inherits
+            ? "Add a provider pi knows with its key, or your own AI gateway as a custom provider. Its key is saved here, or kept in a vault that puts it in the webapp's environment, and never shows again. Agents reach their models through the webapp and never see a key."
+            : 'Add a provider pi knows with its key, or your own AI gateway as a custom provider. Its key is saved here and never shows again. Agents reach their models through the webapp and never see a key.'
+        }
       />
+      {!inherits && <p className="flows-note">This project uses only the providers added here, each with its key saved here.</p>}
       {providers?.workerError && <p className="panel-warning">{providers.workerError}</p>}
       {/* With a single model, it is the default, and needn't show. */}
       {models && models.models.length > 1 && (
@@ -142,16 +151,19 @@ export function ModelProvidersSection({ onError }: { onError: (err: unknown) => 
         </ul>
       ) : (
         <SettingsEmpty action={add}>
-          {models === null || models.models.length > 0
-            ? "None yet, so agents use the worker's own providers below. Add one to pick its models and keep its key here."
-            : "None yet, and the worker offers no model of its own, so agents can't run until a provider is added."}
+          {!inherits
+            ? "None yet, so agents can't run until a provider is added. Add one to pick its models and keep its key here."
+            : models === null || models.models.length > 0
+              ? "None yet, so agents use the worker's own providers below. Add one to pick its models and keep its key here."
+              : "None yet, and the worker offers no model of its own, so agents can't run until a provider is added."}
         </SettingsEmpty>
       )}
-      <WorkerKeys onError={onError} />
+      {inherits && <WorkerKeys onError={onError} />}
       {editing && providers && (
         <ProviderDialog
           provider={editing === 'new' ? null : editing}
           added={providers.providers}
+          inherits={inherits}
           offered={models?.models ?? []}
           onClose={() => setEditing(null)}
           onSaved={(p) => {
@@ -231,16 +243,20 @@ function formatTokens(n: number): string {
 // Adding a provider, picking which first, or changing one: its key, saved
 // or from the webapp's environment, and its models, picked from pi's
 // catalog or, for a custom provider, listed by their IDs. Adding one pi
-// knows replaces the worker's own models of it, which it says.
+// knows replaces the worker's own models of it, which it says. In a project
+// that doesn't inherit the instance's configuration, the key is saved here,
+// the webapp's environment not being the project's.
 function ProviderDialog({
   provider,
   added,
+  inherits,
   offered,
   onClose,
   onSaved,
 }: {
   provider: ModelProvider | null
   added: ModelProvider[]
+  inherits: boolean
   offered: string[]
   onClose: () => void
   onSaved: (p: ModelProviders) => void
@@ -263,7 +279,7 @@ function ProviderDialog({
   const [name, setName] = useState(provider?.name ?? '')
   const [api, setApi] = useState(provider?.api ?? CUSTOM_APIS[0].value)
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '')
-  const [keySource, setKeySource] = useState<KeySource>(provider?.keySource ?? 'saved')
+  const [keySource, setKeySource] = useState<KeySource>(inherits ? (provider?.keySource ?? 'saved') : 'saved')
   const [key, setKey] = useState('')
   const [env, setEnv] = useState(provider?.keySource === 'env' ? provider.env : '')
   const [models, setModels] = useState<string[]>(provider?.models ?? [])
@@ -390,25 +406,33 @@ function ProviderDialog({
           )}
           <div className="panel-field">
             <span>Key</span>
-            <div className="segmented" role="radiogroup" aria-label="Where the key comes from">
-              {(
-                [
-                  ['saved', 'Save it here'],
-                  ['env', 'From the environment'],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="radio"
-                  aria-checked={keySource === value}
-                  className={keySource === value ? 'selected' : ''}
-                  onClick={() => setKeySource(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {inherits && (
+              <div className="segmented" role="radiogroup" aria-label="Where the key comes from">
+                {(
+                  [
+                    ['saved', 'Save it here'],
+                    ['env', 'From the environment'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={keySource === value}
+                    className={keySource === value ? 'selected' : ''}
+                    onClick={() => setKeySource(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {!inherits && provider?.keySource === 'env' && (
+              <span className="panel-warning">
+                It read its key from {provider.env} in the webapp’s environment, which this project doesn’t get: paste
+                the key to save it here.
+              </span>
+            )}
             {keySource === 'saved' ? (
               <input
                 type="password"

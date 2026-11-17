@@ -1,10 +1,13 @@
 // How a page's address names its project (src/address.ts): reading the
 // project and the page from an address, putting a page in a project, the
 // project an address naming none opens in, rewriting such an address in
-// place, and keeping what a browser remembers apart for each project. Run
-// with `npm test`, which needs Node 22.6 or later to load TypeScript.
+// place, naming the project in an address the browser opens itself
+// (inProjectLink in src/api.ts), and keeping what a browser remembers apart
+// for each project. Run with `npm test`, which needs Node 22.6 or later to
+// load TypeScript.
 
 import { hashIn, inTabsProject, outsideProjects, projectFor, projectKey, rewritten, splitHash } from '../src/address.ts'
+import { inProjectLink } from '../src/api.ts'
 
 declare const process: { exitCode?: number }
 
@@ -80,6 +83,20 @@ check('the projects page stays outside', inTabsProject('#/projects', tabs.left),
 check('a tab outside the projects leaves it for the last used', inTabsProject('#/inbox', '#/projects'), '#/inbox')
 check('a tab from before projects too', inTabsProject('#/inbox', '#/flows/12'), '#/inbox')
 check('a tab with no address before', inTabsProject('#/flows/40', undefined), '#/flows/40')
+
+// An address under /api/ the browser opens itself, which can't send the
+// project's header, names it in its query: a run's file, an MCP server's
+// sign-in window. Addresses about the person or the projects, signing in,
+// and what isn't the webapp's stay as they are.
+check('a run’s file', inProjectLink('/api/files?path=runs%2F4%2Freport.pdf', 3), '/api/files?path=runs%2F4%2Freport.pdf&project=3')
+check('a file with a space keeps it', new URLSearchParams(inProjectLink('/api/files?path=a%20b.txt', 3).split('?')[1]).get('path'), 'a b.txt')
+check('an MCP server’s sign-in', inProjectLink('/api/mcp-servers/9/connect', 12), '/api/mcp-servers/9/connect?project=12')
+check('one naming a project already moves it', inProjectLink('/api/files?project=2&path=x', 5), '/api/files?project=5&path=x')
+check('outside any project', inProjectLink('/api/files?path=x', null), '/api/files?path=x')
+check('signing in', inProjectLink('/api/auth/login?next=%2F', 3), '/api/auth/login?next=%2F')
+check('the person', inProjectLink('/api/me', 3), '/api/me')
+check('the projects', inProjectLink('/api/projects/3/members', 3), '/api/projects/3/members')
+check('not the webapp’s', inProjectLink('https://example.com/api/files?path=x', 3), 'https://example.com/api/files?path=x')
 
 // What a browser remembers that is a project's own.
 check('a project’s own key', projectKey('palette-recent', 3), 'palette-recent.p3')

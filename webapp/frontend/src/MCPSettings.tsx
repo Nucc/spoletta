@@ -17,6 +17,7 @@ import { useConfirm } from './Confirm'
 import TabLink from './TabLink'
 import { SettingsEmpty } from './SettingsHead'
 import { pageHash } from './address'
+import { onlySees, useMe } from './Account'
 
 // What pi and Claude Code take as a server name; they name the tools
 // mcp__<name>__<tool>.
@@ -216,7 +217,7 @@ export function MCPServers({
             <span>Connected by</span>
             <select value={auth} onChange={(e) => setAuth(e.target.value as MCPAuth)}>
               <option value="oauth">Each person signing in</option>
-              <option value="token">A token an admin sets, such as an API key</option>
+              <option value="token">A token an owner sets, such as an API key</option>
             </select>
           </label>
           <button className="panel-button" type="submit" disabled={!nameOk || !urlOk || adding}>
@@ -303,7 +304,7 @@ function MCPServerItem({
       )}
       {takesToken && !canConfigure && (
         <small className="panel-note">
-          {s.connected ? 'Everyone uses the token an admin set.' : 'An admin sets its token for everyone.'}
+          {s.connected ? 'Everyone uses the token an owner of the project set.' : 'An owner of the project sets its token for everyone.'}
         </small>
       )}
       <div className="mcp-item-actions">
@@ -341,6 +342,9 @@ export function MCPServerPicker({
   onToolsChange: (tools: Record<string, string[]>) => void
   onOpenSettings: () => void
 }) {
+  // Someone who only sees the project connects nothing there, running
+  // nothing.
+  const sees = onlySees(useMe())
   const pickTools = (id: number, picked: string[] | undefined) => {
     const { [String(id)]: _, ...rest } = tools
     onToolsChange(picked === undefined ? rest : { ...rest, [String(id)]: picked })
@@ -357,9 +361,11 @@ export function MCPServerPicker({
       {servers?.length === 0 && (
         <p className="panel-note">
           None set up.{' '}
-          <button className="link-button" onClick={onOpenSettings}>
-            Add servers
-          </button>
+          {!readOnly && (
+            <button className="link-button" onClick={onOpenSettings}>
+              Add servers
+            </button>
+          )}
         </p>
       )}
       {servers?.map((s) => {
@@ -382,9 +388,11 @@ export function MCPServerPicker({
             {on && !s.connected && s.auth !== 'token' && (
               <>
                 <span className="mcp-status">Not connected</span>
-                <button className="link-button" onClick={() => connectMCPServer(s.id)}>
-                  Connect
-                </button>
+                {!sees && (
+                  <button className="link-button" onClick={() => connectMCPServer(s.id)}>
+                    Connect
+                  </button>
+                )}
               </>
             )}
             {on && (

@@ -584,9 +584,12 @@ export default function Board({
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   // Where the board's own context menu is open, if it is.
   const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(null)
-  // What was copied, from any board of any flow; see clipboard.ts.
-  const [copied, setCopied] = useState<Copied | null>(readCopied)
-  useEffect(() => onCopiedElsewhere(() => setCopied(readCopied())), [])
+  // What was copied, from any board of any flow of the board's project; see
+  // clipboard.ts. The board's project is the one it opened in, as the page
+  // is made anew for another.
+  const [boardProject] = useState(currentProject)
+  const [copied, setCopied] = useState<Copied | null>(() => readCopied(boardProject))
+  useEffect(() => onCopiedElsewhere(boardProject, () => setCopied(readCopied(boardProject))), [boardProject])
   // Where the pointer is over the canvas, on the screen, for pasting there.
   const pointer = useRef<XYPosition | null>(null)
   // The others with the board open, and who changed it just now, if someone
@@ -2728,7 +2731,7 @@ export default function Board({
     const inSelection = id === undefined || getNode(id)?.selected
     const c = copiedOf(getNodes().filter((n) => (inSelection ? n.selected : n.id === id)))
     if (!c) return
-    writeCopied(c)
+    writeCopied(c, boardProject)
     setCopied(c)
   }
 
@@ -2751,7 +2754,7 @@ export default function Board({
   // one given, where the pointer is over the board, or the board's middle.
   // The copies come selected.
   const pasteAt = async (screen?: XYPosition) => {
-    const c = readCopied()
+    const c = readCopied(boardProject)
     const rect = wrapper.current?.getBoundingClientRect()
     const point = screen ?? pointer.current ?? (rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
     if (!c || !point || readOnly || objectBoard || structBoard) return

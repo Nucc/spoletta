@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
-import { countInbox, getFlow, onInboxChanged, onRefusedHere, updateFlow, type Flow } from './api'
+import { countInbox, getFlow, inProject, onInboxChanged, onRefusedHere, updateFlow, type Flow } from './api'
 import Board from './Board'
 import CommandPalette from './CommandPalette'
 import FlowData from './FlowData'
@@ -40,7 +40,8 @@ import {
 // shared struct's records, both with ?q=<search>&sort=<key> for what they
 // show, #/taskboards/<id> for a task board, #/schedules for the
 // schedules, #/inbox for what waits on the person, #/settings/<tab> for
-// the settings, #/settings/audit with ?q= and &sort= too, #/activity for
+// the settings, #/settings/audit and #/settings/events with ?q= and &sort=
+// too, #/activity for
 // what goes on across the flows, with ?days=<n> for its period, #/trash
 // for the flows deleted, anything else for the list of flows. #/people
 // and #/audit, where the people and the audit log were before the
@@ -88,12 +89,15 @@ const pageInHash = (): Page => {
 // decide one, and as they come back to the page; null until known. The
 // server counts those of every project the person may enter, or with
 // nobody signing in those of the open tab's project, so it asks again as
-// that changes.
+// that changes. It is asked in the open tab's project, and only while the
+// person may enter it: a page outside the projects, or one they may not
+// enter, asks nothing, as the server would refuse it, and asking in
+// another project would make them a member of it as they enter it.
 function useInboxCount(project: number | null): number | null {
   const [count, setCount] = useState<number | null>(null)
   useEffect(() => {
     if (project === null) return
-    const ask = () => void countInbox().then((n) => n !== null && setCount(n))
+    const ask = () => void inProject(project, countInbox).then((n) => n !== null && setCount(n))
     ask()
     const t = window.setInterval(ask, INBOX_REFRESH_MS)
     const onVisible = () => document.visibilityState === 'visible' && ask()
@@ -127,7 +131,10 @@ export default function App() {
   const me = useMe()
   const [, redraw] = useReducer((n: number) => n + 1, 0)
   const { project, page } = splitHash(window.location.hash)
-  const inbox = useInboxCount(project)
+  // Whether the person may enter the project the open tab shows, once who
+  // they are is known.
+  const enterable = project !== null && !!me?.projects.some((p) => p.id === project)
+  const inbox = useInboxCount(enterable ? project : null)
 
   // An address naming no project, as an old bookmark's or a notification's,
   // opens in the project last used, else the person's first, in place, once
@@ -142,7 +149,6 @@ export default function App() {
   })
 
   // The project shown is the one an address naming none opens in next.
-  const enterable = project !== null && !!me?.projects.some((p) => p.id === project)
   useEffect(() => {
     if (enterable && project !== null) rememberProject(project)
   }, [enterable, project])

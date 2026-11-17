@@ -7055,6 +7055,20 @@ select.flow-owner:disabled {
   width: 260px;
 }
 
+/* The project's git token, in the settings' Git access tab: its state, the
+   token and the username it goes with on one row. */
+.git-access .git-token {
+  margin-top: 12px;
+  padding-right: 16px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 10px;
+}
+
+.git-access .git-token input.git-username {
+  flex: 0 0 160px;
+}
+
 /* An internet host: the host and what it is for on one line, taking the
    room a key's field takes on other rows, so Remove sits at the end. */
 .egress-item .key-provider {
@@ -8417,6 +8431,24 @@ select.flow-owner:disabled {
   color: #82071e;
 }
 
+/* A skill's instructions or a command's prompt, read where it can't be
+   changed, under its row. */
+.skill-list li {
+  flex-wrap: wrap;
+}
+
+.skill-content {
+  flex-basis: 100%;
+  max-height: 360px;
+  margin: 0 8px 12px 16px;
+  padding: 10px 12px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  background: #f6f8fa;
+  border-radius: 6px;
+}
+
 .skill-editor {
   flex: 1;
   min-width: 0;
@@ -9652,6 +9684,35 @@ select.flow-owner:disabled {
   font-size: 18px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* What holds of a limit under the instance's ceiling, under its field, and
+   the server's words for one above it, there and in the form's foot. */
+.limit-note {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.limit-holds {
+  color: #1f2328;
+}
+
+.limit-over,
+.limits-refused {
+  color: #cf222e;
+}
+
+.limits-refused {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.limits-read dd.limits-ceiling {
+  margin-top: 2px;
+  color: #656d76;
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .spending-columns {

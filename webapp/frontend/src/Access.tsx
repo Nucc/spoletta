@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
   listProjectGroups,
   listProjectMembers,
+  listRoles,
   listUsers,
   setProjectGroups,
   setProjectMembers,
   updateProject,
+  updateUser,
   type OthersAccess,
   type ProjectGiven,
   type ProjectGroup,
@@ -30,7 +32,11 @@ import { useUndoNotice } from './UndoNotice'
 // with, as an owner needn't see everyone Spoletta has; those the owner may
 // list are offered as it is typed. Taking someone or a group out is undone
 // by adding them back, so it asks nothing first but offers to undo it;
-// those taken out are listed apart.
+// those taken out are listed apart. Each person in the project holds the
+// roles its owners give them here (user_roles.go), which name the human
+// objects whose reviews they decide in it, such as Finance where "Finance
+// handles Approve payment"; roles are the project's, so they are given
+// here rather than with the instance's people.
 
 const LEVELS: ProjectLevel[] = ['owner', 'editor', 'viewer']
 
@@ -73,8 +79,12 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
   const [groups, setGroups] = useState<ProjectGroup[] | null>(null)
   // The people to offer as an email is typed: everyone, for an admin of
   // Spoletta, else those who may enter the project another way; null when
-  // whoever asks may not list them.
+  // whoever asks may not list them. Each comes with the roles they hold in
+  // the project.
   const [people, setPeople] = useState<User[] | null>(null)
+  // The roles the project's boards name and its people hold, offered as a
+  // role is typed.
+  const [roleNames, setRoleNames] = useState<string[]>([])
   const [showUndo, , undoNotice] = useUndoNotice()
 
   const refresh = useCallback(async () => {
@@ -87,6 +97,7 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
   useEffect(() => {
     refresh().catch(onError)
     listUsers().then(setPeople, () => setPeople(null))
+    listRoles().then(setRoleNames, () => setRoleNames([]))
   }, [refresh, onError])
 
   if (project === null || !here) return null
@@ -113,6 +124,21 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
       undo: () => void give([...manual.filter((x) => x.user !== m.user), { user: m.user, level: m.level }]),
     })
   }
+
+  // Gives someone in the project these roles in place of those they held;
+  // the roles alone, as only an admin of Spoletta changes anything else.
+  const giveRoles = async (user: number, roles: string[]) => {
+    try {
+      const updated = await updateUser(user, { roles })
+      setPeople((ps) => (ps?.some((p) => p.id === user) ? ps.map((p) => (p.id === user ? updated : p)) : [...(ps ?? []), updated]))
+      setRoleNames((rs) => [...new Set([...rs, ...updated.roles])].sort((a, b) => a.localeCompare(b)))
+      // Their own roles may be what changed.
+      reloadMe().catch(() => {})
+    } catch (err) {
+      onError(err)
+    }
+  }
+  const rolesOf = (user: number) => people?.find((p) => p.id === user)?.roles ?? []
 
   const putGroups = async (to: ProjectGroup[]) => {
     try {
@@ -159,8 +185,25 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
       />
       <ProjectName name={here.name} onRename={(name) => change({ name })} />
 
-      <SettingsHead title="People" level={3} lead={`${LEVEL_TEXT.owner} ${LEVEL_TEXT.editor} ${LEVEL_TEXT.viewer}`} />
+      <SettingsHead
+        title="People"
+        level={3}
+        lead={`${LEVEL_TEXT.owner} ${LEVEL_TEXT.editor} ${LEVEL_TEXT.viewer}`}
+        more={
+          <>
+            Under each person, the roles they hold in this project. Someone holding a role decides the reviews of the
+            processes that a person of that name handles on any of its boards, such as Finance in “Finance handles
+            Approve payment”, and sees those flows to do so. A review no person handles is anyone’s to decide, and owners
+            decide any. Roles are the project’s: the same name in another project is another role.
+          </>
+        }
+      />
       <AddMember people={others} taken={givenByHand} onAdd={(email, level) => give([...manual, { email, level }])} />
+      <datalist id="role-names">
+        {roleNames.map((r) => (
+          <option key={r} value={r} />
+        ))}
+      </datalist>
       {members === null ? (
         <p className="flows-note">Loading…</p>
       ) : current.length === 0 ? (
@@ -175,6 +218,13 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
                   {m.name && `${m.email} · `}
                   {SOURCE_WORDS[m.source]}
                 </span>
+                {people !== null && (
+                  <RoleEditor
+                    who={m.name || m.email}
+                    roles={rolesOf(m.user)}
+                    onChange={(roles) => void giveRoles(m.user, roles)}
+                  />
+                )}
               </div>
               <LevelPick
                 level={m.level}
@@ -346,6 +396,33 @@ function AddMember({
       <button type="submit" disabled={!e || taken.includes(e)}>
         <PlusIcon /> Give access
       </button>
+    </form>
+  )
+}
+
+// The roles someone holds in the project, each taken away with its ×, and
+// one added by name, those the project's boards name offered as it is
+// typed.
+function RoleEditor({ who, roles, onChange }: { who: string; roles: string[]; onChange: (roles: string[]) => void }) {
+  const [name, setName] = useState('')
+  const onAdd = (e: FormEvent) => {
+    e.preventDefault()
+    const n = name.trim()
+    if (!n) return
+    if (!roles.some((r) => r.toLowerCase() === n.toLowerCase())) onChange([...roles, n])
+    setName('')
+  }
+  return (
+    <form className="person-roles" onSubmit={onAdd}>
+      {roles.map((r) => (
+        <span key={r} className="person-role">
+          {r}
+          <button type="button" aria-label={`Take ${r} from ${who}`} onClick={() => onChange(roles.filter((x) => x !== r))}>
+            ×
+          </button>
+        </span>
+      ))}
+      <input list="role-names" placeholder="Add a role" aria-label={`Add a role to ${who}`} value={name} onChange={(e) => setName(e.target.value)} />
     </form>
   )
 }

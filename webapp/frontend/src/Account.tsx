@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getMe, signOut, type Me, type ProjectLevel } from './api'
+import { getMe, signOut, type Me, type Project, type ProjectLevel } from './api'
 import { currentProject, pageHash } from './address'
 import { GearIcon } from './icons'
 
@@ -41,9 +41,21 @@ export function useMe(): Me | null {
 // enter, or outside the projects. Everyone owns every project without
 // sign-in.
 export function levelIn(me: Me | null, project: number | null = currentProject()): ProjectLevel | null {
-  if (me === null || project === null) return null
-  return me.projects.find((p) => p.id === project)?.level ?? null
+  return projectHere(me, project)?.level ?? null
 }
+
+// The project the page is in, the page's unless told another, as /api/me
+// lists it; none outside the projects, or in one the person may not enter.
+export function projectHere(me: Me | null, project: number | null = currentProject()): Project | null {
+  if (me === null || project === null) return null
+  return me.projects.find((p) => p.id === project) ?? null
+}
+
+// Whether the project the page is in gets what the instance is configured
+// with outside the app (the worker's own models and their keys, keys in
+// the webapp's environment, its git token and GitHub App), as Legacy does;
+// another has only what its owners set in its settings.
+export const inheritsInstance = (me: Me | null) => projectHere(me)?.inheritsInstance ?? false
 
 // Whether whoever is signed in configures the project the page is in: one
 // of its owners, as everyone is when nobody signs in.

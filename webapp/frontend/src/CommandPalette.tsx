@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { listFlows, listRuns, listTaskBoards, runOrigin, type Flow, type FlowRun, type TaskBoard } from './api'
-import { configures, managesProjects, useMe } from './Account'
+import { inProject, listFlows, listRuns, listTaskBoards, runOrigin, type Flow, type FlowRun, type TaskBoard } from './api'
+import { configures, managesProjects, projectHere, useMe } from './Account'
 import { LEVEL_WORDS } from './Projects'
 import { formatTime, ORIGIN_LABELS, RUN_LABELS } from './Runs'
 import { tabsFor } from './Settings'
@@ -16,9 +16,11 @@ import { currentPage, currentProject, pageHash, projectKey, splitHash } from './
 // matches what is typed (fuzzy in shortcuts.ts), and what was picked lately
 // comes first. A page opens in a tab of its own, or in the tab already
 // showing it. It reads the flows, task boards and runs as it opens, from
-// the routes their pages use. The person's projects are listed too, each
-// opening its home page, and for the instance's admin the Projects page.
-// What was picked lately is the project's own, as what it names is.
+// the routes their pages use, in the page's project. The person's projects
+// are listed too, each opening its home page, and for the instance's admin
+// the Projects page; on a page outside the projects, or in one the person
+// may not enter, those alone, asking the server nothing. What was picked
+// lately is the project's own, as what it names is.
 
 export type PaletteItem = {
   // Kept to put what was picked lately first, so the same for the same thing.
@@ -152,11 +154,18 @@ export default function CommandPalette({
     return () => dialog.close()
   }, [])
 
+  // The project the page is in, once the person is known to enter it; the
+  // palette lists what is in it only then, and on a page outside the
+  // projects, or in one they may not enter, the projects alone.
+  const here = projectHere(me)?.id ?? null
   useEffect(() => {
-    listFlows().then(setFlows, () => setFlows([]))
-    listTaskBoards().then(setBoards, () => setBoards([]))
-    if (flow !== null) listRuns(flow, undefined, undefined, RUNS_LISTED).then(setRuns, () => setRuns([]))
-  }, [flow])
+    if (here === null) return
+    inProject(here, () => {
+      listFlows().then(setFlows, () => setFlows([]))
+      listTaskBoards().then(setBoards, () => setBoards([]))
+      if (flow !== null) listRuns(flow, undefined, undefined, RUNS_LISTED).then(setRuns, () => setRuns([]))
+    })
+  }, [flow, here])
 
   const page = [...sources].map((get) => get())
   const flowName = flows?.find((f) => f.id === flow)?.name ?? ''
@@ -164,9 +173,9 @@ export default function CommandPalette({
   // may have changed.
   const listed = (): PaletteItem[] => {
     if (choosing) return choosing.items
-    const all: PaletteItem[] = page.flatMap((s) => s.items)
+    const all: PaletteItem[] = here === null ? [] : page.flatMap((s) => s.items)
     all.push(...runs.map((r) => runItem(r, flowName)))
-    all.push(
+    if (here !== null) all.push(
       {
         id: 'page:flows',
         title: 'Home',
@@ -201,7 +210,7 @@ export default function CommandPalette({
         hash: pageHash('#/trash'),
       },
     )
-    if (configures(me)) {
+    if (here !== null && configures(me)) {
       all.push({
         id: 'page:audit',
         title: 'Audit log',
@@ -245,7 +254,7 @@ export default function CommandPalette({
       })
     }
     // The audit log is among the pages above, with what it holds.
-    for (const t of me ? tabsFor(me).filter((t) => t.id !== 'audit') : []) {
+    for (const t of me && here !== null ? tabsFor(me).filter((t) => t.id !== 'audit') : []) {
       all.push({ id: `settings:${t.id}`, title: t.label, group: 'Settings', words: 'settings', hash: pageHash(`#/settings/${t.id}`) })
     }
     for (const b of boards) {
@@ -364,7 +373,9 @@ export default function CommandPalette({
         </p>
       )}
       <ul ref={list} id="palette-list" className="palette-list" role="listbox" aria-label="What it finds">
-        {shown.length === 0 && <li className="palette-empty">{flows === null && !choosing ? 'Loading…' : 'Nothing matches.'}</li>}
+        {shown.length === 0 && (
+          <li className="palette-empty">{flows === null && here !== null && !choosing ? 'Loading…' : 'Nothing matches.'}</li>
+        )}
         {shown.map(({ item, hits }, i) => {
           const heading = !headed || choosing ? '' : item.disabled ? 'Not now' : i < leading ? 'Lately' : item.group
           const head = heading !== group ? heading : ''

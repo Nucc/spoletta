@@ -321,13 +321,21 @@ function ProjectRow({
 
 // What shows in place of a page someone may not enter: that they are in no
 // project yet, or may not enter the one the address names, as it was
-// archived or they were taken out of it; whom to ask; and the projects they
-// may enter instead.
+// archived or they were taken out of it; whom to ask, the instance's admins
+// by name for someone in no project; and the projects they may enter
+// instead.
 export function NoProject({ me, project }: { me: Me; project: number | null }) {
   useEffect(() => {
     document.title = 'No project · Spoletta'
   }, [])
   const none = me.projects.length === 0
+  // The instance's admins by name, which the server gives only someone who
+  // may enter no project.
+  const admins = me.admins ?? []
+  const askAdmin =
+    admins.length > 0
+      ? `Ask ${admins.length === 1 ? admins[0] : `${admins.slice(0, -1).join(', ')} or ${admins[admins.length - 1]}`}, ${admins.length === 1 ? 'the admin' : 'the admins'} of Spoletta,`
+      : 'Ask an admin of Spoletta'
   return (
     <div className="flows-page">
       <header className="toolbar">
@@ -338,7 +346,7 @@ export function NoProject({ me, project }: { me: Me; project: number | null }) {
           <h2>{none ? 'You aren’t in any project yet' : 'You can’t enter this project'}</h2>
           <p className="flows-note">
             {none
-              ? 'Everything here is kept in projects, and you may enter none. Ask an admin of Spoletta to give you one, or an owner of the project you work in to let you in; then reload this page.'
+              ? `Everything here is kept in projects, and you may enter none. ${askAdmin} to give you one, or an owner of the project you work in to let you in; then reload this page.`
               : `Project ${project} may have been archived, or you were taken out of it, or it was never yours. Ask one of its owners, or an admin of Spoletta, to let you in.`}
           </p>
           {!none && (

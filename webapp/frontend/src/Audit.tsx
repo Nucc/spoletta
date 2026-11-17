@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getAuditLog, type AuditLog, type Search } from './api'
+import { getAuditLog, getInstanceEvents, type AuditLog, type Search } from './api'
 import { indexFacets, parse as parseQuery } from './query'
 import { formatTime } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch } from './Search'
@@ -12,16 +12,16 @@ const REFRESH_MS = 10_000
 
 // The events the search matches, asked for again every so often; only the
 // answer to the latest ask shows.
-function useAuditLog(search: Search) {
+function useAuditLog(search: Search, read: (search: Search) => Promise<AuditLog>) {
   const [log, setLog] = useState<AuditLog | null>(null)
   const [error, setError] = useState<string | null>(null)
   const asked = useRef(0)
   const load = useCallback(() => {
     const n = ++asked.current
-    return getAuditLog(search)
+    return read(search)
       .then((l) => n === asked.current && (setLog(l), setError(null)))
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-  }, [search])
+  }, [search, read])
   useEffect(() => {
     load()
     const timer = setInterval(load, REFRESH_MS)
@@ -30,16 +30,41 @@ function useAuditLog(search: Search) {
   return { log, error, load }
 }
 
-// The audit log, for admins: the tokens steps were handed for their models,
-// MCP servers, the internet and git, and when they ended; each internet
-// connection; calls refused and runs stopped for spending what they may; and
-// the limits, internet hosts and model keys admins changed. Searched and
-// sorted as a flow's data is, on the server over the latest events. A tab
-// of the settings, #/settings/audit, taking the window's width; #/audit,
-// where it was before, opens it there.
-export function AuditLogSection() {
-  const { query, setQuery, sort, setSort, search } = useSearch('audit', 0)
-  const { log, error, load } = useAuditLog(search)
+// What each log is: the project's, or the instance's above the projects.
+const LOGS = {
+  audit: {
+    label: 'Audit log',
+    read: getAuditLog,
+    lead: "What steps were handed and reached, what was refused, and what admins changed, searched as a flow's data is.",
+    more: "The tokens steps were handed for their models, MCP servers, the internet, credentials and git, and when they ended; each internet connection and credential call; calls refused and runs stopped for spending what they may; and the limits, internet hosts, model keys, credentials and webhooks the project's owners changed. Never a token or a secret. It asks for the latest events every 10 seconds.",
+    empty: 'Nothing recorded yet. Each step run, and each change an owner of the project makes, shows here.',
+    placeholder: 'Search the log, e.g. kind:internet.refused run:42',
+  },
+  events: {
+    label: 'Instance events',
+    read: getInstanceEvents,
+    lead: 'What happened above the projects, searched as the audit log is.',
+    more: "Projects made, archived, brought back and deleted, the ceilings set over every project's limits, people made admins of Spoletta or no longer, and model and credential calls refused for a token no step was handed. What happens inside a project is in its own audit log. It asks for the latest events every 10 seconds.",
+    empty: 'Nothing recorded yet. Making a project, or setting a ceiling, shows here.',
+    placeholder: 'Search the events, e.g. kind:project.made',
+  },
+}
+
+// The audit log, for the project's owners: the tokens steps were handed for
+// their models, MCP servers, the internet and git, and when they ended;
+// each internet connection; calls refused and runs stopped for spending
+// what they may; and the limits, internet hosts and model keys owners
+// changed. Searched and sorted as a flow's data is, on the server over the
+// latest events. A tab of the settings, #/settings/audit, taking the
+// window's width; #/audit, where it was before, opens it there. The
+// instance's own events, above the projects, show the same way for its
+// admins at #/settings/events (instance), without the runs and steps no
+// such event has.
+export function AuditLogSection({ instance = false }: { instance?: boolean }) {
+  const kind = instance ? 'events' : 'audit'
+  const words = LOGS[kind]
+  const { query, setQuery, sort, setSort, search } = useSearch(kind, 0)
+  const { log, error, load } = useAuditLog(search, words.read)
   const facets = useMemo(() => indexFacets(log?.facets ?? []), [log])
   const ast = useMemo(() => parseQuery(query).ast, [query])
 
@@ -52,11 +77,11 @@ export function AuditLogSection() {
   )
 
   return (
-    <section className="flow-section audit" aria-label="Audit log">
+    <section className="flow-section audit" aria-label={words.label}>
       <SettingsHead
-        title="Audit log"
-        lead="What steps were handed and reached, what was refused, and what admins changed, searched as a flow's data is."
-        more="The tokens steps were handed for their models, MCP servers, the internet, credentials and git, and when they ended; each internet connection and credential call; calls refused and runs stopped for spending what they may; and the limits, internet hosts, model keys, credentials and webhooks admins changed. Never a token or a secret. It asks for the latest events every 10 seconds."
+        title={words.label}
+        lead={words.lead}
+        more={words.more}
         action={
           <button type="button" className="settings-button" onClick={load} title="Fetch the latest events">
             Refresh
@@ -67,16 +92,11 @@ export function AuditLogSection() {
       {log === null ? (
         <p className="flows-note">Loading…</p>
       ) : log.searched === 0 ? (
-        <p className="flows-note">Nothing recorded yet. Each step run, and each change an admin makes, shows here.</p>
+        <p className="flows-note">{words.empty}</p>
       ) : (
         <>
           <div className="search-row">
-            <QueryBar
-              facets={facets}
-              query={query}
-              onChange={setQuery}
-              placeholder="Search the log, e.g. kind:internet.refused run:42"
-            />
+            <QueryBar facets={facets} query={query} onChange={setQuery} placeholder={words.placeholder} />
             <TimeRange facets={facets} query={query} field="at" onChange={setQuery} />
           </div>
           <div className="search-body">
@@ -96,8 +116,8 @@ export function AuditLogSection() {
                       {header('at', 'When', true)}
                       {header('kind', 'Kind')}
                       {header('who', 'Who')}
-                      {header('run', 'Run')}
-                      {header('step', 'Step')}
+                      {!instance && header('run', 'Run')}
+                      {!instance && header('step', 'Step')}
                       <th>What</th>
                     </tr>
                   </thead>
@@ -109,11 +129,13 @@ export function AuditLogSection() {
                           <code>{e.kind}</code>
                         </td>
                         <td>{e.who || <span className="data-started">nobody</span>}</td>
-                        <td>
-                          {e.run !== null &&
-                            (e.flow !== null ? <a href={pageHash(`#/flows/${e.flow}/runs/${e.run}`)}>{e.run}</a> : e.run)}
-                        </td>
-                        <td>{e.step}</td>
+                        {!instance && (
+                          <td>
+                            {e.run !== null &&
+                              (e.flow !== null ? <a href={pageHash(`#/flows/${e.flow}/runs/${e.run}`)}>{e.run}</a> : e.run)}
+                          </td>
+                        )}
+                        {!instance && <td>{e.step}</td>}
                         <td className="audit-detail">{e.detail}</td>
                       </tr>
                     ))}

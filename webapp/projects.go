@@ -933,8 +933,9 @@ func inheritsInstance(ctx context.Context, db querier, project int64) (bool, err
 }
 
 // Someone as they are in a project, for what is done on their behalf
-// outside a request of theirs: an API key's or a webhook's runs, a task
-// board playing, who is told of a step. Admin means owner of the project,
+// outside a request of theirs, such as who is told of a step or whose MCP
+// connection a step uses; what starts runs weighs their level too
+// (memberAs, apiKeyUser). Admin means owner of the project,
 // as enterProject makes it for a request; false if they may not enter it,
 // or there is no such project.
 func userInProject(ctx context.Context, db rowsQuerier, u *user, project int64) (*user, bool, error) {

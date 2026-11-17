@@ -22,8 +22,9 @@ import (
 //
 // What is started outside a request, by an API key, a webhook or a task
 // board playing, is for whoever made it, pressed Play or added it, as they
-// are in the project (memberAs): an owner there, an editor or a viewer,
-// whatever they are in the instance.
+// are in the project now (memberAs): an owner there or an editor, whatever
+// they are in the instance; a viewer, who starts nothing, has none of it
+// started.
 
 // What starting a run of an archived project's flow fails with. It is
 // sql.ErrNoRows too, so whatever answers a flow that isn't there answers it
@@ -59,8 +60,9 @@ func projectArchived(ctx context.Context, db querier, project int64) (bool, erro
 // Someone by id as they are in the project, for what is done on their
 // behalf outside a request of theirs: the runs of an API key they made, of
 // a webhook they added, of a task board they pressed Play on. Why not, when
-// they were removed, are no one, or may no longer enter the project; then
-// the user is nil.
+// they were removed, are no one, may no longer enter the project, or only
+// see it now, as what is done on their behalf does no more than they may;
+// then the user is nil.
 func memberAs(ctx context.Context, db *sql.DB, id, project int64) (*user, string, error) {
 	u := &user{ID: id}
 	var removed bool
@@ -72,12 +74,16 @@ func memberAs(ctx context.Context, db *sql.DB, id, project int64) (*user, string
 	case err != nil:
 		return nil, "", err
 	}
-	in, ok, err := userInProject(ctx, db, u, project)
-	if err != nil {
+	v, found, err := projectOf(ctx, db, u, project)
+	switch {
+	case err != nil:
 		return nil, "", err
-	}
-	if !ok {
+	case !found || v.Level == "":
 		return nil, "may no longer enter the project", nil
+	case v.Level == levelViewer:
+		return nil, "only sees the project now, so starts nothing there", nil
 	}
-	return in, "", nil
+	in := *u
+	in.Admin, in.Project = v.Level == levelOwner, project
+	return &in, "", nil
 }

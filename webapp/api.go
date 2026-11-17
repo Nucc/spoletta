@@ -614,10 +614,13 @@ func recordGiven(ctx context.Context, tx *sql.Tx, b *runBoard, run int64, name s
 }
 
 // An API key as a request presents it: the key, the project it is of, and
-// its owner as they are there, nil when nobody signs in.
+// its owner as they are there, nil when nobody signs in, with their level
+// there now. A key does no more than its owner may now: a viewer's, made
+// while they were an editor, reads what a viewer reads and starts nothing.
 type apiCaller struct {
 	key, project int64
 	user         *user
+	level        string
 }
 
 // Who a request's API key is. Writes why not and returns false if the key
@@ -660,16 +663,18 @@ func apiKeyUser(w http.ResponseWriter, r *http.Request, db *sql.DB, signIn bool)
 	}
 	if signIn {
 		u.ID = owner.Int64
-		in, ok, err := userInProject(r.Context(), db, &u, c.project)
+		v, found, err := projectOf(r.Context(), db, &u, c.project)
 		if err != nil {
 			serverError(w, err)
 			return apiCaller{}, false
 		}
-		if !ok {
+		if !found || v.Level == "" {
 			http.Error(w, "the API key's owner may no longer enter its project", http.StatusUnauthorized)
 			return apiCaller{}, false
 		}
-		c.user = in
+		in := u
+		in.Admin, in.Project = v.Level == levelOwner, c.project
+		c.user, c.level = &in, v.Level
 	}
 	if _, err := db.ExecContext(r.Context(), "UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP(3) WHERE id = ?", c.key); err != nil {
 		serverError(w, err)
@@ -701,6 +706,9 @@ func apiFlowAccess(w http.ResponseWriter, r *http.Request, db *sql.DB, c apiCall
 		return false
 	case access == "":
 		http.Error(w, "flow not found", http.StatusNotFound)
+		return false
+	case c.level == levelViewer && need == accessEdit:
+		http.Error(w, "the API key's owner only sees its project now, so the key starts nothing there; an owner of the project can let them change it", http.StatusForbidden)
 		return false
 	case access == accessReview && need == accessEdit:
 		http.Error(w, "the API key's owner only decides this flow's reviews, and may not run it", http.StatusForbidden)

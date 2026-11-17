@@ -165,8 +165,9 @@ func registerNoteRoutes(mux *http.ServeMux, db *sql.DB) {
 		if refuseInStruct(w, r, db, flow) {
 			return
 		}
-		res, err := db.ExecContext(ctx, "INSERT INTO notes (flow_id, parent_id, x, y, width, height, text, colour, process_id, object_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			flow, n.Parent, n.X, n.Y, n.Width, n.Height, n.Text, n.Colour, n.Process, n.Object)
+		res, err := db.ExecContext(ctx, `INSERT INTO notes (flow_id, parent_id, x, y, width, height, text, colour, process_id, object_id, project_id)
+			SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ?, project_id FROM flows WHERE id = ?`,
+			n.Parent, n.X, n.Y, n.Width, n.Height, n.Text, n.Colour, n.Process, n.Object, flow)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -275,8 +276,9 @@ func registerNoteRoutes(mux *http.ServeMux, db *sql.DB) {
 // Writes the notes s has on the flow's boards, cleared first by
 // restoreSnapshot: with their saved ids, or for one new to the board, as
 // from a setup file, an id of its own. A note on a board s hasn't goes to the
-// top board, and one pointing at what s hasn't points at nothing.
-func restoreNotes(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) error {
+// top board, and one pointing at what s hasn't points at nothing. They are
+// the flow's project's, as the rest of its board.
+func restoreNotes(ctx context.Context, tx *sql.Tx, flow, project int64, s snapshot) error {
 	procs, objs := map[int64]bool{}, map[int64]bool{}
 	for _, p := range s.Processes {
 		procs[p.ID] = true
@@ -295,8 +297,8 @@ func restoreNotes(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) error
 		if n.ID != 0 {
 			id = n.ID
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO notes (id, flow_id, parent_id, x, y, width, height, text, colour, process_id, object_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			id, flow, known(n.Parent, procs), n.X, n.Y, n.Width, n.Height, n.Text, n.Colour, known(n.Process, procs), known(n.Object, objs))
+		_, err := tx.ExecContext(ctx, "INSERT INTO notes (id, flow_id, parent_id, x, y, width, height, text, colour, process_id, object_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id, flow, known(n.Parent, procs), n.X, n.Y, n.Width, n.Height, n.Text, n.Colour, known(n.Process, procs), known(n.Object, objs), project)
 		if err != nil {
 			return err
 		}

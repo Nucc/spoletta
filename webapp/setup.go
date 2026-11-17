@@ -20,6 +20,13 @@ import (
 // versions, history and what persistent objects stored, stays out of it, as
 // do MCP servers' sign-ins. SETUP.md describes the format.
 //
+// A setup is a project's (projects.go): exporting one writes out what that
+// project has alone, and importing one reads and makes over that project's
+// flows, MCP servers, skills and commands, matched by name within it. The
+// file names no project, so one exported from a project makes everything
+// over in another, and the same file imported into two makes two sets
+// apart.
+//
 // Everything in the file refers to everything else by name rather than by
 // id, so a file works in any app, not only the one it came from. Where two
 // processes or objects of a flow, or two states of an object, share a name,
@@ -447,8 +454,9 @@ func storedSetupRoute(v any) (json.RawMessage, error) {
 const maxSetupBytes = 16 << 20
 
 func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
-	// The setup file is the whole setup, everyone's flows, so with sign-in
-	// only admins take it out and bring it in.
+	// The setup file is the whole setup of the request's project, everyone's
+	// flows there, so with sign-in only its owners take it out and bring it
+	// in.
 	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
 		if requestUser(r) != nil && refuseNonAdmin(w, r) {
 			return
@@ -460,7 +468,7 @@ func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		f, err := exportSetup(ctx, tx, 0)
+		f, err := exportSetup(ctx, tx, requestProject(r), 0)
 		var p setupProblem
 		if errors.As(err, &p) {
 			http.Error(w, p.msg, http.StatusConflict)
@@ -528,7 +536,7 @@ func registerSetupRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := importSetup(ctx, tx, f, saving{by: requestUserID(r), reason: savedForImport})
+		res, err := importSetup(ctx, tx, requestProject(r), f, saving{by: requestUserID(r), reason: savedForImport})
 		var p setupProblem
 		if errors.As(err, &p) {
 			http.Error(w, p.msg, http.StatusBadRequest)

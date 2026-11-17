@@ -13,15 +13,19 @@ package main
 // who could before, who still may, and those it now waits on are told.
 //
 // Each message goes by email (mail.go), when the webapp has an SMTP server,
-// and as a Slack direct message from the Slack connector's app, when one is
-// installed with a token, finding the person by their email. Each person
-// picks which in their account's settings, and whether they are told of
-// their runs failing. Every message links straight to the review, or to
-// the run, at PUBLIC_URL, or on this machine without it.
+// and as a Slack direct message from the app of the Slack connector of the
+// run's project, when one is installed there with a token, finding the
+// person by their email. Each person picks which in their account's
+// settings, and whether they are told of their runs failing. Every message
+// links straight to the review, or to the run, in its project, at
+// PUBLIC_URL, or on this machine without it.
 //
-// Admins may decide any review, but only so that one nobody else may
-// decide can still go on; so they are told only of those, unless they
-// may decide it as anyone else would. A review no human object handles is
+// Only people who may enter the run's project (projects.go) are told, each
+// as they are there (projectPeople, as userInProject has them): holding
+// the roles they hold there, a viewer answering no loop question. Its
+// owners may decide any review, but only so that one nobody else may
+// decide can still go on; so they are told only of those, unless they may
+// decide it as anyone else would. A review no human object handles is
 // anyone's who sees its flow, and everyone who does is told of it.
 //
 // Several replicas may notice the same thing, so each message is claimed
@@ -142,13 +146,14 @@ func deciders(ctx context.Context, db *sql.DB, step int64) ([]int64, error) {
 }
 
 // The people told a step waits on them, as deciders, as if it was handed
-// on, or not.
+// on, or not: of those who may enter its run's project, each as they are
+// there.
 func decidersAs(ctx context.Context, db *sql.DB, step int64, escalated bool) ([]int64, error) {
 	var kind string
 	var process sql.NullInt64
-	var run, flow int64
-	err := db.QueryRowContext(ctx, "SELECT s.kind, s.process_ref, s.run_id, r.flow_id FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ?", step).
-		Scan(&kind, &process, &run, &flow)
+	var run, flow, project int64
+	err := db.QueryRowContext(ctx, "SELECT s.kind, s.process_ref, s.run_id, r.flow_id, r.project_id FROM run_steps s JOIN runs r ON r.id = s.run_id WHERE s.id = ?", step).
+		Scan(&kind, &process, &run, &flow, &project)
 	if err != nil {
 		return nil, err
 	}
@@ -160,38 +165,32 @@ func decidersAs(ctx context.Context, db *sql.DB, step int64, escalated bool) ([]
 		}
 		handledBy = b.deciders(process.Int64, escalated)
 	}
-	var people []user
-	err = scanAll(ctx, db, "SELECT id, email, name, admin, team_manager FROM users WHERE removed_at IS NULL ORDER BY id", func(rows *sql.Rows) error {
-		var u user
-		err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Admin, &u.TeamManager)
-		people = append(people, u)
-		return err
-	})
+	people, err := projectPeople(ctx, db, project)
 	if err != nil {
 		return nil, err
 	}
-	var told, admins []int64
-	for _, u := range people {
-		if u.Admin {
-			admins = append(admins, u.ID)
+	roles, err := projectRoles(ctx, db, project)
+	if err != nil {
+		return nil, err
+	}
+	var told, owners []int64
+	for _, p := range people {
+		if p.Admin {
+			owners = append(owners, p.ID)
 		}
 		// As anyone else would.
-		as := u
+		as := p.user
 		as.Admin = false
-		roles, err := userRoles(ctx, db, u.ID)
-		if err != nil {
-			return nil, err
-		}
 		access, err := flowAccess(ctx, db, &as, flow)
 		if err != nil {
 			return nil, err
 		}
-		if decidesStep(&as, roles, access, kind, handledBy) {
-			told = append(told, u.ID)
+		if decidesStep(&as, roles[p.ID], levelAccess(p.level, access), kind, handledBy) {
+			told = append(told, p.ID)
 		}
 	}
 	if len(told) == 0 {
-		return admins, nil
+		return owners, nil
 	}
 	return told, nil
 }
@@ -199,9 +198,11 @@ func decidersAs(ctx context.Context, db *sql.DB, step int64, escalated bool) ([]
 // Claims telling the person of the step of the run, 0 for the run itself,
 // as kind says, in the round of reminders given, 0 for anything else: the
 // claim's id, or 0 if one was claimed already, here or at another replica.
+// The claim is in the run's project.
 func claimNotice(ctx context.Context, db execer, run, step, person int64, kind string, round int) (int64, error) {
-	res, err := db.ExecContext(ctx, "INSERT INTO notifications (run_id, step_id, user_id, kind, round, replica_id) VALUES (?, ?, ?, ?, ?, ?)",
-		run, step, person, kind, round, replicaID)
+	res, err := db.ExecContext(ctx, `INSERT INTO notifications (run_id, step_id, user_id, kind, round, replica_id, project_id)
+		SELECT id, ?, ?, ?, ?, ?, project_id FROM runs WHERE id = ?`,
+		step, person, kind, round, replicaID, run)
 	if mysqlErrorIs(err, mysqlErrDuplicate) {
 		return 0, nil
 	}
@@ -534,13 +535,15 @@ type notice struct {
 
 // Sends the message claimed, on the channels its person wants, logging what
 // went wrong in the run's log and the server's, and records it sent; one
-// about a step no longer waiting goes nowhere.
+// about a step no longer waiting, or to someone who may no longer enter the
+// run's project, goes nowhere.
 func (n *notifier) deliver(id int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), noticeTimeout)
 	defer cancel()
-	var run, step, person int64
+	var run, step, person, project int64
 	var kind string
-	if err := n.db.QueryRowContext(ctx, "SELECT run_id, step_id, user_id, kind FROM notifications WHERE id = ?", id).Scan(&run, &step, &person, &kind); err != nil {
+	if err := n.db.QueryRowContext(ctx, "SELECT run_id, step_id, user_id, kind, project_id FROM notifications WHERE id = ?", id).
+		Scan(&run, &step, &person, &kind, &project); err != nil {
 		log.Printf("WARNING: couldn't read message %d to send it: %v", id, err)
 		return
 	}
@@ -550,22 +553,30 @@ func (n *notifier) deliver(id int64) {
 		}
 	}()
 	var p noticePerson
-	err := n.db.QueryRowContext(ctx, "SELECT email, name, notify_email, notify_slack, notify_failures, removed_at IS NOT NULL FROM users WHERE id = ?", person).
-		Scan(&p.email, &p.name, &p.byEmail, &p.bySlack, &p.ofFailures, &p.removed)
+	var super bool
+	err := n.db.QueryRowContext(ctx, "SELECT email, name, notify_email, notify_slack, notify_failures, removed_at IS NOT NULL, admin FROM users WHERE id = ?", person).
+		Scan(&p.email, &p.name, &p.byEmail, &p.bySlack, &p.ofFailures, &p.removed, &super)
 	if errors.Is(err, sql.ErrNoRows) || p.removed || (kind == noticeFailed && !p.ofFailures) {
 		return
+	}
+	var enters bool
+	if err == nil {
+		_, enters, err = userInProject(ctx, n.db, &user{ID: person, Super: super}, project)
 	}
 	if err != nil {
 		runLog(n.db, run, step, logError, "who to tell couldn't be read: %v", err)
 		return
 	}
+	if !enters {
+		return
+	}
 	var m notice
 	var ok bool
 	if kind == noticeFailed {
-		m, err = n.failedNotice(ctx, run)
+		m, err = n.failedNotice(ctx, run, project)
 		ok = err == nil
 	} else {
-		m, ok, err = n.waitingNotice(ctx, step, kind)
+		m, ok, err = n.waitingNotice(ctx, step, kind, project)
 	}
 	if err != nil {
 		runLog(n.db, run, step, logError, "what to tell %s couldn't be put together: %v", p.label(), err)
@@ -583,13 +594,7 @@ func (n *notifier) deliver(id int64) {
 		}
 	}
 	if p.bySlack {
-		// The Slack connector of the run's project.
-		var c connectorClient
-		var installed bool
-		project, err := runProject(ctx, n.db, run)
-		if err == nil {
-			c, installed, err = slackNotifier(ctx, n.db, project)
-		}
+		c, installed, err := slackNotifier(ctx, n.db, project)
 		if err == nil && installed {
 			err = slackDirect(ctx, c, p.email, m.slack)
 		}
@@ -606,8 +611,9 @@ func (n *notifier) deliver(id int64) {
 
 // What a review, or a loop question, waiting tells those who may decide it,
 // reminds them of, or tells those it is handed on to, as kind says, with
-// the process as its run's board has it; false if it no longer waits.
-func (n *notifier) waitingNotice(ctx context.Context, step int64, kind string) (notice, bool, error) {
+// the process as its run's board has it, linking into its run's project;
+// false if it no longer waits.
+func (n *notifier) waitingNotice(ctx context.Context, step int64, kind string, project int64) (notice, bool, error) {
 	var w waitingStep
 	var status string
 	var process sql.NullInt64
@@ -630,12 +636,19 @@ func (n *notifier) waitingNotice(ctx context.Context, step int64, kind string) (
 			w.handedTo = b.processes[process.Int64].Settings.EscalateTo
 		}
 	}
-	return w.notice(n.base+reviewPath(w.flow, w.run, step), n.base+"/#/settings/account", kind == noticeReminder), true, nil
+	return w.notice(n.base+reviewPath(project, w.flow, w.run, step), n.base+projectPath(project, "settings/account"), kind == noticeReminder), true, nil
 }
 
-// Where the board opens on a run with a step's review showing.
-func reviewPath(flow, run, step int64) string {
-	return fmt.Sprintf("/#/flows/%d/runs/%d/steps/%d", flow, run, step)
+// Where a page of the project is, as the browser addresses it: the page
+// given, such as "settings/account", in the project.
+func projectPath(project int64, page string) string {
+	return fmt.Sprintf("/#/p/%d/%s", project, page)
+}
+
+// Where the board opens on a run with a step's review showing, in the
+// run's project.
+func reviewPath(project, flow, run, step int64) string {
+	return projectPath(project, fmt.Sprintf("flows/%d/runs/%d/steps/%d", flow, run, step))
 }
 
 // A step waiting for a person, as they are told of it.
@@ -721,8 +734,8 @@ func (w waitingStep) notice(link, settings string, reminder bool) notice {
 	return m
 }
 
-// What a run failing tells whoever started it.
-func (n *notifier) failedNotice(ctx context.Context, run int64) (notice, error) {
+// What a run failing tells whoever started it, linking into its project.
+func (n *notifier) failedNotice(ctx context.Context, run, project int64) (notice, error) {
 	var flow int64
 	var name string
 	var finished sql.NullTime
@@ -747,7 +760,8 @@ func (n *notifier) failedNotice(ctx context.Context, run int64) (notice, error) 
 	if err != nil {
 		return notice{}, err
 	}
-	return failedRunNotice(run, name, finished, failures, n.base+fmt.Sprintf("/#/flows/%d/runs/%d", flow, run), n.base+"/#/settings/account"), nil
+	return failedRunNotice(run, name, finished, failures, n.base+projectPath(project, fmt.Sprintf("flows/%d/runs/%d", flow, run)),
+		n.base+projectPath(project, "settings/account")), nil
 }
 
 func failedRunNotice(run int64, flowName string, finished sql.NullTime, failures []string, link, settings string) notice {
@@ -811,11 +825,12 @@ func spokenDuration(seconds int) string {
 	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
 }
 
-// Whether people are told by email, and on Slack, as an admin set them up.
-func (n *notifier) channels(ctx context.Context) (email, slack bool, err error) {
+// Whether people are told by email, as the instance is set up, and on
+// Slack, as the project's owners set it up.
+func (n *notifier) channels(ctx context.Context, project int64) (email, slack bool, err error) {
 	if n == nil {
 		return false, false, nil
 	}
-	slack, err = slackInstalled(ctx, n.db)
+	_, slack, err = slackNotifier(ctx, n.db, project)
 	return n.mail != nil, slack, err
 }

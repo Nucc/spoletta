@@ -82,7 +82,8 @@ func recordOutput(db *sql.DB, step int64, stream, text string) {
 	if stream != "stderr" {
 		stream = "stdout"
 	}
-	if _, err := db.ExecContext(context.Background(), "INSERT INTO run_step_output (step_id, stream, text) VALUES (?, ?, ?)", step, stream, text); err != nil {
+	if _, err := db.ExecContext(context.Background(), "INSERT INTO run_step_output (step_id, stream, text, project_id) VALUES (?, ?, ?, (SELECT project_id FROM run_steps WHERE id = ?))",
+		step, stream, text, step); err != nil {
 		log.Printf("record what step %d printed: %v", step, err)
 	}
 }

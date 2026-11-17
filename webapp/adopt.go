@@ -527,16 +527,17 @@ func (e *engine) forget(run int64) {
 }
 
 // How the run walks: its flow, on the version it took, with that version's
-// repositories and the branches' prefix it started with.
+// repositories and the branches' prefix it started with, in the project it
+// is in, as the run keeps it.
 func flowRunOf(ctx context.Context, db *sql.DB, id int64) (*flowRun, error) {
-	var flow, version int64
+	var flow, project, version int64
 	var name string
 	var settings flowSettings
 	var body []byte
 	var published bool
-	err := db.QueryRowContext(ctx, `SELECT r.flow_id, v.id, f.name, f.settings, v.snapshot, r.published FROM runs r
+	err := db.QueryRowContext(ctx, `SELECT r.flow_id, r.project_id, v.id, f.name, f.settings, v.snapshot, r.published FROM runs r
 		JOIN flows f ON f.id = r.flow_id JOIN flow_versions v ON v.id = r.version_id WHERE r.id = ?`, id).
-		Scan(&flow, &version, &name, &settings, &body, &published)
+		Scan(&flow, &project, &version, &name, &settings, &body, &published)
 	if err != nil {
 		return nil, err
 	}
@@ -558,7 +559,7 @@ func flowRunOf(ctx context.Context, db *sql.DB, id int64) (*flowRun, error) {
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	fr := newFlowRun(flow, version, board, settings.Repositories, prefix)
+	fr := newFlowRun(project, flow, version, board, settings.Repositories, prefix)
 	fr.rule = settings.Branch
 	fr.published = published
 	return fr, nil
@@ -656,8 +657,9 @@ func claimRun(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 		}
 	}
 	for _, r := range runs {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO run_moves (run_id, from_replica, to_replica, host) VALUES (?, ?, ?, ?)",
-			r, from, replicaID, truncate(replicaHost, 255)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO run_moves (run_id, from_replica, to_replica, host, project_id)
+			VALUES (?, ?, ?, ?, (SELECT project_id FROM runs WHERE id = ?))`,
+			r, from, replicaID, truncate(replicaHost, 255), r); err != nil {
 			return false, err
 		}
 	}

@@ -36,6 +36,27 @@ package main
 // Every request to /api/ needs a session but those signing in and out. The
 // MCP proxy at /mcp/ doesn't: the worker reaches it with an agent step's own
 // token; see mcp.go.
+//
+// The company's provider may say which groups someone is in, in the claim
+// OIDC_GROUPS_CLAIM names: a string, one group, or a list of strings, in the
+// ID token or, failing that, in what its userinfo endpoint says. A group a
+// project is given to lets its people in (projects.go), so each sign-in
+// replaces the person's groups (user_groups) with those it carries; one
+// without the variable, or with Google, carries none. Someone taken out of a
+// group at the provider loses what it gave them as their groups are read
+// again: every replica looks, every few seconds, for sessions of people with
+// groups read longer ago than an hour (or half GROUPS_MAX_AGE, if that is
+// shorter) and reads them again from the provider with the session's
+// refresh token, or its access token while it lasts, kept sealed with
+// SECRET_KEY (secrets.go). A session the provider refuses to refresh ends.
+// Where they can't be read again, as the provider gave no refresh token,
+// a session of someone with groups read longer ago than GROUPS_MAX_AGE (24
+// hours unless set) is over, so they sign in again. The sign-in asks for
+// offline_access, which gets a refresh token from most providers, when
+// OIDC_GROUPS_CLAIM is set and the provider's discovery document lists it.
+// When groups were last read is kept with the person (groups_read_at), and
+// each session's next reading with it, claimed by moving it on, so nothing
+// of it lives only in one replica's memory.
 
 import (
 	"context"
@@ -48,6 +69,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -101,6 +123,9 @@ type auth struct {
 	publicURL string
 	domains   []string
 	admins    map[string]bool
+	// How long someone's groups hold once read, past which a session of
+	// theirs is over; and how often a live session reads them again.
+	groupsMaxAge, groupsEvery time.Duration
 }
 
 // An identity provider people sign in with.
@@ -115,19 +140,46 @@ type provider struct {
 	// account of the email's domain's own, as the ID token's hd claim says.
 	hostedDomains bool
 	mailDomains   []string
+	// The claim saying which groups someone is in; none for a provider
+	// whose sign-ins carry no groups.
+	groupsClaim string
 }
 
 // Google's issuer; GOOGLE_ISSUER stands in for it in tests.
 const googleIssuer = "https://accounts.google.com"
 
+// How long groups hold unless GROUPS_MAX_AGE says, and how often at most a
+// live session reads them again; see the top of this file.
+const (
+	defaultGroupsMaxAge = 24 * time.Hour
+	groupsReadEvery     = time.Hour
+)
+
+// How often every replica looks for sessions whose groups are due to be
+// read again, and how long one that couldn't be waits to be tried again.
+const (
+	groupsSweep = 5 * time.Second
+	groupsRetry = 5 * time.Minute
+)
+
 func newAuth(db *sql.DB) *auth {
 	a := &auth{
-		db:        db,
-		publicURL: strings.TrimRight(env("PUBLIC_URL", ""), "/"),
-		admins:    map[string]bool{},
+		db:           db,
+		publicURL:    strings.TrimRight(env("PUBLIC_URL", ""), "/"),
+		admins:       map[string]bool{},
+		groupsMaxAge: defaultGroupsMaxAge,
 	}
+	if v := env("GROUPS_MAX_AGE", ""); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			log.Fatalf("GROUPS_MAX_AGE must be a duration such as 24h or 90m: %q", v)
+		}
+		a.groupsMaxAge = d
+	}
+	a.groupsEvery = min(groupsReadEvery, a.groupsMaxAge/2)
 	if issuer := strings.TrimRight(env("OIDC_ISSUER", ""), "/"); issuer != "" {
-		p := &provider{key: "oidc", issuer: issuer, clientID: env("OIDC_CLIENT_ID", ""), clientSecret: env("OIDC_CLIENT_SECRET", "")}
+		p := &provider{key: "oidc", issuer: issuer, clientID: env("OIDC_CLIENT_ID", ""), clientSecret: env("OIDC_CLIENT_SECRET", ""),
+			groupsClaim: strings.TrimSpace(env("OIDC_GROUPS_CLAIM", ""))}
 		if p.clientID == "" {
 			log.Fatal("OIDC_CLIENT_ID must be set with OIDC_ISSUER")
 		}
@@ -213,12 +265,19 @@ func (a *auth) protect(next http.Handler) http.Handler {
 	})
 }
 
+// The condition on users u that their groups were read longer ago than the
+// microseconds its argument gives; never NULL, and false for groups put
+// there otherwise than by signing in, which have no time they were read.
+const staleGroups = "COALESCE(u.groups_read_at < CURRENT_TIMESTAMP(3) - INTERVAL ? MICROSECOND, FALSE)"
+
 func hashToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
 }
 
-// The user of the request's session, or nil without one still going. Whether
+// The user of the request's session, or nil without one still going: one
+// of someone whose groups were read longer ago than GROUPS_MAX_AGE is over,
+// as they may have left them since (see the top of this file). Whether
 // they are an owner of the project the request is about is worked out next
 // (enterProject).
 func (a *auth) sessionUser(r *http.Request) (*user, error) {
@@ -229,7 +288,9 @@ func (a *auth) sessionUser(r *http.Request) (*user, error) {
 	var u user
 	err = a.db.QueryRowContext(r.Context(),
 		`SELECT u.id, u.email, u.name, u.admin, u.team_manager FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP(3) AND u.removed_at IS NULL`, hashToken(c.Value)).
+		WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP(3) AND u.removed_at IS NULL
+			AND NOT (`+staleGroups+` AND EXISTS (SELECT 1 FROM user_groups g WHERE g.user_id = u.id))`,
+		hashToken(c.Value), a.groupsMaxAge.Microseconds()).
 		Scan(&u.ID, &u.Email, &u.Name, &u.Super, &u.TeamManager)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -257,6 +318,8 @@ type oidcProvider struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	UserinfoEndpoint      string `json:"userinfo_endpoint"`
+	// The scopes it says it supports, if it says; see the login route.
+	ScopesSupported []string `json:"scopes_supported"`
 }
 
 // The provider the key names, or the only one without a key; nil if none.
@@ -322,11 +385,37 @@ type idClaims struct {
 	Name          string          `json:"name"`
 	// The Google Workspace domain whose account it is; see provider.
 	HostedDomain string `json:"hd"`
+	// Every claim as it came, for the one naming the groups.
+	raw map[string]json.RawMessage
 }
 
 // The claims of an ID token from the token endpoint, checked as being for
 // this sign-in.
 func (p *provider) idClaims(token, nonce string) (idClaims, error) {
+	c, err := p.checkedClaims(token)
+	if err != nil {
+		return c, err
+	}
+	if subtle.ConstantTimeCompare([]byte(c.Nonce), []byte(nonce)) != 1 {
+		return c, errors.New("the ID token is for another sign-in")
+	}
+	return c, nil
+}
+
+// The claims of an ID token the token endpoint gave as a session's tokens
+// were refreshed, which has no nonce, checked as being from the provider,
+// for this webapp, and about the same person, who is subject to it.
+func (p *provider) refreshedClaims(token, subject string) (idClaims, error) {
+	c, err := p.checkedClaims(token)
+	if err == nil && c.Subject != subject {
+		err = errors.New("the refreshed ID token is about someone else")
+	}
+	return c, err
+}
+
+// The claims of an ID token from the token endpoint, checked as being from
+// the provider, for this webapp, still good and naming someone.
+func (p *provider) checkedClaims(token string) (idClaims, error) {
 	var c idClaims
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -337,6 +426,9 @@ func (p *provider) idClaims(token, nonce string) (idClaims, error) {
 		return c, fmt.Errorf("the ID token: %w", err)
 	}
 	if err := json.Unmarshal(payload, &c); err != nil {
+		return c, fmt.Errorf("the ID token: %w", err)
+	}
+	if err := json.Unmarshal(payload, &c.raw); err != nil {
 		return c, fmt.Errorf("the ID token: %w", err)
 	}
 	var audiences []string
@@ -353,47 +445,89 @@ func (p *provider) idClaims(token, nonce string) (idClaims, error) {
 		return c, errors.New("the ID token isn't for this webapp")
 	case time.Now().After(time.Unix(int64(c.Expiry), 0)):
 		return c, errors.New("the ID token expired")
-	case subtle.ConstantTimeCompare([]byte(c.Nonce), []byte(nonce)) != 1:
-		return c, errors.New("the ID token is for another sign-in")
 	case c.Subject == "":
 		return c, errors.New("the ID token names nobody")
 	}
 	return c, nil
 }
 
-// Fills in the email and name the ID token left out from the userinfo endpoint.
-func fillFromUserinfo(ctx context.Context, p oidcProvider, accessToken string, c *idClaims) error {
-	if (c.Email != "" && c.Name != "") || p.UserinfoEndpoint == "" {
-		return nil
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.UserinfoEndpoint, nil)
+// What the userinfo endpoint says of whoever the access token is for, and
+// the status it answered with.
+func userinfo(ctx context.Context, endpoint, accessToken string) (idClaims, int, error) {
+	var info idClaims
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return err
+		return info, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
 	resp, err := oauthClient.Do(req)
 	if err != nil {
-		return err
+		return info, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("userinfo: status %d", resp.StatusCode)
+		return info, resp.StatusCode, fmt.Errorf("userinfo: status %d", resp.StatusCode)
 	}
-	var info idClaims
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return fmt.Errorf("userinfo: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err == nil {
+		err = json.Unmarshal(body, &info)
 	}
-	// Only about the same person.
-	if info.Subject != c.Subject {
-		return errors.New("userinfo is about someone else")
+	if err == nil {
+		err = json.Unmarshal(body, &info.raw)
 	}
-	if c.Email == "" {
-		c.Email, c.EmailVerified = info.Email, info.EmailVerified
+	if err != nil {
+		return info, resp.StatusCode, fmt.Errorf("userinfo: %w", err)
 	}
-	if c.Name == "" {
-		c.Name = info.Name
+	return info, resp.StatusCode, nil
+}
+
+// Where a sign-in found the groups.
+const (
+	groupsInIDToken  = "id_token"
+	groupsInUserinfo = "userinfo"
+)
+
+// The groups the provider's claim names among the claims given, and
+// whether it is there at all: a string is one group, a list of strings
+// several, null none. Names longer than a project's group may have are left
+// out, as no project could be given them.
+func (p *provider) groupsIn(claims map[string]json.RawMessage) ([]string, bool, error) {
+	raw, ok := claims[p.groupsClaim]
+	if p.groupsClaim == "" || !ok {
+		return nil, false, nil
 	}
-	return nil
+	var names []string
+	var one *string
+	if err := json.Unmarshal(raw, &one); err == nil {
+		if one != nil {
+			names = []string{*one}
+		}
+	} else if err := json.Unmarshal(raw, &names); err != nil {
+		return nil, true, fmt.Errorf("the claim %s, which OIDC_GROUPS_CLAIM names, is neither a string nor a list of strings", p.groupsClaim)
+	}
+	groups := []string{}
+	for _, n := range names {
+		if n != "" && len(n) <= maxGroupName && !slices.Contains(groups, n) {
+			groups = append(groups, n)
+		}
+	}
+	return groups, true, nil
+}
+
+// Replaces the person's groups with those given, read from the provider
+// now.
+func setGroups(ctx context.Context, tx *sql.Tx, user int64, groups []string) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM user_groups WHERE user_id = ?", user); err != nil {
+		return err
+	}
+	for _, g := range groups {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO user_groups (user_id, group_name) VALUES (?, ?)", user, g); err != nil {
+			return err
+		}
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE users SET groups_read_at = CURRENT_TIMESTAMP(3) WHERE id = ?", user)
+	return err
 }
 
 // Whether someone with this email may sign in without an admin adding them.
@@ -422,8 +556,9 @@ var (
 )
 
 // The user who signed in with the provider, made or updated from what it
-// says of them; errNotAdmitted if they may not sign in.
-func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims) (int64, error) {
+// says of them, their groups now those given; errNotAdmitted if they may
+// not sign in.
+func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims, groups []string) (int64, error) {
 	email := strings.ToLower(strings.TrimSpace(c.Email))
 	// A provider that says the email isn't verified could be told any.
 	if email == "" || (c.EmailVerified != nil && !*c.EmailVerified) {
@@ -470,7 +605,10 @@ func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims) (int64, er
 			if _, err = tx.ExecContext(ctx, "INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)", p.issuer, c.Subject, id); err != nil {
 				return err
 			}
-			return joinLegacy(ctx, tx, id, admin)
+			if err := joinLegacy(ctx, tx, id, admin); err != nil {
+				return err
+			}
+			return setGroups(ctx, tx, id, groups)
 		case err != nil:
 			return err
 		}
@@ -493,22 +631,27 @@ func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims) (int64, er
 		_, err = tx.ExecContext(ctx,
 			"UPDATE users SET email = ?, name = COALESCE(NULLIF(?, ''), name), admin = admin OR ?, signed_in_at = CURRENT_TIMESTAMP(3) WHERE id = ?",
 			email, c.Name, admin, id)
-		return err
+		if err != nil {
+			return err
+		}
+		return setGroups(ctx, tx, id, groups)
 	})
 	return id, err
 }
 
 func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
-	// Who is signed in, with their roles, and whether anyone signs in at
-	// all; whether they are the instance's admin (super), and the projects
-	// they may enter, each with their level there. Their admin is whether
-	// they own the project the request names (see projects.go). Without
+	// Who is signed in, with their roles and teams in the project the
+	// request names, and whether anyone signs in at all; whether they are
+	// the instance's admin (super), and the projects they may enter, each
+	// with their level there. Their admin is whether they own the project
+	// the request names (see projects.go). Someone who may enter none is
+	// told whom to ask: the instance's admins, by name (admins). Without
 	// sign-in everyone may do anything, in any project.
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		u := requestUser(r)
 		me := map[string]any{"signIn": a != nil, "user": nil, "super": u == nil || u.Super}
 		if u != nil {
-			p, err := getPerson(r.Context(), db, u.ID)
+			p, err := getPerson(r.Context(), db, u.ID, requestProject(r))
 			if err != nil {
 				serverError(w, err)
 				return
@@ -522,6 +665,20 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			return
 		}
 		me["projects"] = projects
+		if u != nil && len(projects) == 0 {
+			admins := []string{}
+			err := scanAll(r.Context(), db, "SELECT COALESCE(NULLIF(name, ''), email) FROM users WHERE admin AND removed_at IS NULL ORDER BY 1", func(rows *sql.Rows) error {
+				var n string
+				err := rows.Scan(&n)
+				admins = append(admins, n)
+				return err
+			})
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			me["admins"] = admins
+		}
 		writeJSON(w, http.StatusOK, me)
 	})
 	if a == nil {
@@ -555,11 +712,17 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			MaxAge: int(signInLifetime / time.Second), HttpOnly: true, Secure: a.secure(r), SameSite: http.SameSiteLaxMode,
 		})
 		challenge := sha256.Sum256([]byte(s.Verifier))
+		// A refresh token, to read someone's groups again while their
+		// session lives, where the provider says it gives one this way.
+		scope := "openid email profile"
+		if pr.groupsClaim != "" && slices.Contains(p.ScopesSupported, "offline_access") {
+			scope += " offline_access"
+		}
 		q := url.Values{
 			"response_type":         {"code"},
 			"client_id":             {pr.clientID},
 			"redirect_uri":          {a.redirectURL(r)},
-			"scope":                 {"openid email profile"},
+			"scope":                 {scope},
 			"state":                 {s.State},
 			"nonce":                 {s.Nonce},
 			"code_challenge":        {base64.RawURLEncoding.EncodeToString(challenge[:])},
@@ -600,7 +763,7 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			authPage(w, http.StatusBadRequest, "Signing in failed", "This sign-in was with a provider nobody signs in with here any more. Sign in again.")
 			return
 		}
-		id, err := a.finish(r, pr, s, q.Get("code"))
+		as, err := a.finish(r, pr, s, q.Get("code"))
 		if errors.Is(err, errNotAdmitted) {
 			authPage(w, http.StatusForbidden, "You can't sign in yet", "Ask an admin to add you, then sign in again.")
 			return
@@ -624,8 +787,7 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			serverError(w, err)
 			return
 		}
-		if _, err := a.db.ExecContext(r.Context(), "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
-			hashToken(token), id, time.Now().Add(sessionLifetime).UTC()); err != nil {
+		if err := a.startSession(r.Context(), token, pr, as); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -652,27 +814,23 @@ func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 	})
 }
 
-// Exchanges the code the provider came back with for who signed in, and
-// returns their user's id.
-func (a *auth) finish(r *http.Request, pr *provider, s signIn, code string) (int64, error) {
-	ctx := r.Context()
-	p, err := pr.discover(ctx)
-	if err != nil {
-		return 0, err
-	}
-	form := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {a.redirectURL(r)},
-		"code_verifier": {s.Verifier},
-	}
+// What the token endpoint gives.
+type oidcTokens struct {
+	tokenResponse
+	IDToken string `json:"id_token"`
+}
+
+// Asks the provider's token endpoint for tokens, as its client, and says
+// what it gave, the status it answered with, and what went wrong.
+func (pr *provider) tokens(ctx context.Context, endpoint string, form url.Values) (oidcTokens, int, error) {
+	var t oidcTokens
 	// A public client says who it is in the form.
 	if pr.clientSecret == "" {
 		form.Set("client_id", pr.clientID)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenEndpoint, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return 0, err
+		return t, 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
@@ -681,31 +839,360 @@ func (a *auth) finish(r *http.Request, pr *provider, s signIn, code string) (int
 	}
 	resp, err := oauthClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("token endpoint: %w", err)
+		return t, 0, fmt.Errorf("token endpoint: %w", err)
 	}
 	defer resp.Body.Close()
-	var t struct {
-		tokenResponse
-		IDToken string `json:"id_token"`
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&t); err != nil {
+		return t, resp.StatusCode, fmt.Errorf("token endpoint: status %d: %w", resp.StatusCode, err)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&t); err != nil {
-		return 0, fmt.Errorf("token endpoint: status %d: %w", resp.StatusCode, err)
-	}
-	if resp.StatusCode != http.StatusOK || t.IDToken == "" {
+	if resp.StatusCode != http.StatusOK {
 		msg := t.Error
 		if t.Description != "" {
 			msg += ": " + t.Description
 		}
-		return 0, fmt.Errorf("token endpoint: status %d: %s", resp.StatusCode, msg)
+		return t, resp.StatusCode, fmt.Errorf("token endpoint: status %d: %s", resp.StatusCode, msg)
+	}
+	return t, resp.StatusCode, nil
+}
+
+// What signing in came to: who signed in, and what their session keeps to
+// read their groups again.
+type signedInAs struct {
+	user int64
+	// The groups they are in, and where the sign-in found them
+	// (groupsInIDToken or groupsInUserinfo); none found, none.
+	groups     []string
+	groupsFrom string
+	// The provider's tokens, and how many seconds the access token lasts,
+	// if it says.
+	refreshToken, accessToken string
+	expiresIn                 int64
+}
+
+// Exchanges the code the provider came back with for who signed in, and
+// returns their user and what their session keeps.
+func (a *auth) finish(r *http.Request, pr *provider, s signIn, code string) (signedInAs, error) {
+	ctx := r.Context()
+	var as signedInAs
+	p, err := pr.discover(ctx)
+	if err != nil {
+		return as, err
+	}
+	t, _, err := pr.tokens(ctx, p.TokenEndpoint, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {a.redirectURL(r)},
+		"code_verifier": {s.Verifier},
+	})
+	if err == nil && t.IDToken == "" {
+		err = errors.New("token endpoint: no ID token")
+	}
+	if err != nil {
+		return as, err
 	}
 	claims, err := pr.idClaims(t.IDToken, s.Nonce)
 	if err != nil {
-		return 0, err
+		return as, err
 	}
-	if err := fillFromUserinfo(ctx, p, t.AccessToken, &claims); err != nil {
-		return 0, err
+	groups, found, err := pr.groupsIn(claims.raw)
+	if err != nil {
+		return as, err
 	}
-	return a.signedIn(ctx, pr, claims)
+	if found {
+		as.groupsFrom = groupsInIDToken
+	}
+	// The userinfo endpoint fills in the email and name the ID token left
+	// out, and the groups.
+	if (claims.Email == "" || claims.Name == "" || (pr.groupsClaim != "" && !found)) && p.UserinfoEndpoint != "" {
+		info, _, err := userinfo(ctx, p.UserinfoEndpoint, t.AccessToken)
+		if err != nil {
+			return as, err
+		}
+		// Only about the same person.
+		if info.Subject != claims.Subject {
+			return as, errors.New("userinfo is about someone else")
+		}
+		if claims.Email == "" {
+			claims.Email, claims.EmailVerified = info.Email, info.EmailVerified
+		}
+		if claims.Name == "" {
+			claims.Name = info.Name
+		}
+		if !found {
+			if groups, found, err = pr.groupsIn(info.raw); err != nil {
+				return as, err
+			}
+			if found {
+				as.groupsFrom = groupsInUserinfo
+			}
+		}
+	}
+	as.groups, as.refreshToken, as.accessToken, as.expiresIn = groups, t.RefreshToken, t.AccessToken, t.ExpiresIn
+	as.user, err = a.signedIn(ctx, pr, claims, groups)
+	return as, err
+}
+
+// Where a session's refresh or access token, as column says, is kept.
+func sessionTokenPlace(column, hash string) string { return "sessions/" + column + "/" + hash }
+
+// A token as a session keeps it: sealed, or NULL for none.
+func sessionToken(column, hash, token string) (sql.NullString, error) {
+	if token == "" {
+		return sql.NullString{}, nil
+	}
+	v, err := secrets.seal(sessionTokenPlace(column, hash), token)
+	return sql.NullString{String: v, Valid: err == nil}, err
+}
+
+// Starts the session of whoever signed in, under the token given. Someone
+// with groups from a provider that carries them keeps its tokens, to read
+// them again, as long as one is left to read them with.
+func (a *auth) startSession(ctx context.Context, token string, pr *provider, as signedInAs) error {
+	hash := hashToken(token)
+	var refresh, access sql.NullString
+	var expiresIn *int64
+	var checkIn *int64
+	if pr.groupsClaim != "" && len(as.groups) > 0 && (as.refreshToken != "" || as.accessToken != "") {
+		var err error
+		if refresh, err = sessionToken("refresh_token", hash, as.refreshToken); err != nil {
+			return err
+		}
+		if access, err = sessionToken("access_token", hash, as.accessToken); err != nil {
+			return err
+		}
+		if as.expiresIn > 0 {
+			expiresIn = &as.expiresIn
+		}
+		every := a.groupsEvery.Microseconds()
+		checkIn = &every
+	}
+	_, err := a.db.ExecContext(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at, issuer, refresh_token, access_token, access_expires_at, groups_from, groups_check_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3) + INTERVAL ? SECOND, ?, CURRENT_TIMESTAMP(3) + INTERVAL ? MICROSECOND)`,
+		hash, as.user, time.Now().Add(sessionLifetime).UTC(), pr.issuer, refresh, access, expiresIn, as.groupsFrom, checkIn)
+	return err
+}
+
+// Reads again, every groupsSweep until ctx ends, the groups of people with
+// a live session whose groups are due to be; see the top of this file.
+func (a *auth) watchGroups(ctx context.Context) {
+	if a == nil {
+		return
+	}
+	t := time.NewTicker(groupsSweep)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if err := a.readGroupsDue(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("WARNING: couldn't read people's groups again: %v", err)
+		}
+	}
+}
+
+// Reads again the groups of the people with groups read longer ago than
+// groupsEvery, each through one of their sessions due, which only one
+// replica claims at a time by moving its next reading on. Only sessions of
+// the providers this replica signs in with are looked at, so one started
+// with other providers, as in a deploy changing them, leaves the others'
+// sessions be.
+func (a *auth) readGroupsDue(ctx context.Context) error {
+	var issuers []any
+	for _, p := range a.providers {
+		if p.groupsClaim != "" {
+			issuers = append(issuers, p.issuer)
+		}
+	}
+	if len(issuers) == 0 {
+		return nil
+	}
+	var due []string
+	err := scanAll(ctx, a.db, `SELECT s.token_hash FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.groups_check_at <= CURRENT_TIMESTAMP(3) AND s.expires_at > CURRENT_TIMESTAMP(3) AND s.issuer IN `+placeholders(len(issuers))+`
+			AND u.removed_at IS NULL AND `+staleGroups+` AND EXISTS (SELECT 1 FROM user_groups g WHERE g.user_id = u.id)
+		ORDER BY s.groups_check_at LIMIT 20`, func(rows *sql.Rows) error {
+		var hash string
+		err := rows.Scan(&hash)
+		due = append(due, hash)
+		return err
+	}, append(issuers, a.groupsEvery.Microseconds())...)
+	if err != nil {
+		return err
+	}
+	for _, hash := range due {
+		res, err := a.db.ExecContext(ctx, `UPDATE sessions s JOIN users u ON u.id = s.user_id
+			SET s.groups_check_at = CURRENT_TIMESTAMP(3) + INTERVAL ? MICROSECOND
+			WHERE s.token_hash = ? AND s.groups_check_at <= CURRENT_TIMESTAMP(3) AND `+staleGroups,
+			min(groupsRetry, a.groupsEvery).Microseconds(), hash, a.groupsEvery.Microseconds())
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			continue
+		}
+		if err := a.readGroupsAgain(ctx, hash); err != nil && ctx.Err() == nil {
+			log.Printf("WARNING: couldn't read the groups of a session's person again, so they are tried again in %s: %v", min(groupsRetry, a.groupsEvery), err)
+		}
+	}
+	return nil
+}
+
+// Why a session's groups can't be read again, whatever is tried.
+var errGroupsUnreadable = errors.New("the groups can't be read again")
+
+// Reads the groups of the session's person again from the provider, with
+// the session's refresh token, or its access token while it lasts, and
+// keeps the tokens the provider gives back. A session the provider refuses
+// to refresh ends. One whose groups can't be read again, as it has no token
+// left that works, or neither a new ID token nor userinfo carries the
+// claim where the sign-in found it, keeps its tokens no more; it ends once
+// its person's groups are older than GROUPS_MAX_AGE. Any other error is
+// returned, to be tried again.
+func (a *auth) readGroupsAgain(ctx context.Context, hash string) error {
+	err := a.refreshGroups(ctx, hash)
+	switch {
+	case errors.Is(err, errGroupsUnreadable):
+		log.Printf("a session's groups can't be read again (%v), so it ends once they are older than %s", err, a.groupsMaxAge)
+		_, err = a.db.ExecContext(ctx, `UPDATE sessions SET refresh_token = NULL, access_token = NULL, access_expires_at = NULL, groups_check_at = NULL
+			WHERE token_hash = ?`, hash)
+	case errors.Is(err, errRefreshRefused):
+		_, err = a.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash = ?", hash)
+	}
+	return err
+}
+
+// The provider refused to refresh a session's tokens: whoever it was for
+// may no longer sign in with it.
+var errRefreshRefused = errors.New("the provider refused to refresh the session")
+
+func (a *auth) refreshGroups(ctx context.Context, hash string) error {
+	var user int64
+	var issuer, from string
+	var refreshSealed, accessSealed sql.NullString
+	var accessGone bool
+	err := a.db.QueryRowContext(ctx, `SELECT user_id, issuer, groups_from, refresh_token, access_token,
+			COALESCE(access_expires_at <= CURRENT_TIMESTAMP(3), FALSE) FROM sessions WHERE token_hash = ?`, hash).
+		Scan(&user, &issuer, &from, &refreshSealed, &accessSealed, &accessGone)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var pr *provider
+	for _, p := range a.providers {
+		if p.issuer == issuer && p.groupsClaim != "" {
+			pr = p
+		}
+	}
+	if pr == nil {
+		return nil
+	}
+	var subject string
+	err = a.db.QueryRowContext(ctx, "SELECT subject FROM user_identities WHERE issuer = ? AND user_id = ?", issuer, user).Scan(&subject)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: they are no longer known to the provider", errGroupsUnreadable)
+	}
+	if err != nil {
+		return err
+	}
+	open := func(column string, stored sql.NullString) (string, error) {
+		if !stored.Valid {
+			return "", nil
+		}
+		return secrets.open(sessionTokenPlace(column, hash), stored.String)
+	}
+	refresh, err := open("refresh_token", refreshSealed)
+	if err != nil {
+		return err
+	}
+	access, err := open("access_token", accessSealed)
+	if err != nil {
+		return err
+	}
+	if refresh == "" && (access == "" || accessGone) {
+		return fmt.Errorf("%w: the provider gave no refresh token, and the access token expired", errGroupsUnreadable)
+	}
+	p, err := pr.discover(ctx)
+	if err != nil {
+		return err
+	}
+	var expiresIn *int64
+	var refreshed map[string]json.RawMessage
+	if refresh != "" {
+		t, status, err := pr.tokens(ctx, p.TokenEndpoint, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}})
+		if t.Error == "invalid_grant" {
+			return errRefreshRefused
+		}
+		if err == nil && t.AccessToken == "" {
+			err = fmt.Errorf("token endpoint: status %d: no access token", status)
+		}
+		if err != nil {
+			return err
+		}
+		access = t.AccessToken
+		if t.RefreshToken != "" {
+			refresh = t.RefreshToken
+		}
+		if t.ExpiresIn > 0 {
+			expiresIn = &t.ExpiresIn
+		}
+		if t.IDToken != "" {
+			c, err := pr.refreshedClaims(t.IDToken, subject)
+			if err != nil {
+				return fmt.Errorf("%w: %v", errGroupsUnreadable, err)
+			}
+			refreshed = c.raw
+		}
+	}
+	groups, found, err := pr.groupsIn(refreshed)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errGroupsUnreadable, err)
+	}
+	asked := false
+	if !found && p.UserinfoEndpoint != "" {
+		info, status, err := userinfo(ctx, p.UserinfoEndpoint, access)
+		if status == http.StatusUnauthorized && refresh == "" {
+			return fmt.Errorf("%w: the access token is no longer taken", errGroupsUnreadable)
+		}
+		if err != nil {
+			return err
+		}
+		if info.Subject != subject {
+			return fmt.Errorf("%w: userinfo is about someone else", errGroupsUnreadable)
+		}
+		if groups, found, err = pr.groupsIn(info.raw); err != nil {
+			return fmt.Errorf("%w: %v", errGroupsUnreadable, err)
+		}
+		asked = true
+	}
+	// The claim left out where the sign-in found it says they are in no
+	// group; left out elsewhere it says nothing.
+	if !found && !((from == groupsInIDToken && refreshed != nil) || (from == groupsInUserinfo && asked)) {
+		return fmt.Errorf("%w: neither a refreshed ID token nor userinfo carries the claim %s", errGroupsUnreadable, pr.groupsClaim)
+	}
+	sealedRefresh, err := sessionToken("refresh_token", hash, refresh)
+	if err != nil {
+		return err
+	}
+	sealedAccess, err := sessionToken("access_token", hash, access)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, a.db, func(tx *sql.Tx) error {
+		if err := setGroups(ctx, tx, user, groups); err != nil {
+			return err
+		}
+		// A new access token lasts as long as the provider said, if it
+		// said; the one kept, as long as it did.
+		_, err := tx.ExecContext(ctx, `UPDATE sessions SET refresh_token = ?, access_token = ?,
+				access_expires_at = IF(?, CURRENT_TIMESTAMP(3) + INTERVAL ? SECOND, access_expires_at),
+				groups_check_at = CURRENT_TIMESTAMP(3) + INTERVAL ? MICROSECOND WHERE token_hash = ?`,
+			sealedRefresh, sealedAccess, refresh != "", expiresIn, a.groupsEvery.Microseconds(), hash)
+		return err
+	})
 }
 
 // The page a sign-in that can't go on ends on.

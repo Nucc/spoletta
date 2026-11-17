@@ -687,10 +687,22 @@ func newFakeWorker(t *testing.T) *fakeWorker {
 		writeJSON(w, http.StatusOK, map[string][]string{"released": {}})
 	})
 	mux.HandleFunc("POST /workspaces/diff", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		// As the real one, the project a number and the rest strings; kept
+		// as text each.
+		var raw map[string]any
+		dec := json.NewDecoder(r.Body)
+		dec.UseNumber()
+		if err := dec.Decode(&raw); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if _, ok := raw["project"].(json.Number); raw["project"] != nil && !ok {
+			http.Error(w, "the project is a number", http.StatusBadRequest)
+			return
+		}
+		body := map[string]string{}
+		for k, v := range raw {
+			body[k] = fmt.Sprint(v)
 		}
 		fw.mu.Lock()
 		fw.diffs = append(fw.diffs, body)

@@ -185,7 +185,7 @@ func (e *engine) start(nr pendingRun, flow int64, given map[int64]value) {
 	lr.failWith = cancel
 	go func() {
 		logRunStarted(e.db, id)
-		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
+		fr := newFlowRun(nr.project, flow, nr.version, nr.board, nr.repos, nr.prefix)
 		fr.rule = nr.rule
 		fr.record = nr.record
 		fr.published = nr.published
@@ -218,7 +218,7 @@ func (e *engine) rerun(nr pendingRun, flow int64, board *int64, given map[int64]
 	lr.failWith = cancel
 	go func() {
 		logRunStarted(e.db, nr.id)
-		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
+		fr := newFlowRun(nr.project, flow, nr.version, nr.board, nr.repos, nr.prefix)
 		fr.rule = nr.rule
 		fr.starts = starts
 		fr.record = nr.record
@@ -541,6 +541,9 @@ func (p *pass) visit(id int64) bool {
 
 // What every board of a run of the whole flow walks on.
 type flowRun struct {
+	// The project the run is in, its flow's, which everything it writes
+	// is in too; see run_projects.go.
+	project int64
 	flow    int64
 	version int64
 	board   snapshot
@@ -578,9 +581,12 @@ func (fr *flowRun) opl(ctx context.Context, db *sql.DB) string {
 	return fr.about
 }
 
-func newFlowRun(flow, version int64, board snapshot, repos []repository, prefix string) *flowRun {
+// How a run of the flow in project walks version's board. One only looked
+// at, which writes nothing, may be in project 0.
+func newFlowRun(project, flow, version int64, board snapshot, repos []repository, prefix string) *flowRun {
 	rb := newRunBoard(flow, board)
-	return &flowRun{flow: flow, version: version, board: rb.snapshot, rb: rb, objects: rb.objects, repos: repos, prefix: prefix}
+	rb.project = project
+	return &flowRun{project: project, flow: flow, version: version, board: rb.snapshot, rb: rb, objects: rb.objects, repos: repos, prefix: prefix}
 }
 
 // A workspace of its own for run, named id, on the branch <prefix>/id, its
@@ -590,7 +596,7 @@ func (fr *flowRun) workspace(run int64, id string, nb namedBranch) *runWorkspace
 	if len(fr.repos) == 0 {
 		return nil
 	}
-	return &runWorkspace{id: id, run: run, branch: fr.prefix + "/" + id, named: nb.name, unnamed: nb.unnamed, repos: fr.repos, starts: fr.starts}
+	return &runWorkspace{id: id, project: fr.project, run: run, branch: fr.prefix + "/" + id, named: nb.name, unnamed: nb.unnamed, repos: fr.repos, starts: fr.starts}
 }
 
 // A run walking a board: the top board, or a flow process's.
@@ -1177,7 +1183,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 		records, err := w.queried(id)
 		if err != nil {
 			runLog(w.e.db, w.run, 0, logError, "the records for process %d couldn't be queried: %v", id, err)
-			w.note(id, stepError, "Its query couldn't read the records.")
+			w.note(id, stepError, queryFailure(err))
 			w.fail()
 			return
 		}
@@ -1469,11 +1475,16 @@ func (w *walk) runBoard(id int64, given map[int64]value, it *item, callee *flowR
 		if callee != nil {
 			fr, board = callee, nil
 		}
-		if run, err = startChildRun(w.ctx, db, fr.flow, fr.version, w.run, board, w.names[id], key, stepID, fr.published); err != nil {
+		if run, err = startChildRun(w.ctx, db, w.fr.project, fr.flow, fr.version, w.run, board, w.names[id], key, stepID, fr.published); err != nil {
 			runLog(db, w.run, stepID, logError, "the run of process %d couldn't start: %v", id, err)
 			why := "Its run couldn't start."
-			if errors.Is(err, errInTrash) {
+			switch {
+			case errors.Is(err, errInTrash):
 				why = "Its run couldn't start: the flow it runs was moved to the trash."
+			case errors.Is(err, errOtherProject):
+				why = "Its run couldn't start: the flow it runs is another project's, which a run here can't reach."
+			case errors.Is(err, errProjectArchived):
+				why = "Its run couldn't start: " + archivedRuns + "."
 			}
 			w.endStep(stepID, stepError, why)
 			w.fail()
@@ -1747,19 +1758,36 @@ func (w *walk) endStep(stepID int64, status, msg string) {
 // Starts the run of a recording flow process, or of the flow a subflow
 // process runs, on version of flow, and refers its step in the outer run to
 // it. board is the flow process whose board it runs, nil for the top board.
-func startChildRun(ctx context.Context, db *sql.DB, flow, version, parent int64, board *int64, name, key string, stepID int64, published bool) (int64, error) {
+// It is in project, the outer run's, which the flow must be in too: else
+// errOtherProject, or errProjectArchived once the project is archived.
+func startChildRun(ctx context.Context, db *sql.DB, project, flow, version, parent int64, board *int64, name, key string, stepID int64, published bool) (int64, error) {
 	// Only of a flow out of the trash, read as moving it there takes it, so
 	// a run started meanwhile is one it sees and stops (trash.go).
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, replica_id, published)
-		SELECT id, ?, ?, ?, ?, ?, ?, ?, ? FROM flows WHERE id = ? AND deleted_at IS NULL`,
-		runRunning, version, parent, board, name, key, replicaID, published, flow)
+		`INSERT INTO runs (flow_id, status, version_id, parent_run_id, process_ref, process_name, item_key, replica_id, published, project_id)
+		SELECT f.id, ?, ?, ?, ?, ?, ?, ?, ?, f.project_id FROM flows f JOIN projects p ON p.id = f.project_id
+		WHERE f.id = ? AND f.deleted_at IS NULL AND f.project_id = ? AND p.archived_at IS NULL`,
+		runRunning, version, parent, board, name, key, replicaID, published, flow, project)
 	if err != nil {
 		return 0, err
 	}
 	if n, err := res.RowsAffected(); err != nil {
 		return 0, err
 	} else if n == 0 {
+		var in int64
+		var trashed, archived bool
+		err := db.QueryRowContext(ctx, `SELECT f.project_id, f.deleted_at IS NOT NULL, p.archived_at IS NOT NULL FROM flows f
+			JOIN projects p ON p.id = f.project_id WHERE f.id = ?`, flow).Scan(&in, &trashed, &archived)
+		switch {
+		case errors.Is(err, sql.ErrNoRows) || err == nil && trashed:
+			return 0, errInTrash
+		case err != nil:
+			return 0, err
+		case in != project:
+			return 0, errOtherProject
+		case archived:
+			return 0, errProjectArchived
+		}
 		return 0, errInTrash
 	}
 	id, err := res.LastInsertId()

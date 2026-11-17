@@ -5,7 +5,7 @@ import { InboxIcon } from './icons'
 import { formatTime } from './Runs'
 import ErrorBanner from './ErrorBanner'
 import { HomeCrumb } from './Projects'
-import { currentProject, pageHash } from './address'
+import { pageHash } from './address'
 
 // How often the inbox, and the count of it in the tab bar, ask again.
 export const INBOX_REFRESH_MS = 30_000
@@ -17,13 +17,12 @@ const WAITS: Record<InboxItem['waits'], string> = {
   loop: 'Loop question',
 }
 
-// Every step waiting on the person signed in, across every flow they see,
-// newest first: the reviews and inputs they may decide, and the loop
-// questions of flows they may change; without sign-in, every step waiting.
-// Each opens its flow's board on its run, with its review showing. The
-// inbox is the person's, so where the server says which project an item is
-// in, it names it and opens it there; the server lists the page's project
-// alone until it does.
+// Every step waiting on the person signed in, across every project they may
+// enter and every flow they see there, newest first: the reviews and inputs
+// they may decide, and the loop questions of flows they may change; without
+// sign-in, every step waiting in the page's project. Each opens its flow's
+// board on its run, in its own project, with its review showing; where the
+// person may enter several projects, each names its own.
 export default function Inbox() {
   const me = useMe()
   const [items, setItems] = useState<InboxItem[] | null>(null)
@@ -54,6 +53,10 @@ export default function Inbox() {
     }
   }, [refresh])
 
+  // Each item names its project where they may enter several, or the
+  // items are of several.
+  const named = (me?.projects.length ?? 0) > 1 || new Set((items ?? []).map((it) => it.project)).size > 1
+
   return (
     <div className="flows-page">
       <header className="toolbar">
@@ -73,8 +76,8 @@ export default function Inbox() {
           </h2>
           <p className="flows-note">
             {me?.signIn === false
-              ? 'Every review, input and loop question waiting, in every flow, as nobody signs in and so everyone decides everything.'
-              : 'The reviews and inputs your roles let you decide, and the loop questions of flows you may change, in every flow you see.'}{' '}
+              ? 'Every review, input and loop question waiting, in every flow of this project, as nobody signs in and so everyone decides everything.'
+              : 'The reviews and inputs your roles let you decide, and the loop questions of flows you may change, in every project you are in.'}{' '}
             {me?.user && (
               <>
                 How you are told of them is in <a href={pageHash('#/settings/account')}>your settings</a>.
@@ -89,7 +92,7 @@ export default function Inbox() {
             <ul className="inbox-list">
               {items.map((it) => (
                 <li key={it.step}>
-                  <InboxRow item={it} />
+                  <InboxRow item={it} named={named} />
                 </li>
               ))}
             </ul>
@@ -100,17 +103,17 @@ export default function Inbox() {
   )
 }
 
-function InboxRow({ item }: { item: InboxItem }) {
+function InboxRow({ item, named }: { item: InboxItem; named: boolean }) {
   // The first lines of the instructions or the question, the rest on the board.
   const detail = item.detail.trim().split('\n').slice(0, 3).join('\n')
   return (
-    <a className={`inbox-item waits-${item.waits}`} href={pageHash(reviewHash(item), item.project ?? currentProject())}>
+    <a className={`inbox-item waits-${item.waits}`} href={pageHash(reviewHash(item), item.project)}>
       <span className="inbox-head">
         <span className="inbox-waits">{WAITS[item.waits]}</span>
         <span className="inbox-process">{item.processName}</span>
       </span>
       <span className="inbox-where">
-        {item.projectName && `${item.projectName} · `}
+        {named && `${item.projectName} · `}
         {item.flowName} · run {item.run}
         {item.parent !== null && ` (within run ${item.parent})`}
         {item.startedBy && `, started by ${item.startedBy}`}

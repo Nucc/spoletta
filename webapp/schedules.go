@@ -225,9 +225,12 @@ func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error 
 	}
 	var dues []due
 	// A flow in the trash runs nothing; its schedules come round again once
-	// it is restored (trash.go).
+	// it is restored (trash.go). Nor does one of an archived project, which
+	// starts no runs; its schedules come round again once it is brought
+	// back. Each runs in its flow's project (newRun).
 	rows, err := db.QueryContext(ctx, `SELECT s.id, s.flow_id, s.cron, s.timezone, s.next_run_at FROM schedules s
-		JOIN flows f ON f.id = s.flow_id AND `+liveFlows+` WHERE s.enabled AND s.next_run_at <= ?`, now.UTC())
+		JOIN flows f ON f.id = s.flow_id AND `+liveFlows+` JOIN projects p ON p.id = f.project_id AND p.archived_at IS NULL
+		WHERE s.enabled AND s.next_run_at <= ?`, now.UTC())
 	if err != nil {
 		return err
 	}
@@ -277,8 +280,10 @@ func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error 
 func registerScheduleRoutes(mux *http.ServeMux, db *sql.DB) {
 	// Every schedule, or with flow, those of that flow, by flow then id.
 	mux.HandleFunc("GET /api/schedules", func(w http.ResponseWriter, r *http.Request) {
+		// The request's project's, with nobody signing in too.
 		cond, args := visibleFlows(requestUser(r))
-		q := "SELECT " + scheduleColumns + " FROM schedules s JOIN flows f ON f.id = s.flow_id WHERE " + cond
+		q := "SELECT " + scheduleColumns + " FROM schedules s JOIN flows f ON f.id = s.flow_id WHERE s.project_id = ? AND " + cond
+		args = append([]any{requestProject(r)}, args...)
 		if r.URL.Query().Has("flow") {
 			f, ok := flowParam(w, r)
 			if !ok {
@@ -356,8 +361,9 @@ func registerScheduleRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		enabled := body.Enabled == nil || *body.Enabled
-		res, err := db.ExecContext(r.Context(), "INSERT INTO schedules (flow_id, cron, timezone, enabled, next_run_at, created_by) VALUES (?, ?, ?, ?, ?, ?)",
-			body.Flow, body.Cron, body.Timezone, enabled, nextRun(body.Cron, body.Timezone, enabled, time.Now()), requestUserID(r))
+		res, err := db.ExecContext(r.Context(), `INSERT INTO schedules (flow_id, cron, timezone, enabled, next_run_at, created_by, project_id)
+			SELECT id, ?, ?, ?, ?, ?, project_id FROM flows WHERE id = ?`,
+			body.Cron, body.Timezone, enabled, nextRun(body.Cron, body.Timezone, enabled, time.Now()), requestUserID(r), body.Flow)
 		if err != nil {
 			serverError(w, err)
 			return

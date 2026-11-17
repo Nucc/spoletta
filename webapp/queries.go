@@ -139,12 +139,12 @@ func checkQuery(ctx context.Context, db *sql.DB, l link) (string, error) {
 	return "", nil
 }
 
-// The records of the object the query selects, as a list of it: what
-// runs other than run that ended done stored of it, or for a shared object
-// its store's records; see shared.go.
-func queryRecords(ctx context.Context, db *sql.DB, run, object, store int64, q *linkQuery) (string, error) {
+// The records of the object the query of a run in project selects, as a
+// list of it: what runs other than run that ended done stored of it, or for
+// a shared object its store's records; see shared.go. Only the project's.
+func queryRecords(ctx context.Context, db *sql.DB, project, run, object, store int64, q *linkQuery) (string, error) {
 	if store != 0 {
-		return querySharedRecords(ctx, db, store, q)
+		return querySharedRecords(ctx, db, project, store, q)
 	}
 	where, err := parseRule(q.Where)
 	if err != nil {
@@ -154,7 +154,7 @@ func queryRecords(ctx context.Context, db *sql.DB, run, object, store int64, q *
 	if q.Oldest {
 		order = "ASC"
 	}
-	args := []any{object, runDone, run}
+	args := []any{object, project, runDone, run}
 	state := ""
 	if q.State != "" {
 		state = " AND i.state = ?"
@@ -162,7 +162,7 @@ func queryRecords(ctx context.Context, db *sql.DB, run, object, store int64, q *
 	}
 	rows, err := db.QueryContext(ctx,
 		`SELECT i.content FROM object_instances i JOIN runs r ON r.id = i.run_id
-		WHERE i.object_id = ? AND r.status = ? AND r.id <> ?`+state+`
+		WHERE i.object_id = ? AND i.project_id = ? AND r.status = ? AND r.id <> ?`+state+`
 		ORDER BY r.finished_at `+order+`, r.id `+order, args...)
 	if err != nil {
 		return "", err
@@ -188,13 +188,24 @@ func queryRecords(ctx context.Context, db *sql.DB, run, object, store int64, q *
 
 // The inputs a process's query links give it, in object order. A run
 // started on a shared record reads that record alone of its store, whatever
-// the query; see record_runs.go.
+// the query; see record_runs.go. A *recordConflict, saying so, for a query
+// of another project's store, which a run doesn't reach.
 func (w *walk) queried(id int64) ([]runInput, error) {
 	var ins []runInput
 	for _, qe := range w.queries[id] {
+		store := w.fr.rb.store(qe.object)
+		if store != 0 {
+			project, err := objectProject(w.ctx, w.e.db, store)
+			if err != nil {
+				return nil, err
+			}
+			if project != 0 && project != w.fr.project {
+				return nil, &recordConflict{fmt.Sprintf("Its query of %s reads another project's struct, which a run here can't reach.", quote(w.objects[qe.object]))}
+			}
+		}
 		content, pinned, err := w.fr.pinnedRecord(w.ctx, w.e.db, qe.object)
 		if err == nil && !pinned {
-			content, err = queryRecords(w.ctx, w.e.db, w.run, qe.object, w.fr.rb.store(qe.object), qe.query)
+			content, err = queryRecords(w.ctx, w.e.db, w.fr.project, w.run, qe.object, store, qe.query)
 		}
 		if err != nil {
 			return nil, err
@@ -205,6 +216,16 @@ func (w *walk) queried(id int64) ([]runInput, error) {
 		ins = append(ins, runInput{Name: name, Content: content, Role: inputRecords})
 	}
 	return ins, nil
+}
+
+// What a step whose query couldn't read its records says: why, when it
+// reads what a run doesn't reach.
+func queryFailure(err error) string {
+	var c *recordConflict
+	if errors.As(err, &c) {
+		return c.msg
+	}
+	return "Its query couldn't read the records."
 }
 
 type queryEnd struct {

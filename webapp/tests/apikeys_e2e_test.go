@@ -157,7 +157,7 @@ func TestAPIStartsFlowWithInputs(t *testing.T) {
 	}
 
 	rn := apiStart(a, k.Key, tf.flow.ID, map[string]any{"inputs": good["inputs"], "states": map[string]any{"Ticket": "urgent"}}, http.StatusCreated)
-	if rn.Status != runRunning || !strings.HasSuffix(rn.URL, fmt.Sprintf("#/flows/%d/runs/%d", tf.flow.ID, rn.ID)) {
+	if rn.Status != runRunning || !strings.HasSuffix(rn.URL, fmt.Sprintf("#/p/1/flows/%d/runs/%d", tf.flow.ID, rn.ID)) {
 		t.Errorf("started %+v", rn)
 	}
 	det := a.finish(rn.ID)

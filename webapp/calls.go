@@ -22,21 +22,28 @@ import (
 // publish.go).
 //
 // A flow can't run itself, however many subflows apart; see checkCall. One
-// in the trash runs nowhere until it is restored (trash.go).
+// in the trash runs nowhere until it is restored (trash.go). A flow runs
+// only procedures of its own project: one of another is no flow to pick,
+// and a run whose board somehow names one fails the step running it.
+
+// Why a subflow process's step doesn't run a procedure of another project.
+const otherProjectCall = "The procedure it runs is another project's, which a run here can't reach; pick one of this project's."
 
 // Why a subflow process can't be given a flow in the trash to run.
 const inTrashCall = "that procedure is in the trash; restore it, or pick another"
 
 // What's wrong with a process of kind in flow running the flow its settings
-// name, if anything: that flow must exist, out of the trash, and must not,
-// directly or through its own subflow processes, run flow.
+// name, if anything: that flow must exist, in flow's project, out of the
+// trash, and must not, directly or through its own subflow processes, run
+// flow.
 func checkCall(ctx context.Context, db *sql.DB, flow int64, kind string, s processSettings) (string, error) {
 	if kind != kindSubflow || s.Flow == nil {
 		return "", nil
 	}
 	var n int
 	var st, trashed bool
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(MAX(is_struct), FALSE), COALESCE(MAX(deleted_at IS NOT NULL), FALSE) FROM flows WHERE id = ?", *s.Flow).
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(MAX(c.is_struct), FALSE), COALESCE(MAX(c.deleted_at IS NOT NULL), FALSE)
+		FROM flows c JOIN flows f ON f.id = ? AND f.project_id = c.project_id WHERE c.id = ?`, flow, *s.Flow).
 		Scan(&n, &st, &trashed); err != nil {
 		return "", err
 	}
@@ -109,14 +116,19 @@ func (fr *flowRun) call(ctx context.Context, db *sql.DB, flow *int64) (*flowRun,
 	defer tx.Rollback()
 	var name string
 	var settings flowSettings
+	var project int64
 	var trashed bool
 	// Taken as moving it to the trash takes it, which then sees its run.
-	err = tx.QueryRowContext(ctx, "SELECT name, settings, deleted_at IS NOT NULL FROM flows WHERE id = ? FOR UPDATE", *flow).Scan(&name, &settings, &trashed)
+	err = tx.QueryRowContext(ctx, "SELECT name, settings, project_id, deleted_at IS NOT NULL FROM flows WHERE id = ? FOR UPDATE", *flow).
+		Scan(&name, &settings, &project, &trashed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "The flow it runs is gone.", nil
 	}
 	if err != nil {
 		return nil, "", err
+	}
+	if project != fr.project {
+		return nil, otherProjectCall, nil
 	}
 	if trashed {
 		return nil, "The procedure it runs, " + quote(name) + ", is in the trash; restore it, or pick another.", nil
@@ -131,7 +143,7 @@ func (fr *flowRun) call(ctx context.Context, db *sql.DB, flow *int64) (*flowRun,
 	if err := tx.Commit(); err != nil {
 		return nil, "", err
 	}
-	callee := newFlowRun(*flow, version, board, settings.Repositories, settings.prefix(name))
+	callee := newFlowRun(fr.project, *flow, version, board, settings.Repositories, settings.prefix(name))
 	callee.rule = settings.Branch
 	callee.callers = append(slices.Clone(fr.callers), fr.flow)
 	callee.published = fr.published
@@ -208,16 +220,20 @@ const (
 // is the object of the same name on the board if there is one, or else a new
 // one with the same states, attributes and objects making it up, so what comes out of that flow has
 // somewhere to go here.
-// Does nothing for other processes, or one that runs no flow.
+// Does nothing for other processes, or one that runs no flow, or a flow of
+// another project, which it runs nowhere (see board_projects.go).
 func bringOutcomes(ctx context.Context, tx *sql.Tx, process int64) error {
-	var flow int64
+	var flow, project int64
 	var parent *int64
 	var x, y float64
 	var kind string
 	var s processSettings
-	err := tx.QueryRowContext(ctx, "SELECT flow_id, parent_id, x, y, kind, settings FROM processes WHERE id = ?", process).
-		Scan(&flow, &parent, &x, &y, &kind, &s)
+	err := tx.QueryRowContext(ctx, "SELECT flow_id, parent_id, x, y, kind, settings, project_id FROM processes WHERE id = ?", process).
+		Scan(&flow, &parent, &x, &y, &kind, &s, &project)
 	if err != nil || kind != kindSubflow || s.Flow == nil {
+		return err
+	}
+	if other, err := elsewhere(ctx, tx, "flows", project, []int64{*s.Flow}); err != nil || other[*s.Flow] {
 		return err
 	}
 	if err := markModule(ctx, tx, *s.Flow); err != nil {
@@ -261,7 +277,7 @@ func bringOutcomes(ctx context.Context, tx *sql.Tx, process int64) error {
 		} else if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO object_links (process_id, object_id, direction, state_id) VALUES (?, ?, 'output', 0)", process, here); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO object_links (process_id, object_id, direction, state_id, project_id) VALUES (?, ?, 'output', 0, ?)", process, here, project); err != nil {
 			return err
 		}
 	}

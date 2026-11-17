@@ -179,7 +179,7 @@ func trialTargetOf(ctx context.Context, flow, id int64, board snapshot) (trialTa
 		}
 		t.states[st.Object][st.Name] = st.ID
 	}
-	t.w = newWalk(ctx, nil, 0, nil, newFlowRun(flow, 0, board, nil, ""), t.process.Parent, nil, nil)
+	t.w = newWalk(ctx, nil, 0, nil, newFlowRun(0, flow, 0, board, nil, ""), t.process.Parent, nil, nil)
 	t.takes = []trialObject{}
 	for _, in := range t.w.inputs[id] {
 		if slices.ContainsFunc(t.takes, func(o trialObject) bool { return o.Object == in.object }) {
@@ -446,7 +446,7 @@ func (e *engine) try(nr pendingRun, flow int64, board *int64, process int64, val
 	lr.failWith = cancel
 	go func() {
 		logRunStarted(e.db, nr.id)
-		fr := newFlowRun(flow, nr.version, nr.board, nr.repos, nr.prefix)
+		fr := newFlowRun(nr.project, flow, nr.version, nr.board, nr.repos, nr.prefix)
 		w := newWalk(ctx, e, nr.id, lr, fr, board, nil, fr.workspace(nr.id, "run-"+strconv.FormatInt(nr.id, 10), namedBranch{}))
 		w.try(process, values)
 		e.finish(ctx, nr.id, w)
@@ -477,7 +477,7 @@ func (w *walk) try(id int64, values map[int64]value) {
 	records, err := w.queried(id)
 	if err != nil {
 		runLog(w.e.db, w.run, 0, logError, "the records for process %d couldn't be queried: %v", id, err)
-		w.note(id, stepError, "Its query couldn't read the records.")
+		w.note(id, stepError, queryFailure(err))
 		w.fail()
 		return
 	}
@@ -529,6 +529,10 @@ func trialTargetFor(w http.ResponseWriter, r *http.Request, tx *sql.Tx, board *s
 // publish.go), marked as one of the process; or false once it answered.
 func newTrial(w http.ResponseWriter, r *http.Request, tx *sql.Tx, flow int64) (pendingRun, trialTarget, bool) {
 	nr, err := newRun(r.Context(), tx, flow, nil, requestUserID(r), false)
+	if errors.Is(err, errProjectArchived) {
+		http.Error(w, archivedRuns, http.StatusConflict)
+		return nr, trialTarget{}, false
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "process not found", http.StatusNotFound)
 		return nr, trialTarget{}, false
@@ -803,9 +807,15 @@ func registerTrialRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			http.Error(w, fmt.Sprintf("a process keeps at most %d samples; delete one first", maxSamples), http.StatusConflict)
 			return
 		}
+		// A sample is its process's project's.
+		project, err := idBy(r.Context(), tx, "SELECT project_id FROM processes WHERE id = ?", t.process.ID)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		if _, err := tx.ExecContext(r.Context(),
-			"INSERT INTO process_samples (process_id, name, inputs) VALUES (?, ?, ?) AS saved ON DUPLICATE KEY UPDATE inputs = saved.inputs",
-			t.process.ID, body.Name, inputs); err != nil {
+			"INSERT INTO process_samples (process_id, name, inputs, project_id) VALUES (?, ?, ?, ?) AS saved ON DUPLICATE KEY UPDATE inputs = saved.inputs",
+			t.process.ID, body.Name, inputs, project); err != nil {
 			serverError(w, err)
 			return
 		}

@@ -21,7 +21,10 @@ import (
 // a run works on the same branch, picking up where the one before left off;
 // each item of a list a flow process runs for gets a branch of its own, so
 // items running at once don't meet. The worker keeps the workspaces; see
-// worker/workspace.go.
+// worker/workspace.go. A workspace is its run's project's: the worker
+// shares repositories among a project's runs alone, so it is told the
+// project with every step (workspaceSpec.Project) and every diff, and keeps
+// each workspace to the one its first step named.
 
 type flowSettings struct {
 	Repositories []repository `json:"repositories"`
@@ -185,6 +188,9 @@ type runWorkspace struct {
 	// Names its directory in the worker: run-<id> for a run, run-<id>-step-<id>
 	// for an item of a list that runs without a run of its own.
 	id string
+	// The project the run is in, whose shared repositories its checkouts
+	// come from and go back to.
+	project int64
 	// The run working in it: the run it is named after, or for an item
 	// without a run of its own, the run the item is in.
 	run    int64
@@ -201,8 +207,12 @@ type runWorkspace struct {
 // What the worker takes for a step: the workspace with the repositories the
 // process works on.
 type workspaceSpec struct {
-	ID     string `json:"id"`
-	Branch string `json:"branch"`
+	ID string `json:"id"`
+	// The project the run is in, whose shared repositories the worker
+	// takes its checkouts from; it refuses a workspace another project's
+	// step made.
+	Project int64  `json:"project,omitempty"`
+	Branch  string `json:"branch"`
 	// The branch its checkouts are on, and origin's they start from if it
 	// has it, when the run's flow names it after what the run works on; the
 	// worker keeps them as Branch. See branch_names.go.
@@ -240,7 +250,7 @@ func (ws *runWorkspace) forProcess(s processSettings) *workspaceSpec {
 	if len(repos) == 0 {
 		return nil
 	}
-	return &workspaceSpec{ID: ws.id, Branch: ws.branch, Named: ws.named, Unnamed: ws.unnamed, Run: ws.run, Repositories: repos}
+	return &workspaceSpec{ID: ws.id, Project: ws.project, Branch: ws.branch, Named: ws.named, Unnamed: ws.unnamed, Run: ws.run, Repositories: repos}
 }
 
 // The branch its checkouts are on, as the agent and scripts see it.

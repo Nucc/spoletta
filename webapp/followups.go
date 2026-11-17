@@ -204,8 +204,9 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	}
 	defer tx.Rollback()
 	// Locking the run orders follow-ups of its steps against each other.
-	var locked int64
-	err = tx.QueryRowContext(ctx, "SELECT id FROM runs WHERE id = ? FOR UPDATE", runID).Scan(&locked)
+	// Its project is the follow-up's, and its workspace's.
+	var locked, project int64
+	err = tx.QueryRowContext(ctx, "SELECT id, project_id FROM runs WHERE id = ? FOR UPDATE", runID).Scan(&locked, &project)
 	if errors.Is(err, sql.ErrNoRows) {
 		return f, run, processSettings{}, errNotFound
 	}
@@ -252,8 +253,8 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 		return f, run, processSettings{}, err
 	}
 	res, err := tx.ExecContext(ctx,
-		"INSERT INTO run_step_followups (step_id, attempt, message, status, output, error, replica_id) VALUES (?, ?, ?, ?, '', '', ?)",
-		stepID, f.Attempt, message, stepActive, replicaID)
+		"INSERT INTO run_step_followups (step_id, attempt, message, status, output, error, replica_id, project_id) VALUES (?, ?, ?, ?, '', '', ?, ?)",
+		stepID, f.Attempt, message, stepActive, replicaID, project)
 	if err != nil {
 		return f, run, processSettings{}, err
 	}
@@ -302,10 +303,13 @@ func startFollowUp(ctx context.Context, db *sql.DB, runID, stepID int64, message
 	f.StartedAt = time.Now()
 	run.Prompt = followUpPrompt(message)
 	run.Workspace = s.Workspace
-	if run.Project, err = runProject(ctx, db, runID); err != nil {
-		return f, run, processSettings{}, err
+	// The run's project, whatever the session kept, as one kept before
+	// projects names none.
+	if run.Workspace != nil {
+		run.Workspace.Project = project
 	}
-	run.DiskLimit = limitsIn(run.Project).diskBytes()
+	run.Project = project
+	run.DiskLimit = limitsIn(project).diskBytes()
 	run.Run = runID
 	run.SessionID = s.ID
 	run.Resume = true

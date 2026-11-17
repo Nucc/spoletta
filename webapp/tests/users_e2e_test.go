@@ -33,6 +33,9 @@ type usersPerson struct {
 
 // An identity provider that signs in whoever the test says is next, and
 // hands out ID tokens it doesn't sign, as the webapp doesn't check them.
+// What a test sets on it after it is made, under mu, changes what it says
+// from then: the groups people are in, and where it says them, as a
+// provider's administrator would; see projects_people_e2e_test.go.
 type fakeProvider struct {
 	t   *testing.T
 	srv *httptest.Server
@@ -44,6 +47,29 @@ type fakeProvider struct {
 	codes map[string]usersCode
 	// Changes the ID token's claims, to test what the webapp refuses.
 	tamper func(map[string]any)
+
+	// Whether it has a userinfo endpoint, which its discovery document
+	// names, and the scopes that says it supports.
+	userinfo bool
+	scopes   []string
+	// The claim naming people's groups, where it says them ("id_token" or
+	// "userinfo"), and each one's groups by subject: a string, a list of
+	// strings, or whatever else it is to send; none sends no claim.
+	groupsClaim, groupsIn string
+	groups                map[string]any
+	// Whether its token endpoint gives refresh tokens, a new ID token with
+	// each refresh, how many seconds its access tokens last (0: it doesn't
+	// say), and whether it refuses every refresh as a grant no longer good.
+	refresh, refreshIDToken bool
+	expiresIn               int
+	refuseRefresh           bool
+	// The tokens it gave, to whom; a refresh token is used once.
+	accessTokens, refreshTokens map[string]usersPerson
+	given                       int
+	// The scope the latest sign-in asked for, and how many refreshes were
+	// asked for.
+	scope     string
+	refreshes int
 }
 
 type usersCode struct {
@@ -52,14 +78,24 @@ type usersCode struct {
 }
 
 func newFakeProvider(t *testing.T) *fakeProvider {
-	p := &fakeProvider{t: t, codes: map[string]usersCode{}}
+	p := &fakeProvider{t: t, codes: map[string]usersCode{}, groups: map[string]any{},
+		accessTokens: map[string]usersPerson{}, refreshTokens: map[string]usersPerson{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		doc := map[string]any{
 			"issuer":                 p.srv.URL,
 			"authorization_endpoint": p.srv.URL + "/authorize",
 			"token_endpoint":         p.srv.URL + "/token",
-		})
+		}
+		if p.userinfo {
+			doc["userinfo_endpoint"] = p.srv.URL + "/userinfo"
+		}
+		if p.scopes != nil {
+			doc["scopes_supported"] = p.scopes
+		}
+		writeJSON(w, http.StatusOK, doc)
 	})
 	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -71,6 +107,7 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 		p.mu.Lock()
 		code := fmt.Sprintf("code-%d", len(p.codes))
 		p.codes[code] = usersCode{person: p.next, nonce: q.Get("nonce"), challenge: q.Get("code_challenge"), redirectTo: q.Get("redirect_uri")}
+		p.scope = q.Get("scope")
 		p.mu.Unlock()
 		http.Redirect(w, r, q.Get("redirect_uri")+"?"+url.Values{"code": {code}, "state": {q.Get("state")}}.Encode(), http.StatusFound)
 	})
@@ -82,35 +119,87 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 		}
 		r.ParseForm()
 		p.mu.Lock()
+		defer p.mu.Unlock()
+		if r.Form.Get("grant_type") == "refresh_token" {
+			p.refreshes++
+			who, ok := p.refreshTokens[r.Form.Get("refresh_token")]
+			delete(p.refreshTokens, r.Form.Get("refresh_token"))
+			if !ok || p.refuseRefresh {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant", "error_description": "the refresh token is no longer good"})
+				return
+			}
+			writeJSON(w, http.StatusOK, p.tokensFor(who, "", p.refreshIDToken))
+			return
+		}
 		c, ok := p.codes[r.Form.Get("code")]
 		delete(p.codes, r.Form.Get("code"))
-		tamper := p.tamper
-		p.mu.Unlock()
 		challenge := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
 		if !ok || base64.RawURLEncoding.EncodeToString(challenge[:]) != c.challenge || r.Form.Get("redirect_uri") != c.redirectTo {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant"})
 			return
 		}
-		claims := map[string]any{
-			"iss": p.srv.URL, "aud": usersClientID, "exp": time.Now().Add(time.Hour).Unix(), "nonce": c.nonce,
-			"sub": c.person.subject, "email": c.person.email, "name": c.person.name,
+		writeJSON(w, http.StatusOK, p.tokensFor(c.person, c.nonce, true))
+	})
+	mux.HandleFunc("GET /userinfo", func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		who, ok := p.accessTokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+		if !p.userinfo || !ok {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
 		}
-		if c.person.verified != nil {
-			claims["email_verified"] = *c.person.verified
+		info := map[string]any{"sub": who.subject, "email": who.email, "name": who.name}
+		if g, ok := p.groups[who.subject]; ok && p.groupsIn == "userinfo" {
+			info[p.groupsClaim] = g
 		}
-		if c.person.hd != "" {
-			claims["hd"] = c.person.hd
-		}
-		if tamper != nil {
-			tamper(claims)
-		}
-		payload, _ := json.Marshal(claims)
-		token := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
-		writeJSON(w, http.StatusOK, map[string]any{"access_token": "access", "token_type": "Bearer", "id_token": token})
+		writeJSON(w, http.StatusOK, info)
 	})
 	p.srv = httptest.NewServer(mux)
 	t.Cleanup(p.srv.Close)
 	return p
+}
+
+// What the token endpoint gives the person: an access token, a refresh
+// token if it gives them, and with idToken, an ID token for the nonce,
+// none for a refresh's. Called with mu held.
+func (p *fakeProvider) tokensFor(who usersPerson, nonce string, idToken bool) map[string]any {
+	p.given++
+	access := fmt.Sprintf("access-%d", p.given)
+	p.accessTokens[access] = who
+	out := map[string]any{"access_token": access, "token_type": "Bearer"}
+	if p.expiresIn > 0 {
+		out["expires_in"] = p.expiresIn
+	}
+	if p.refresh {
+		refresh := fmt.Sprintf("refresh-%d", p.given)
+		p.refreshTokens[refresh] = who
+		out["refresh_token"] = refresh
+	}
+	if !idToken {
+		return out
+	}
+	claims := map[string]any{
+		"iss": p.srv.URL, "aud": usersClientID, "exp": time.Now().Add(time.Hour).Unix(),
+		"sub": who.subject, "email": who.email, "name": who.name,
+	}
+	if nonce != "" {
+		claims["nonce"] = nonce
+	}
+	if who.verified != nil {
+		claims["email_verified"] = *who.verified
+	}
+	if who.hd != "" {
+		claims["hd"] = who.hd
+	}
+	if g, ok := p.groups[who.subject]; ok && p.groupsIn == "id_token" {
+		claims[p.groupsClaim] = g
+	}
+	if p.tamper != nil {
+		p.tamper(claims)
+	}
+	payload, _ := json.Marshal(claims)
+	out["id_token"] = "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+	return out
 }
 
 // A webapp people sign in to through the provider, the admin and anyone at

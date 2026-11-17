@@ -83,10 +83,11 @@ never committed. The ones to know:
 | Variable | What it does |
 |---|---|
 | `WORKER_TOKEN` | The token only the webapp asks the worker with. Without one the worker answers anyone reaching it, and runs their bash. Make one with `openssl rand -hex 32`. |
-| `SECRET_KEY` | Seals the model keys, MCP tokens, credentials' secrets and webhooks' secrets the webapp keeps in the database. Make one with `openssl rand -base64 32`. |
+| `SECRET_KEY` | Seals the model keys, MCP tokens, credentials' and webhooks' secrets and sign-ins' tokens the webapp keeps in the database. Make one with `openssl rand -base64 32`. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_NAME` | Signing in with your identity provider over OpenID Connect. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Signing in with Google. |
 | `ADMIN_EMAILS`, `OIDC_ALLOWED_DOMAINS` | Who may sign in, and who is an admin. |
+| `OIDC_GROUPS_CLAIM`, `GROUPS_MAX_AGE` | The claim naming the groups people are in at your identity provider, which projects are given to, and how long groups read hold, `24h` by default, where they can't be read again. See [Groups](#groups). |
 | `PUBLIC_URL` | Where people reach the app, for sign-in's redirect and the links in messages. |
 | `PUBLISH_HOST` | `0.0.0.0` to reach the webapp from other machines, once people sign in. |
 | `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` | A GitHub App whose tokens steps clone and push the flows' repositories with. |
@@ -94,6 +95,7 @@ never committed. The ones to know:
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD` | Emailing people when a review waits on them, and when their runs fail. |
 | `RESUME_RUNS` | `false` ends the runs of a webapp that stopped, rather than having another carry them on. |
 | `TRASH_KEEP` | How long the trash keeps a deleted flow, such as `30d`, the default. |
+| `LOCAL_MIGRATIONS` | A directory of migrations of your own, run after Spoletta's in place of those built into `webapp/local_migrations/`; see [MIGRATIONS.md](MIGRATIONS.md#local-migrations). |
 | `CLAUDE_CODE_VERSION` | Builds the worker's and steps' images with Claude Code, at that exact version, so agent processes may run with it; empty, the default, leaves it out. See [Claude Code](#claude-code). |
 | `CHILD_ENV` | Variables of the worker's own to hand every step, comma-separated, each passed through in compose.yaml too. |
 | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | Compose's MySQL, which the webapp connects to as that user. |
@@ -117,6 +119,35 @@ email. Admins add, remove and promote people in the app's settings.
 
 Once people sign in, set `PUBLISH_HOST=0.0.0.0` to reach the webapp from
 elsewhere.
+
+### Groups
+
+A project's owners may give it to a group of your identity provider's, so
+whoever is in it enters the project at the group's level. `OIDC_GROUPS_CLAIM`
+names the claim saying which groups someone is in, such as `groups`: a
+string, one group, or a list of strings, in the ID token or, where the ID
+token leaves it out, in what the provider's userinfo endpoint says. Map the
+groups into that claim at your provider. Each sign-in replaces the person's
+groups with those it carries; without the variable, or signing in with
+Google, they are in none.
+
+Someone taken out of a group at the provider keeps what it gave them until
+their groups are read again. While their session lives, the webapp reads
+them again every hour (or every half of `GROUPS_MAX_AGE`, if that is
+shorter), with the refresh token the provider gave the session, or its
+access token while that lasts, both kept sealed with `SECRET_KEY`; a
+session the provider refuses to refresh ends. To get a refresh token the
+sign-in asks for the `offline_access` scope, but only when
+`OIDC_GROUPS_CLAIM` is set and the provider's discovery document lists
+`offline_access` among its `scopes_supported`; let the client use refresh
+tokens at your provider, or one listing the scope may refuse the sign-in.
+Where groups can't be read again, as the provider gave no refresh token, a
+session of someone in any group ends once their groups are older than
+`GROUPS_MAX_AGE` (`24h` unless set, a duration such as `8h` or `90m`), so
+they sign in again; someone in no group stays signed in as long as before.
+What runs on someone's behalf without a session, an API key's runs, a
+webhook's, a schedule's or a task board's, keeps their groups as last read
+until they are read again.
 
 ## Sealing secrets
 

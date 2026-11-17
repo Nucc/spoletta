@@ -86,8 +86,9 @@ const pageInHash = (): Page => {
 
 // How many steps wait on the person, asked every so often, again once they
 // decide one, and as they come back to the page; null until known. The
-// server counts those of the open tab's project, so it asks again as that
-// changes.
+// server counts those of every project the person may enter, or with
+// nobody signing in those of the open tab's project, so it asks again as
+// that changes.
 function useInboxCount(project: number | null): number | null {
   const [count, setCount] = useState<number | null>(null)
   useEffect(() => {

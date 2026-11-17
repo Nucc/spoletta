@@ -27,13 +27,16 @@ package main
 // webhooks.go. So does a person giving what the flow starts from by hand,
 // from Run's menu on the board, which may run the board as it is.
 //
-// A key is someone's: the runs it starts are theirs, using their model keys
-// and MCP connections, and it starts only the flows they may run and reads
-// only the runs they see; see owners.go. Without sign-in, keys are nobody's
-// and start any flow, and once people sign in they stop working. A key is
-// shown once, as it is made, and kept as its hash, as sessions are. The key
-// routes are outside /api/, so a key reaches only them and a session none of
-// them.
+// A key is someone's, in a project: the runs it starts are theirs, using
+// their model keys and MCP connections, as they are in the project, and it
+// starts only the flows of its project they may run there and reads only
+// the runs there they see; see owners.go and projects.go. A flow or a run of
+// another project, or of one archived, isn't there for it, and once its
+// maker may no longer enter its project it stops working. Without sign-in,
+// keys are nobody's and start any flow of their project, and once people
+// sign in they stop working. A key is shown once, as it is made, and kept
+// as its hash, as sessions are. The key routes are outside /api/, so a key
+// reaches only them and a session none of them.
 
 import (
 	"bytes"
@@ -87,7 +90,8 @@ type givenObject struct {
 // what keeps it from being started this way. Board is the board its runs
 // start on: the version published, if any, or else the board as it is.
 func flowInputs(ctx context.Context, flow int64, board snapshot) ([]givenObject, string) {
-	w := newWalk(ctx, nil, 0, nil, newFlowRun(flow, 0, board, nil, ""), nil, nil, nil)
+	// Only looked at, so in no project.
+	w := newWalk(ctx, nil, 0, nil, newFlowRun(0, flow, 0, board, nil, ""), nil, nil, nil)
 	s := w.fr.rb.structure
 	var in []givenObject
 	names := map[string]bool{}
@@ -368,8 +372,12 @@ func getAPIRun(ctx context.Context, db *sql.DB, r *http.Request, id int64) (apiR
 	if err != nil {
 		return apiRun{}, err
 	}
+	project, err := runProject(ctx, db, id)
+	if err != nil {
+		return apiRun{}, err
+	}
 	out := apiRun{ID: rn.ID, Flow: rn.Flow, Status: rn.Status, StartedAt: rn.StartedAt, FinishedAt: rn.FinishedAt,
-		URL:      fmt.Sprintf("%s/#/flows/%d/runs/%d", publicOrigin(r), rn.Flow, rn.ID),
+		URL:      runAddress(publicOrigin(r), project, rn.Flow, rn.ID),
 		Outcomes: map[string]apiOutcome{}, Errors: []apiStepError{}}
 	// The outcomes are the objects the run's board connects to its end.
 	b, err := runBoardOf(ctx, db, id)
@@ -404,6 +412,11 @@ func getAPIRun(ctx context.Context, db *sql.DB, r *http.Request, id int64) (apiR
 			return err
 		}, id, stepError, stepDuplicate)
 	return out, err
+}
+
+// The address of a run's page, in its project, as the frontend has it.
+func runAddress(origin string, project, flow, run int64) string {
+	return fmt.Sprintf("%s/#/p/%d/flows/%d/runs/%d", origin, project, flow, run)
 }
 
 // What an object holds as an outcome. An agent generating one without
@@ -472,6 +485,11 @@ func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src
 		return 0, false, nil, err
 	}
 	nr, err := newRun(ctx, tx, flow, nil, startedBy, published)
+	// A key or a webhook finds no flow in an archived project; a person
+	// starting it by hand is told why.
+	if errors.Is(err, errProjectArchived) && src.column == "" {
+		return 0, false, &apiRefusal{http.StatusConflict, archivedRuns}, nil
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, &apiRefusal{http.StatusNotFound, "flow not found"}, nil
 	}
@@ -479,6 +497,7 @@ func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src
 		return 0, false, nil, err
 	}
 	b := newRunBoard(flow, nr.board)
+	b.project = nr.project
 	in, msg := flowInputs(ctx, flow, nr.board)
 	if msg != "" {
 		return 0, false, &apiRefusal{http.StatusUnprocessableEntity, msg}, nil
@@ -503,7 +522,7 @@ func startGivenRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, src
 			return 0, false, nil, err
 		}
 	}
-	if msg, err := refusedGiven(ctx, tx, nr.board, in, given); err != nil {
+	if msg, err := refusedGiven(ctx, tx, nr.project, nr.board, in, given); err != nil {
 		return 0, false, nil, err
 	} else if msg != "" {
 		return 0, false, &apiRefusal{http.StatusUnprocessableEntity, msg}, nil
@@ -552,9 +571,9 @@ func recordGiven(ctx context.Context, tx *sql.Tx, b *runBoard, run int64, name s
 		return nil, nil
 	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO run_steps (run_id, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at)
-		VALUES (?, ?, ?, '', '[]', ?, '', '', '', CURRENT_TIMESTAMP(3))`,
-		run, truncate(name, 255), kindInput, stepDone)
+		`INSERT INTO run_steps (run_id, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at, project_id)
+		VALUES (?, ?, ?, '', '[]', ?, '', '', '', CURRENT_TIMESTAMP(3), ?)`,
+		run, truncate(name, 255), kindInput, stepDone, b.project)
 	if err != nil {
 		return nil, err
 	}
@@ -594,56 +613,88 @@ func recordGiven(ctx context.Context, tx *sql.Tx, b *runBoard, run int64, name s
 	return dup, releaseRun(ctx, tx, run)
 }
 
-// Who a request's API key is: the key, and its owner, nil when nobody
-// signs in. Writes why not and returns false if the key doesn't let it in.
-func apiKeyUser(w http.ResponseWriter, r *http.Request, db *sql.DB, signIn bool) (int64, *user, bool) {
+// An API key as a request presents it: the key, the project it is of, and
+// its owner as they are there, nil when nobody signs in.
+type apiCaller struct {
+	key, project int64
+	user         *user
+}
+
+// Who a request's API key is. Writes why not and returns false if the key
+// doesn't let it in: it isn't one, its owner was removed, or may no longer
+// enter its project.
+func apiKeyUser(w http.ResponseWriter, r *http.Request, db *sql.DB, signIn bool) (apiCaller, bool) {
 	auth := r.Header.Get("Authorization")
 	token, ok := strings.CutPrefix(auth, "Bearer ")
 	if !ok || strings.TrimSpace(token) == "" {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "an API key is needed, as Authorization: Bearer <key>; make one in the settings", http.StatusUnauthorized)
-		return 0, nil, false
+		return apiCaller{}, false
 	}
-	var key int64
+	var c apiCaller
 	var owner sql.NullInt64
 	var u user
 	var removed bool
+	// The owner's admin flag is the instance's; what they are in the key's
+	// project is worked out below.
 	err := db.QueryRowContext(r.Context(),
-		`SELECT k.id, k.user_id, COALESCE(u.email, ''), COALESCE(u.name, ''), COALESCE(u.admin, FALSE), COALESCE(u.team_manager, FALSE), u.removed_at IS NOT NULL
+		`SELECT k.id, k.project_id, k.user_id, COALESCE(u.email, ''), COALESCE(u.name, ''), COALESCE(u.admin, FALSE), COALESCE(u.team_manager, FALSE), u.removed_at IS NOT NULL
 		FROM api_keys k LEFT JOIN users u ON u.id = k.user_id WHERE k.token_hash = ?`, hashToken(strings.TrimSpace(token))).
-		Scan(&key, &owner, &u.Email, &u.Name, &u.Admin, &u.TeamManager, &removed)
+		Scan(&c.key, &c.project, &owner, &u.Email, &u.Name, &u.Super, &u.TeamManager, &removed)
 	if errors.Is(err, sql.ErrNoRows) {
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 		http.Error(w, "the API key isn't one; it may have been deleted", http.StatusUnauthorized)
-		return 0, nil, false
+		return apiCaller{}, false
 	}
 	if err != nil {
 		serverError(w, err)
-		return 0, nil, false
+		return apiCaller{}, false
 	}
 	switch {
 	case signIn && !owner.Valid:
 		http.Error(w, "the API key was made before people signed in, so it is nobody's; make a new one", http.StatusUnauthorized)
-		return 0, nil, false
+		return apiCaller{}, false
 	case removed:
 		http.Error(w, "the API key's owner was removed", http.StatusUnauthorized)
-		return 0, nil, false
+		return apiCaller{}, false
 	}
-	if _, err := db.ExecContext(r.Context(), "UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP(3) WHERE id = ?", key); err != nil {
+	if signIn {
+		u.ID = owner.Int64
+		in, ok, err := userInProject(r.Context(), db, &u, c.project)
+		if err != nil {
+			serverError(w, err)
+			return apiCaller{}, false
+		}
+		if !ok {
+			http.Error(w, "the API key's owner may no longer enter its project", http.StatusUnauthorized)
+			return apiCaller{}, false
+		}
+		c.user = in
+	}
+	if _, err := db.ExecContext(r.Context(), "UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP(3) WHERE id = ?", c.key); err != nil {
 		serverError(w, err)
-		return 0, nil, false
+		return apiCaller{}, false
 	}
-	if !signIn || !owner.Valid {
-		return key, nil, true
-	}
-	u.ID = owner.Int64
-	return key, &u, true
+	return c, true
 }
 
 // Whether the key's owner may go as far as need with the flow, writing why
-// not if not; a flow they don't see doesn't exist to them.
-func apiFlowAccess(w http.ResponseWriter, r *http.Request, db *sql.DB, u *user, flow int64, need string) bool {
-	access, err := flowAccess(r.Context(), db, u, flow)
+// not if not; a flow they don't see doesn't exist to them, nor does one of
+// another project than the key's, or of one archived, whoever asks.
+func apiFlowAccess(w http.ResponseWriter, r *http.Request, db *sql.DB, c apiCaller, flow int64, need string) bool {
+	var project int64
+	var archived bool
+	err := db.QueryRowContext(r.Context(), "SELECT f.project_id, p.archived_at IS NOT NULL FROM flows f JOIN projects p ON p.id = f.project_id WHERE f.id = ?", flow).
+		Scan(&project, &archived)
+	switch {
+	case errors.Is(err, sql.ErrNoRows) || err == nil && (project != c.project || archived):
+		http.Error(w, "flow not found", http.StatusNotFound)
+		return false
+	case err != nil:
+		serverError(w, err)
+		return false
+	}
+	access, err := flowAccess(r.Context(), db, c.user, flow)
 	switch {
 	case err != nil:
 		serverError(w, err)
@@ -794,12 +845,12 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 
 	// What the flow takes, as a JSON Schema of the request starting it too.
 	mux.HandleFunc("GET /v1/flows/{id}", func(w http.ResponseWriter, r *http.Request) {
-		_, u, ok := apiKeyUser(w, r, db, signIn)
+		c, ok := apiKeyUser(w, r, db, signIn)
 		if !ok {
 			return
 		}
 		id, ok := flowID(w, r)
-		if !ok || !apiFlowAccess(w, r, db, u, id, accessReview) {
+		if !ok || !apiFlowAccess(w, r, db, c, id, accessReview) {
 			return
 		}
 		d, err := describeFlowAPI(r.Context(), db, r, id)
@@ -819,12 +870,12 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 	// {"inputs": {"<object>": ...}, "states": {"<object>": "<state>"}}. An
 	// Idempotency-Key header makes sending it again return the same run.
 	mux.HandleFunc("POST /v1/flows/{id}/runs", func(w http.ResponseWriter, r *http.Request) {
-		key, u, ok := apiKeyUser(w, r, db, signIn)
+		c, ok := apiKeyUser(w, r, db, signIn)
 		if !ok {
 			return
 		}
 		id, ok := flowID(w, r)
-		if !ok || !apiFlowAccess(w, r, db, u, id, accessEdit) {
+		if !ok || !apiFlowAccess(w, r, db, c, id, accessEdit) {
 			return
 		}
 		var req apiRunRequest
@@ -840,10 +891,10 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 			return
 		}
 		var startedBy *int64
-		if u != nil {
-			startedBy = &u.ID
+		if c.user != nil {
+			startedBy = &c.user.ID
 		}
-		run, created, refused, err := startGivenRun(r.Context(), db, eng, id, apiKeySource(key), startedBy, idempotency, true,
+		run, created, refused, err := startGivenRun(r.Context(), db, eng, id, apiKeySource(c.key), startedBy, idempotency, true,
 			func([]givenObject) (apiRunRequest, error) { return req, nil })
 		if err != nil {
 			serverError(w, err)
@@ -872,7 +923,7 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 
 	// What the run came to so far.
 	mux.HandleFunc("GET /v1/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
-		_, u, ok := apiKeyUser(w, r, db, signIn)
+		c, ok := apiKeyUser(w, r, db, signIn)
 		if !ok {
 			return
 		}
@@ -880,9 +931,10 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 		if !ok {
 			return
 		}
-		var flow int64
-		err := db.QueryRowContext(r.Context(), "SELECT flow_id FROM runs WHERE id = ?", id).Scan(&flow)
-		if errors.Is(err, sql.ErrNoRows) {
+		// A run of another project than the key's isn't there for it.
+		var flow, project int64
+		err := db.QueryRowContext(r.Context(), "SELECT flow_id, project_id FROM runs WHERE id = ?", id).Scan(&flow, &project)
+		if errors.Is(err, sql.ErrNoRows) || err == nil && project != c.project {
 			http.Error(w, "run not found", http.StatusNotFound)
 			return
 		}
@@ -890,7 +942,7 @@ func registerAPIRoutes(mux *http.ServeMux, db *sql.DB, eng *engine, signIn bool)
 			serverError(w, err)
 			return
 		}
-		if !apiFlowAccess(w, r, db, u, flow, accessReview) {
+		if !apiFlowAccess(w, r, db, c, flow, accessReview) {
 			return
 		}
 		out, err := getAPIRun(r.Context(), db, r, id)

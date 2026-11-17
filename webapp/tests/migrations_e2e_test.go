@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -131,8 +132,13 @@ func TestMigrateCommand(t *testing.T) {
 
 // Runs `webapp migrate` with args on the database name.
 func migrateDB(name string, args ...string) (string, error) {
+	return migrateDBWith(name, nil, args...)
+}
+
+// Runs `webapp migrate` with args on the database name, with env besides.
+func migrateDBWith(name string, env []string, args ...string) (string, error) {
 	cmd := exec.Command(testDB.binary, append([]string{"migrate"}, args...)...)
-	cmd.Env = []string{
+	cmd.Env = append([]string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 		"DB_HOST=" + testDB.host,
@@ -140,9 +146,125 @@ func migrateDB(name string, args ...string) (string, error) {
 		"DB_NAME=" + name,
 		"DB_USER=" + testDB.user,
 		"DB_PASSWORD=" + testDB.password,
-	}
+	}, env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// A webapp built on Spoletta's code keeps migrations of its own apart, as
+// local migrations: they run after Spoletta's, so they may change its
+// tables, recorded in goose_local_version; `webapp migrate status` lists
+// them and `webapp migrate local down-to` undoes them alone, leaving
+// Spoletta's; a webapp without them warns of a database that ran them; and
+// a LOCAL_MIGRATIONS that isn't there stops the webapp before it migrates
+// anything.
+func TestLocalMigrations(t *testing.T) {
+	needDB(t)
+	root := secretsDB(t)
+	name := fmt.Sprintf("%s%d_local", testDBPrefix, time.Now().UnixNano())
+	if _, err := root.Exec("CREATE DATABASE " + name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { root.Exec("DROP DATABASE IF EXISTS " + name) })
+	db := openDB(t, name)
+
+	dir := t.TempDir()
+	for file, content := range map[string]string{
+		"00001_add_badges.sql": "-- +goose Up\nCREATE TABLE badges (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL);\n\n" +
+			"-- +goose Down\nDROP TABLE badges;\n",
+		// On a table of Spoletta's, which a new database has only once
+		// Spoletta's migrations ran.
+		"00002_add_user_badges.sql": "-- +goose Up\nALTER TABLE users ADD COLUMN badge_id BIGINT NULL;\n\n" +
+			"-- +goose Down\nALTER TABLE users DROP COLUMN badge_id;\n",
+		"README.md": "Not a migration.\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local := "LOCAL_MIGRATIONS=" + dir
+
+	if _, err := startWebapp(newFakeWorker(t).url, 30*time.Second, "DB_NAME="+name, "LOCAL_MIGRATIONS="+filepath.Join(dir, "missing")); err == nil || !strings.Contains(err.Error(), "LOCAL_MIGRATIONS") {
+		t.Fatalf("started with LOCAL_MIGRATIONS naming no directory: %v, want it to stop saying so", err)
+	}
+	var tables int
+	if err := db.QueryRow("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()").Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("stopped for LOCAL_MIGRATIONS, the database has %d tables (%v), want none", tables, err)
+	}
+
+	applied := func(table string) []int64 {
+		t.Helper()
+		rows, err := db.Query("SELECT version_id FROM " + table + " WHERE version_id > 0 ORDER BY version_id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var vs []int64
+		for rows.Next() {
+			var v int64
+			rows.Scan(&v)
+			vs = append(vs, v)
+		}
+		return vs
+	}
+	has := func(cs []string, column string) bool {
+		return slices.ContainsFunc(cs, func(c string) bool { return strings.HasPrefix(c, column+" ") })
+	}
+
+	startApp(t, newFakeWorker(t).url, "DB_NAME="+name, local).proc.stop()
+	if v := applied("goose_local_version"); !slices.Equal(v, []int64{1, 2}) {
+		t.Fatalf("local migrations recorded = %v, want 1, 2", v)
+	}
+	spoletta := applied("goose_db_version")
+	up := columns(t, db)
+	for _, c := range []string{"badges.name", "users.badge_id"} {
+		if !has(up, c) {
+			t.Errorf("the local migrations didn't add %s", c)
+		}
+	}
+
+	out, err := migrateDBWith(name, []string{local}, "status")
+	if err != nil {
+		t.Fatalf("migrate status: %v\n%s", err, out)
+	}
+	for _, want := range []string{"00002_schema.sql", "local 00001_add_badges.sql", "local 00002_add_user_badges.sql"} {
+		if !regexp.MustCompile(`(?m)^\d+\s+applied\s+.*\s` + regexp.QuoteMeta(want) + `$`).MatchString(out) {
+			t.Errorf("migrate status doesn't list %s as applied:\n%s", want, out)
+		}
+	}
+
+	out, err = migrateDBWith(name, []string{local}, "local", "down-to", "1")
+	if err != nil || !strings.Contains(out, "undid local 00002_add_user_badges.sql") {
+		t.Fatalf("migrate local down-to 1: %v\n%s", err, out)
+	}
+	if v := applied("goose_local_version"); !slices.Equal(v, []int64{1}) {
+		t.Errorf("down to local version 1, recorded %v", v)
+	}
+	if cs := columns(t, db); has(cs, "users.badge_id") || !has(cs, "badges.name") {
+		t.Errorf("down to local version 1 left users.badge_id or took badges.name")
+	}
+	if v := applied("goose_db_version"); !slices.Equal(v, spoletta) {
+		t.Errorf("going down the local migrations changed Spoletta's: %v, were %v", v, spoletta)
+	}
+
+	logged := startApp(t, newFakeWorker(t).url, "DB_NAME="+name).proc.stop()
+	if !strings.Contains(logged, "WARNING: the database is at local version 1, but this webapp has no local migrations") {
+		t.Errorf("a webapp without local migrations didn't warn of the database's:\n%s", logged)
+	}
+	if out, err := migrateDB(name, "local", "down-to", "0"); err == nil || !strings.Contains(out, "no local migrations") {
+		t.Errorf("migrate local down-to without local migrations = %v, want it refused:\n%s", err, out)
+	}
+
+	startApp(t, newFakeWorker(t).url, "DB_NAME="+name, local).proc.stop()
+	if again := columns(t, db); !slices.Equal(up, again) {
+		t.Errorf("going down and up again changed the columns:\nbefore %v\nafter  %v", up, again)
+	}
+	if out, err := migrateDBWith(name, []string{local}, "local", "down-to", "0"); err != nil {
+		t.Fatalf("migrate local down-to 0: %v\n%s", err, out)
+	}
+	if v, cs := applied("goose_local_version"), columns(t, db); len(v) != 0 || has(cs, "badges.name") || has(cs, "users.badge_id") {
+		t.Errorf("down to local version 0, recorded %v, with badges or users.badge_id left", v)
+	}
 }
 
 // Every migration after the schema one is undone by its Down, leaving the

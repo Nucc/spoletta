@@ -54,10 +54,11 @@ func runLog(db *sql.DB, run, step int64, level, format string, args ...any) {
 		prefix = "ERROR: "
 	}
 	log.Printf("%srun %d: %s", prefix, run, msg)
-	// Timed by this clock, as the worker times its lines, not the database's.
+	// Timed by this clock, as the worker times its lines, not the database's;
+	// in the run's project.
 	if _, err := db.ExecContext(context.Background(),
-		"INSERT INTO run_logs (run_id, step_id, source, level, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		run, nullID(step), logWebapp, level, msg, time.Now().UTC()); err != nil {
+		"INSERT INTO run_logs (run_id, step_id, source, level, message, created_at, project_id) VALUES (?, ?, ?, ?, ?, ?, (SELECT project_id FROM runs WHERE id = ?))",
+		run, nullID(step), logWebapp, level, msg, time.Now().UTC(), run); err != nil {
 		log.Printf("record the log of run %d: %v", run, err)
 	}
 }
@@ -85,8 +86,8 @@ func recordWorkerLog(db *sql.DB, step int64, lines []workerLogLine) {
 			at = time.Now()
 		}
 		if _, err := db.ExecContext(context.Background(),
-			`INSERT INTO run_logs (run_id, step_id, source, level, message, created_at)
-			SELECT run_id, id, ?, ?, ?, ? FROM run_steps WHERE id = ?`,
+			`INSERT INTO run_logs (run_id, step_id, source, level, message, created_at, project_id)
+			SELECT run_id, id, ?, ?, ?, ?, project_id FROM run_steps WHERE id = ?`,
 			logWorker, level, l.Message, at.UTC(), step); err != nil {
 			log.Printf("record the worker's log of step %d: %v", step, err)
 			return

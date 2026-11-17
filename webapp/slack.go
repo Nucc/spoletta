@@ -253,14 +253,14 @@ func slAddReaction(ctx context.Context, c connectorClient, a opArgs) (any, error
 	return map[string]any{"channel": a.str("channel"), "ts": a.str("ts"), "emoji": a.str("emoji")}, nil
 }
 
-// The Slack connector the project installed that its people are told on,
-// the first installed with a token, and whether there is one.
+// The installed Slack connector people are told on of what is in the
+// project, its first installed with a token, and whether there is one.
 func slackNotifier(ctx context.Context, db *sql.DB, project int64) (connectorClient, bool, error) {
 	var servers []struct {
 		id  int64
 		url string
 	}
-	err := scanAll(ctx, db, "SELECT id, url FROM mcp_servers WHERE project_id = ? AND connector = ? ORDER BY id", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT id, url FROM mcp_servers WHERE connector = ? AND project_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var s struct {
 			id  int64
 			url string
@@ -268,7 +268,7 @@ func slackNotifier(ctx context.Context, db *sql.DB, project int64) (connectorCli
 		err := rows.Scan(&s.id, &s.url)
 		servers = append(servers, s)
 		return err
-	}, project, slackConnector.Name)
+	}, slackConnector.Name, project)
 	if err != nil {
 		return connectorClient{}, false, err
 	}
@@ -283,17 +283,6 @@ func slackNotifier(ctx context.Context, db *sql.DB, project int64) (connectorCli
 		return slackConnector.client(s.url, token), true, nil
 	}
 	return connectorClient{}, false, nil
-}
-
-// Whether any project installed a Slack connector with its token, so that
-// people, whose settings are the instance's, may ask to be told on Slack;
-// each message goes through the Slack connector of the project of the run
-// it is about (slackNotifier).
-func slackInstalled(ctx context.Context, db *sql.DB) (bool, error) {
-	var installed bool
-	err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM mcp_servers s JOIN mcp_tokens t ON t.server_id = s.id AND t.user_id = 0
-		WHERE s.connector = ? AND t.access_token IS NOT NULL)`, slackConnector.Name).Scan(&installed)
-	return installed, err
 }
 
 // Sends the person with the email a direct message from the app, saying text

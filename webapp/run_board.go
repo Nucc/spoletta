@@ -25,8 +25,10 @@ import (
 
 // A version's board, looked up by id.
 type runBoard struct {
-	// The flow it is a board of.
-	flow int64
+	// The flow it is a board of, and for a run's board, the project the run
+	// is in, which what its steps write is in too; 0 for a board only looked
+	// at.
+	flow, project int64
 	snapshot
 	processes map[int64]process
 	objects   map[int64]snapshotObject
@@ -68,10 +70,10 @@ func newRunBoard(flow int64, s snapshot) *runBoard {
 // The board a run ran on: its version's, or for a run from before versions
 // were recorded, the board as it is.
 func runBoardOf(ctx context.Context, db *sql.DB, run int64) (*runBoard, error) {
-	var flow int64
+	var flow, project int64
 	var body []byte
-	err := db.QueryRowContext(ctx, `SELECT r.flow_id, v.snapshot FROM runs r
-		LEFT JOIN flow_versions v ON v.id = r.version_id WHERE r.id = ?`, run).Scan(&flow, &body)
+	err := db.QueryRowContext(ctx, `SELECT r.flow_id, r.project_id, v.snapshot FROM runs r
+		LEFT JOIN flow_versions v ON v.id = r.version_id WHERE r.id = ?`, run).Scan(&flow, &project, &body)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +90,9 @@ func runBoardOf(ctx context.Context, db *sql.DB, run int64) (*runBoard, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newRunBoard(flow, s), nil
+	b := newRunBoard(flow, s)
+	b.project = project
+	return b, nil
 }
 
 // The board's process, as startStepAs records a step of it; errNotFound if

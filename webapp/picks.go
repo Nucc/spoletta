@@ -46,8 +46,8 @@ import (
 type objectPick struct {
 	States []string `json:"states,omitempty" yaml:"states,omitempty"`
 	State  string   `json:"state,omitempty" yaml:"state,omitempty"`
-	Where  string `json:"where,omitempty" yaml:"where,omitempty"`
-	Oldest bool   `json:"oldest,omitempty" yaml:"oldest,omitempty"`
+	Where  string   `json:"where,omitempty" yaml:"where,omitempty"`
+	Oldest bool     `json:"oldest,omitempty" yaml:"oldest,omitempty"`
 }
 
 // The states the pick takes records in, none for any.
@@ -276,16 +276,16 @@ func takeRecords(ctx context.Context, tx *sql.Tx, flow int64, nr *pendingRun) er
 	}
 	var all []took
 	for _, o := range picking {
-		record, state, content, err := takeRecord(ctx, tx, nr.record, o)
+		record, state, content, err := takeRecord(ctx, tx, nr.project, nr.record, o)
 		if err != nil {
 			return err
 		}
 		all = append(all, took{object: o, record: record, state: state, value: content})
 	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO run_steps (run_id, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at)
-		VALUES (?, ?, ?, '', '[]', ?, '', '', '', CURRENT_TIMESTAMP(3))`,
-		nr.id, takenStep, kindInput, stepDone)
+		`INSERT INTO run_steps (run_id, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at, project_id)
+		VALUES (?, ?, ?, '', '[]', ?, '', '', '', CURRENT_TIMESTAMP(3), ?)`,
+		nr.id, takenStep, kindInput, stepDone, nr.project)
 	if err != nil {
 		return err
 	}
@@ -297,8 +297,8 @@ func takeRecords(ctx context.Context, tx *sql.Tx, flow int64, nr *pendingRun) er
 	picked := map[int64]string{}
 	for _, t := range all {
 		picked[t.object.ID] = t.value
-		if _, err := tx.ExecContext(ctx, "INSERT INTO taken_records (run_id, object_ref, record_id, state) VALUES (?, ?, ?, ?)",
-			nr.id, t.object.ID, t.record, t.state); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO taken_records (run_id, object_ref, record_id, state, project_id) VALUES (?, ?, ?, ?, ?)",
+			nr.id, t.object.ID, t.record, t.state, nr.project); err != nil {
 			return err
 		}
 		if err := insertRunObject(ctx, tx, nr.id, step, t.object.ID, t.object.Name, t.state, t.value); err != nil {
@@ -322,17 +322,24 @@ func picksRecord(o snapshotObject) bool {
 	return o.Pick != nil && o.Store != nil && o.Parent == nil && o.Owner == nil && !o.Many
 }
 
-// The record a run takes for the object picking one: the one it was
-// started on, if that is of the object's store, else the first the pick
+// The record a run in project takes for the object picking one: the one it
+// was started on, if that is of the object's store, else the first the pick
 // selects that no run going on holds; its id, state and content. A run
 // started on a record takes it whoever else holds it, as a person picked
-// it.
-func takeRecord(ctx context.Context, tx *sql.Tx, on int64, o snapshotObject) (int64, string, string, error) {
+// it. Only a record of the project: a pick of another project's store has
+// none to take.
+func takeRecord(ctx context.Context, tx *sql.Tx, project, on int64, o snapshotObject) (int64, string, string, error) {
 	store := *o.Store
+	if of, err := objectProject(ctx, tx, store); err != nil {
+		return 0, "", "", err
+	} else if of != 0 && of != project {
+		return 0, "", "", &nothingToTake{msg: fmt.Sprintf("%s picks a record of another project's struct, which a run here can't reach", quote(o.Name))}
+	}
 	if on != 0 {
 		var of int64
 		var state, content string
-		err := tx.QueryRowContext(ctx, "SELECT object_id, state, content FROM shared_records WHERE id = ? AND deleted_at IS NULL FOR UPDATE", on).Scan(&of, &state, &content)
+		err := tx.QueryRowContext(ctx, "SELECT object_id, state, content FROM shared_records WHERE id = ? AND project_id = ? AND deleted_at IS NULL FOR UPDATE", on, project).
+			Scan(&of, &state, &content)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, "", "", fmt.Errorf("record %d, which the run was started on, was deleted", on)
 		}
@@ -351,8 +358,8 @@ func takeRecord(ctx context.Context, tx *sql.Tx, on int64, o snapshotObject) (in
 	if o.Pick.Oldest {
 		order = "ASC"
 	}
-	q := "SELECT id, content FROM shared_records WHERE object_id = ? AND deleted_at IS NULL"
-	args := []any{store}
+	q := "SELECT id, content FROM shared_records WHERE object_id = ? AND project_id = ? AND deleted_at IS NULL"
+	args := []any{store, project}
 	if ss := o.Pick.states(); len(ss) > 0 {
 		q += " AND state IN (?" + strings.Repeat(", ?", len(ss)-1) + ")"
 		for _, st := range ss {

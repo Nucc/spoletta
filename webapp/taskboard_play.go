@@ -64,10 +64,12 @@ package main
 // run, so if it fails the column tries it again after its while, the first
 // of its tries, rather than the board starting it again at once.
 //
-// A board's runs are for whoever pressed Play (started_by, which runUser
-// reads), so their access, spending limits and connections apply; once
-// they are removed, the board stops playing and says why, and a column
-// whose flow they may not run says so and starts nothing. Two boards
+// A board plays in its own project, its runs there, for whoever pressed
+// Play (started_by, which runUser reads) as they are in that project, so
+// their access, spending limits and connections there apply; once they are
+// removed, or may no longer enter the project, or the project is archived,
+// the board stops playing and says why, and a column whose flow they may
+// not run says so and starts nothing. Two boards
 // playing over the same records may both start a run on one, as two people
 // may from the Records page.
 
@@ -471,33 +473,29 @@ func boardGoing(ctx context.Context, db rowsQuerier, board int64) (map[int64]int
 	return going, err
 }
 
-// A person by id, with whether they were removed; nil for nobody.
-func boardPlayer(ctx context.Context, db querier, id int64) (*user, bool, error) {
-	u := &user{ID: id}
-	var removed bool
-	err := db.QueryRowContext(ctx, "SELECT email, name, admin, team_manager, removed_at IS NOT NULL FROM users WHERE id = ?", id).
-		Scan(&u.Email, &u.Name, &u.Admin, &u.TeamManager, &removed)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, true, nil
+// Whom a board of project's runs are for, or why it plays no more: whoever
+// pressed Play, as they are in the project, until they are removed or may
+// no longer enter it; nobody without sign-in. A board in an archived
+// project plays no more, starting nothing.
+func boardRunner(ctx context.Context, db *sql.DB, signIn bool, project int64, playedBy sql.NullInt64) (*user, string, error) {
+	if archived, err := projectArchived(ctx, db, project); err != nil || archived {
+		if archived {
+			return nil, archivedRuns, nil
+		}
+		return nil, "", err
 	}
-	return u, removed, err
-}
-
-// Whom a board's runs are for, or why it plays no more: whoever pressed
-// Play, until they are removed; nobody without sign-in.
-func boardRunner(ctx context.Context, db *sql.DB, signIn bool, playedBy sql.NullInt64) (*user, string, error) {
 	if !signIn {
 		return nil, "", nil
 	}
 	if !playedBy.Valid {
 		return nil, "it was played before people signed in, so its runs were nobody's; press Play to have them be yours", nil
 	}
-	u, removed, err := boardPlayer(ctx, db, playedBy.Int64)
+	u, why, err := memberAs(ctx, db, playedBy.Int64, project)
 	if err != nil {
 		return nil, "", err
 	}
-	if removed {
-		return nil, "whoever pressed Play was removed; press Play to have its runs be yours", nil
+	if why != "" {
+		return nil, "whoever pressed Play " + why + "; press Play to have its runs be yours", nil
 	}
 	return u, "", nil
 }
@@ -616,14 +614,15 @@ func stopBoard(ctx context.Context, db *sql.DB, board int64, why string) error {
 func playTurn(ctx context.Context, db *sql.DB, eng *engine, signIn bool, board int64) error {
 	var playedBy sql.NullInt64
 	var free int
-	err := db.QueryRowContext(ctx, "SELECT played_by, max_runs FROM task_boards WHERE id = ? AND playing", board).Scan(&playedBy, &free)
+	var project int64
+	err := db.QueryRowContext(ctx, "SELECT played_by, max_runs, project_id FROM task_boards WHERE id = ? AND playing", board).Scan(&playedBy, &free, &project)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	runner, msg, err := boardRunner(ctx, db, signIn, playedBy)
+	runner, msg, err := boardRunner(ctx, db, signIn, project, playedBy)
 	if err != nil {
 		return err
 	}
@@ -814,7 +813,8 @@ func startBoardRun(ctx context.Context, db *sql.DB, eng *engine, board int64, f 
 	if _, err := tx.ExecContext(ctx, "UPDATE runs SET record_id = ? WHERE id = ?", record, nr.id); err != nil {
 		return false, false, err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO task_board_runs (run_id, board_id, record_id, state) VALUES (?, ?, ?, ?)", nr.id, board, record, state); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO task_board_runs (run_id, board_id, record_id, state, project_id) VALUES (?, ?, ?, ?, ?)",
+		nr.id, board, record, state, nr.project); err != nil {
 		return false, false, err
 	}
 	nr.record = record
@@ -838,16 +838,20 @@ func startBoardRun(ctx context.Context, db *sql.DB, eng *engine, board int64, f 
 // if it wouldn't, and for one naming none and not resting, the flows taking
 // each state it names or its records shown are in; and on each card shown
 // the run going on its record, or why the board skips it as stuck. The
-// runs are whoever pressed Play's while it plays, else u's, who would press
-// it.
+// runs are whoever pressed Play's while it plays, as they are in the
+// board's project, else u's, who would press it.
 func fillPlay(ctx context.Context, db *sql.DB, u *user, b *taskBoard, structs map[int64]taskStruct) error {
 	runner := u
 	if b.Playing && b.playedBy.Valid {
-		p, removed, err := boardPlayer(ctx, db, b.playedBy.Int64)
+		var project int64
+		if err := db.QueryRowContext(ctx, "SELECT project_id FROM task_boards WHERE id = ?", b.ID).Scan(&project); err != nil {
+			return err
+		}
+		p, why, err := memberAs(ctx, db, b.playedBy.Int64, project)
 		if err != nil {
 			return err
 		}
-		if p != nil && !removed {
+		if why == "" {
 			runner = p
 		}
 	}

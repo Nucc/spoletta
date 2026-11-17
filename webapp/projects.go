@@ -728,7 +728,9 @@ func registerProjectRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 	})
 
 	// Says who is given the project by hand, and at which level, in place
-	// of those who were: [{"user", "level"}]. Those left out are removed;
+	// of those who were: [{"user", "level"}], or {"email", "level"} for
+	// someone the instance has, by their email, as the project's owners
+	// needn't see everyone the instance has. Those left out are removed;
 	// someone who came in another way and is named is a member by hand from
 	// then. Its owners'; an owner doesn't take their own ownership away.
 	mux.HandleFunc("PUT /api/projects/{id}/members", func(w http.ResponseWriter, r *http.Request) {
@@ -738,21 +740,33 @@ func registerProjectRoutes(mux *http.ServeMux, db *sql.DB, workerURL string) {
 		}
 		var body []struct {
 			User  int64  `json:"user"`
+			Email string `json:"email"`
 			Level string `json:"level"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		ctx := r.Context()
 		levels := map[int64]string{}
 		for _, m := range body {
 			if levelRank[m.Level] == 0 {
 				http.Error(w, `a member's level is "owner", "editor" or "viewer"`, http.StatusBadRequest)
 				return
 			}
+			if email := strings.ToLower(strings.TrimSpace(m.Email)); email != "" && m.User == 0 {
+				err := db.QueryRowContext(ctx, "SELECT id FROM users WHERE email = ? AND removed_at IS NULL", email).Scan(&m.User)
+				if errors.Is(err, sql.ErrNoRows) {
+					http.Error(w, fmt.Sprintf("nobody with the email %s signs in to Spoletta yet; an admin of Spoletta adds people, then you can give them access here", email), http.StatusBadRequest)
+					return
+				}
+				if err != nil {
+					serverError(w, err)
+					return
+				}
+			}
 			levels[m.User] = m.Level
 		}
-		ctx := r.Context()
 		me := requestUser(r)
 		if me != nil && !me.Super && v.how == sourceManual && levels[me.ID] != levelOwner {
 			http.Error(w, "you can't stop being the project's owner yourself; ask another owner", http.StatusBadRequest)

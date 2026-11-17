@@ -58,8 +58,12 @@ func registerStateRoutes(mux *http.ServeMux, db *sql.DB) {
 		if !ownObject(w, r, db, s.Object) {
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO object_states (object_id, name, rule) VALUES (?, ?, ?)", s.Object, s.Name, s.Rule)
-		if mysqlErrorIs(err, mysqlErrForeignKey) {
+		res, err := db.ExecContext(r.Context(), "INSERT INTO object_states (object_id, name, rule, project_id) SELECT id, ?, ?, project_id FROM objects WHERE id = ?", s.Name, s.Rule, s.Object)
+		var added int64
+		if err == nil {
+			added, err = res.RowsAffected()
+		}
+		if mysqlErrorIs(err, mysqlErrForeignKey) || (err == nil && added == 0) {
 			http.Error(w, "object not found", http.StatusBadRequest)
 			return
 		}
@@ -178,8 +182,9 @@ func deleteState(ctx context.Context, db *sql.DB, id int64) error {
 }
 
 // The states of every object, by object id.
-func listStates(ctx context.Context, db *sql.DB) (map[int64][]objectState, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, object_id, name, COALESCE(rule, ''), source_id FROM object_states ORDER BY id")
+func listStates(ctx context.Context, db *sql.DB, flow int64) (map[int64][]objectState, error) {
+	rows, err := db.QueryContext(ctx, `SELECT st.id, st.object_id, st.name, COALESCE(st.rule, ''), st.source_id FROM object_states st
+		JOIN objects o ON o.id = st.object_id WHERE o.flow_id = ? ORDER BY st.id`, flow)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,8 @@
 package main
 
 // The Activity page (Activity.tsx) shows what goes on across every flow
-// someone sees: the runs going on now and those failed lately, and over a
+// someone sees in the project they are in (projects.go), with nobody
+// signing in too: the runs going on now and those failed lately, and over a
 // period of days, how many runs started each day, how many of them failed
 // and what they spent on models, by flow; the processes that fail most; how
 // long people take to decide reviews and how often they send work back.
@@ -23,7 +24,8 @@ package main
 // Nor is a trial of one process alone (trials.go), nor its step, though
 // what it spent counts toward what its flow spent: it cost that money.
 //
-// Only the flows the person sees count; see visibleFlows. Days are the
+// Only the flows of the project the person sees count; see visibleFlows.
+// Days are the
 // person's, in the time zone their browser names, else UTC: each starts at
 // its midnight there, worked out here and given to the database as the
 // bounds of the period's days, so they hold across a change of the clocks
@@ -188,23 +190,26 @@ type activity struct {
 	AllReviews reviewTimes `json:"allReviews"`
 }
 
-// The flows the person sees; see visibleFlows. Worked out once, so the
-// queries over runs and steps needn't ask it of each.
+// The flows of the project the person sees; see visibleFlows. Worked out
+// once, so the queries over runs and steps needn't ask it of each.
 type flowSet struct {
-	// The flows seen; nil for every one but those in the trash.
+	project int64
+	// The flows seen; nil for every one of the project but those in the
+	// trash.
 	ids []int64
 	// Those in the trash, for someone seeing every other flow.
 	trashed []int64
 }
 
-func seenFlows(ctx context.Context, db *sql.DB, u *user) (flowSet, error) {
-	var seen flowSet
+func seenFlows(ctx context.Context, db *sql.DB, u *user, project int64) (flowSet, error) {
+	seen := flowSet{project: project}
 	cond, args := visibleFlows(u)
-	q := "SELECT f.id FROM flows f WHERE " + cond
+	q, args := "SELECT f.id FROM flows f WHERE f.project_id = ? AND "+cond, append([]any{project}, args...)
 	into := &seen.ids
-	// Someone seeing every flow is told those they don't, which are fewer.
+	// Someone seeing every flow of the project, nobody signing in or its
+	// owner, is told those they don't, which are fewer.
 	if u == nil || u.Admin {
-		q, into = "SELECT f.id FROM flows f WHERE f.deleted_at IS NOT NULL", &seen.trashed
+		q, args, into = "SELECT f.id FROM flows f WHERE f.project_id = ? AND f.deleted_at IS NOT NULL", []any{project}, &seen.trashed
 	}
 	*into = []int64{}
 	err := scanAll(ctx, db, q, func(rows *sql.Rows) error {
@@ -216,29 +221,31 @@ func seenFlows(ctx context.Context, db *sql.DB, u *user) (flowSet, error) {
 	return seen, err
 }
 
-// The condition that column col names one of the flows seen, and its
+// The condition that a row of the table whose columns start with prefix,
+// such as "r.", is in the project and names one of the flows seen, and its
 // arguments.
-func ofFlows(col string, seen flowSet) (string, []any) {
+func ofFlows(prefix string, seen flowSet) (string, []any) {
+	in, args := prefix+"project_id = ?", []any{seen.project}
 	switch {
 	case seen.ids != nil:
-		return col + " IN " + placeholders(len(seen.ids)), int64Args(seen.ids)
+		return in + " AND " + prefix + "flow_id IN " + placeholders(len(seen.ids)), append(args, int64Args(seen.ids)...)
 	case len(seen.trashed) > 0:
-		return col + " NOT IN " + placeholders(len(seen.trashed)), int64Args(seen.trashed)
+		return in + " AND " + prefix + "flow_id NOT IN " + placeholders(len(seen.trashed)), append(args, int64Args(seen.trashed)...)
 	}
-	return "TRUE", nil
+	return in, args
 }
 
-// Works out the page for the person over the period.
-func loadActivity(ctx context.Context, db *sql.DB, u *user, p period) (activity, error) {
+// Works out the page for the person in the project over the period.
+func loadActivity(ctx context.Context, db *sql.DB, u *user, project int64, p period) (activity, error) {
 	a := activity{Zone: p.zone, Days: p.days, Flows: []flowActivity{}, Processes: []processFailures{}, Reviews: []reviewTimes{}}
-	seen, err := seenFlows(ctx, db, u)
+	seen, err := seenFlows(ctx, db, u, project)
 	if err != nil {
 		return a, err
 	}
 	n := len(p.days)
 	flows := map[int64]*flowActivity{}
 	day, dayArgs := p.dayOf("started_at")
-	of, ofArgs := ofFlows("flow_id", seen)
+	of, ofArgs := ofFlows("", seen)
 	err = scanAll(ctx, db, "SELECT flow_id, "+day+` AS d, SUM(trial_of IS NULL), SUM(status = ? AND trial_of IS NULL), SUM(spent_micros), SUM(unpriced_calls)
 		FROM runs WHERE parent_run_id IS NULL AND started_at >= ? AND `+of+` GROUP BY flow_id, d`, func(rows *sql.Rows) error {
 		var id, micros, unpriced int64
@@ -406,10 +413,10 @@ var workKinds = []any{kindAgent, kindScript, kindConnector}
 func failingProcesses(ctx context.Context, db *sql.DB, p period, seen flowSet) ([]processFailures, error) {
 	out := []processFailures{}
 	var lastSteps []int64
-	of, ofArgs := ofFlows("r.flow_id", seen)
+	of, ofArgs := ofFlows("r.", seen)
 	err := scanAll(ctx, db, `SELECT r.flow_id, g.process_ref, g.steps, g.failed, g.last FROM (
 			SELECT s.process_ref, COUNT(*) AS steps, SUM(s.status = ?) AS failed, MAX(IF(s.status = ?, s.id, NULL)) AS last, MAX(s.run_id) AS run
-			FROM run_steps s WHERE s.kind IN `+placeholders(len(workKinds))+` AND s.started_at >= ? AND s.process_ref IS NOT NULL
+			FROM run_steps s WHERE s.kind IN `+placeholders(len(workKinds))+` AND s.started_at >= ? AND s.project_id = ? AND s.process_ref IS NOT NULL
 				AND s.run_id NOT IN (SELECT id FROM runs WHERE trial_of IS NOT NULL)
 			GROUP BY s.process_ref HAVING failed > 0
 		) g JOIN runs r ON r.id = g.run
@@ -420,7 +427,7 @@ func failingProcesses(ctx context.Context, db *sql.DB, p period, seen flowSet) (
 		out = append(out, pf)
 		lastSteps = append(lastSteps, last)
 		return err
-	}, slices.Concat([]any{stepError, stepError}, workKinds, []any{p.from()}, ofArgs, []any{listedProcesses})...)
+	}, slices.Concat([]any{stepError, stepError}, workKinds, []any{p.from(), seen.project}, ofArgs, []any{listedProcesses})...)
 	if err != nil || len(out) == 0 {
 		return out, err
 	}
@@ -450,7 +457,7 @@ func reviewsDecided(ctx context.Context, db *sql.DB, p period, seen flowSet) ([]
 	byProcess := map[int64]*reviewTimes{}
 	var out []*reviewTimes
 	var latest []int64
-	of, ofArgs := ofFlows("r.flow_id", seen)
+	of, ofArgs := ofFlows("r.", seen)
 	err := scanAll(ctx, db, `WITH d AS (
 			SELECT r.flow_id, s.process_ref, s.id, UNIX_TIMESTAMP(s.finished_at) - UNIX_TIMESTAMP(s.started_at) AS secs, s.instructions <> '' AS asked
 			FROM run_steps s JOIN runs r ON r.id = s.run_id
@@ -578,7 +585,7 @@ func registerActivityRoutes(mux *http.ServeMux, db *sql.DB) {
 			days = n
 		}
 		p := periodOf(time.Now(), activityZone(r.URL.Query().Get("tz")), days)
-		a, err := loadActivity(r.Context(), db, requestUser(r), p)
+		a, err := loadActivity(r.Context(), db, requestUser(r), requestProject(r), p)
 		if err != nil {
 			serverError(w, err)
 			return

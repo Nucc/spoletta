@@ -90,24 +90,24 @@ func storeInstances(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID 
 	// Objects and attributes go in id order, so concurrent runs take the
 	// keys' locks in the same order.
 	for _, g := range objects {
-		if dup, err := storeInstance(ctx, tx, runID, stepID, g.object, g.name, g.content, g.state, b.uniqueAttributes(g.object)); dup != nil || err != nil {
+		if dup, err := storeInstance(ctx, tx, b.project, runID, stepID, g.object, g.name, g.content, g.state, b.uniqueAttributes(g.object)); dup != nil || err != nil {
 			return dup, err
 		}
 	}
 	return nil, nil
 }
 
-// Stores what a run holds of a persistent object, replacing what it stored
-// of it before, and its unique values, those of attrs. Returns the first
-// unique value another run already holds; the caller rolls back what was
-// stored then.
-func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64, name, content, state string, attrs []attribute) (*duplicate, error) {
+// Stores what a run of project holds of a persistent object, replacing what
+// it stored of it before, and its unique values, those of attrs. Returns the
+// first unique value another run already holds; the caller rolls back what
+// was stored then.
+func storeInstance(ctx context.Context, tx *sql.Tx, project, runID, stepID, object int64, name, content, state string, attrs []attribute) (*duplicate, error) {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM object_instances WHERE object_id = ? AND run_id = ?", object, runID); err != nil {
 		return nil, err
 	}
 	res, err := tx.ExecContext(ctx,
-		"INSERT INTO object_instances (object_id, run_id, step_id, content, state) VALUES (?, ?, ?, ?, ?)",
-		object, runID, stepID, content, state)
+		"INSERT INTO object_instances (object_id, run_id, step_id, content, state, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+		object, runID, stepID, content, state, project)
 	if err != nil {
 		return nil, err
 	}
@@ -129,8 +129,8 @@ func storeInstance(ctx context.Context, tx *sql.Tx, runID, stepID, object int64,
 		}
 		value := compact(fields[a.Name])
 		_, err := tx.ExecContext(ctx,
-			"INSERT INTO instance_keys (object_id, attribute_id, value_hash, value, instance_id) VALUES (?, ?, ?, ?, ?)",
-			object, a.ID, hash, value, instance)
+			"INSERT INTO instance_keys (object_id, attribute_id, value_hash, value, instance_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+			object, a.ID, hash, value, instance, project)
 		if mysqlErrorIs(err, mysqlErrDuplicate) {
 			d := &duplicate{Object: name, Attribute: a.Name, Value: value}
 			err := tx.QueryRowContext(ctx,

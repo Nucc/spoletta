@@ -13,7 +13,7 @@ import (
 // A walk of board, nil for the top one, of a run of a flow whose board is b,
 // with no engine behind it: enough to see how it reads the board.
 func walkOn(b snapshot, board *int64, given map[int64]value) *walk {
-	return newWalk(context.Background(), nil, 0, nil, newFlowRun(1, 1, b, nil, ""), board, given, nil)
+	return newWalk(context.Background(), nil, 0, nil, newFlowRun(1, 1, 1, b, nil, ""), board, given, nil)
 }
 
 // Write turns the brief into a draft, which a person reviews, approving or

@@ -117,7 +117,7 @@ func registerCommentRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 			var roles []string
 			if u != nil {
-				if roles, err = userRoles(r.Context(), db, u.ID); err != nil {
+				if roles, err = userRoles(r.Context(), db, u.ID, requestProject(r)); err != nil {
 					serverError(w, err)
 					return
 				}
@@ -136,8 +136,8 @@ func registerCommentRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, fmt.Sprintf("a review keeps at most %d comments", maxReviewComments), http.StatusConflict)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "INSERT INTO review_comments (run_id, step_id, user_id, text) VALUES (?, ?, ?, ?)",
-			run, step, requestUserID(r), text); err != nil {
+		if _, err := db.ExecContext(r.Context(), "INSERT INTO review_comments (run_id, step_id, user_id, text, project_id) VALUES (?, ?, ?, ?, (SELECT project_id FROM runs WHERE id = ?))",
+			run, step, requestUserID(r), text, run); err != nil {
 			serverError(w, err)
 			return
 		}

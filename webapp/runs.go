@@ -267,10 +267,12 @@ func startStepAs(ctx context.Context, db *sql.DB, b *runBoard, runID, processID 
 		}
 	}
 	// Only into a run this replica walks: one another took over (see
-	// resume.go) is that one's to go on with.
+	// resume.go) is that one's to go on with. The step is in the run's
+	// project, and refers to its process only while the board there has it.
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO run_steps (run_id, process_id, process_ref, process_name, kind, model, thinking, prompt, inputs, change_request, status, output, error, instructions)
-		SELECT id, (SELECT id FROM processes WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '' FROM runs WHERE id = ? AND replica_id = ?`,
+		`INSERT INTO run_steps (run_id, process_id, process_ref, process_name, kind, model, thinking, prompt, inputs, change_request, status, output, error, instructions, project_id)
+		SELECT id, (SELECT p.id FROM processes p WHERE p.id = ? AND p.project_id = runs.project_id), ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', project_id
+		FROM runs WHERE id = ? AND replica_id = ?`,
 		p.ID, p.ID, p.Name, kind, p.Model, p.Thinking, prompt, in, crJSON, status, runID, replicaID)
 	if err != nil {
 		return 0, err
@@ -426,13 +428,14 @@ func finishStepOnce(ctx context.Context, db *sql.DB, b *runBoard, stepID int64, 
 }
 
 // Records what a run holds of an object, as a step generated it or a person
-// decided it. One the board as it is no longer has is referred to by
-// object_ref alone.
+// decided it, in the run's project. One the board as it is no longer has is
+// referred to by object_ref alone.
 func insertRunObject(ctx context.Context, db execer, run, step, object int64, name, state, content string) error {
 	_, err := db.ExecContext(ctx,
-		`INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content)
-		VALUES (?, ?, (SELECT id FROM objects WHERE id = ?), ?, ?, ?, ?)`,
-		run, step, object, object, name, state, content)
+		`INSERT INTO run_objects (run_id, step_id, object_id, object_ref, name, state, content, project_id)
+		VALUES (?, ?, (SELECT o.id FROM objects o WHERE o.id = ? AND o.project_id = (SELECT project_id FROM runs WHERE id = ?)), ?, ?, ?, ?,
+			(SELECT project_id FROM runs WHERE id = ?))`,
+		run, step, object, run, object, name, state, content, run)
 	return err
 }
 
@@ -547,9 +550,11 @@ func startRun(ctx context.Context, db *sql.DB, eng *engine, flow int64, schedule
 // A run recorded, and what the engine needs to execute it.
 type pendingRun struct {
 	id, version int64
-	board       snapshot
-	repos       []repository
-	prefix      string
+	// The project it is in, its flow's; see run_projects.go.
+	project int64
+	board   snapshot
+	repos   []repository
+	prefix  string
 	// What names the branch its checkouts are on; see branch_names.go.
 	rule string
 	// The shared record it is started on, 0 for none; see record_runs.go.
@@ -568,13 +573,24 @@ type pendingRun struct {
 // version the flow published if it has one; see runVersion. A board changed
 // since its version is saved as a new one first, so the run's version shows
 // what it ran. The flow's settings, its repositories, are the version's.
-// sql.ErrNoRows without the flow, or with it in the trash, whose moving
-// there waits for the run to be recorded, to stop it (see trash.go).
+// The run is in the flow's project. sql.ErrNoRows without the flow, or with
+// it in the trash, whose moving there waits for the run to be recorded, to
+// stop it (see trash.go); errProjectArchived, which is sql.ErrNoRows too,
+// when its project is archived.
 func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *int64, published bool) (pendingRun, error) {
 	var name string
 	var settings flowSettings
-	if err := tx.QueryRowContext(ctx, "SELECT name, settings FROM flows WHERE id = ? AND deleted_at IS NULL FOR UPDATE", flow).Scan(&name, &settings); err != nil {
+	var project int64
+	var archived bool
+	// Only the flow's row is locked: a project's runs start side by side.
+	err := tx.QueryRowContext(ctx, `SELECT f.name, f.settings, f.project_id, p.archived_at IS NOT NULL FROM flows f
+		JOIN projects p ON p.id = f.project_id WHERE f.id = ? AND f.deleted_at IS NULL FOR UPDATE OF f`, flow).
+		Scan(&name, &settings, &project, &archived)
+	if err != nil {
 		return pendingRun{}, err
+	}
+	if archived {
+		return pendingRun{}, errProjectArchived
 	}
 	version, board, onPublished, err := runVersion(ctx, tx, flow, published, saving{by: startedBy, reason: savedForRun})
 	if err != nil {
@@ -583,8 +599,8 @@ func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *in
 	if board.Settings != nil {
 		settings = *board.Settings
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by, replica_id, published) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		flow, runRunning, version, schedule, startedBy, replicaID, onPublished)
+	res, err := tx.ExecContext(ctx, "INSERT INTO runs (flow_id, status, version_id, schedule_id, started_by, replica_id, published, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		flow, runRunning, version, schedule, startedBy, replicaID, onPublished, project)
 	if err != nil {
 		return pendingRun{}, err
 	}
@@ -592,7 +608,8 @@ func newRun(ctx context.Context, tx *sql.Tx, flow int64, schedule, startedBy *in
 	if err != nil {
 		return pendingRun{}, err
 	}
-	return pendingRun{id: id, version: version, board: board, repos: settings.Repositories, prefix: settings.prefix(name), rule: settings.Branch, published: onPublished}, nil
+	return pendingRun{id: id, version: version, project: project, board: board, repos: settings.Repositories, prefix: settings.prefix(name),
+		rule: settings.Branch, published: onPublished}, nil
 }
 
 func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
@@ -676,6 +693,10 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			}
 		} else {
 			id, err = startRun(r.Context(), db, eng, f, nil, requestUserID(r), body.Published)
+		}
+		if errors.Is(err, errProjectArchived) {
+			http.Error(w, archivedRuns, http.StatusConflict)
+			return
 		}
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "flow not found", http.StatusNotFound)
@@ -764,7 +785,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		var roles []string
 		if u := requestUser(r); u != nil {
-			if roles, err = userRoles(r.Context(), db, u.ID); err != nil {
+			if roles, err = userRoles(r.Context(), db, u.ID, requestProject(r)); err != nil {
 				serverError(w, err)
 				return
 			}

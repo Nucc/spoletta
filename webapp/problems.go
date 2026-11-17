@@ -774,7 +774,10 @@ func problemErrors(ps []problem) []problem {
 
 // Reads what the rules need to know of the app for the boards given, as
 // whoever asks sees it: their MCP connections, and with withModel the
-// default model, asking the worker when the settings keep none.
+// default model, asking the worker when the settings keep none. What the
+// boards name is read in the flow's project alone, so another project's
+// procedure, source, MCP server, skill or credential is none (see
+// board_projects.go), and the roles are the project's.
 func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerURL string, flow int64, withModel bool, boards ...snapshot) (problemFacts, error) {
 	f := problemFacts{signIn: requestUser(r) != nil, servers: map[int64]serverFacts{}, flows: map[int64]bool{}, trashed: map[int64]bool{}, skills: map[int64]pickFacts{},
 		credentials: map[int64]pickFacts{}, roles: map[string]bool{}, sources: map[int64]bool{}}
@@ -817,25 +820,25 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 		}
 	}
 	if len(flows) > 0 {
-		err := scanAll(ctx, db, "SELECT id, deleted_at IS NOT NULL FROM flows WHERE id IN "+placeholders(len(flows)), func(rows *sql.Rows) error {
+		err := scanAll(ctx, db, "SELECT id, deleted_at IS NOT NULL FROM flows WHERE project_id = ? AND id IN "+placeholders(len(flows)), func(rows *sql.Rows) error {
 			var id int64
 			var trashed bool
 			err := rows.Scan(&id, &trashed)
 			f.flows[id] = true
 			f.trashed[id] = trashed
 			return err
-		}, flows...)
+		}, append([]any{project}, flows...)...)
 		if err != nil {
 			return f, err
 		}
 	}
 	if len(sources) > 0 {
-		err := scanAll(ctx, db, "SELECT id FROM objects WHERE id IN "+placeholders(len(sources)), func(rows *sql.Rows) error {
+		err := scanAll(ctx, db, "SELECT id FROM objects WHERE project_id = ? AND id IN "+placeholders(len(sources)), func(rows *sql.Rows) error {
 			var id int64
 			err := rows.Scan(&id)
 			f.sources[id] = true
 			return err
-		}, sources...)
+		}, append([]any{project}, sources...)...)
 		if err != nil {
 			return f, err
 		}
@@ -873,12 +876,12 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 		}
 	}
 	if f.signIn {
-		err := scanAll(ctx, db, "SELECT DISTINCT ur.name FROM user_roles ur JOIN users u ON u.id = ur.user_id WHERE u.removed_at IS NULL", func(rows *sql.Rows) error {
+		err := scanAll(ctx, db, "SELECT DISTINCT ur.name FROM user_roles ur JOIN users u ON u.id = ur.user_id WHERE u.removed_at IS NULL AND ur.project_id = ?", func(rows *sql.Rows) error {
 			var name string
 			err := rows.Scan(&name)
 			f.roles[roleKey(name)] = true
 			return err
-		})
+		}, project)
 		if err != nil {
 			return f, err
 		}

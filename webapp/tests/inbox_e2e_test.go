@@ -363,7 +363,7 @@ func TestNotifyWhoMayDecide(t *testing.T) {
 
 	rn := a.startRun(b.flow.ID)
 	review := a.waitStep(rn.ID, "Review", stepWaiting)
-	link := inboxLink(a, fmt.Sprintf("/#/flows/%d/runs/%d/steps/%d", b.flow.ID, rn.ID, review.ID))
+	link := inboxLink(a, fmt.Sprintf("/#/p/1/flows/%d/runs/%d/steps/%d", b.flow.ID, rn.ID, review.ID))
 	inboxEventually(t, "Bob's email and Slack message", func() bool { return len(smtp.to(bob.email)) > 0 && len(slack.to(bob.email)) > 0 })
 	m := smtp.to(bob.email)[0]
 	if m.subject != fmt.Sprintf(`"Review" waits for your review, in run %d of "Review"`, rn.ID) || !strings.Contains(m.text, "Open the review: "+link) {
@@ -398,7 +398,7 @@ func TestNotifyWhoMayDecide(t *testing.T) {
 	}
 	inboxEventually(t, "Bob being told his run failed", func() bool { return len(slack.to(bob.email)) == 3 })
 	if dm := slack.to(bob.email)[2]; !strings.Contains(dm, fmt.Sprintf("Run %d of", failed.ID)) ||
-		!strings.Contains(dm, inboxLink(a, fmt.Sprintf("/#/flows/%d/runs/%d|Open the run", f.ID, failed.ID))) {
+		!strings.Contains(dm, inboxLink(a, fmt.Sprintf("/#/p/1/flows/%d/runs/%d|Open the run", f.ID, failed.ID))) {
 		t.Errorf("Bob's failure message: %s", dm)
 	}
 

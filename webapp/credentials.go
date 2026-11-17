@@ -395,12 +395,17 @@ type credentialAccess struct {
 }
 
 // The credentials a process picked, for its step, if its flow may use them
-// all and each has its secret; else why not.
+// all and each has its secret; else why not. One of another project than
+// the flow's is none.
 func stepCredentials(ctx context.Context, db querier, flow int64, ids []int64) ([]credentialAccess, string, error) {
 	if len(ids) == 0 {
 		return nil, "", nil
 	}
 	cond, args, err := flowCredentials(ctx, db, flow)
+	if err != nil {
+		return nil, "", err
+	}
+	project, err := flowProject(ctx, db, flow)
 	if err != nil {
 		return nil, "", err
 	}
@@ -412,8 +417,8 @@ func stepCredentials(ctx context.Context, db querier, flow int64, ids []int64) (
 		c := credentialAccess{id: id}
 		var variable string
 		var secretSet, usable bool
-		err := db.QueryRowContext(ctx, "SELECT c.name, c.variable, c.base_url, c.secret <> '', "+cond+" FROM credentials c WHERE c.id = ?",
-			append(args, id)...).Scan(&c.Name, &variable, &c.BaseURL, &secretSet, &usable)
+		err := db.QueryRowContext(ctx, "SELECT c.name, c.variable, c.base_url, c.secret <> '', "+cond+" FROM credentials c WHERE c.id = ? AND c.project_id = ?",
+			append(args, id, project)...).Scan(&c.Name, &variable, &c.BaseURL, &secretSet, &usable)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, "a credential the process uses was removed; pick its credentials again", nil

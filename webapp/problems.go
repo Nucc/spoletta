@@ -845,13 +845,13 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 		if err != nil {
 			return f, err
 		}
-		err = scanAll(ctx, db, "SELECT s.id, s.name, "+cond+" FROM skills s WHERE s.kind = ? AND s.id IN "+placeholders(len(skills)), func(rows *sql.Rows) error {
+		err = scanAll(ctx, db, "SELECT s.id, s.name, "+cond+" FROM skills s WHERE s.kind = ? AND s.project_id = ? AND s.id IN "+placeholders(len(skills)), func(rows *sql.Rows) error {
 			var id int64
 			var p pickFacts
 			err := rows.Scan(&id, &p.name, &p.usable)
 			f.skills[id] = p
 			return err
-		}, append(append(args, kindSkill), skills...)...)
+		}, append(append(args, kindSkill, project), skills...)...)
 		if err != nil {
 			return f, err
 		}
@@ -861,13 +861,13 @@ func loadProblemFacts(ctx context.Context, db *sql.DB, r *http.Request, workerUR
 		if err != nil {
 			return f, err
 		}
-		err = scanAll(ctx, db, "SELECT c.id, c.name, "+cond+", c.secret <> '' FROM credentials c WHERE c.id IN "+placeholders(len(credentials)), func(rows *sql.Rows) error {
+		err = scanAll(ctx, db, "SELECT c.id, c.name, "+cond+", c.secret <> '' FROM credentials c WHERE c.project_id = ? AND c.id IN "+placeholders(len(credentials)), func(rows *sql.Rows) error {
 			var id int64
 			var p pickFacts
 			err := rows.Scan(&id, &p.name, &p.usable, &p.secret)
 			f.credentials[id] = p
 			return err
-		}, append(args, credentials...)...)
+		}, append(append(args, project), credentials...)...)
 		if err != nil {
 			return f, err
 		}

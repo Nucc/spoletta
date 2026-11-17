@@ -129,7 +129,7 @@ func listSkills(ctx context.Context, db rowsQuerier, kind, cond string, args ...
 }
 
 // The skills an agent process picked, for its step, if its flow may use them
-// all; else why not.
+// all; else why not. One of another project than the flow's is none.
 func stepSkills(ctx context.Context, db querier, flow int64, ids []int64) ([]runSkill, string, error) {
 	if len(ids) == 0 {
 		return nil, "", nil
@@ -138,12 +138,16 @@ func stepSkills(ctx context.Context, db querier, flow int64, ids []int64) ([]run
 	if err != nil {
 		return nil, "", err
 	}
+	project, err := flowProject(ctx, db, flow)
+	if err != nil {
+		return nil, "", err
+	}
 	var out []runSkill
 	for _, id := range ids {
 		var s runSkill
 		var usable bool
-		err := db.QueryRowContext(ctx, "SELECT s.name, s.description, s.content, "+cond+" FROM skills s WHERE s.id = ? AND s.kind = ?",
-			append(args, id, kindSkill)...).Scan(&s.Name, &s.Description, &s.Content, &usable)
+		err := db.QueryRowContext(ctx, "SELECT s.name, s.description, s.content, "+cond+" FROM skills s WHERE s.id = ? AND s.kind = ? AND s.project_id = ?",
+			append(args, id, kindSkill, project)...).Scan(&s.Name, &s.Description, &s.Content, &usable)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, "a skill the process uses was deleted; pick its skills again", nil

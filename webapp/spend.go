@@ -210,7 +210,7 @@ func (b *llmBroker) outOfBudget(ctx context.Context, g *llmGrant) (string, error
 			return "", err
 		}
 		if spent >= g.UserLimit {
-			return fmt.Sprintf("out of budget: its person has spent %s on models in the project this month, and may spend %s", formatDollars(spent), formatDollars(g.UserLimit)), nil
+			return fmt.Sprintf("out of budget: its person has spent %s on models this month, and may spend %s", formatDollars(spent), formatDollars(g.UserLimit)), nil
 		}
 	}
 	return "", nil

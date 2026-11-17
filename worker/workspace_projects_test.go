@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -274,6 +275,14 @@ func TestDiffWithholdsTheWorkersGitConfig(t *testing.T) {
 // A project deleted for good takes its shared repositories with it, and
 // nothing of another project's or of Legacy's.
 func TestDeletingAProjectRemovesItsSharedRepositories(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	workspacesRoot = t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	for _, kv := range [][2]string{{"GIT_AUTHOR_NAME", "Flow agent"}, {"GIT_AUTHOR_EMAIL", "a@localhost"}, {"GIT_COMMITTER_NAME", "Flow agent"}, {"GIT_COMMITTER_EMAIL", "a@localhost"}} {
+		t.Setenv(kv[0], kv[1])
+	}
 	const url = "https://example.invalid/acme/api.git"
 	const other = "https://example.invalid/acme/web.git"
 	sharedWithBranchOf(t, 2, url, "flow/run-30")

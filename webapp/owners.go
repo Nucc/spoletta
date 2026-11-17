@@ -94,11 +94,22 @@ func editableFlows(u *user) (string, []any) {
 // a row owned by a team has no owner_user_id to compare, and one owned by
 // a person no owner_team_id.
 func ownedBy(t string, u *user) (string, []any) {
-	if u == nil || u.Admin {
+	if u == nil {
 		return "TRUE", nil
 	}
-	return "((" + t + ".owner_user_id IS NULL AND " + t + ".owner_team_id IS NULL) OR " + t + `.owner_user_id <=> ?
-		OR EXISTS (SELECT 1 FROM team_members tm WHERE tm.user_id = ? AND tm.team_id = ` + t + ".owner_team_id))", []any{u.ID, u.ID}
+	cond, args := "TRUE", []any(nil)
+	if !u.Admin {
+		cond = "((" + t + ".owner_user_id IS NULL AND " + t + ".owner_team_id IS NULL) OR " + t + `.owner_user_id <=> ?
+		OR EXISTS (SELECT 1 FROM team_members tm WHERE tm.user_id = ? AND tm.team_id = ` + t + ".owner_team_id))"
+		args = []any{u.ID, u.ID}
+	}
+	// Someone is who they are in one project (user.Project): an owner
+	// there owns nothing of another, and everyone's there isn't theirs
+	// elsewhere.
+	if u.Project != 0 {
+		cond, args = "("+t+".project_id = ? AND "+cond+")", append([]any{u.Project}, args...)
+	}
+	return cond, args
 }
 
 // The condition on flows f that only the ones out of the trash meet; see
@@ -113,14 +124,24 @@ const liveFlows = "f.deleted_at IS NULL"
 // version_roles, so this reads no snapshot.
 func visibleFlows(u *user) (string, []any) {
 	cond, args := editableFlows(u)
-	if u == nil || u.Admin {
+	if cond == "TRUE" {
 		return liveFlows, args
 	}
-	return "(" + liveFlows + " AND (" + cond + ` OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = ? AND (
+	if u.Admin {
+		return "(" + liveFlows + " AND " + cond + ")", args
+	}
+	// A role is the project's, so it shows only flows of the project it
+	// is held in, and of the one they are in as this user.
+	in := ""
+	if u.Project != 0 {
+		in = "f.project_id = ? AND "
+		args = append(args, u.Project)
+	}
+	return "(" + liveFlows + " AND (" + cond + ` OR (` + in + `EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = ? AND ur.project_id = f.project_id AND (
 		EXISTS (SELECT 1 FROM objects o WHERE o.flow_id = f.id AND o.human AND LOWER(TRIM(o.name)) = LOWER(ur.name))
 		OR EXISTS (SELECT 1 FROM version_roles vr WHERE vr.role = LOWER(ur.name) AND (vr.version_id = f.published_version_id
 			OR vr.version_id IN (SELECT r.version_id FROM runs r JOIN run_steps s ON s.run_id = r.id
-				WHERE r.flow_id = f.id AND r.status = 'running' AND s.status = 'waiting' AND s.kind IN ('human', 'loop'))))))))`, append(args, u.ID)
+				WHERE r.flow_id = f.id AND r.status = 'running' AND s.status = 'waiting' AND s.kind IN ('human', 'loop')))))))))`, append(args, u.ID)
 }
 
 // How far the user may go with the flow: accessEdit, accessReview, or ""

@@ -286,6 +286,7 @@ func enterProject(db *sql.DB, next http.Handler) http.Handler {
 		if u != nil {
 			as := *u
 			as.Admin = v.Level == levelOwner
+			as.Project = project
 			ctx = context.WithValue(ctx, userKey{}, &as)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -920,5 +921,6 @@ func userInProject(ctx context.Context, db rowsQuerier, u *user, project int64) 
 	}
 	as := *u
 	as.Admin = v.Level == levelOwner
+	as.Project = project
 	return &as, true, nil
 }

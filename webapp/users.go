@@ -68,6 +68,11 @@ type user struct {
 	// The instance's admin, users.admin, who makes projects, enters any as
 	// its owner, and manages people.
 	Super bool `json:"-"`
+	// The project they are in as this user: the request's, or the one
+	// something is done in on their behalf (userInProject); none for a user
+	// read from a row. What they own, see and may change is then kept to it
+	// (ownedBy, visibleFlows).
+	Project int64 `json:"-"`
 	// Makes teams and says who is in them; see teams.go.
 	TeamManager bool `json:"teamManager"`
 }

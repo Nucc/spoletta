@@ -766,6 +766,13 @@ func TestProjectsCompositeKeysRefuseAnotherProject(t *testing.T) {
 		board.ID, legacy.ID, p.ID); !refusedByForeignKey(err) {
 		t.Errorf("a column holding another project's struct: %v, want refused", err)
 	}
+	// Nor does a run of the project start on another project's record
+	// (migration 00091).
+	tickets := taskStruct(a, fmt.Sprintf("Legacy tickets %d", time.Now().UnixNano()), nil, "id", nil, "open")
+	record := taskRecord(a, tickets.ID, map[string]any{"id": "T-1"}, "open")
+	if _, err := db.Exec("INSERT INTO runs (flow_id, status, record_id, project_id) VALUES (?, 'done', ?, ?)", f.ID, record.ID, p.ID); !refusedByForeignKey(err) {
+		t.Errorf("a run of the project on another project's record: %v, want refused", err)
+	}
 }
 
 // Archiving a project keeps everyone but a super admin out of it; deleting

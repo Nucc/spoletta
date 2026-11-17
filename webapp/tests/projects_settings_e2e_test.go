@@ -1079,7 +1079,7 @@ func TestProjectMCPSignInIsBoundToItsProject(t *testing.T) {
 	}
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "doesn&#39;t exist") {
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(body), "doesn&#39;t exist") {
 		t.Errorf("the window naming Legacy ended with %d: %s", resp.StatusCode, body)
 	}
 	// Someone who may not enter the project can't open it.

@@ -415,8 +415,18 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 		if !ok {
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "DELETE FROM mcp_servers WHERE id = ? AND project_id = ?", id, requestProject(r)); err != nil {
+		res, err := db.ExecContext(r.Context(), "DELETE FROM mcp_servers WHERE id = ? AND project_id = ?", id, requestProject(r))
+		if err != nil {
 			serverError(w, err)
+			return
+		}
+		// Another project's is no server of this one's.
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			if err != nil {
+				serverError(w, err)
+				return
+			}
+			http.Error(w, "server not found", http.StatusNotFound)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -431,6 +441,10 @@ func registerMCPRoutes(mux *http.ServeMux, db *sql.DB, b *mcpBroker) {
 			return
 		}
 		to, err := b.startSignIn(r.Context(), requestProject(r), id, tokenOwner(r), callbackURL(r))
+		if errors.Is(err, errNoSuchServer) {
+			signInPage(w, http.StatusNotFound, "Couldn't start signing in", err.Error())
+			return
+		}
 		if err != nil {
 			log.Printf("mcp: sign in to server %d: %v", id, err)
 			signInPage(w, http.StatusBadGateway, "Couldn't start signing in", err.Error())
@@ -728,7 +742,7 @@ func (b *mcpBroker) startSignIn(ctx context.Context, project, id, user int64, re
 	err := b.db.QueryRowContext(ctx, "SELECT url, client_id, redirect_uri, auth FROM mcp_servers WHERE id = ? AND project_id = ?", id, project).
 		Scan(&serverURL, &clientID, &registeredRedirect, &auth)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", errors.New("the server doesn't exist")
+		return "", errNoSuchServer
 	}
 	if err != nil {
 		return "", err
@@ -1135,6 +1149,10 @@ func adminToken(ctx context.Context, db *sql.DB, id int64, rejected string) (str
 	}
 	return token, nil
 }
+
+// What signing in to a server that isn't the project's fails with: one of
+// another project is none.
+var errNoSuchServer = errors.New("the server doesn't exist")
 
 var errMCPTokenRejected = errors.New("the server turned its token away; an owner of the project sets a new one in Settings, under MCP servers")
 

@@ -94,6 +94,22 @@ func clip(v any) any {
 	return s[:maxMessageText] + fmt.Sprintf("\n… (%d more bytes)", len(s)-maxMessageText)
 }
 
+// Whether the step is the run's, writing that it isn't found if not: a
+// step of another run, such as another project's, is none of the run's,
+// which the guard found the request's (owners.go).
+func stepOfRun(w http.ResponseWriter, r *http.Request, db *sql.DB, run, step int64) bool {
+	var n int
+	if err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM run_steps WHERE id = ? AND run_id = ?", step, run).Scan(&n); err != nil {
+		serverError(w, err)
+		return false
+	}
+	if n == 0 {
+		http.Error(w, "step not found", http.StatusNotFound)
+		return false
+	}
+	return true
+}
+
 func registerMessageRoutes(mux *http.ServeMux, db *sql.DB) {
 	// A step's conversation, in order; ?after= a message id gives only the
 	// messages since, for following a step while it goes.
@@ -110,6 +126,9 @@ func registerMessageRoutes(mux *http.ServeMux, db *sql.DB) {
 				http.Error(w, "invalid after", http.StatusBadRequest)
 				return
 			}
+		}
+		if !stepOfRun(w, r, db, runID, id) {
+			return
 		}
 		rows, err := db.QueryContext(r.Context(),
 			`SELECT m.id, m.attempt, m.message, m.created_at FROM run_step_messages m

@@ -59,9 +59,9 @@ type diffRequest struct {
 	Project          int64  `json:"project"`
 	InheritsInstance bool   `json:"inheritsInstance"`
 	Workspace        string `json:"workspace"`
-	Repository string `json:"repository"`
-	Before     string `json:"before"`
-	After      string `json:"after"`
+	Repository       string `json:"repository"`
+	Before           string `json:"before"`
+	After            string `json:"after"`
 }
 
 // What the step and its ended follow-ups did to each repository, in the

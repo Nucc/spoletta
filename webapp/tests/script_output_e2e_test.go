@@ -66,9 +66,6 @@ func TestScriptOutputWhileItRuns(t *testing.T) {
 	if got := contentsOf(d, "Size"); len(got) != 1 {
 		t.Errorf("Size %v, want what the script printed", got)
 	}
-	var other []outputChunk
-	a.call("GET", fmt.Sprintf("/api/runs/%d/steps/%d/output", rn.ID+1, step.ID), nil, http.StatusOK, &other)
-	if len(other) != 0 {
-		t.Errorf("the step's output read as another run's: %+v", other)
-	}
+	// Read as another run's, the step isn't there.
+	a.refused("GET", fmt.Sprintf("/api/runs/%d/steps/%d/output", rn.ID+1, step.ID), nil, http.StatusNotFound, "step not found")
 }

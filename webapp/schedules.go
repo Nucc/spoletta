@@ -29,6 +29,13 @@ import (
 //
 // Every server checks, so with several of them each time is claimed by
 // moving the schedule's next time on, which only one of them gets to do.
+//
+// Its runs' agents work with the connections of whoever made it
+// (runUser), so, when people sign in, it starts nothing while they may no
+// longer enter its project or only see it (memberAs), as an API key, a
+// webhook and a playing task board don't; its times are skipped, saying
+// why in the server's log, until someone who may run the flow makes it
+// again.
 
 type schedule struct {
 	ID       int64  `json:"id"`
@@ -201,7 +208,7 @@ func getSchedule(ctx context.Context, db *sql.DB, id int64) (schedule, error) {
 }
 
 // Starts the runs of the schedules due, every tick, until ctx is done.
-func runSchedules(ctx context.Context, db *sql.DB, eng *engine, tick time.Duration) {
+func runSchedules(ctx context.Context, db *sql.DB, eng *engine, tick time.Duration, signIn bool) {
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	for {
@@ -209,7 +216,7 @@ func runSchedules(ctx context.Context, db *sql.DB, eng *engine, tick time.Durati
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := fireDue(ctx, db, eng, time.Now()); err != nil && ctx.Err() == nil {
+			if err := fireDue(ctx, db, eng, time.Now(), signIn); err != nil && ctx.Err() == nil {
 				log.Printf("schedules: %v", err)
 			}
 		}
@@ -217,18 +224,19 @@ func runSchedules(ctx context.Context, db *sql.DB, eng *engine, tick time.Durati
 }
 
 // Starts a run for each schedule due at now that this server claims.
-func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error {
+func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time, signIn bool) error {
 	type due struct {
-		id, flow   int64
-		expr, zone string
-		next       time.Time
+		id, flow, project int64
+		maker             sql.NullInt64
+		expr, zone        string
+		next              time.Time
 	}
 	var dues []due
 	// A flow in the trash runs nothing; its schedules come round again once
 	// it is restored (trash.go). Nor does one of an archived project, which
 	// starts no runs; its schedules come round again once it is brought
 	// back. Each runs in its flow's project (newRun).
-	rows, err := db.QueryContext(ctx, `SELECT s.id, s.flow_id, s.cron, s.timezone, s.next_run_at FROM schedules s
+	rows, err := db.QueryContext(ctx, `SELECT s.id, s.flow_id, f.project_id, s.created_by, s.cron, s.timezone, s.next_run_at FROM schedules s
 		JOIN flows f ON f.id = s.flow_id AND `+liveFlows+` JOIN projects p ON p.id = f.project_id AND p.archived_at IS NULL
 		WHERE s.enabled AND s.next_run_at <= ?`, now.UTC())
 	if err != nil {
@@ -236,7 +244,7 @@ func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error 
 	}
 	for rows.Next() {
 		var d due
-		if err := rows.Scan(&d.id, &d.flow, &d.expr, &d.zone, &d.next); err != nil {
+		if err := rows.Scan(&d.id, &d.flow, &d.project, &d.maker, &d.expr, &d.zone, &d.next); err != nil {
 			rows.Close()
 			return err
 		}
@@ -265,6 +273,16 @@ func fireDue(ctx context.Context, db *sql.DB, eng *engine, now time.Time) error 
 		if running > 0 {
 			log.Printf("schedule %d: skipped, its last run is still going", d.id)
 			continue
+		}
+		if signIn && d.maker.Valid {
+			_, why, err := memberAs(ctx, db, d.maker.Int64, d.project)
+			if err != nil {
+				return err
+			}
+			if why != "" {
+				log.Printf("schedule %d: skipped, as whoever made it %s; someone who may run the flow makes it again", d.id, why)
+				continue
+			}
 		}
 		id := d.id
 		var none *nothingToTake

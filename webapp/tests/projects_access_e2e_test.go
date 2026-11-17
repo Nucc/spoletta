@@ -47,6 +47,9 @@ func TestProjectsWhatTheyStartDoesNoMoreThanTheyMayNow(t *testing.T) {
 	a.call("POST", "/api/taskboards", map[string]any{"name": "Bob's board"}, http.StatusCreated, &board)
 	t.Cleanup(func() { db.Exec("UPDATE task_boards SET playing = FALSE WHERE id = ?", board.ID) })
 	a.call("POST", fmt.Sprintf("/api/taskboards/%d/play", board.ID), nil, http.StatusOK, &board)
+	var sched schedule
+	a.call("POST", "/api/schedules", map[string]any{"flow": issues.ID, "cron": everySecond, "timezone": "UTC", "enabled": false}, http.StatusCreated, &sched)
+	t.Cleanup(func() { db.Exec("DELETE FROM schedules WHERE id = ?", sched.ID) })
 
 	// Made a viewer, nothing of his starts anything.
 	usersSignIn(a, prov, usersAda)
@@ -62,6 +65,16 @@ func TestProjectsWhatTheyStartDoesNoMoreThanTheyMayNow(t *testing.T) {
 	b := waitBoard(a, board.ID, "the board to stop", func(b playBoard) bool { return !b.Playing })
 	if !strings.Contains(b.Stopped, "only sees the project now") {
 		t.Errorf("the board stopped saying %q", b.Stopped)
+	}
+	// His schedule, turned on, comes round and starts nothing.
+	a.call("PATCH", fmt.Sprintf("/api/schedules/%d", sched.ID), map[string]any{"enabled": true}, http.StatusOK, nil)
+	time.Sleep(2500 * time.Millisecond)
+	a.call("PATCH", fmt.Sprintf("/api/schedules/%d", sched.ID), map[string]any{"enabled": false}, http.StatusOK, nil)
+	if runs := a.scheduledRuns(issues.ID, sched.ID); len(runs) != 0 {
+		t.Errorf("the viewer's schedule started %d runs", len(runs))
+	}
+	if !strings.Contains(a.proc.log.String(), fmt.Sprintf("schedule %d: skipped, as whoever made it only sees the project now", sched.ID)) {
+		t.Errorf("the server's log doesn't say why the schedule started nothing")
 	}
 
 	// A viewer still deletes his own key, which is then none.

@@ -383,7 +383,14 @@ func registerTemplateRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		id := res.Flows[0].ID
-		if _, err := tx.ExecContext(ctx, "UPDATE flows SET owner_user_id = ?, owner_team_id = ? WHERE id = ?", ownerUser, ownerTeam, id); err != nil {
+		_, err = tx.ExecContext(ctx, "UPDATE flows SET owner_user_id = ?, owner_team_id = ? WHERE id = ?", ownerUser, ownerTeam, id)
+		// A team or someone of another project, which the keys refuse, is
+		// none to give it to.
+		if mysqlErrorIs(err, mysqlErrForeignKey) && body.Owner != nil {
+			http.Error(w, "no such "+body.Owner.Kind, http.StatusBadRequest)
+			return
+		}
+		if err != nil {
 			serverError(w, err)
 			return
 		}

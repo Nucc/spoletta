@@ -467,7 +467,13 @@ func guardFlows(db *sql.DB, next http.Handler) http.Handler {
 			}
 		}
 		need := neededAccess(r)
-		project := requestProject(r)
+		// A request outside the projects naming none (projects.go) names
+		// nothing in one either, which it must to be about it.
+		project, named := requestProjectIf(r)
+		if !named && len(refs) > 0 {
+			http.Error(w, noProjectNamed, http.StatusBadRequest)
+			return
+		}
 		for _, rf := range refs {
 			var flow sql.NullInt64
 			var in int64

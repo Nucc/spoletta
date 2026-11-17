@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -362,18 +363,49 @@ func TestProjectsKeepFlowsAndTaskBoardsApart(t *testing.T) {
 	a.project = 1 << 40
 	a.refused("GET", "/api/flows", nil, http.StatusNotFound, "no such project")
 	a.project = 0
-	req, err := http.NewRequest("GET", a.url+"/api/flows", nil)
-	if err != nil {
-		t.Fatal(err)
+	send := func(method, path, header string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, a.url+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header != "" {
+			req.Header.Set("X-Spoletta-Project", header)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
 	}
-	req.Header.Set("X-Spoletta-Project", "Legacy")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	if status, _ := send("GET", "/api/flows", "Legacy"); status != http.StatusBadRequest {
+		t.Errorf("a header naming no id got %d, want 400", status)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("a header naming no id got %d, want 400", resp.StatusCode)
+
+	// A request about what is in a project names it, by the header or, a
+	// page the browser opens, by its address; Legacy is no default.
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/flows"}, {"POST", "/api/flows"}, {"GET", fmt.Sprintf("/api/flows/%d", legacyFlow.ID)},
+		{"GET", "/api/runs"}, {"GET", "/api/taskboards"}, {"DELETE", fmt.Sprintf("/api/taskboards/%d", legacyBoard.ID)},
+	} {
+		if status, body := send(c.method, c.path, ""); status != http.StatusBadRequest || !strings.Contains(body, "names no project") {
+			t.Errorf("%s %s naming no project = %d %s, want 400", c.method, c.path, status, body)
+		}
+	}
+	if status, body := send("GET", fmt.Sprintf("/api/flows/%d?project=1", legacyFlow.ID), ""); status != http.StatusOK {
+		t.Errorf("a GET naming Legacy in its address = %d %s", status, body)
+	}
+	if status, body := send("GET", fmt.Sprintf("/api/flows/%d?project=%d", legacyFlow.ID, p.ID), ""); status != http.StatusNotFound {
+		t.Errorf("a GET of Legacy's flow naming another project in its address = %d %s", status, body)
+	}
+	// Requests about the person, the projects and the instance name none;
+	// the inbox is the person's, in every project.
+	for _, path := range []string{"/api/me", "/api/inbox", "/api/projects", "/api/instance/limits", "/api/instance/events"} {
+		if status, body := send("GET", path, ""); status != http.StatusOK {
+			t.Errorf("GET %s naming no project = %d %s, want 200", path, status, body)
+		}
 	}
 }
 

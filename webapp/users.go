@@ -641,17 +641,18 @@ func (a *auth) signedIn(ctx context.Context, p *provider, c idClaims, groups []s
 
 func registerAuthRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 	// Who is signed in, with their roles and teams in the project the
-	// request names, and whether anyone signs in at all; whether they are
-	// the instance's admin (super), and the projects they may enter, each
-	// with their level there. Their admin is whether they own the project
-	// the request names (see projects.go). Someone who may enter none is
-	// told whom to ask: the instance's admins, by name (admins). Without
-	// sign-in everyone may do anything, in any project.
+	// request names, none if it names none, and whether anyone signs in at
+	// all; whether they are the instance's admin (super), and the projects
+	// they may enter, each with their level there. Their admin is whether
+	// they own the project the request names (see projects.go). Someone who
+	// may enter none is told whom to ask: the instance's admins, by name
+	// (admins). Without sign-in everyone may do anything, in any project.
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		u := requestUser(r)
 		me := map[string]any{"signIn": a != nil, "user": nil, "super": u == nil || u.Super}
 		if u != nil {
-			p, err := getPerson(r.Context(), db, u.ID, requestProject(r))
+			project, _ := requestProjectIf(r)
+			p, err := getPerson(r.Context(), db, u.ID, project)
 			if err != nil {
 				serverError(w, err)
 				return

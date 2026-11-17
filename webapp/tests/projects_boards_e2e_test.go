@@ -98,9 +98,7 @@ func projSetupImport(a *app, file string) (int, []byte) {
 		a.t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/yaml")
-	if a.project != 0 {
-		req.Header.Set("X-Spoletta-Project", fmt.Sprint(a.project))
-	}
+	a.inProject(req)
 	resp, err := a.client.Do(req)
 	if err != nil {
 		a.t.Fatal(err)

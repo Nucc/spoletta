@@ -27,21 +27,24 @@ package main
 // the group is unassigned or others_access goes back, and what they made
 // stays. Removing a member is always soft.
 //
-// Every /api/ request names its project in the X-Spoletta-Project header,
-// and is worked on there: enterProject, before guardFlows, works out the
-// person's level and refuses them if they have none (403) or there is no
-// such project (404), puts the project in the request's context
+// Every /api/ request about what is in a project names it in the
+// X-Spoletta-Project header, or, a page the browser opens, in its
+// address's project parameter, and is worked on there: enterProject,
+// before guardFlows, refuses one naming none (400), works out the person's
+// level and refuses them if they have none (403) or there is no such
+// project (404), puts the project in the request's context
 // (requestProject), and the request's user with Admin meaning owner of this
 // project and Super the instance's admin. A viewer's requests that change
-// or start anything are refused there, in one place.
+// or start anything are refused there, in one place. Requests about the
+// person, the projects or the instance (outsideProjects) need name none.
 //
-// Transition, until the projects work is done: a request without the header
-// is Legacy's; and the instance's people are Legacy's members, someone an
-// admin adds or who signs in the first time becoming one, an owner if an
-// admin else an editor, as everyone was in the one space there was before
-// projects (joinLegacy), and making someone an admin or no longer one moves
-// them to owner or editor there (followAdminInLegacy). Legacy is project 1,
-// inheriting what the instance is configured with outside the database.
+// Transition, until the projects work is done: the instance's people are
+// Legacy's members, someone an admin adds or who signs in the first time
+// becoming one, an owner if an admin else an editor, as everyone was in
+// the one space there was before projects (joinLegacy), and making someone
+// an admin or no longer one moves them to owner or editor there
+// (followAdminInLegacy). Legacy is project 1, inheriting what the instance
+// is configured with outside the database.
 //
 // Without sign-in there is nobody, as before: every request may do
 // anything, including making and switching projects.
@@ -97,12 +100,24 @@ const (
 
 type projectKey struct{}
 
-// The project the request is worked on in; Legacy outside /api/.
+// The project the request is worked on in, which enterProject found and
+// let it into. Only a request to /api/ inside the projects has one for
+// certain, so a handler of another asking for it is a mistake, and it
+// panics saying so rather than taking some project: a request outside the
+// projects that may name one reads it with requestProjectIf.
 func requestProject(r *http.Request) int64 {
-	if p, ok := r.Context().Value(projectKey{}).(int64); ok {
+	if p, ok := requestProjectIf(r); ok {
 		return p
 	}
-	return legacyProject
+	panic(fmt.Sprintf("%s %s asked for the project of a request that names none; outside the projects, read it with requestProjectIf", r.Method, r.URL.Path))
+}
+
+// The project a request is worked on in, if it names one: every request
+// to /api/ inside the projects does, and one outside them may (see
+// outsideProjects).
+func requestProjectIf(r *http.Request) (int64, bool) {
+	p, ok := r.Context().Value(projectKey{}).(int64)
+	return p, ok
 }
 
 // A project as someone may enter it.
@@ -229,28 +244,35 @@ func enterAsMember(ctx context.Context, db *sql.DB, project, user int64, level, 
 	return err
 }
 
-// Requests about the person or the projects themselves, rather than what is
-// in the project their header names: they go on whatever their level there.
-// So does the OAuth callback of an MCP server's sign-in, which comes back
-// with only the sign-in's state, whose project it is (mcp.go).
+// Requests about the person, the projects themselves or the instance,
+// rather than what is in a project: they name none, or go on whatever
+// their level in the one they name. The inbox is the person's, across
+// every project they may enter (inbox.go). So does the OAuth callback of
+// an MCP server's sign-in, which comes back with only the sign-in's state,
+// whose project it is (mcp.go).
 func outsideProjects(path string) bool {
 	return path == "/api/me" || strings.HasPrefix(path, "/api/me/") ||
 		path == "/api/projects" || strings.HasPrefix(path, "/api/projects/") ||
+		strings.HasPrefix(path, "/api/instance/") || path == "/api/inbox" ||
 		path == "/api/mcp-oauth/callback"
 }
+
+// What a request to /api/ inside the projects naming none is told.
+const noProjectNamed = "the request names no project: send its id in the " + projectHeader + " header, or, for a page the browser opens, in the address's project parameter"
 
 // Works out the project a request to /api/ is about, from its header, and
 // the person's level there; refuses them if they may not enter it, or, a
 // viewer, if the request would change or start anything; and passes it on
-// with the project and the person as they are there. See the top of this
-// file.
+// with the project and the person as they are there. A request inside the
+// projects naming none is refused; one outside them goes on without one.
+// See the top of this file.
 func enterProject(db *sql.DB, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/api/auth/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		project := legacyProject
+		outside := outsideProjects(r.URL.Path)
 		h := strings.TrimSpace(r.Header.Get(projectHeader))
 		// A page the browser opens, such as an MCP server's sign-in window
 		// or a run's file, can't send the header, so a GET names its
@@ -258,13 +280,18 @@ func enterProject(db *sql.DB, next http.Handler) http.Handler {
 		if h == "" && r.Method == http.MethodGet {
 			h = strings.TrimSpace(r.URL.Query().Get("project"))
 		}
-		if h != "" {
-			id, err := strconv.ParseInt(h, 10, 64)
-			if err != nil || id <= 0 {
-				http.Error(w, projectHeader+" must be a project's id", http.StatusBadRequest)
+		if h == "" {
+			if !outside {
+				http.Error(w, noProjectNamed, http.StatusBadRequest)
 				return
 			}
-			project = id
+			next.ServeHTTP(w, r)
+			return
+		}
+		project, err := strconv.ParseInt(h, 10, 64)
+		if err != nil || project <= 0 {
+			http.Error(w, projectHeader+" must be a project's id", http.StatusBadRequest)
+			return
 		}
 		ctx := r.Context()
 		u := requestUser(r)
@@ -273,7 +300,7 @@ func enterProject(db *sql.DB, next http.Handler) http.Handler {
 			serverError(w, err)
 			return
 		}
-		if !outsideProjects(r.URL.Path) {
+		if !outside {
 			switch {
 			case !found || (v.Archived && v.Level == ""):
 				http.Error(w, "no such project", http.StatusNotFound)

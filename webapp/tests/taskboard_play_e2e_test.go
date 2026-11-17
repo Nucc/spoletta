@@ -639,8 +639,10 @@ func TestTaskBoardTriesRecordsAgain(t *testing.T) {
 		_, run := playCardRun(b, "PR-1")
 		return run.Status == "retrying"
 	})
-	// In at most its column's while, a second here.
-	if col, run := playCardRun(b, "PR-1"); col != "Draft" || run.Why != "failed" || run.RetryIn < 0 || run.RetryIn > 1000 || run.Run == 0 {
+	// In at most its column's while, a second here, give or take how far the
+	// webapp's clock, which says when the run ended, is from the database's,
+	// which says what time it is now.
+	if col, run := playCardRun(b, "PR-1"); col != "Draft" || run.Why != "failed" || run.RetryIn < 0 || run.RetryIn > 1250 || run.Run == 0 {
 		t.Errorf("PR-1 shows in %q as %+v, want in Draft to be tried again within a second after its run failed", col, run)
 	}
 

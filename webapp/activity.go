@@ -202,8 +202,9 @@ func seenFlows(ctx context.Context, db *sql.DB, u *user) (flowSet, error) {
 	cond, args := visibleFlows(u)
 	q := "SELECT f.id FROM flows f WHERE " + cond
 	into := &seen.ids
-	// Someone seeing every flow is told those they don't, which are fewer.
-	if u == nil || u.Admin {
+	// Someone seeing every flow is told those they don't, which are fewer;
+	// an owner of a project sees only its flows, listed as anyone's are.
+	if u == nil || (u.Admin && u.Project == 0) {
 		q, into = "SELECT f.id FROM flows f WHERE f.deleted_at IS NOT NULL", &seen.trashed
 	}
 	*into = []int64{}

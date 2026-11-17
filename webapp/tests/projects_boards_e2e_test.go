@@ -403,6 +403,7 @@ func TestProjectsRestoreKeepsToTheFlowsProject(t *testing.T) {
 			switch int64(o["id"].(float64)) {
 			case copied.ID:
 				o["source"], o["store"] = legacyRoot.ID, legacyRoot.ID
+				o["follows"] = map[string]any{"object": legacyObject.ID, "attribute": "ticket"}
 			case plain.ID:
 				o["general"] = legacyObject.ID
 			}
@@ -441,6 +442,10 @@ func TestProjectsRestoreKeepsToTheFlowsProject(t *testing.T) {
 	objs := editObjects(a, f.ID)
 	if objs[copied.Name].Source != nil || objs["Plain"].General != nil {
 		t.Errorf("the copy follows %v and Plain specializes %v, want neither", show(objs[copied.Name].Source), show(objs["Plain"].General))
+	}
+	var followsNone bool
+	if err := db.QueryRow("SELECT follows IS NULL FROM objects WHERE id = ?", copied.ID).Scan(&followsNone); err != nil || !followsNone {
+		t.Errorf("the copy follows a reference held by Legacy's object: %v", err)
 	}
 	for _, note := range notesOf(a, f.ID) {
 		if note.Process != nil {

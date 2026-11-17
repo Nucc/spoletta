@@ -412,7 +412,8 @@ func objectIDs(os []snapshotObject) []int64 {
 // another is refused (errOthersRows). Every row written is the flow's
 // project's, whatever s holds, and what s refers to in another project, a
 // procedure, a source, a store, a struct referred to, what processes pick,
-// is left out, as is a general not on the board (see board_projects.go).
+// is left out, as is a general, or an object whose reference is followed,
+// not on the board (see board_projects.go).
 func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) error {
 	project, err := flowProject(ctx, tx, flow)
 	if err != nil {
@@ -492,22 +493,27 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			return err
 		}
 	}
+	// An object specializes, and follows a reference held by, one of its own
+	// flow alone.
+	onBoard := map[int64]bool{}
+	for _, id := range keepObjs {
+		onBoard[id] = true
+	}
 	// Generals go in once every object is there, since one may come later.
 	for _, o := range ownersFirst(s.Objects) {
+		follows := o.Follows
+		if follows != nil && !onBoard[follows.Object] {
+			follows = nil
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, own_name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, pick, follows, project_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, own_name = saved.own_name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
 				many = saved.many, min_items = saved.min_items, max_items = saved.max_items, human = saved.human, at_end = saved.at_end, parent_id = saved.parent_id,
 				owner_id = saved.owner_id, relation = saved.relation, general_id = NULL, pick = saved.pick, follows = saved.follows`,
-			o.ID, flow, o.Name, o.OwnName, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation, storedPick(o.Pick), storedFollow(o.Follows), project)
+			o.ID, flow, o.Name, o.OwnName, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation, storedPick(o.Pick), storedFollow(follows), project)
 		if err != nil {
 			return err
 		}
-	}
-	// An object specializes one of its own flow alone.
-	onBoard := map[int64]bool{}
-	for _, id := range keepObjs {
-		onBoard[id] = true
 	}
 	for _, o := range s.Objects {
 		if o.General != nil && onBoard[*o.General] {

@@ -43,6 +43,18 @@ type attribute struct {
 	RefName string `json:"refName,omitempty"`
 }
 
+// What's wrong with an attribute of the request's project referring to the
+// records of ref, as checkRef says, and a struct of another project is none
+// to it, whoever asks (see board_projects.go); the attribute is in that
+// project, as guardFlows keeps it.
+func checkRefHere(r *http.Request, db *sql.DB, ref *int64, unique bool) (string, error) {
+	other, err := objectElsewhere(r.Context(), db, requestProject(r), ref)
+	if err != nil || other {
+		return "an attribute refers to the records of a struct", err
+	}
+	return checkRef(r.Context(), db, requestUser(r), ref, unique)
+}
+
 func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/objects/{id}/attributes", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -88,7 +100,7 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 
-		if msg, err := checkRef(r.Context(), db, requestUser(r), a.Ref, a.Unique); err != nil {
+		if msg, err := checkRefHere(r, db, a.Ref, a.Unique); err != nil {
 			serverError(w, err)
 			return
 		} else if msg != "" {
@@ -99,13 +111,18 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, ref_id, value_type, value_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-			a.Object, a.Name, a.Definition, a.Unique, a.File, a.Ref, a.Type, a.Pattern)
+		res, err := db.ExecContext(r.Context(), `INSERT INTO object_attributes (object_id, name, definition, is_unique, is_file, ref_id, value_type, value_pattern, project_id)
+			SELECT id, ?, ?, ?, ?, ?, ?, ?, project_id FROM objects WHERE id = ?`,
+			a.Name, a.Definition, a.Unique, a.File, a.Ref, a.Type, a.Pattern, a.Object)
+		var added int64
+		if err == nil {
+			added, err = res.RowsAffected()
+		}
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "the object already has an attribute named "+a.Name, http.StatusConflict)
 			return
-		case mysqlErrorIs(err, mysqlErrForeignKey):
+		case mysqlErrorIs(err, mysqlErrForeignKey) || (err == nil && added == 0):
 			http.Error(w, "object not found", http.StatusBadRequest)
 			return
 		case err != nil:
@@ -251,7 +268,7 @@ func registerAttributeRoutes(mux *http.ServeMux, db *sql.DB) {
 			if *ref == 0 {
 				ref = nil
 			}
-			if msg, err := checkRef(r.Context(), db, requestUser(r), ref, unique); err != nil {
+			if msg, err := checkRefHere(r, db, ref, unique); err != nil {
 				serverError(w, err)
 				return
 			} else if msg != "" {
@@ -330,10 +347,14 @@ func checkAttribute(ctx context.Context, db *sql.DB, object int64, change func(*
 	return s.check(), nil
 }
 
-// The attributes of every object, or of one if object isn't 0, by object id.
-func listAttributes(ctx context.Context, db *sql.DB, object int64) (map[int64][]attribute, error) {
-	rows, err := db.QueryContext(ctx,
-		"SELECT id, object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern FROM object_attributes WHERE ? = 0 OR object_id = ? ORDER BY id", object, object)
+// The attributes of one object, or with object 0 of every object of flow,
+// by object id.
+func listAttributes(ctx context.Context, db *sql.DB, object, flow int64) (map[int64][]attribute, error) {
+	q, arg := "SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.source_id, a.ref_id, a.value_type, a.value_pattern FROM object_attributes a WHERE a.object_id = ? ORDER BY a.id", object
+	if object == 0 {
+		q, arg = "SELECT a.id, a.object_id, a.name, a.definition, a.is_unique, a.is_file, a.source_id, a.ref_id, a.value_type, a.value_pattern FROM object_attributes a JOIN objects o ON o.id = a.object_id WHERE o.flow_id = ? ORDER BY a.id", flow
+	}
+	rows, err := db.QueryContext(ctx, q, arg)
 	if err != nil {
 		return nil, err
 	}

@@ -328,8 +328,9 @@ type listedProcess struct {
 	TrashedFlow string `json:"trashedFlow,omitempty"`
 }
 
-// Names the procedures in the trash the subflow processes run.
-func markTrashedCalls(ctx context.Context, db *sql.DB, ps []listedProcess) error {
+// Names the procedures in the trash the subflow processes run, of their
+// project alone.
+func markTrashedCalls(ctx context.Context, db *sql.DB, project int64, ps []listedProcess) error {
 	var called []int64
 	for _, p := range ps {
 		if p.Kind == kindSubflow && p.Settings.Flow != nil {
@@ -340,13 +341,13 @@ func markTrashedCalls(ctx context.Context, db *sql.DB, ps []listedProcess) error
 		return nil
 	}
 	trashed := map[int64]string{}
-	err := scanAll(ctx, db, "SELECT id, name FROM flows WHERE deleted_at IS NOT NULL AND id IN "+placeholders(len(called)), func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT id, name FROM flows WHERE deleted_at IS NOT NULL AND project_id = ? AND id IN "+placeholders(len(called)), func(rows *sql.Rows) error {
 		var id int64
 		var name string
 		err := rows.Scan(&id, &name)
 		trashed[id] = name
 		return err
-	}, int64Args(called)...)
+	}, append([]any{project}, int64Args(called)...)...)
 	for i := range ps {
 		if p := &ps[i]; p.Kind == kindSubflow && p.Settings.Flow != nil {
 			p.TrashedFlow = trashed[*p.Settings.Flow]
@@ -381,7 +382,7 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		if err := markTrashedCalls(r.Context(), db, ps); err != nil {
+		if err := markTrashedCalls(r.Context(), db, requestProject(r), ps); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -449,14 +450,26 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		project, err := flowProject(r.Context(), db, p.Flow)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if msg, err := settingsElsewhere(r.Context(), db, project, false, &p.Settings); err != nil {
+			serverError(w, err)
+			return
+		} else if msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO processes (flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.Flow, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings)
+		res, err := tx.ExecContext(r.Context(), "INSERT INTO processes (flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.Flow, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings, project)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -534,12 +547,22 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 
 		var oldKind string
-		var flow int64
+		var flow, project int64
 		var oldSettings processSettings
-		err = db.QueryRowContext(r.Context(), "SELECT kind, flow_id, settings FROM processes WHERE id = ?", id).Scan(&oldKind, &flow, &oldSettings)
+		err = db.QueryRowContext(r.Context(), "SELECT kind, flow_id, settings, project_id FROM processes WHERE id = ?", id).Scan(&oldKind, &flow, &oldSettings, &project)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			serverError(w, err)
 			return
+		}
+		// What its settings pick is its project's (see board_projects.go).
+		if patch.Settings != nil && oldKind != "" {
+			if msg, err := settingsElsewhere(r.Context(), db, project, false, patch.Settings); err != nil {
+				serverError(w, err)
+				return
+			} else if msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
 		}
 		if oldKind != "" && (patch.Kind != nil || patch.Settings != nil) {
 			kind, settings := oldKind, oldSettings
@@ -640,7 +663,14 @@ func registerProcessRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "DELETE FROM processes WHERE id = ?", id); err != nil {
+		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
+			if err := releaseGoing(r.Context(), tx, []int64{id}, nil); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(r.Context(), "DELETE FROM processes WHERE id = ?", id)
+			return err
+		})
+		if err != nil {
 			serverError(w, err)
 			return
 		}

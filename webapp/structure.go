@@ -254,7 +254,9 @@ func checkStructure(ctx context.Context, db *sql.DB, flow int64, change func(str
 // copy keeps the object as its source, and follows it; see modules.go. It
 // starts as many as the object is, which a struct's copy on a board may
 // change for its flow (syncCopy).
-// The copy goes at, or where the object is without it. Returns the copy's id.
+// The copy goes at, or where the object is without it. Returns the copy's
+// id. Both flows are one project's, as nothing refers to another (see
+// board_projects.go).
 func copyStructure(ctx context.Context, tx *sql.Tx, s structure, object, flow int64, parent, owner *int64, at *point) (int64, error) {
 	o := s[object]
 	if o == nil {
@@ -264,10 +266,17 @@ func copyStructure(ctx context.Context, tx *sql.Tx, s structure, object, flow in
 	if at != nil {
 		x, y = &at.X, &at.Y
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, width, parent_id, owner_id, relation, source_id, many, min_items, max_items)
-		SELECT ?, name, COALESCE(?, x), COALESCE(?, y), width, ?, ?, relation, id, ?, ?, ? FROM objects WHERE id = ?`,
-		flow, x, y, parent, owner, o.many, o.quantity.min, o.quantity.max, object)
+	res, err := tx.ExecContext(ctx, `INSERT INTO objects (flow_id, name, x, y, width, parent_id, owner_id, relation, source_id, many, min_items, max_items, project_id)
+		SELECT f.id, o.name, COALESCE(?, o.x), COALESCE(?, o.y), o.width, ?, ?, o.relation, o.id, ?, ?, ?, f.project_id
+		FROM objects o JOIN flows f ON f.id = ? AND f.project_id = o.project_id WHERE o.id = ?`,
+		x, y, parent, owner, o.many, o.quantity.min, o.quantity.max, flow, object)
 	if err != nil {
+		return 0, err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		if err == nil {
+			err = fmt.Errorf("object %d isn't in flow %d's project", object, flow)
+		}
 		return 0, err
 	}
 	id, err := res.LastInsertId()

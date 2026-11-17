@@ -807,9 +807,15 @@ func registerTrialRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			http.Error(w, fmt.Sprintf("a process keeps at most %d samples; delete one first", maxSamples), http.StatusConflict)
 			return
 		}
+		// A sample is its process's project's.
+		project, err := idBy(r.Context(), tx, "SELECT project_id FROM processes WHERE id = ?", t.process.ID)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 		if _, err := tx.ExecContext(r.Context(),
-			"INSERT INTO process_samples (process_id, name, inputs) VALUES (?, ?, ?) AS saved ON DUPLICATE KEY UPDATE inputs = saved.inputs",
-			t.process.ID, body.Name, inputs); err != nil {
+			"INSERT INTO process_samples (process_id, name, inputs, project_id) VALUES (?, ?, ?, ?) AS saved ON DUPLICATE KEY UPDATE inputs = saved.inputs",
+			t.process.ID, body.Name, inputs, project); err != nil {
 			serverError(w, err)
 			return
 		}

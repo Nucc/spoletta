@@ -45,6 +45,10 @@ type flowInfo struct {
 type importer struct {
 	ctx context.Context
 	tx  *sql.Tx
+	// The project imported into: the file names its flows, MCP servers,
+	// skills and credentials by name within it alone, and what the import
+	// makes is its (see board_projects.go).
+	project int64
 	// MCP servers by mcpNameKey.
 	mcp map[string]int64
 	// The connector each MCP server is, by id, if it is one.
@@ -68,11 +72,12 @@ type importer struct {
 	res   setupResult
 }
 
-// Imports f in tx: what is wrong with it is a setupProblem, and changes
-// nothing. A flow it makes over has its board saved as a version first, as
-// saved says.
-func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (setupResult, error) {
-	im := &importer{ctx: ctx, tx: tx, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, skills: map[string]int64{}, credentials: map[string]int64{}, existing: map[string][]flowInfo{}, trashed: map[int64]bool{},
+// Imports f into project in tx: what is wrong with it is a setupProblem,
+// and changes nothing. A flow it makes over has its board saved as a
+// version first, as saved says. The file names no project, so one exported
+// from a project makes its flows over in another.
+func importSetup(ctx context.Context, tx *sql.Tx, project int64, f setupFile, saved saving) (setupResult, error) {
+	im := &importer{ctx: ctx, tx: tx, project: project, mcp: map[string]int64{}, mcpConnectors: map[int64]string{}, skills: map[string]int64{}, credentials: map[string]int64{}, existing: map[string][]flowInfo{}, trashed: map[int64]bool{},
 		imported: map[string]flowInfo{}, entries: map[string]*setupEntry{}, objects: map[int64]map[string]int64{},
 		saved: saved, res: setupResult{Flows: []importedFlow{}}}
 	var entries []*setupEntry
@@ -106,7 +111,7 @@ func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (se
 
 	// A flow in the trash isn't made over; one of its name is made anew
 	// (trash.go).
-	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, deleted_at IS NOT NULL FROM flows ORDER BY id FOR UPDATE", func(rows *sql.Rows) error {
+	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, deleted_at IS NOT NULL FROM flows WHERE project_id = ? ORDER BY id FOR UPDATE", func(rows *sql.Rows) error {
 		var fi flowInfo
 		var name string
 		var trashed bool
@@ -117,7 +122,7 @@ func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (se
 			im.existing[name] = append(im.existing[name], fi)
 		}
 		return err
-	})
+	}, project)
 	if err != nil {
 		return im.res, err
 	}
@@ -130,13 +135,13 @@ func importSetup(ctx context.Context, tx *sql.Tx, f setupFile, saved saving) (se
 	if err := im.skillsOf(kindCommand, f.Commands); err != nil {
 		return im.res, err
 	}
-	err = scanAll(ctx, tx, "SELECT id, variable FROM credentials", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, variable FROM credentials WHERE project_id = ?", func(rows *sql.Rows) error {
 		var id int64
 		var variable string
 		err := rows.Scan(&id, &variable)
 		im.credentials[variable] = id
 		return err
-	})
+	}, project)
 	if err != nil {
 		return im.res, err
 	}
@@ -167,7 +172,7 @@ func (im *importer) mcpServers(servers []setupMCPServer) error {
 		url, auth string
 	}
 	existing := map[string]have{}
-	err := scanAll(im.ctx, im.tx, "SELECT id, name, url, auth, connector FROM mcp_servers", func(rows *sql.Rows) error {
+	err := scanAll(im.ctx, im.tx, "SELECT id, name, url, auth, connector FROM mcp_servers WHERE project_id = ?", func(rows *sql.Rows) error {
 		var h have
 		var name, connector string
 		err := rows.Scan(&h.id, &name, &h.url, &h.auth, &connector)
@@ -175,7 +180,7 @@ func (im *importer) mcpServers(servers []setupMCPServer) error {
 		im.mcp[mcpNameKey(name)] = h.id
 		im.mcpConnectors[h.id] = connector
 		return err
-	})
+	}, im.project)
 	if err != nil {
 		return err
 	}
@@ -194,8 +199,8 @@ func (im *importer) mcpServers(servers []setupMCPServer) error {
 		seen[k] = true
 		h, ok := existing[k]
 		if !ok {
-			res, err := im.tx.ExecContext(im.ctx, "INSERT INTO mcp_servers (name, url, description, auth, connector) VALUES (?, ?, ?, ?, ?)",
-				s.Name, s.URL, s.Description, s.Auth, s.Connector)
+			res, err := im.tx.ExecContext(im.ctx, "INSERT INTO mcp_servers (name, url, description, auth, connector, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+				s.Name, s.URL, s.Description, s.Auth, s.Connector, im.project)
 			if err != nil {
 				return err
 			}
@@ -226,13 +231,13 @@ func (im *importer) mcpServers(servers []setupMCPServer) error {
 // skills the app then has are kept for processes to name.
 func (im *importer) skillsOf(kind string, items []setupSkill) error {
 	existing := map[string]int64{}
-	err := scanAll(im.ctx, im.tx, "SELECT id, name FROM skills WHERE kind = ? FOR UPDATE", func(rows *sql.Rows) error {
+	err := scanAll(im.ctx, im.tx, "SELECT id, name FROM skills WHERE kind = ? AND project_id = ? FOR UPDATE", func(rows *sql.Rows) error {
 		var id int64
 		var name string
 		err := rows.Scan(&id, &name)
 		existing[name] = id
 		return err
-	}, kind)
+	}, kind, im.project)
 	if err != nil {
 		return err
 	}
@@ -257,8 +262,8 @@ func (im *importer) skillsOf(kind string, items []setupSkill) error {
 			}
 			continue
 		}
-		res, err := im.tx.ExecContext(im.ctx, "INSERT INTO skills (kind, name, description, argument_hint, content) VALUES (?, ?, ?, ?, ?)",
-			kind, s.Name, s.Description, s.ArgumentHint, s.Content)
+		res, err := im.tx.ExecContext(im.ctx, "INSERT INTO skills (kind, name, description, argument_hint, content, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+			kind, s.Name, s.Description, s.ArgumentHint, s.Content, im.project)
 		if err != nil {
 			return err
 		}
@@ -458,14 +463,14 @@ func (im *importer) importEntry(e *setupEntry) error {
 		}
 		fi.module = module || (fi.module && isStruct)
 	} else {
-		res, err := tx.ExecContext(ctx, "INSERT INTO flows (name, module, is_struct, settings) VALUES (?, ?, ?, ?)", e.name, module, isStruct, settings)
+		res, err := tx.ExecContext(ctx, "INSERT INTO flows (name, module, is_struct, settings, project_id) VALUES (?, ?, ?, ?, ?)", e.name, module, isStruct, settings, im.project)
 		if err != nil {
 			return err
 		}
 		if fi.id, err = res.LastInsertId(); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO flow_starts (flow_id, x, y) VALUES (?, 40, 40)", fi.id); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO flow_starts (flow_id, x, y, project_id) VALUES (?, 40, 40, ?)", fi.id, im.project); err != nil {
 			return err
 		}
 		fi.module, fi.isStruct = module, isStruct
@@ -541,8 +546,8 @@ func (im *importer) schedules(flow int64, name string, want []setupSchedule) err
 			}
 		}
 		if match == nil {
-			_, err := im.tx.ExecContext(im.ctx, "INSERT INTO schedules (flow_id, cron, timezone, enabled, next_run_at) VALUES (?, ?, ?, ?, ?)",
-				flow, s.Cron, s.Timezone, enabled, nextRun(s.Cron, s.Timezone, enabled, now))
+			_, err := im.tx.ExecContext(im.ctx, "INSERT INTO schedules (flow_id, cron, timezone, enabled, next_run_at, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+				flow, s.Cron, s.Timezone, enabled, nextRun(s.Cron, s.Timezone, enabled, now), im.project)
 			if err != nil {
 				return err
 			}
@@ -757,7 +762,7 @@ func (b *builder) walkBoard(board *setupBoard, parent *int64, where string) erro
 		}
 		if bp.cur == nil {
 			var err error
-			if bp.id, err = b.reserve("INSERT INTO processes (flow_id, name, kind, prompt, script) VALUES (?, '', 'agent', '', '')", b.flow); err != nil {
+			if bp.id, err = b.reserve("INSERT INTO processes (flow_id, name, kind, prompt, script, project_id) VALUES (?, '', 'agent', '', '', ?)", b.flow, b.project); err != nil {
 				return err
 			}
 		}
@@ -829,7 +834,7 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 	}
 	if bo.cur == nil {
 		var err error
-		if bo.id, err = b.reserve("INSERT INTO objects (flow_id, name) VALUES (?, '')", b.flow); err != nil {
+		if bo.id, err = b.reserve("INSERT INTO objects (flow_id, name, project_id) VALUES (?, '', ?)", b.flow, b.project); err != nil {
 			return err
 		}
 	}
@@ -880,7 +885,7 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 		if bo.states[sid] != 0 {
 			return problemf("%s: two states are %s; give one a key of its own", at, quote(sid))
 		}
-		id, err := b.matchOrReserve("state", bo, name, "INSERT INTO object_states (object_id, name) VALUES (?, '')", bo.id)
+		id, err := b.matchOrReserve("state", bo, name, "INSERT INTO object_states (object_id, name, project_id) VALUES (?, '', ?)", bo.id, b.project)
 		if err != nil {
 			return err
 		}
@@ -897,7 +902,7 @@ func (b *builder) walkObject(o *setupObject, parent, owner *int64, where string)
 			return problemf("%s: two attributes are named %s", at, quote(name))
 		}
 		names[name] = true
-		id, err := b.matchOrReserve("attribute", bo, name, "INSERT INTO object_attributes (object_id, name, definition) VALUES (?, ?, '')", bo.id, b.placeholder())
+		id, err := b.matchOrReserve("attribute", bo, name, "INSERT INTO object_attributes (object_id, name, definition, project_id) VALUES (?, ?, '', ?)", bo.id, b.placeholder(), b.project)
 		if err != nil {
 			return err
 		}
@@ -984,7 +989,7 @@ func (b *builder) walkCopy(bo *bobj, source int64) error {
 			}
 		}
 		if id == 0 {
-			if id, err = b.reserve("INSERT INTO object_states (object_id, name) VALUES (?, '')", bo.id); err != nil {
+			if id, err = b.reserve("INSERT INTO object_states (object_id, name, project_id) VALUES (?, '', ?)", bo.id, b.project); err != nil {
 				return err
 			}
 		}
@@ -1772,8 +1777,8 @@ func (b *builder) write() error {
 		if l.at != nil {
 			atX, atY = sql.NullFloat64{Float64: l.at.X, Valid: true}, sql.NullFloat64{Float64: l.at.Y, Valid: true}
 		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			id, l.proc.id, l.obj.id, l.direction, l.state, storedRoute(l.route), atX, atY, l.role, l.condition, storedQuery(l.query))
+		res, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id, l.proc.id, l.obj.id, l.direction, l.state, storedRoute(l.route), atX, atY, l.role, l.condition, storedQuery(l.query), b.project)
 		if err != nil {
 			return err
 		}
@@ -1782,7 +1787,7 @@ func (b *builder) write() error {
 			return err
 		}
 		for _, st := range l.states {
-			if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO link_states (link_id, state_id) VALUES (?, ?)", linkID, st); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO link_states (link_id, state_id, project_id) VALUES (?, ?, ?)", linkID, st, b.project); err != nil {
 				return err
 			}
 		}
@@ -1799,7 +1804,7 @@ func (b *builder) write() error {
 					id = have.ID
 				}
 			}
-			if _, err := tx.ExecContext(ctx, "INSERT INTO connections (id, source_id, target_id, kind) VALUES (?, ?, ?, ?)", id, c.Source, c.Target, c.Kind); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO connections (id, source_id, target_id, kind, project_id) VALUES (?, ?, ?, ?, ?)", id, c.Source, c.Target, c.Kind, b.project); err != nil {
 				return err
 			}
 		}

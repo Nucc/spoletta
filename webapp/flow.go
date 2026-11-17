@@ -163,12 +163,16 @@ func registerFlowRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 
-		res, err := db.ExecContext(r.Context(), "INSERT INTO connections (source_id, target_id, kind) VALUES (?, ?, ?)", c.Source, c.Target, c.Kind)
+		res, err := db.ExecContext(r.Context(), "INSERT INTO connections (source_id, target_id, kind, project_id) SELECT id, ?, ?, project_id FROM processes WHERE id = ?", c.Target, c.Kind, c.Source)
+		var added int64
+		if err == nil {
+			added, err = res.RowsAffected()
+		}
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "connection already exists", http.StatusConflict)
 			return
-		case mysqlErrorIs(err, mysqlErrForeignKey):
+		case mysqlErrorIs(err, mysqlErrForeignKey) || (err == nil && added == 0):
 			http.Error(w, "process not found", http.StatusBadRequest)
 			return
 		case err != nil:

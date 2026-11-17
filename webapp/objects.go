@@ -167,7 +167,7 @@ func getObject(ctx context.Context, db *sql.DB, id int64) (object, error) {
 	if err := rows.Err(); err != nil {
 		return o, err
 	}
-	attrs, err := listAttributes(ctx, db, id)
+	attrs, err := listAttributes(ctx, db, id, 0)
 	if err != nil {
 		return o, err
 	}
@@ -213,12 +213,12 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		states, err := listStates(r.Context(), db)
+		states, err := listStates(r.Context(), db, f)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		attrs, err := listAttributes(r.Context(), db, 0)
+		attrs, err := listAttributes(r.Context(), db, 0, f)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -275,8 +275,9 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 		if o.Owner == nil && refuseInStruct(w, r, db, o.Flow) {
 			return
 		}
-		res, err := db.ExecContext(r.Context(), "INSERT INTO objects (flow_id, name, x, y, width, human, parent_id, owner_id, relation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			o.Flow, o.Name, o.X, o.Y, o.Width, o.Human, o.Parent, o.Owner, o.Relation)
+		res, err := db.ExecContext(r.Context(), `INSERT INTO objects (flow_id, name, x, y, width, human, parent_id, owner_id, relation, project_id)
+			SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, project_id FROM flows WHERE id = ?`,
+			o.Name, o.X, o.Y, o.Width, o.Human, o.Parent, o.Owner, o.Relation, o.Flow)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -582,7 +583,14 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "a struct is its object; delete the struct instead", http.StatusBadRequest)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "DELETE FROM objects WHERE id = ?", id); err != nil {
+		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
+			if err := releaseGoing(r.Context(), tx, nil, []int64{id}); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(r.Context(), "DELETE FROM objects WHERE id = ?", id)
+			return err
+		})
+		if err != nil {
 			serverError(w, err)
 			return
 		}
@@ -691,13 +699,18 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(r.Context(), "INSERT INTO object_links (process_id, object_id, direction, state_id, role, is_condition, query) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			l.Process, l.Object, l.Direction, state, l.Role, l.Condition, storedQuery(l.Query))
+		res, err := tx.ExecContext(r.Context(), `INSERT INTO object_links (process_id, object_id, direction, state_id, role, is_condition, query, project_id)
+			SELECT id, ?, ?, ?, ?, ?, ?, project_id FROM processes WHERE id = ?`,
+			l.Object, l.Direction, state, l.Role, l.Condition, storedQuery(l.Query), l.Process)
+		var added int64
+		if err == nil {
+			added, err = res.RowsAffected()
+		}
 		switch {
 		case mysqlErrorIs(err, mysqlErrDuplicate):
 			http.Error(w, "link already exists", http.StatusConflict)
 			return
-		case mysqlErrorIs(err, mysqlErrForeignKey):
+		case mysqlErrorIs(err, mysqlErrForeignKey) || (err == nil && added == 0):
 			http.Error(w, "process or object not found", http.StatusBadRequest)
 			return
 		case err != nil:
@@ -932,7 +945,7 @@ func setDecisionStates(ctx context.Context, tx *sql.Tx, linkID, object int64, st
 		if err != nil {
 			return "", err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO link_states (link_id, state_id) VALUES (?, ?)", linkID, s); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO link_states (link_id, state_id, project_id) SELECT ?, id, project_id FROM object_states WHERE id = ?", linkID, s); err != nil {
 			return "", err
 		}
 	}

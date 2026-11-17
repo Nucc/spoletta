@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +33,10 @@ import (
 // person asks about and a summary of the latest (assistant_runs.go), so it
 // can say why one failed and what would change it. What it may change is
 // this flow alone; it may add the procedures, structs and MCP servers the
-// flow needs, but not make over the ones the app has.
+// flow needs, but not make over the ones the app has. It works in its
+// flow's project (projects.go): what it is told of, the procedures,
+// structs, MCP servers, skills and credentials, is that project's, and what
+// it replies with is imported there.
 //
 // Anyone who can open the flow can talk to the assistant, so it runs without
 // tools: it gets the guide to authoring flows with its prompt, and all it can
@@ -286,12 +290,14 @@ func startAssistantReply(ctx context.Context, db *sql.DB, flow int64, message st
 	if going {
 		return 0, conflictError("the assistant is still replying to your last message")
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO assistant_messages (flow_id, role, content, status, error, finished_at) VALUES (?, ?, ?, ?, '', CURRENT_TIMESTAMP(3))",
-		flow, rolePerson, message, stepDone); err != nil {
+	// They are the flow's project's.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO assistant_messages (flow_id, role, content, status, error, finished_at, project_id)
+		SELECT id, ?, ?, ?, '', CURRENT_TIMESTAMP(3), project_id FROM flows WHERE id = ?`,
+		rolePerson, message, stepDone, flow); err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO assistant_messages (flow_id, role, content, status, error, replica_id) VALUES (?, ?, '', ?, '', ?)",
-		flow, roleAssistant, stepActive, replicaID)
+	res, err := tx.ExecContext(ctx, "INSERT INTO assistant_messages (flow_id, role, content, status, error, replica_id, project_id) SELECT id, ?, '', ?, '', ?, project_id FROM flows WHERE id = ?",
+		roleAssistant, stepActive, replicaID, flow)
 	if err != nil {
 		return 0, err
 	}
@@ -327,7 +333,10 @@ func finishAssistantReply(db *sql.DB, id int64, res assistantResult) error {
 
 // The flow as the assistant is told it.
 type assistantFlow struct {
-	id               int64
+	id int64
+	// Its project, which its reply is imported into and what it is told of
+	// is read from.
+	project          int64
 	name             string
 	module, isStruct bool
 	settings         flowSettings
@@ -354,21 +363,23 @@ func loadAssistantFlow(ctx context.Context, db *sql.DB, id int64) (assistantFlow
 		return af, err
 	}
 	defer tx.Rollback()
-	if err := tx.QueryRowContext(ctx, "SELECT name, module, is_struct, settings FROM flows WHERE id = ?", id).
-		Scan(&af.name, &af.module, &af.isStruct, &af.settings); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT name, module, is_struct, settings, project_id FROM flows WHERE id = ?", id).
+		Scan(&af.name, &af.module, &af.isStruct, &af.settings, &af.project); err != nil {
 		return af, err
 	}
-	f, err := exportSetup(ctx, tx, id)
+	f, err := exportSetup(ctx, tx, af.project, id)
 	if err != nil {
 		return af, err
 	}
 	// What processes are tried on is no part of what they do; left out, the
 	// flow it replies with keeps them.
 	f.dropSamples()
+	// What it is told of is its project's alone.
 	cond, args, err := flowSkills(ctx, tx, id)
 	if err != nil {
 		return af, err
 	}
+	cond, args = cond+" AND s.project_id = ?", append(args, af.project)
 	for _, list := range []struct {
 		kind, prefix string
 		out          *string
@@ -385,7 +396,14 @@ func loadAssistantFlow(ctx context.Context, db *sql.DB, id int64) (assistantFlow
 	if err != nil {
 		return af, err
 	}
+	ours, err := idsOf(ctx, tx, "SELECT id FROM credentials WHERE project_id = ?", af.project)
+	if err != nil {
+		return af, err
+	}
 	for _, c := range creds {
+		if !slices.Contains(ours, c.ID) {
+			continue
+		}
 		af.credentials += fmt.Sprintf("- %s, %s, at $%s", c.Name, c.BaseURL, credentialEnv(c.Variable))
 		if d := strings.Join(strings.Fields(c.Description), " "); d != "" {
 			af.credentials += ": " + d
@@ -554,7 +572,7 @@ func applyAssistantSetup(ctx context.Context, db *sql.DB, af assistantFlow, file
 	if msg, err := keepToFlow(ctx, tx, af, &f); err != nil || msg != "" {
 		return 0, msg, err
 	}
-	res, err := importSetup(ctx, tx, f, saving{by: who, reason: savedForAssistant})
+	res, err := importSetup(ctx, tx, af.project, f, saving{by: who, reason: savedForAssistant})
 	var p setupProblem
 	if errors.As(err, &p) {
 		return 0, p.msg, nil
@@ -621,12 +639,12 @@ func keepToFlow(ctx context.Context, tx *sql.Tx, af assistantFlow, f *setupFile)
 	}
 
 	existing := map[string]bool{}
-	err := scanAll(ctx, tx, "SELECT name FROM flows WHERE id <> ? AND deleted_at IS NULL", func(rows *sql.Rows) error {
+	err := scanAll(ctx, tx, "SELECT name FROM flows WHERE id <> ? AND deleted_at IS NULL AND project_id = ?", func(rows *sql.Rows) error {
 		var name string
 		err := rows.Scan(&name)
 		existing[name] = true
 		return err
-	}, af.id)
+	}, af.id, af.project)
 	if err != nil {
 		return "", err
 	}
@@ -669,12 +687,12 @@ func keepToFlow(ctx context.Context, tx *sql.Tx, af assistantFlow, f *setupFile)
 	}
 
 	servers := map[string]string{}
-	err = scanAll(ctx, tx, "SELECT name, url FROM mcp_servers", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT name, url FROM mcp_servers WHERE project_id = ?", func(rows *sql.Rows) error {
 		var name, url string
 		err := rows.Scan(&name, &url)
 		servers[mcpNameKey(name)] = url
 		return err
-	})
+	}, af.project)
 	if err != nil {
 		return "", err
 	}

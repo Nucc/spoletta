@@ -333,6 +333,19 @@ func deleteFlow(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// What refers to its processes and objects, such as copies of a
+	// struct's object, lets go of them first (00065, board_projects.go).
+	processes, err := idsOf(ctx, tx, "SELECT id FROM processes WHERE flow_id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	objects, err := idsOf(ctx, tx, "SELECT id FROM objects WHERE flow_id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	if err := releaseGoing(ctx, tx, processes, objects); err != nil {
+		return nil, err
+	}
 	// What refers to the flow and its versions by keys naming its project
 	// too, which MySQL can't null as they go (00053), is nulled first.
 	stmts := []string{

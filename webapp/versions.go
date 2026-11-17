@@ -22,7 +22,9 @@ import (
 // keeps its rows' ids across jumps: runs refer to processes and objects by
 // id, and persistent objects remember what runs stored by object and
 // attribute id. A flow may publish one of its versions for the runs nobody
-// starts by hand to take; see publish.go.
+// starts by hand to take; see publish.go. A snapshot names no project: the
+// board it brings back is its flow's project's, whatever it holds (see
+// board_projects.go).
 type version struct {
 	ID int64 `json:"id"`
 	// The version the board was on when this one was saved, if any; a save
@@ -382,11 +384,53 @@ func deleteOthers(ctx context.Context, tx *sql.Tx, flow int64, table string, kee
 	return err
 }
 
+// A board kept as JSON naming processes or objects another flow has, which
+// rewriting would change.
+var errOthersRows = errors.New("the board names processes or objects of another flow")
+
+// The ids of processes or objects.
+func processIDs(ps []process) []int64 {
+	ids := make([]int64, len(ps))
+	for i, p := range ps {
+		ids[i] = p.ID
+	}
+	return ids
+}
+
+func objectIDs(os []snapshotObject) []int64 {
+	ids := make([]int64, len(os))
+	for i, o := range os {
+		ids[i] = o.ID
+	}
+	return ids
+}
+
 // Rewrites the flow's board as s has it. Processes and objects are updated
 // in place rather than recreated, so the runs referring to them keep doing
 // so. Rows nothing outside the board refers to are recreated with their
-// saved ids. Other flows stay as they are.
+// saved ids. Other flows stay as they are: s naming a process or object of
+// another is refused (errOthersRows). Every row written is the flow's
+// project's, whatever s holds, and what s refers to in another project, a
+// procedure, a source, a store, a struct referred to, what processes pick,
+// is left out, as is a general, or an object whose reference is followed,
+// not on the board (see board_projects.go).
 func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) error {
+	project, err := flowProject(ctx, tx, flow)
+	if err != nil {
+		return err
+	}
+	for table, ids := range map[string][]int64{"processes": processIDs(s.Processes), "objects": objectIDs(s.Objects)} {
+		err := inShares(ids, func(share []int64) error {
+			others, err := idsOf(ctx, tx, "SELECT id FROM "+table+" WHERE flow_id <> ? AND id IN "+placeholders(len(share)), append([]any{flow}, int64Args(share)...)...)
+			if err == nil && len(others) > 0 {
+				err = errOthersRows
+			}
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
 	// Cleared first so their unique keys can't collide while being rewritten.
 	for _, del := range []string{
 		`DELETE ls FROM link_states ls JOIN object_links l ON l.id = ls.link_id
@@ -405,62 +449,107 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		}
 	}
 
-	keep := make([]int64, len(s.Processes))
-	for i, p := range s.Processes {
-		keep[i] = p.ID
-	}
-	if err := deleteOthers(ctx, tx, flow, "processes", keep); err != nil {
+	// What goes lets go of what refers to it first (board_projects.go).
+	keepProcs, keepObjs := processIDs(s.Processes), objectIDs(s.Objects)
+	goingProcs, err := idsOf(ctx, tx, "SELECT id FROM processes WHERE flow_id = ? AND id NOT IN "+placeholders(len(keepProcs)), append([]any{flow}, int64Args(keepProcs)...)...)
+	if err != nil {
 		return err
 	}
-	keep = make([]int64, len(s.Objects))
-	for i, o := range s.Objects {
-		keep[i] = o.ID
+	goingObjs, err := idsOf(ctx, tx, "SELECT id FROM objects WHERE flow_id = ? AND id NOT IN "+placeholders(len(keepObjs)), append([]any{flow}, int64Args(keepObjs)...)...)
+	if err != nil {
+		return err
 	}
-	if err := deleteOthers(ctx, tx, flow, "objects", keep); err != nil {
+	if err := releaseGoing(ctx, tx, goingProcs, goingObjs); err != nil {
+		return err
+	}
+	if err := deleteOthers(ctx, tx, flow, "processes", keepProcs); err != nil {
+		return err
+	}
+	if err := deleteOthers(ctx, tx, flow, "objects", keepObjs); err != nil {
 		return err
 	}
 
-	// Ids are never shared between flows, so these only ever update the flow's own rows.
+	// What the processes pick of another project is left out.
+	settings := make([]*processSettings, len(s.Processes))
+	for i := range s.Processes {
+		settings[i] = &s.Processes[i].Settings
+	}
+	if _, err := settingsElsewhere(ctx, tx, project, true, settings...); err != nil {
+		return err
+	}
 	for _, p := range parentsFirst(s.Processes) {
 		// Sentry processes, which versions from before they were retired
 		// hold, come back as agent processes, as the database's became.
 		if p.Kind == "sentry" {
 			p.Kind = kindAgent
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
+		_, err := tx.ExecContext(ctx, `INSERT INTO processes (id, flow_id, name, kind, prompt, script, model, thinking, x, y, width, parent_id, recording, settings, project_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, kind = saved.kind, prompt = saved.prompt, script = saved.script,
 				model = saved.model, thinking = saved.thinking, x = saved.x, y = saved.y, width = saved.width,
 				parent_id = saved.parent_id, recording = saved.recording, settings = saved.settings`,
-			p.ID, flow, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings)
+			p.ID, flow, p.Name, p.Kind, p.Prompt, p.Script, p.Model, p.Thinking, p.X, p.Y, p.Width, p.Parent, p.Recording, p.Settings, project)
 		if err != nil {
 			return err
 		}
 	}
+	// An object specializes, and follows a reference held by, one of its own
+	// flow alone.
+	onBoard := map[int64]bool{}
+	for _, id := range keepObjs {
+		onBoard[id] = true
+	}
 	// Generals go in once every object is there, since one may come later.
 	for _, o := range ownersFirst(s.Objects) {
-		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, own_name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, pick, follows)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) AS saved
+		follows := o.Follows
+		if follows != nil && !onBoard[follows.Object] {
+			follows = nil
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO objects (id, flow_id, name, own_name, x, y, width, persistent, many, min_items, max_items, human, at_end, parent_id, owner_id, relation, general_id, pick, follows, project_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) AS saved
 			ON DUPLICATE KEY UPDATE name = saved.name, own_name = saved.own_name, x = saved.x, y = saved.y, width = saved.width, persistent = saved.persistent,
 				many = saved.many, min_items = saved.min_items, max_items = saved.max_items, human = saved.human, at_end = saved.at_end, parent_id = saved.parent_id,
 				owner_id = saved.owner_id, relation = saved.relation, general_id = NULL, pick = saved.pick, follows = saved.follows`,
-			o.ID, flow, o.Name, o.OwnName, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation, storedPick(o.Pick), storedFollow(o.Follows))
+			o.ID, flow, o.Name, o.OwnName, o.X, o.Y, o.Width, o.Persistent, o.Many, o.Min, o.Max, o.Human, o.End, o.Parent, o.Owner, o.Relation, storedPick(o.Pick), storedFollow(follows), project)
 		if err != nil {
 			return err
 		}
 	}
 	for _, o := range s.Objects {
-		if o.General != nil {
+		if o.General != nil && onBoard[*o.General] {
 			if _, err := tx.ExecContext(ctx, "UPDATE objects SET general_id = ? WHERE id = ?", o.General, o.ID); err != nil {
 				return err
 			}
 		}
 	}
-	// A copy whose source is gone since is an object of its own.
+	// What objects and attributes refer to in another project is left out.
+	var referred []int64
+	for _, o := range s.Objects {
+		if o.Store != nil {
+			referred = append(referred, *o.Store)
+		}
+	}
+	for _, a := range s.Attributes {
+		if a.Ref != nil {
+			referred = append(referred, *a.Ref)
+		}
+	}
+	outside, err := elsewhere(ctx, tx, "objects", project, referred)
+	if err != nil {
+		return err
+	}
+	here := func(id *int64) *int64 {
+		if id == nil || outside[*id] {
+			return nil
+		}
+		return id
+	}
+	// A copy whose source is gone since, or another project's, is an object
+	// of its own.
 	for _, o := range s.Objects {
 		var source *int64
 		if o.Source != nil {
-			if err := tx.QueryRowContext(ctx, "SELECT id FROM objects WHERE id = ?", *o.Source).Scan(&source); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			if err := tx.QueryRowContext(ctx, "SELECT id FROM objects WHERE id = ? AND project_id = ?", *o.Source, project).Scan(&source); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 		}
@@ -468,18 +557,18 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 			return err
 		}
 		// A copy's store is its source's again once copies are synced.
-		if _, err := tx.ExecContext(ctx, "UPDATE objects SET store_id = ? WHERE id = ?", o.Store, o.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE objects SET store_id = ? WHERE id = ?", here(o.Store), o.ID); err != nil {
 			return err
 		}
 	}
 	for _, st := range s.States {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO object_states (id, object_id, name, rule, source_id) VALUES (?, ?, ?, ?, ?)", st.ID, st.Object, st.Name, st.Rule, st.Source); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO object_states (id, object_id, name, rule, source_id, project_id) VALUES (?, ?, ?, ?, ?, ?)", st.ID, st.Object, st.Name, st.Rule, st.Source, project); err != nil {
 			return err
 		}
 	}
 	for _, a := range s.Attributes {
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (id, object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			a.ID, a.Object, a.Name, a.Definition, a.Unique, a.File, a.Source, a.Ref, a.Type, a.Pattern)
+		_, err := tx.ExecContext(ctx, "INSERT INTO object_attributes (id, object_id, name, definition, is_unique, is_file, source_id, ref_id, value_type, value_pattern, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			a.ID, a.Object, a.Name, a.Definition, a.Unique, a.File, a.Source, here(a.Ref), a.Type, a.Pattern, project)
 		if err != nil {
 			return err
 		}
@@ -489,29 +578,29 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		if l.At != nil {
 			atX, atY = sql.NullFloat64{Float64: l.At.X, Valid: true}, sql.NullFloat64{Float64: l.At.Y, Valid: true}
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			l.ID, l.Process, l.Object, l.Direction, l.State, storedRoute(l.Route), atX, atY, l.Role, l.Condition, storedQuery(l.Query))
+		_, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			l.ID, l.Process, l.Object, l.Direction, l.State, storedRoute(l.Route), atX, atY, l.Role, l.Condition, storedQuery(l.Query), project)
 		if err != nil {
 			return err
 		}
 	}
 	for _, ls := range s.LinkStates {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO link_states (link_id, state_id) VALUES (?, ?)", ls.Link, ls.State); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO link_states (link_id, state_id, project_id) VALUES (?, ?, ?)", ls.Link, ls.State, project); err != nil {
 			return err
 		}
 	}
 	for _, c := range s.Connections {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO connections (id, source_id, target_id, kind) VALUES (?, ?, ?, ?)", c.ID, c.Source, c.Target, c.Kind); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO connections (id, source_id, target_id, kind, project_id) VALUES (?, ?, ?, ?, ?)", c.ID, c.Source, c.Target, c.Kind, project); err != nil {
 			return err
 		}
 	}
 	for _, b := range s.Boards {
-		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, end_x, end_y) VALUES (?, ?, ?, ?, ?)",
-			b.Process, b.Start.X, b.Start.Y, b.End.X, b.End.Y)
+		_, err := tx.ExecContext(ctx, "INSERT INTO inner_boards (process_id, x, y, end_x, end_y, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+			b.Process, b.Start.X, b.Start.Y, b.End.X, b.End.Y, project)
 		if err != nil {
 			return err
 		}
-		if err := restoreStartTargets(ctx, tx, s, b.Start); err != nil {
+		if err := restoreStartTargets(ctx, tx, project, s, b.Start); err != nil {
 			return err
 		}
 	}
@@ -529,32 +618,33 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		if sm.ID != 0 {
 			id = sm.ID
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO process_samples (id, process_id, name, inputs) VALUES (?, ?, ?, ?)", id, sm.Process, sm.Name, sm.Inputs); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO process_samples (id, process_id, name, inputs, project_id) VALUES (?, ?, ?, ?, ?)", id, sm.Process, sm.Name, sm.Inputs, project); err != nil {
 			return err
 		}
 	}
-	if err := restoreNotes(ctx, tx, flow, s); err != nil {
+	if err := restoreNotes(ctx, tx, flow, project, s); err != nil {
 		return err
 	}
 	var endX, endY *float64
 	if s.End != nil {
 		endX, endY = &s.End.X, &s.End.Y
 	}
-	_, err := tx.ExecContext(ctx, "UPDATE flow_starts SET x = ?, y = ?, end_x = ?, end_y = ? WHERE flow_id = ?",
+	_, err = tx.ExecContext(ctx, "UPDATE flow_starts SET x = ?, y = ?, end_x = ?, end_y = ? WHERE flow_id = ?",
 		s.Start.X, s.Start.Y, endX, endY, flow)
 	if err != nil {
 		return err
 	}
-	return restoreStartTargets(ctx, tx, s, s.Start)
+	return restoreStartTargets(ctx, tx, project, s, s.Start)
 }
 
-// Points the start at the processes it points at in s, those s still has.
-func restoreStartTargets(ctx context.Context, tx *sql.Tx, s snapshot, start startNode) error {
+// Points the start at the processes it points at in s, those s still has,
+// in the board's project.
+func restoreStartTargets(ctx context.Context, tx *sql.Tx, project int64, s snapshot, start startNode) error {
 	for _, t := range start.Targets {
 		if !slices.ContainsFunc(s.Processes, func(p process) bool { return p.ID == t.Process }) {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO start_targets (process_id, route) VALUES (?, ?)", t.Process, storedRoute(t.Route)); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT IGNORE INTO start_targets (process_id, route, project_id) VALUES (?, ?, ?)", t.Process, storedRoute(t.Route), project); err != nil {
 			return err
 		}
 	}
@@ -628,8 +718,9 @@ func saveVersion(ctx context.Context, tx *sql.Tx, flow int64, reuse bool, saved 
 			return *current, err
 		}
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO flow_versions (flow_id, based_on, snapshot, saved_by, reason, note) VALUES (?, ?, ?, ?, ?, ?)",
-		flow, current, body, saved.by, saved.reason, saved.note)
+	res, err := tx.ExecContext(ctx, `INSERT INTO flow_versions (flow_id, based_on, snapshot, saved_by, reason, note, project_id)
+		SELECT id, ?, ?, ?, ?, ?, project_id FROM flows WHERE id = ?`,
+		current, body, saved.by, saved.reason, saved.note, flow)
 	if err != nil {
 		return 0, err
 	}
@@ -820,7 +911,10 @@ func registerVersionRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		if err := rewriteBoard(ctx, tx, f, s); err != nil {
+		if err := rewriteBoard(ctx, tx, f, s); errors.Is(err, errOthersRows) {
+			http.Error(w, "the version names what another flow has, so it can't be gone back to", http.StatusConflict)
+			return
+		} else if err != nil {
 			serverError(w, err)
 			return
 		}

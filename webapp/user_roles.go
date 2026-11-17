@@ -66,7 +66,7 @@ func saveVersionRoles(ctx context.Context, tx *sql.Tx, version int64, s snapshot
 	for _, name := range names {
 		if key := roleKey(name); key != "" && !seen[key] {
 			seen[key] = true
-			if _, err := tx.ExecContext(ctx, "INSERT INTO version_roles (version_id, role) VALUES (?, ?)", version, key); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO version_roles (version_id, role, project_id) SELECT id, ?, project_id FROM flow_versions WHERE id = ?", key, version); err != nil {
 				return err
 			}
 		}

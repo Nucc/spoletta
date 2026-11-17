@@ -143,15 +143,17 @@ func TestProviderCheck(t *testing.T) {
 
 // A step's agent directory holds the host's settings, and its models.json
 // with the run's providers over the host's; the host's own without any.
+// A step not inheriting the instance's configuration gets neither the
+// host's settings nor its models.json, only its project's providers.
 func TestWriteAgentDir(t *testing.T) {
-	host := []byte(`{"providers": {}}`)
+	host := []byte(`{"providers": {"host-gateway": {"baseUrl": "https://gateway.example.com"}}}`)
 	agentConfig.settings, agentConfig.models = []byte(`{"defaultModel": "a"}`), host
 	t.Cleanup(func() { agentConfig.settings, agentConfig.models = nil, nil })
 	t.Setenv("PI_MODEL_CATALOG", t.TempDir())
 
 	providers := []modelProvider{{ID: "anthropic", Env: "ANTHROPIC_API_KEY", Models: []string{"claude-a"}}}
 	dir := filepath.Join(t.TempDir(), "agent")
-	if err := writeAgentDir(dir, providers, nil); err != nil {
+	if err := writeAgentDir(dir, providers, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	want, _ := providersModels(host, providers, nil, nil)
@@ -167,10 +169,28 @@ func TestWriteAgentDir(t *testing.T) {
 		t.Errorf("the agent directory's mode = %v; want only the worker's", fi.Mode())
 	}
 	other := filepath.Join(t.TempDir(), "agent")
-	if err := writeAgentDir(other, nil, nil); err != nil {
+	if err := writeAgentDir(other, nil, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(other, "models.json")); !json.Valid(b) || strings.Contains(string(b), "anthropic") {
 		t.Errorf("without, models.json = %s", b)
+	}
+
+	withheld := filepath.Join(t.TempDir(), "agent")
+	if err := writeAgentDir(withheld, providers, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(withheld, "models.json")); !strings.Contains(string(b), "anthropic") || strings.Contains(string(b), "host-gateway") {
+		t.Errorf("not inheriting, models.json = %s", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(withheld, "settings.json")); string(b) != `{}` {
+		t.Errorf("not inheriting, settings.json = %s", b)
+	}
+	none := filepath.Join(t.TempDir(), "agent")
+	if err := writeAgentDir(none, nil, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(none, "models.json")); err == nil {
+		t.Errorf("not inheriting, without providers, a models.json was written")
 	}
 }

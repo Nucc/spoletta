@@ -16,8 +16,18 @@ package main
 // script gets from the worker's environment, for an instance that wants
 // its scripts to call an API with a token of its own, knowing its agents
 // can read it too.
+//
+// What the worker is configured with is the instance's, so a step gets it
+// only when the webapp says its project inherits it (inheritsInstance,
+// Legacy alone): the variables CHILD_ENV names, the AWS_* ones pi signs in
+// to Bedrock with, its git config, its own pi config (providers.go) and its
+// own providers' say in Claude Code's choice of Bedrock (claude.go). For a
+// step of another project the worker withholds them all: git reads neither
+// the worker's global config (GIT_CONFIG_GLOBAL, or its home's) nor its
+// system's, for the step's own git and the worker's git for it alike.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -49,6 +59,24 @@ func childEnv(extra ...string) []string {
 			names = append(names, n)
 		}
 	}
+	return envOf(names, extra...)
+}
+
+// The environment of a step's process, as childEnv makes it for a step
+// whose project inherits the instance's configuration; for another, the
+// variables above but the worker's git config, nothing CHILD_ENV names, and
+// git told to read no system config.
+func stepEnv(inherits bool, extra ...string) []string {
+	if inherits {
+		return childEnv(extra...)
+	}
+	names := slices.DeleteFunc(slices.Clone(childVars), func(n string) bool { return n == "GIT_CONFIG_GLOBAL" || n == "GIT_CONFIG_NOSYSTEM" })
+	return envOf(names, append([]string{"GIT_CONFIG_NOSYSTEM=1"}, extra...)...)
+}
+
+// The variables named, as the worker has them, then extra, which win over
+// them; git never asking for credentials on a terminal.
+func envOf(names []string, extra ...string) []string {
 	set := map[string]bool{}
 	for _, kv := range extra {
 		name, _, _ := strings.Cut(kv, "=")
@@ -62,6 +90,50 @@ func childEnv(extra ...string) []string {
 		}
 	}
 	return append(env, extra...)
+}
+
+// Whether a step gets the worker's own configuration, as its request says.
+// A webapp from before projects says nothing, and all it runs is Legacy's,
+// which inherits it; a request naming a project, as every one from a
+// webapp with projects does, yet saying nothing gets none, so a webapp
+// that forgot to say withholds rather than hands out.
+func inheritsInstance(said *bool, project int64, ws *workspaceSpec) bool {
+	if said != nil {
+		return *said
+	}
+	return project == 0 && (ws == nil || ws.Project == 0)
+}
+
+type inheritsKey struct{}
+
+// The step's context, saying whether it inherits the instance's
+// configuration, which the worker's own git for it follows too.
+func withInheritance(ctx context.Context, inherits bool) context.Context {
+	return context.WithValue(ctx, inheritsKey{}, inherits)
+}
+
+// Whether what ctx is for inherits the instance's configuration: a step of
+// a project that does, or the worker's own work not for one.
+func inheritsFrom(ctx context.Context) bool {
+	inherits, ok := ctx.Value(inheritsKey{}).(bool)
+	return inherits || !ok
+}
+
+// The environment of the worker's own commands for a step, its git above
+// all, with extra: as a step's, and for one not inheriting the instance's
+// configuration without the worker's global git config either, which its
+// home holds when GIT_CONFIG_GLOBAL doesn't name it.
+func workerEnv(ctx context.Context, extra ...string) []string {
+	if inheritsFrom(ctx) {
+		return childEnv(extra...)
+	}
+	return stepEnv(false, append([]string{"GIT_CONFIG_GLOBAL=" + os.DevNull}, extra...)...)
+}
+
+// The environment of git the worker runs for a step, with the step's
+// credentials if ctx carries them.
+func gitEnv(ctx context.Context) []string {
+	return workerEnv(ctx, gitCredentialEnv(ctx)...)
 }
 
 // A credential a step calls a service with, as the webapp sends it: the

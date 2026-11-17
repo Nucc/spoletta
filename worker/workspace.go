@@ -182,7 +182,10 @@ type takenWorkspace struct {
 	// What the step's commit of what it left uncommitted says it was: its
 	// process and, for an agent, its pi session.
 	process, session string
-	release          func()
+	// Whether its step inherits the instance's configuration, which the
+	// worker's git giving the workspace back follows; see env.go.
+	inherits bool
+	release  func()
 	// The step's log, for what goes wrong giving the workspace back.
 	log *stepLogger
 }
@@ -260,6 +263,7 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 		return nil, err
 	}
 	meta.Branch, meta.Named, meta.Project = ws.Branch, ws.Named, ws.project()
+	meta.Withholds = !inheritsFrom(ctx)
 	for _, r := range ws.Repositories {
 		meta.Repositories[r.Name] = r.URL
 	}
@@ -269,7 +273,7 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 	}
 	pctx, cancel := context.WithTimeout(ctx, prepareTimeout)
 	defer cancel()
-	t := &takenWorkspace{dir: dir, spec: ws, repos: ws.Repositories, before: map[string]string{}, release: unlock}
+	t := &takenWorkspace{dir: dir, spec: ws, repos: ws.Repositories, before: map[string]string{}, inherits: inheritsFrom(ctx), release: unlock}
 	for _, r := range ws.Repositories {
 		recreated, err := checkout(pctx, l, dir, ws, r)
 		if err != nil {
@@ -297,7 +301,7 @@ func takeWorkspace(ctx context.Context, ws *workspaceSpec, l *stepLogger) (*take
 func (t *takenWorkspace) done(res *runResult) {
 	defer t.release()
 	// The step's context may be over; this doesn't take long.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(withInheritance(context.Background(), t.inherits), time.Minute)
 	defer cancel()
 	for _, r := range t.repos {
 		dest := filepath.Join(t.dir, r.Name)
@@ -369,7 +373,7 @@ fi
 	var stdout, stderr bytes.Buffer
 	spec := sandboxSpec{
 		Cmd: append([]string{"sh", "-c", script, "sh", subject}, trailers...),
-		Dir: dir, Env: childEnv(), Mounts: []mount{{Path: dir}}, Offline: true,
+		Dir: dir, Env: workerEnv(ctx), Mounts: []mount{{Path: dir}}, Offline: true,
 	}
 	err := steps.run(ctx, spec, &stdout, &stderr)
 	uncommitted := strings.Contains(stdout.String(), "uncommitted")
@@ -762,7 +766,7 @@ func gitOK(ctx context.Context, dir string, args ...string) error {
 func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = childEnv(gitCredentialEnv(ctx)...)
+	cmd.Env = gitEnv(ctx)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -864,8 +868,6 @@ func workspacesOf(run int64) []string {
 // couldn't be: it then stays, with the workspace. False if there was
 // nothing to release.
 func releaseWorkspace(dir string) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -877,6 +879,10 @@ func releaseWorkspace(dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// As the steps that worked in it, with or without the worker's own git
+	// config.
+	ctx, cancel := context.WithTimeout(withInheritance(context.Background(), !meta.Withholds), time.Minute)
+	defer cancel()
 	kept := false
 	for _, e := range entries {
 		wt := filepath.Join(dir, e.Name())
@@ -988,6 +994,10 @@ type workspaceMeta struct {
 	// are its own; none in a meta from before projects, which is Legacy's.
 	Project      int64             `json:"project,omitempty"`
 	Repositories map[string]string `json:"repositories"`
+	// Whether the last step to take it didn't inherit the instance's
+	// configuration, so the worker's own git config stays out of its
+	// release too; none in a meta from before projects, which is Legacy's.
+	Withholds bool `json:"withholds,omitempty"`
 	// Whether the worker kept a meta of the workspace yet, and so the
 	// project it is bound to; not kept itself.
 	kept bool

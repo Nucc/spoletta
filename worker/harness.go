@@ -113,7 +113,7 @@ func runAgent(ctx context.Context, h harness, run runRequest, timeout time.Durat
 		return runResult{Error: "create private directory: " + err.Error()}
 	}
 	defer os.RemoveAll(private)
-	ctx, gitEnv, err := writeGitCredentials(ctx, private, run.Git)
+	ctx, gitEnv, err := writeGitCredentials(withInheritance(ctx, run.inherits()), private, run.Git)
 	if err != nil {
 		return runResult{Error: err.Error()}
 	}

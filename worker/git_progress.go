@@ -109,7 +109,7 @@ func gitLogged(ctx context.Context, l *stepLogger, what, dir string, args ...str
 	p := newGitProgress(func(line string) { l.infof("%s: %s", what, line) })
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = childEnv(gitCredentialEnv(ctx)...)
+	cmd.Env = gitEnv(ctx)
 	cmd.Stderr = p
 	cmd.WaitDelay = 5 * time.Second
 	err := cmd.Run()

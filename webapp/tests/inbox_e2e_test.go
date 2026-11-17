@@ -712,7 +712,7 @@ func TestNotifySendsWhatAStoppedReplicaClaimed(t *testing.T) {
 		kind string
 		sent any
 	}{{"reminder", nil}, {"lost", time.Now()}} {
-		if _, err := db.Exec("INSERT INTO notifications (run_id, step_id, user_id, kind, replica_id, sent_at) VALUES (?, ?, ?, ?, ?, ?)",
+		if _, err := db.Exec("INSERT INTO notifications (run_id, step_id, user_id, kind, replica_id, sent_at, project_id) VALUES (?, ?, ?, ?, ?, ?, 1)",
 			rn.ID, review.ID, row.ID, c.kind, "0123456789abcdef0123456789abcdef", c.sent); err != nil {
 			t.Fatal(err)
 		}

@@ -70,15 +70,15 @@ func TestSecretsSealed(t *testing.T) {
 	}
 
 	// Secrets kept before SECRET_KEY was set are sealed when it is.
-	if _, err := db.Exec("INSERT INTO model_keys (env, api_key) VALUES ('OLD_UNSEALED_KEY', 'sk-old')"); err != nil {
+	if _, err := db.Exec("INSERT INTO model_keys (env, api_key, project_id) VALUES ('OLD_UNSEALED_KEY', 'sk-old', 1)"); err != nil {
 		t.Fatal(err)
 	}
-	res, err := db.Exec("INSERT INTO mcp_servers (name, url) VALUES ('old-unsealed', 'https://mcp.example.com')")
+	res, err := db.Exec("INSERT INTO mcp_servers (name, url, project_id) VALUES ('old-unsealed', 'https://mcp.example.com', 1)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	server, _ := res.LastInsertId()
-	if _, err := db.Exec("INSERT INTO mcp_tokens (server_id, user_id, access_token, refresh_token) VALUES (?, 0, 'old-access', NULL)", server); err != nil {
+	if _, err := db.Exec("INSERT INTO mcp_tokens (server_id, user_id, access_token, refresh_token, project_id) VALUES (?, 0, 'old-access', NULL, 1)", server); err != nil {
 		t.Fatal(err)
 	}
 	b := startApp(t, a.worker.url)

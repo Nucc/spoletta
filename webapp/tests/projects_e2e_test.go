@@ -125,12 +125,20 @@ func refusedByForeignKey(err error) bool {
 	return errors.As(err, &my) && my.Number == 1452
 }
 
-// Every table names its project, never null, but those above the projects;
-// a new table forgetting it fails here.
+// Whether err is MySQL's refusing a row that leaves out a column with no
+// default, as project_id is.
+func refusedForNoDefault(err error) bool {
+	var my *mysql.MySQLError
+	return errors.As(err, &my) && my.Number == 1364
+}
+
+// Every table names its project, never null and with no default, so every
+// row inserted must name it, but those above the projects; a new table
+// forgetting it fails here.
 func TestProjectsEveryTableNamesItsProject(t *testing.T) {
 	needDB(t)
 	db := secretsDB(t)
-	rows, err := db.Query(`SELECT t.TABLE_NAME, COALESCE(c.COLUMN_TYPE, ''), COALESCE(c.IS_NULLABLE, '')
+	rows, err := db.Query(`SELECT t.TABLE_NAME, COALESCE(c.COLUMN_TYPE, ''), COALESCE(c.IS_NULLABLE, ''), c.COLUMN_DEFAULT IS NOT NULL
 		FROM information_schema.TABLES t LEFT JOIN information_schema.COLUMNS c
 			ON c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME AND c.COLUMN_NAME = 'project_id'
 		WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_TYPE = 'BASE TABLE' ORDER BY t.TABLE_NAME`)
@@ -141,7 +149,8 @@ func TestProjectsEveryTableNamesItsProject(t *testing.T) {
 	var tables []string
 	for rows.Next() {
 		var table, typ, null string
-		if err := rows.Scan(&table, &typ, &null); err != nil {
+		var defaulted bool
+		if err := rows.Scan(&table, &typ, &null, &defaulted); err != nil {
 			t.Fatal(err)
 		}
 		tables = append(tables, table)
@@ -153,6 +162,8 @@ func TestProjectsEveryTableNamesItsProject(t *testing.T) {
 			t.Errorf("%s names no project: give it project_id BIGINT NOT NULL, or say why it is above projects", table)
 		case typ != "bigint" || null != "NO":
 			t.Errorf("%s.project_id is %s, nullable %s; want bigint, not null", table, typ, null)
+		case defaulted:
+			t.Errorf("%s.project_id has a default, so a row inserted without naming its project lands in some project: drop it", table)
 		}
 	}
 	for _, above := range aboveProjects {
@@ -720,13 +731,16 @@ func TestProjectsCompositeKeysRefuseAnotherProject(t *testing.T) {
 	a.project = p.ID
 	f := a.newFlow(fmt.Sprintf("Keyed %d", time.Now().UnixNano()))
 
-	if _, err := db.Exec("INSERT INTO processes (flow_id, name, prompt, script) VALUES (?, 'Stray', '', '')", f.ID); !refusedByForeignKey(err) {
+	if _, err := db.Exec("INSERT INTO processes (flow_id, name, prompt, script) VALUES (?, 'Stray', '', '')", f.ID); !refusedForNoDefault(err) {
+		t.Errorf("a process naming no project: %v, want refused for naming none", err)
+	}
+	if _, err := db.Exec("INSERT INTO processes (flow_id, name, prompt, script, project_id) VALUES (?, 'Stray', '', '', 1)", f.ID); !refusedByForeignKey(err) {
 		t.Errorf("a process of Legacy in the project's flow: %v, want refused", err)
 	}
 	if _, err := db.Exec("INSERT INTO processes (flow_id, name, prompt, script, project_id) VALUES (?, 'Kept', '', '', ?)", f.ID, p.ID); err != nil {
 		t.Errorf("a process of the flow's project: %v", err)
 	}
-	res, err := db.Exec("INSERT INTO teams (name) VALUES (?)", fmt.Sprintf("Legacy team %d", time.Now().UnixNano()))
+	res, err := db.Exec("INSERT INTO teams (name, project_id) VALUES (?, 1)", fmt.Sprintf("Legacy team %d", time.Now().UnixNano()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,7 +756,7 @@ func TestProjectsCompositeKeysRefuseAnotherProject(t *testing.T) {
 	if _, err := db.Exec("UPDATE flows SET owner_user_id = ? WHERE id = ?", outsider, f.ID); !refusedByForeignKey(err) {
 		t.Errorf("someone outside the project owning its flow: %v, want refused", err)
 	}
-	if _, err := db.Exec("INSERT INTO team_members (team_id, user_id) VALUES (?, ?)", team, outsider); !refusedByForeignKey(err) {
+	if _, err := db.Exec("INSERT INTO team_members (team_id, user_id, project_id) VALUES (?, ?, 1)", team, outsider); !refusedByForeignKey(err) {
 		t.Errorf("someone outside Legacy in its team: %v, want refused", err)
 	}
 	board := taskBoardCall(a, "POST", "/api/taskboards", map[string]any{"name": fmt.Sprintf("Keyed board %d", time.Now().UnixNano())}, http.StatusCreated)

@@ -382,6 +382,11 @@ func startApp(t *testing.T, workerURL string, extra ...string) *app {
 		// names none (requestProject).
 		case strings.Contains(out, "http: panic serving"):
 			t.Errorf("the webapp panicked serving a request:\n%s", out)
+		// A row inserted without naming its project, which has no default
+		// (migration 00090), as what the webapp does in the background
+		// only logs.
+		case strings.Contains(out, "doesn't have a default value"):
+			t.Errorf("the webapp inserted a row without a column it must name:\n%s", out)
 		case t.Failed():
 			t.Logf("the webapp logged:\n%s", out)
 		}

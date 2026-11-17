@@ -167,13 +167,13 @@ func TestActivityRunsFailuresAndCost(t *testing.T) {
 	proc := a.newFlow("Packaging")
 	a.call("PATCH", fmt.Sprintf("/api/flows/%d", proc.ID), map[string]any{"module": true}, http.StatusOK, nil)
 	pack := a.agent(proc.ID, "Package", "Package it.")
-	res, err := db.Exec("INSERT INTO runs (flow_id, status, parent_run_id, finished_at) VALUES (?, 'failed', ?, NOW(3))", proc.ID, runs[2].ID)
+	res, err := db.Exec("INSERT INTO runs (flow_id, status, parent_run_id, finished_at, project_id) VALUES (?, 'failed', ?, NOW(3), 1)", proc.ID, runs[2].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	child, _ := res.LastInsertId()
-	if _, err := db.Exec(`INSERT INTO run_steps (run_id, process_ref, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at)
-		VALUES (?, ?, 'Package', 'agent', '', '[]', 'error', '', 'out of disk', '', NOW(3))`, child, pack.ID); err != nil {
+	if _, err := db.Exec(`INSERT INTO run_steps (run_id, process_ref, process_name, kind, prompt, inputs, status, output, error, instructions, finished_at, project_id)
+		VALUES (?, ?, 'Package', 'agent', '', '[]', 'error', '', 'out of disk', '', NOW(3), 1)`, child, pack.ID); err != nil {
 		t.Fatal(err)
 	}
 	// Each run's agent reached its models, which the run kept count of.

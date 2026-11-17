@@ -9,7 +9,6 @@ package tests
 // and activity.go.
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -543,93 +542,6 @@ func TestProjectsPeopleWhomToAsk(t *testing.T) {
 	}
 }
 
-// Moves the flows, everything on their boards, their versions and runs, and
-// the MCP servers given, with their tokens, into the project, as if made
-// there. A board or a run of a project but Legacy can be made only once
-// every part of the webapp names the project it inserts into, so these
-// tests make them in Legacy and move them, with the database's keys
-// unchecked for the move alone.
-func peopleMove(t *testing.T, project int64, flows []int64, servers ...int64) {
-	t.Helper()
-	db := secretsDB(t)
-	ctx := context.Background()
-	list := func(ids []any) string { return "(" + strings.TrimSuffix(strings.Repeat("?, ", len(ids)), ", ") + ")" }
-	ids := func(q string, args []any) []any {
-		t.Helper()
-		if len(args) == 0 {
-			return nil
-		}
-		rows, err := db.Query(q+" "+list(args), args...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer rows.Close()
-		var out []any
-		for rows.Next() {
-			var id int64
-			rows.Scan(&id)
-			out = append(out, id)
-		}
-		return out
-	}
-	var fs, ss []any
-	for _, f := range flows {
-		fs = append(fs, f)
-	}
-	for _, s := range servers {
-		ss = append(ss, s)
-	}
-	runs := ids("SELECT id FROM runs WHERE flow_id IN", fs)
-	processes := ids("SELECT id FROM processes WHERE flow_id IN", fs)
-	// Each column naming what moves, and its ids; a table's own id column
-	// is named by the table.
-	by := map[string][]any{
-		"flow_id": fs, "run_id": runs, "process_id": processes, "source_id": processes,
-		"object_id":  ids("SELECT id FROM objects WHERE flow_id IN", fs),
-		"version_id": ids("SELECT id FROM flow_versions WHERE flow_id IN", fs),
-		"step_id":    ids("SELECT id FROM run_steps WHERE run_id IN", runs),
-		"link_id":    ids("SELECT id FROM object_links WHERE process_id IN", processes),
-		"server_id":  ss,
-	}
-	own := map[string][]any{"flows": fs, "mcp_servers": ss}
-	rows, err := db.Query(`SELECT c.TABLE_NAME, c.COLUMN_NAME FROM information_schema.COLUMNS c
-		JOIN information_schema.COLUMNS p ON p.TABLE_SCHEMA = c.TABLE_SCHEMA AND p.TABLE_NAME = c.TABLE_NAME AND p.COLUMN_NAME = 'project_id'
-		WHERE c.TABLE_SCHEMA = DATABASE() ORDER BY 1, 2`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conds := map[string][]string{}
-	args := map[string][]any{}
-	for rows.Next() {
-		var table, column string
-		rows.Scan(&table, &column)
-		ids := by[column]
-		if column == "id" {
-			ids = own[table]
-		}
-		if len(ids) > 0 {
-			conds[table] = append(conds[table], column+" IN "+list(ids))
-			args[table] = append(args[table], ids...)
-		}
-	}
-	rows.Close()
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
-		t.Fatal(err)
-	}
-	defer conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1")
-	for table, cs := range conds {
-		if _, err := conn.ExecContext(ctx, "UPDATE `"+table+"` SET project_id = ? WHERE "+strings.Join(cs, " OR "),
-			append([]any{project}, args[table]...)...); err != nil {
-			t.Fatalf("move %s: %v", table, err)
-		}
-	}
-}
-
 // A flow everyone sees, whose run waits on a review its role decides, or
 // anyone without one; returns the flow, the run and its review, waiting.
 func peopleReview(a *app, name, role string, settings *processSettings) (flow, run, step) {
@@ -702,11 +614,12 @@ func TestProjectsPeopleInboxAcrossProjects(t *testing.T) {
 	// Anyone's reviews in each project, and the Approvers' in each.
 	_, legacyRun, legacyFree := peopleReview(a, "Legacy free", "", nil)
 	_, _, legacyRole := peopleReview(a, "Legacy approved", "Approver", nil)
-	movedFree, movedRun, twoFree := peopleReview(a, "Moved free", "", nil)
-	movedRole, movedRoleRun, twoRole := peopleReview(a, "Moved approved", "Approver", nil)
+	a.project = two.ID
+	_, movedRun, twoFree := peopleReview(a, "Second free", "", nil)
+	movedRole, movedRoleRun, twoRole := peopleReview(a, "Second approved", "Approver", nil)
 	// The approved one Ada's own, so only its role holders see it.
 	a.call("PUT", fmt.Sprintf("/api/flows/%d/owner", movedRole.ID), map[string]any{"kind": "user", "id": peopleMe(a)}, http.StatusOK, nil)
-	peopleMove(t, two.ID, []int64{movedFree.ID, movedRole.ID})
+	a.project = 0
 
 	steps := []int64{legacyFree.ID, legacyRole.ID, twoFree.ID, twoRole.ID}
 	asBob, asCarl, asDina := inboxAs(a, prov, bob), inboxAs(a, prov, carl), inboxAs(a, prov, dina)
@@ -767,8 +680,8 @@ func TestProjectsPeopleInboxActivityAndHealthWithoutSignIn(t *testing.T) {
 	a := newApp(t)
 	two := newProject(a, "Unsigned two")
 	legacy, legacyRun, legacyStep := peopleReview(a, "Stays", "", nil)
-	moved, movedRun, movedStep := peopleReview(a, "Moves", "", nil)
-	peopleMove(t, two.ID, []int64{moved.ID})
+	a.project = two.ID
+	moved, movedRun, movedStep := peopleReview(a, "Second", "", nil)
 
 	for project, want := range map[int64]struct {
 		flow, run, step int64
@@ -810,11 +723,10 @@ func TestProjectsPeopleActivityOfAnOwner(t *testing.T) {
 	o := usersAdd(a, olga.email)
 	a.call("PUT", fmt.Sprintf("/api/projects/%d/members", two.ID), []map[string]any{{"user": o.ID, "level": "owner"}}, http.StatusOK, nil)
 	legacy, legacyRun, _ := peopleReview(a, "Owner's legacy", "", nil)
-	moved, movedRun, _ := peopleReview(a, "Owner's moved", "", nil)
-	peopleMove(t, two.ID, []int64{moved.ID})
+	a.project = two.ID
+	moved, movedRun, _ := peopleReview(a, "Owner's second", "", nil)
 
 	usersSignIn(a, prov, olga)
-	a.project = two.ID
 	act := activityOf(a, 7, "UTC")
 	if act.flow(moved.ID) == nil || act.flow(legacy.ID) != nil {
 		t.Errorf("the owner's Activity page has flows %+v, want %d and not %d", act.Flows, moved.ID, legacy.ID)
@@ -846,15 +758,13 @@ func TestProjectsPeopleNoticesKeepToTheProject(t *testing.T) {
 	a.call("PUT", fmt.Sprintf("/api/projects/%d/members", two.ID), []map[string]any{{"user": b.ID, "level": "editor"}}, http.StatusOK, nil)
 	a.project = two.ID
 	a.call("PATCH", fmt.Sprintf("/api/users/%d", b.ID), map[string]any{"roles": []string{"Approver"}}, http.StatusOK, nil)
-	a.project = 0
 	name := fmt.Sprintf("people_slack_%d", time.Now().UnixNano())
 	slack.install(a, name)
-	server := secretsStored(t, db, "SELECT id FROM mcp_servers WHERE name = ?", name)
-	var serverID int64
-	fmt.Sscan(server, &serverID)
+	if in := secretsStored(t, db, "SELECT project_id FROM mcp_servers WHERE name = ?", name); in != fmt.Sprint(two.ID) {
+		t.Fatalf("the Slack connector was installed in project %s, want %d", in, two.ID)
+	}
 
 	f, rn, review := peopleReview(a, "Told", "Approver", &processSettings{RemindAfter: ptr(2)})
-	peopleMove(t, two.ID, []int64{f.ID}, serverID)
 	link := inboxLink(a, fmt.Sprintf("/#/p/%d/flows/%d/runs/%d/steps/%d", two.ID, f.ID, rn.ID, review.ID))
 	inboxEventually(t, "Bob being reminded in the second project", func() bool {
 		return slices.ContainsFunc(smtp.to(bob.email), func(m inboxMail) bool {

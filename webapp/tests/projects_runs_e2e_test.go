@@ -20,59 +20,6 @@ import (
 	"time"
 )
 
-// Moves the flows, procedures and structs into the project, with what
-// their boards, versions, schedules and webhooks hold, as if they had been
-// made there. Boards are built in Legacy, whose routes all name it, and
-// moved on a connection of their own with the foreign keys unchecked, as
-// deleting a project empties it: a stopgap for as long as routes making a
-// board don't name the project.
-func prMove(t *testing.T, db *sql.DB, project int64, flows ...int64) {
-	t.Helper()
-	ctx := context.Background()
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
-		t.Fatal(err)
-	}
-	defer conn.ExecContext(context.Background(), "SET FOREIGN_KEY_CHECKS = 1")
-	in := "(?" + strings.Repeat(", ?", len(flows)-1) + ")"
-	processes := "(SELECT id FROM processes WHERE flow_id IN " + in + ")"
-	objects := "(SELECT id FROM objects WHERE flow_id IN " + in + ")"
-	where := map[string]string{
-		"flows":         "id IN " + in,
-		"object_states": "object_id IN " + objects, "object_attributes": "object_id IN " + objects,
-		"object_links": "process_id IN " + processes, "connections": "source_id IN " + processes,
-		"inner_boards": "process_id IN " + processes, "start_targets": "process_id IN " + processes,
-		"process_samples": "process_id IN " + processes,
-		"link_states":     "link_id IN (SELECT l.id FROM object_links l JOIN processes p ON p.id = l.process_id WHERE p.flow_id IN " + in + ")",
-		"version_roles":   "version_id IN (SELECT id FROM flow_versions WHERE flow_id IN " + in + ")",
-	}
-	for _, table := range []string{"flow_versions", "flow_history", "flow_starts", "flow_tags", "favourite_flows", "board_changes",
-		"board_viewers", "assistant_messages", "notes", "schedules", "webhooks", "processes", "objects"} {
-		where[table] = "flow_id IN " + in
-	}
-	// Those reading the flows' rows first, before these move.
-	order := []string{"link_states", "version_roles", "object_states", "object_attributes", "object_links", "connections",
-		"inner_boards", "start_targets", "process_samples"}
-	for table := range where {
-		if !slices.Contains(order, table) {
-			order = append(order, table)
-		}
-	}
-	args := []any{project}
-	for _, f := range flows {
-		args = append(args, f)
-	}
-	for _, table := range order {
-		if _, err := conn.ExecContext(ctx, "UPDATE `"+table+"` SET project_id = ? WHERE "+where[table], args...); err != nil {
-			t.Fatalf("move %s: %v", table, err)
-		}
-	}
-}
-
 // Saves the board of each flow as a version, which runs of it then take as
 // it is, so starting one saves none.
 func prSave(a *app, flows ...int64) {
@@ -268,14 +215,13 @@ func TestProjectsRunAFlowInASecondProject(t *testing.T) {
 	a := newApp(t)
 	db := secretsDB(t)
 	n := time.Now().UnixNano()
+	p := newProject(a, "Runs")
+	a.project = p.ID
 	res := setupImportOK(a, prBoardFile(n))
 	ticketName := fmt.Sprintf("PR Ticket %d", n)
 	tickets, changes := prImported(t, res, ticketName), prImported(t, res, fmt.Sprintf("PR Change %d", n))
 	summarise, work := prImported(t, res, fmt.Sprintf("PR Summarise %d", n)), prImported(t, res, fmt.Sprintf("PR Work %d", n))
 	prSave(a, summarise, work)
-	p := newProject(a, "Runs")
-	prMove(t, db, p.ID, tickets, changes, summarise, work)
-	a.project = p.ID
 
 	// Records made by hand there are its own, and a change names a ticket
 	// of its own.
@@ -404,11 +350,29 @@ func TestProjectsRunAFlowInASecondProject(t *testing.T) {
 	a.refused("GET", fmt.Sprintf("/api/structs/%d/records", tickets), nil, http.StatusNotFound, "not found")
 }
 
+// Plants a reference to another project's procedure, store or struct on a
+// board, which no route lets anyone make: what proves a run reaches none of
+// it needs one there all the same. Each is a column no key checks (a
+// subflow process's settings, a copy's store, a reference attribute's
+// struct), so a plain update makes it, and nothing else on the board moves.
+func prPlant(t *testing.T, db *sql.DB, stmt string, args ...any) {
+	t.Helper()
+	res, err := db.Exec(stmt, args...)
+	if err != nil {
+		t.Fatalf("%s: %v", stmt, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("%s changed %d rows (%v), want 1", stmt, n, err)
+	}
+}
+
 // A board somehow naming another project's procedure, struct or record,
-// as only moving it there can make one, reaches none of it: a subflow
-// process's step fails, a pick or a query of another project's records
-// takes none, a reference to another project's struct is refused, and a
-// record, a run or a flow of another project isn't there by its id.
+// as no route lets one, reaches none of it: a subflow process's board isn't
+// run, a pick or a query of another project's records takes none, a
+// reference to another project's struct is refused, and a record, a run or
+// a flow of another project isn't there by its id. The boards are built in
+// the second project, each naming its own, and only the one reference is
+// planted.
 func TestProjectsRunsReachNoOtherProject(t *testing.T) {
 	a := newApp(t)
 	db := secretsDB(t)
@@ -418,44 +382,55 @@ func TestProjectsRunsReachNoOtherProject(t *testing.T) {
 	tickets := taskStruct(a, fmt.Sprintf("Legacy ticket %d", n), nil, "id", []string{"title"}, "open")
 	legacyRecord := taskRecord(a, tickets.ID, map[string]any{"id": "T-1", "title": "Theirs"}, "open")
 	ticketRoot := modObjects(a, tickets.ID)[0]
-	sub := verBuildSubflow(a)
+	legacySub := verBuildSubflow(a)
 	a.worker.onAgent("Fix", handsIn(data("fixed")))
-	legacyRun := a.finish(a.startRun(sub.callee.ID).ID)
+	legacyRun := a.finish(a.startRun(legacySub.callee.ID).ID)
+
+	p := newProject(a, "Apart")
+	a.project = p.ID
+	// The project's own tickets, which its boards name before the plants.
+	own := taskStruct(a, fmt.Sprintf("Own ticket %d", n), nil, "id", []string{"title"}, "open")
+	ownRoot := modObjects(a, own.ID)[0]
+
+	// A subflow process, then running Legacy's procedure.
+	sub := verBuildSubflow(a)
+	prPlant(t, db, "UPDATE processes SET settings = JSON_SET(settings, '$.flow', ?) WHERE id = ? AND project_id = ?", legacySub.callee.ID, sub.call.ID, p.ID)
 
 	// A flow picking one of Legacy's tickets.
 	picking := a.newFlow(fmt.Sprintf("Picking %d", n))
-	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", tickets.ID), map[string]any{"flow": picking.ID, "x": 0, "y": 0}, http.StatusCreated, nil)
-	pickedCopy := modNamed(t, modObjects(a, picking.ID), tickets.Name)
+	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", own.ID), map[string]any{"flow": picking.ID, "x": 0, "y": 0}, http.StatusCreated, nil)
+	pickedCopy := modNamed(t, modObjects(a, picking.ID), own.Name)
 	a.call("PUT", fmt.Sprintf("/api/objects/%d/pick", pickedCopy.ID), map[string]any{"pick": map[string]any{"state": "open"}}, http.StatusNoContent, nil)
 	take := a.newProcess(picking.ID, map[string]any{"name": "Take", "kind": kindScript, "script": "take"})
 	a.input(take.ID, pickedCopy.ID)
 	a.startAt(picking.ID, take.ID)
+	prPlant(t, db, "UPDATE objects SET store_id = ? WHERE id = ? AND project_id = ?", ticketRoot.ID, pickedCopy.ID, p.ID)
 
 	// A flow querying Legacy's tickets.
 	querying := a.newFlow(fmt.Sprintf("Querying %d", n))
-	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", tickets.ID), map[string]any{"flow": querying.ID, "x": 0, "y": 0}, http.StatusCreated, nil)
-	queriedCopy := modNamed(t, modObjects(a, querying.ID), tickets.Name)
+	a.call("POST", fmt.Sprintf("/api/structs/%d/copies", own.ID), map[string]any{"flow": querying.ID, "x": 0, "y": 0}, http.StatusCreated, nil)
+	queriedCopy := modNamed(t, modObjects(a, querying.ID), own.Name)
 	look := a.newProcess(querying.ID, map[string]any{"name": "Look", "kind": kindScript, "script": "look"})
 	a.link(map[string]any{"process": look.ID, "object": queriedCopy.ID, "direction": directionInput, "query": linkQuery{State: "open", Limit: 1}})
 	a.output(look.ID, a.newObject(querying.ID, "Seen").ID)
 	a.startAt(querying.ID, look.ID)
 	a.worker.onScript("Look", func(context.Context, scriptRun) runResult { return runResult{OK: true, Output: `{"data": "seen"}`} })
+	prPlant(t, db, "UPDATE objects SET store_id = ? WHERE id = ? AND project_id = ?", ticketRoot.ID, queriedCopy.ID, p.ID)
 
 	// A struct whose records refer to Legacy's tickets.
 	referring := taskStruct(a, fmt.Sprintf("Referring %d", n), nil, "key", nil, "open")
-	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", modObjects(a, referring.ID)[0].ID), map[string]any{"name": "ticket", "ref": ticketRoot.ID}, http.StatusCreated, nil)
-
+	var ref struct {
+		ID int64 `json:"id"`
+	}
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", modObjects(a, referring.ID)[0].ID), map[string]any{"name": "ticket", "ref": ownRoot.ID}, http.StatusCreated, &ref)
+	prPlant(t, db, "UPDATE object_attributes SET ref_id = ? WHERE id = ? AND project_id = ?", ticketRoot.ID, ref.ID, p.ID)
 	prSave(a, sub.caller.ID, picking.ID, querying.ID)
-	p := newProject(a, "Apart")
-	// The callers move, what they name stays in Legacy.
-	prMove(t, db, p.ID, sub.caller.ID, picking.ID, querying.ID, referring.ID)
-	a.project = p.ID
 
 	// The procedure is Legacy's, so for this project the subflow process
 	// runs none there is: the board has a problem and isn't run.
 	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", sub.caller.ID), nil, http.StatusConflict, "pick another in its panel")
 	var called int
-	if err := db.QueryRow("SELECT COUNT(*) FROM runs WHERE flow_id = ? AND parent_run_id IS NOT NULL", sub.callee.ID).Scan(&called); err != nil || called != 0 {
+	if err := db.QueryRow("SELECT COUNT(*) FROM runs WHERE flow_id = ? AND parent_run_id IS NOT NULL", legacySub.callee.ID).Scan(&called); err != nil || called != 0 {
 		t.Errorf("Legacy's procedure ran %d times for another project's run (%v)", called, err)
 	}
 	// Legacy's tickets are none to pick, or to query.
@@ -484,7 +459,7 @@ func TestProjectsRunsReachNoOtherProject(t *testing.T) {
 	} {
 		a.refused("GET", path, nil, http.StatusNotFound, "")
 	}
-	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", sub.callee.ID), nil, http.StatusNotFound, "not found")
+	a.refused("POST", fmt.Sprintf("/api/runs?flow=%d", legacySub.callee.ID), nil, http.StatusNotFound, "not found")
 	// Nothing of these runs went to Legacy.
 	var runs []int64
 	rows, err := db.Query("SELECT id FROM runs WHERE flow_id IN (?, ?, ?)", sub.caller.ID, picking.ID, querying.ID)
@@ -525,7 +500,11 @@ func TestProjectsStartRunsInTheirOwnProject(t *testing.T) {
 	n := time.Now().UnixNano()
 	a.worker.onScript("Handle", func(context.Context, scriptRun) runResult { return runResult{OK: true, Output: `{"data": "handled"}`} })
 
-	// Built in Legacy, as routes making a board don't name the project yet.
+	legacyFlow := a.newFlow(fmt.Sprintf("Legacy's own %d", n))
+	legacyKey := apiNewKey(a, "Legacy's")
+
+	p := newProject(a, "Starting")
+	a.project = p.ID
 	issues := prIssueFlow(a, fmt.Sprintf("Issues %d", n))
 	pubPublish(a, issues.ID, "issues")
 	var sched schedule
@@ -534,12 +513,6 @@ func TestProjectsStartRunsInTheirOwnProject(t *testing.T) {
 	bugs := taskStruct(a, fmt.Sprintf("Bug %d", n), nil, "id", []string{"title"}, "new", "triaged")
 	triage := movingFlow(a, bugs, "Triage", "new", "triaged")
 	pubPublish(a, triage.ID, "triage")
-	legacyFlow := a.newFlow(fmt.Sprintf("Legacy's own %d", n))
-	legacyKey := apiNewKey(a, "Legacy's")
-
-	p := newProject(a, "Starting")
-	prMove(t, db, p.ID, issues.ID, bugs.ID, triage.ID)
-	a.project = p.ID
 	address := func(flow, run int64) string { return fmt.Sprintf("/#/p/%d/flows/%d/runs/%d", p.ID, flow, run) }
 	inProject := func(what string, run int64) {
 		t.Helper()
@@ -552,9 +525,6 @@ func TestProjectsStartRunsInTheirOwnProject(t *testing.T) {
 	// An API key of the project: its runs are there; Legacy's key reaches
 	// none of it, nor the project's key Legacy's flow.
 	key := apiNewKey(a, "The project's")
-	if _, err := db.Exec("UPDATE api_keys SET project_id = ? WHERE id = ?", p.ID, key.ID); err != nil {
-		t.Fatal(err)
-	}
 	body := map[string]any{"inputs": map[string]any{"Issue": "Printer jam"}}
 	viaKey := apiStart(a, key.Key, issues.ID, body, http.StatusCreated)
 	if !strings.HasSuffix(viaKey.URL, address(issues.ID, viaKey.ID)) {
@@ -647,11 +617,10 @@ func TestProjectsStartRunsInTheirOwnProject(t *testing.T) {
 func TestProjectsTakenOverRunKeepsItsProject(t *testing.T) {
 	d := newAdoptDB(t)
 	a := d.start(adoptTimeout)
+	p := newProject(a, "Moving")
+	a.project = p.ID
 	b := newAdoptReview(a, "Reviewed in a project")
 	prSave(a, b.flow.ID)
-	p := newProject(a, "Moving")
-	prMove(t, d.db, p.ID, b.flow.ID)
-	a.project = p.ID
 
 	rn := a.startRun(b.flow.ID)
 	step := a.waitStep(rn.ID, "Review", stepWaiting)
@@ -683,19 +652,15 @@ func TestProjectsRunsAreForTheirMakerAsTheyAreInTheProject(t *testing.T) {
 	a.worker.onScript("Handle", func(context.Context, scriptRun) runResult { return runResult{OK: true, Output: `{"data": "handled"}`} })
 	bob := usersNewPerson("Bob")
 	bobRow := usersAdd(a, bob.email)
+	p := newProject(a, "Bob's")
+	a.call("PUT", fmt.Sprintf("/api/projects/%d/members", p.ID), []map[string]any{{"user": bobRow.ID, "level": "editor"}}, http.StatusOK, nil)
+	a.project = p.ID
 	issues := prIssueFlow(a, fmt.Sprintf("Bob's issues %d", n))
 	usersShare(a, issues.ID)
 	pubPublish(a, issues.ID, "issues")
-	p := newProject(a, "Bob's")
-	a.call("PUT", fmt.Sprintf("/api/projects/%d/members", p.ID), []map[string]any{{"user": bobRow.ID, "level": "editor"}}, http.StatusOK, nil)
-	prMove(t, db, p.ID, issues.ID)
 
 	usersSignIn(a, prov, bob)
 	key := apiNewKey(a, "Bob's")
-	if _, err := db.Exec("UPDATE api_keys SET project_id = ? WHERE id = ?", p.ID, key.ID); err != nil {
-		t.Fatal(err)
-	}
-	a.project = p.ID
 	body := map[string]any{"inputs": map[string]any{"Issue": "Printer jam"}}
 	rn := apiStart(a, key.Key, issues.ID, body, http.StatusCreated)
 	if d := a.finish(rn.ID); d.Status != runDone || d.StartedBy != "Bob" {

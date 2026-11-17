@@ -210,7 +210,7 @@ yours would have been.
 
 ```
 VERSION  STATE    APPLIED AT (UTC)     MIGRATION
-48       applied  2026-11-17 09:12:40  00048_add_claude_default_model.sql
+53       applied  2026-11-17 09:12:40  00053_add_project_foreign_keys.sql
 1        applied  2026-11-17 09:12:41  local 00001_add_user_badges.sql
 2        pending                       local 00002_add_badge_colours.sql
 ```
@@ -222,7 +222,7 @@ local migration may stand on what a Down of Spoletta's takes away:
 
 ```sh
 webapp migrate local down-to 1
-webapp migrate down-to 47
+webapp migrate down-to 48
 ```
 
 A webapp without local migrations started on a database that ran some logs

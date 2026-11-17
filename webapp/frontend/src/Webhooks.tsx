@@ -17,6 +17,7 @@ import {
 } from './api'
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
+import { pageHash } from './address'
 
 const KIND_LABELS: Record<WebhookKind, string> = { github: 'GitHub', slack: 'Slack', generic: 'Generic' }
 
@@ -669,7 +670,7 @@ function DeliveriesDialog({ webhook, onClose }: { webhook: Webhook; onClose: () 
                     {d.run !== null && (
                       <>
                         {' '}
-                        <a href={`#/flows/${webhook.flow}/runs/${d.run}`} onClick={onClose}>
+                        <a href={pageHash(`#/flows/${webhook.flow}/runs/${d.run}`)} onClick={onClose}>
                           run #{d.run}
                         </a>
                       </>

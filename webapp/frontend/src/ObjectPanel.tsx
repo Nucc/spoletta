@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { listTaskStructs, pickStates, type AttributePatch, type AttributeType, type FlowObject, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation, type TaskStruct } from './api'
+import { inProject, listTaskStructs, pickStates, type AttributePatch, type AttributeType, type FlowObject, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation, type TaskStruct } from './api'
 import { Data } from './Data'
 import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TableIcon, TrashIcon, ZoomInIcon } from './icons'
 import { pickText } from './ObjectNode'
@@ -8,6 +8,7 @@ import QuantityInput from './QuantityInput'
 import { fieldsOf, ownedBy, type Field } from './structure'
 import { openTab } from './tabs'
 import { Hint, useHelp } from './Hints'
+import { currentProject, pageHash } from './address'
 
 const SAVE_DELAY_MS = 500
 
@@ -171,7 +172,11 @@ export default function ObjectPanel({
   }
   const latestCommit = useRef(commitObjectName)
   latestCommit.current = commitObjectName
-  useEffect(() => () => latestCommit.current(), [])
+  // To the panel's project, as the tab may show another as it closes.
+  useEffect(() => {
+    const project = currentProject()
+    return () => inProject(project, () => latestCommit.current())
+  }, [])
 
   // Every field of the object needs a name of its own, its own attributes'
   // as much as those it inherits and the objects it is made of.
@@ -213,11 +218,11 @@ export default function ObjectPanel({
         <p className="panel-note module-note">
           A copy of {module.struct ? 'the struct' : 'an object of the procedure'}{' '}
           <a
-            href={`#/flows/${module.id}`}
+            href={pageHash(`#/flows/${module.id}`)}
             // It opens in a new tab, leaving this flow where it is.
             onClick={(e) => {
               e.preventDefault()
-              openTab(`#/flows/${module.id}`)
+              openTab(pageHash(`#/flows/${module.id}`))
             }}
           >
             {module.name}
@@ -357,7 +362,7 @@ export default function ObjectPanel({
             </>,
           )}
           {shared && (
-            <a className="link-button records-table-link" href={`#/flows/${flow}/records`}>
+            <a className="link-button records-table-link" href={pageHash(`#/flows/${flow}/records`)}>
               <TableIcon /> Show its records
             </a>
           )}
@@ -371,7 +376,7 @@ export default function ObjectPanel({
         </p>
       )}
       {!owner && !human && !structRoot && shared && module && (
-        <a className="link-button records-table-link" href={`#/flows/${module.id}/records`}>
+        <a className="link-button records-table-link" href={pageHash(`#/flows/${module.id}/records`)}>
           <TableIcon /> Show its records
         </a>
       )}
@@ -470,7 +475,7 @@ export default function ObjectPanel({
           {persistent && (
             <a
               className="link-button records-table-link"
-              href={`#/flows/${flow}/data?q=${encodeURIComponent('status:done')}`}
+              href={pageHash(`#/flows/${flow}/data?q=${encodeURIComponent('status:done')}`)}
               title="What this flow's runs that ended done stored, a run per row"
             >
               <TableIcon /> Show what runs stored
@@ -712,7 +717,10 @@ function AttributeRow({
   // Whatever is left saves when the panel closes.
   const latest = useRef(definition)
   latest.current = definition
-  useEffect(() => () => flush(latest.current), [])
+  useEffect(() => {
+    const project = currentProject()
+    return () => inProject(project, () => flush(latest.current))
+  }, [])
 
   const trimmed = name.trim()
   const clash = trimmed !== attribute.name && taken.includes(trimmed)
@@ -722,7 +730,10 @@ function AttributeRow({
   }
   const latestCommit = useRef(commitName)
   latestCommit.current = commitName
-  useEffect(() => () => void latestCommit.current(), [])
+  useEffect(() => {
+    const project = currentProject()
+    return () => void inProject(project, () => latestCommit.current())
+  }, [])
 
   // A text's pattern, saved as the name is; one the server refuses, such as
   // one that isn't a regular expression, goes back to what it was.
@@ -740,7 +751,10 @@ function AttributeRow({
   }
   const latestPattern = useRef(commitPattern)
   latestPattern.current = commitPattern
-  useEffect(() => () => void latestPattern.current(), [])
+  useEffect(() => {
+    const project = currentProject()
+    return () => void inProject(project, () => latestPattern.current())
+  }, [])
 
   // A file holds a path, and a reference keys, so neither has a type.
   const typeable = !attribute.file && !attribute.ref

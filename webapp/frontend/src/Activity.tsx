@@ -4,6 +4,8 @@ import { ActivityIcon } from './icons'
 import { formatTime } from './Runs'
 import { HomeFrame } from './FlowList'
 import ErrorBanner from './ErrorBanner'
+import { HomeCrumb } from './Projects'
+import { currentPage, pageHash, replacePage } from './address'
 
 // What goes on across every flow one sees: the runs going on now and those
 // that failed lately, and over the last 7, 30 or 90 days, the runs a day and
@@ -27,7 +29,7 @@ const SPENT = '#0969da'
 const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 
 const daysInHash = () => {
-  const n = Number(new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('days'))
+  const n = Number(new URLSearchParams(currentPage().split('?')[1] ?? '').get('days'))
   return PERIODS.includes(n) ? n : DEFAULT_DAYS
 }
 
@@ -61,17 +63,14 @@ export default function Activity() {
   // The period goes in the address, in place, keeping the tab's entry.
   const pick = (n: number) => {
     setDays(n)
-    const hash = n === DEFAULT_DAYS ? '#/activity' : `#/activity?days=${n}`
-    if (window.location.hash !== hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + hash)
+    replacePage(n === DEFAULT_DAYS ? '#/activity' : `#/activity?days=${n}`)
   }
 
   return (
     <div className="flows-page home">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            Home
-          </a>
+          <HomeCrumb />
           <span className="crumb-separator" aria-hidden>
             /
           </span>
@@ -177,7 +176,7 @@ function RunLines({ runs, total }: { runs: ActivityRun[]; total: number }) {
       <ul className="activity-runs">
         {runs.map((r) => (
           <li key={r.id}>
-            <a href={`#/flows/${r.flow}/runs/${r.id}`}>
+            <a href={pageHash(`#/flows/${r.flow}/runs/${r.id}`)}>
               <span className={`status-dot ${r.status}`} aria-hidden />
               <span className="activity-run-flow">{r.flowName}</span>
               <span className="activity-run-id">#{r.id}</span>
@@ -462,7 +461,7 @@ function Flows({ data }: { data: ActivityData }) {
                 return (
                   <tr key={f.flow}>
                     <td>
-                      <a href={`#/flows/${f.flow}`}>{f.name}</a>
+                      <a href={pageHash(`#/flows/${f.flow}`)}>{f.name}</a>
                       {f.module && <span className="activity-kind">procedure</span>}
                     </td>
                     <td>
@@ -516,13 +515,13 @@ function Processes({ data }: { data: ActivityData }) {
                 <tr key={p.process}>
                   <td>{p.name}</td>
                   <td>
-                    <a href={`#/flows/${p.flow}`}>{p.flowName}</a>
+                    <a href={pageHash(`#/flows/${p.flow}`)}>{p.flowName}</a>
                   </td>
                   <td className="num activity-bad">
                     {p.failed.toLocaleString()} of {p.steps.toLocaleString()} · {share(p.failed, p.steps)}
                   </td>
                   <td className="activity-error-cell">
-                    <a href={`#/flows/${p.flow}/runs/${p.lastRun}`} title={p.lastError}>
+                    <a href={pageHash(`#/flows/${p.flow}/runs/${p.lastRun}`)} title={p.lastError}>
                       #{p.lastRun}
                     </a>{' '}
                     <span title={p.lastError}>{p.lastError || 'failed'}</span>
@@ -574,7 +573,7 @@ function Reviews({ data }: { data: ActivityData }) {
                   r={r}
                   name={r.name ?? ''}
                   flow={
-                    <a href={`#/flows/${r.flow}`} className="activity-flow-link">
+                    <a href={pageHash(`#/flows/${r.flow}`)} className="activity-flow-link">
                       {r.flowName}
                     </a>
                   }

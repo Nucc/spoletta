@@ -5,6 +5,7 @@ import { formatTime } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch } from './Search'
 import ErrorBanner from './ErrorBanner'
 import { SettingsHead } from './SettingsHead'
+import { pageHash } from './address'
 
 // How often the log is asked for again, as steps run.
 const REFRESH_MS = 10_000
@@ -110,7 +111,7 @@ export function AuditLogSection() {
                         <td>{e.who || <span className="data-started">nobody</span>}</td>
                         <td>
                           {e.run !== null &&
-                            (e.flow !== null ? <a href={`#/flows/${e.flow}/runs/${e.run}`}>{e.run}</a> : e.run)}
+                            (e.flow !== null ? <a href={pageHash(`#/flows/${e.flow}/runs/${e.run}`)}>{e.run}</a> : e.run)}
                         </td>
                         <td>{e.step}</td>
                         <td className="audit-detail">{e.detail}</td>

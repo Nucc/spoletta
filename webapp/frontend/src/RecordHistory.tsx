@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { getRecordChanges, type FieldChange, type RecordChange, type RecordChanges } from './api'
 import { AgentIcon, ConnectorIcon, FlowIcon, HumanIcon, LockIcon, PencilIcon, ScriptIcon } from './icons'
 import { formatTime } from './Runs'
+import { pageHash } from './address'
 
 // A shared record's history in its dialog, newest first: each change the
 // state it moved to and from, what made it (a process of a run, linked to
@@ -36,7 +37,7 @@ function originIcon(c: RecordChange) {
 function Origin({ c, onNavigate }: { c: RecordChange; onNavigate: () => void }) {
   const run = (id: number, flow: number | null) =>
     flow !== null ? (
-      <a href={`#/flows/${flow}/runs/${id}`} title="Open the run on its flow's board" onClick={onNavigate}>
+      <a href={pageHash(`#/flows/${flow}/runs/${id}`)} title="Open the run on its flow's board" onClick={onNavigate}>
         run #{id}
       </a>
     ) : (

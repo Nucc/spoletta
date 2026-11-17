@@ -16,6 +16,7 @@ import {
 import { useConfirm } from './Confirm'
 import TabLink from './TabLink'
 import { SettingsEmpty } from './SettingsHead'
+import { pageHash } from './address'
 
 // What pi and Claude Code take as a server name; they name the tools
 // mcp__<name>__<tool>.
@@ -50,14 +51,18 @@ function nameFromURL(url: string): string {
 export function MCPSettingsPanel({
   servers,
   canConfigure,
+  canConnect = true,
   onChanged,
   onClose,
   onError,
 }: {
   servers: MCPServer[]
   // Whether whoever is signed in adds, changes and removes servers: an
-  // admin, or anyone without sign-in.
+  // owner of the project, or anyone without sign-in.
   canConfigure: boolean
+  // Whether they connect servers for themselves: not when they only see
+  // the project, as they run nothing there.
+  canConnect?: boolean
   // Load the servers again.
   onChanged: () => void
   onClose: () => void
@@ -74,7 +79,7 @@ export function MCPSettingsPanel({
       <Hint id="panel-mcp" className="panel-hint">
         The servers agents reach tools through; an agent picks those it uses in its panel.
       </Hint>
-      <MCPServers servers={servers} canConfigure={canConfigure} onChanged={onChanged} onError={onError} />
+      <MCPServers servers={servers} canConfigure={canConfigure} canConnect={canConnect} onChanged={onChanged} onError={onError} />
     </aside>
   )
 }
@@ -85,6 +90,7 @@ export function MCPSettingsPanel({
 export function MCPServers({
   servers,
   canConfigure,
+  canConnect = true,
   onChanged,
   onError,
   note = true,
@@ -92,6 +98,7 @@ export function MCPServers({
   servers: MCPServer[]
   note?: boolean
   canConfigure: boolean
+  canConnect?: boolean
   onChanged: () => void
   onError: (err: unknown) => void
 }) {
@@ -147,7 +154,7 @@ export function MCPServers({
           <p className="panel-note">No servers yet.</p>
         ) : (
           <SettingsEmpty>
-            No servers yet. Install one from <a href="#/settings/connectors">Connectors</a>
+            No servers yet. Install one from <a href={pageHash('#/settings/connectors')}>Connectors</a>
             {canConfigure ? ', or add any other by its URL below.' : '.'}
           </SettingsEmpty>
         )
@@ -158,6 +165,7 @@ export function MCPServers({
               key={s.id}
               server={s}
               canConfigure={canConfigure}
+              canConnect={canConnect}
               onConnect={() => connectMCPServer(s.id)}
               onDisconnect={() => act(() => disconnectMCPServer(s.id))}
               onSetToken={(token) => act(() => setMCPToken(s.id, token))}
@@ -223,6 +231,7 @@ export function MCPServers({
 function MCPServerItem({
   server: s,
   canConfigure,
+  canConnect,
   onConnect,
   onDisconnect,
   onSetToken,
@@ -232,6 +241,7 @@ function MCPServerItem({
 }: {
   server: MCPServer
   canConfigure: boolean
+  canConnect: boolean
   onConnect: () => void
   onDisconnect: () => void
   onSetToken: (token: string) => void
@@ -297,8 +307,8 @@ function MCPServerItem({
         </small>
       )}
       <div className="mcp-item-actions">
-        {!takesToken && <button onClick={onConnect}>{s.connected ? 'Sign in again' : 'Connect'}</button>}
-        {!takesToken && s.connected && <button onClick={onDisconnect}>Disconnect</button>}
+        {!takesToken && canConnect && <button onClick={onConnect}>{s.connected ? 'Sign in again' : 'Connect'}</button>}
+        {!takesToken && canConnect && s.connected && <button onClick={onDisconnect}>Disconnect</button>}
         {takesToken && canConfigure && s.connected && <button onClick={onClearToken}>Clear token</button>}
         {canConfigure && (
           <button className="danger" onClick={onRemove}>
@@ -340,7 +350,7 @@ export function MCPServerPicker({
   return (
     <fieldset className="panel-field mcp-picker">
       <legend>
-        <TabLink hash="#/settings/mcp" title="Set up and connect MCP servers in Settings, in a new tab">
+        <TabLink hash={pageHash('#/settings/mcp')} title="Set up and connect MCP servers in Settings, in a new tab">
           MCP servers
         </TabLink>
       </legend>

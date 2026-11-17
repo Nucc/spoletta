@@ -17,6 +17,7 @@ import TabLink from './TabLink'
 import { PlusIcon } from './icons'
 import { useConfirm } from './Confirm'
 import { SettingsEmpty, SettingsHead } from './SettingsHead'
+import { pageHash } from './address'
 
 // Credentials, kept by admins: a service's base URL and secret, which
 // scripts and agents call it with through the webapp's proxy without ever
@@ -364,7 +365,7 @@ export function CredentialPicker({
     <fieldset className="panel-field mcp-picker">
       <legend>
         {admin ? (
-          <TabLink hash="#/settings/credentials" title="Add and change credentials in Settings, in a new tab">
+          <TabLink hash={pageHash('#/settings/credentials')} title="Add and change credentials in Settings, in a new tab">
             Credentials
           </TabLink>
         ) : (
@@ -377,7 +378,7 @@ export function CredentialPicker({
             <>
               None this flow may use.{' '}
               {!readOnly && (
-                <TabLink hash="#/settings/credentials" title="Add credentials in Settings, in a new tab">
+                <TabLink hash={pageHash('#/settings/credentials')} title="Add credentials in Settings, in a new tab">
                   Add one in Settings
                 </TabLink>
               )}

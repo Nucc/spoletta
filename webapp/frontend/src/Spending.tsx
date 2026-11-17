@@ -13,6 +13,7 @@ import {
   type Spending,
 } from "./api";
 import { SettingsHead } from "./SettingsHead";
+import { pageHash } from './address'
 
 // What agents spent on models this month, by whom and on which runs, and the
 // limits admins set on it; everyone else sees their own spending and the
@@ -333,7 +334,7 @@ export function SpendingSection({
                   <div className="spending-bar-row">
                     <a
                       className="spending-run"
-                      href={`#/flows/${r.flow}/runs/${r.run}`}
+                      href={pageHash(`#/flows/${r.flow}/runs/${r.run}`)}
                     >
                       <span className="spending-rank">{i + 1}</span>
                       <span className="spending-run-name">{r.name}</span>

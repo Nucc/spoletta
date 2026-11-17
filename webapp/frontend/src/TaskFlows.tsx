@@ -111,8 +111,9 @@ export function FlowStrip({
   // Whose the board's runs are while it plays, by name; empty when it
   // doesn't, or nobody signs in.
   runner: string
-  // Saves the column's flow, by its place; refused, it throws.
-  onPick: (column: number, choice: FlowChoice) => Promise<void>
+  // Saves the column's flow, by its place; refused, it throws. None for
+  // whoever only sees the project, for whom the strip only shows.
+  onPick?: (column: number, choice: FlowChoice) => Promise<void>
 }) {
   // The column whose flow is being picked, by its place.
   const [picking, setPicking] = useState<number | null>(null)
@@ -250,7 +251,7 @@ export function FlowStrip({
           </div>
         )
       })}
-      {picked && picking !== null && (
+      {picked && picking !== null && onPick && (
         <FlowPicker
           key={picking}
           item={picked}

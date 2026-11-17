@@ -19,10 +19,12 @@ const REASONS: Record<Version['reason'], string> = {
 // the newer versions stay, and saving adds one on top. The version
 // published is the one the runs nobody starts from the board run, and any
 // version can be published, which rolls back to it without changing the
-// board. Any two can be compared, or one with the board as it is.
+// board. Any two can be compared, or one with the board as it is; whoever
+// may not change the flow only compares them.
 export function VersionPanel({
   versions,
   disabled,
+  readOnly = false,
   onRestore,
   onPublish,
   onUnpublish,
@@ -33,6 +35,8 @@ export function VersionPanel({
   versions: Versions
   // While the board can't change underneath a run, or a change is going.
   disabled: boolean
+  // For whoever may not change the flow nor run it: nothing but comparing.
+  readOnly?: boolean
   onRestore: (id: number) => void
   onPublish: (id: number) => void
   onUnpublish: () => void
@@ -71,13 +75,17 @@ export function VersionPanel({
               it. {versions.draft ? 'The board has changed since.' : 'The board is the same.'}
             </p>
             <div className="published-actions">
-              <button onClick={onRunPublished} title="Run the version published rather than the board">
-                Run it
-              </button>
+              {!readOnly && (
+                <button onClick={onRunPublished} title="Run the version published rather than the board">
+                  Run it
+                </button>
+              )}
               {versions.draft && <button onClick={() => onCompare(published, null)}>What changed since</button>}
-              <button onClick={onUnpublish} title="Schedules, the API and runs on records run the board as it is again">
-                Stop publishing
-              </button>
+              {!readOnly && (
+                <button onClick={onUnpublish} title="Schedules, the API and runs on records run the board as it is again">
+                  Stop publishing
+                </button>
+              )}
             </div>
           </>
         )}
@@ -89,7 +97,9 @@ export function VersionPanel({
           <p className="panel-note">
             {comparing !== null
               ? `Pick the version to compare version ${comparing} with, or the board.`
-              : disabled
+              : readOnly
+                ? 'Compare any two versions, or one with the board as it is.'
+                : disabled
                 ? 'Wait for the run of the board to finish to switch versions.'
                 : 'Going back to a version brings the board back to it; changes since the last save are lost, and saving afterwards adds a new version on top.'}
           </p>
@@ -122,20 +132,24 @@ export function VersionPanel({
                 <span className="version-actions">
                   {comparing === null ? (
                     <>
-                      <button
-                        disabled={disabled || v.id === current}
-                        onClick={() => onRestore(v.id)}
-                        title={v.id === current ? 'The board is on this version' : `Bring the board back to version ${v.id}`}
-                      >
-                        Go back to it
-                      </button>
-                      <button
-                        disabled={v.id === published}
-                        onClick={() => onPublish(v.id)}
-                        title={`Have schedules, the API and runs on records run version ${v.id}; the board stays as it is`}
-                      >
-                        Publish
-                      </button>
+                      {!readOnly && (
+                        <>
+                          <button
+                            disabled={disabled || v.id === current}
+                            onClick={() => onRestore(v.id)}
+                            title={v.id === current ? 'The board is on this version' : `Bring the board back to version ${v.id}`}
+                          >
+                            Go back to it
+                          </button>
+                          <button
+                            disabled={v.id === published}
+                            onClick={() => onPublish(v.id)}
+                            title={`Have schedules, the API and runs on records run version ${v.id}; the board stays as it is`}
+                          >
+                            Publish
+                          </button>
+                        </>
+                      )}
                       <button onClick={() => setComparing(v.id)} title="Compare with the board or another version">
                         Compare
                       </button>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { listTemplates, type FlowTemplate, type ProcessKind, type TemplateNeed } from './api'
 import { AgentIcon, ConnectorIcon, FlowIcon, HumanIcon, ScriptIcon, SubflowIcon } from './icons'
+import { pageHash } from './address'
 
 // Ready flows to start from, kept in the webapp (templates.go): each says
 // what it does, its steps, and what it needs of the app, a repository, a
@@ -74,7 +75,7 @@ export function TemplateGallery({
 function Need({ need, admin, signIn }: { need: TemplateNeed; admin: boolean; signIn: boolean }) {
   const settings = (path: string, what: string) =>
     admin ? (
-      <a href={`#/settings/${path}`}>in Settings, under {what}</a>
+      <a href={pageHash(`#/settings/${path}`)}>in Settings, under {what}</a>
     ) : (
       `an admin does in Settings, under ${what}`
     )

@@ -71,7 +71,9 @@ export function RecordDialog({
   record: SharedRecord | null
   // The state a new one starts in, such as the one a task board's column holds.
   state?: string
-  onSave: (content: Record<string, unknown>, state: string) => Promise<void>
+  // Saves it; none for whoever may not change the struct's records, who see
+  // its history alone.
+  onSave?: (content: Record<string, unknown>, state: string) => Promise<void>
   onDelete?: () => Promise<void>
   onClose: () => void
 }) {
@@ -85,7 +87,7 @@ export function RecordDialog({
   // Whether it has a history to show, and the form to correct it; the
   // history is asked for once its tab first shows, and kept.
   const history = record !== null && struct !== undefined
-  const editable = record === null || isFields(record.content) || !history
+  const editable = !!onSave && (record === null || isFields(record.content) || !history)
   const [tab, setTab] = useState<Tab>(editable ? initialTab : 'history')
   const [historySeen, setHistorySeen] = useState(tab === 'history')
   const show = (t: Tab) => {
@@ -158,7 +160,7 @@ export function RecordDialog({
         content[name] = f.text
       }
     }
-    run(() => onSave(content, state))
+    if (onSave) run(() => onSave(content, state))
   }
 
   // Deleting it, under its form, or its history when it shows that alone.

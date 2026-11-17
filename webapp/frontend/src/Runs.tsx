@@ -28,6 +28,7 @@ import StepTerminal, { formatLogTime, StepScreen, useStepLogs } from './StepTerm
 import { elapsedText, formatSpan } from './timeline'
 import { atDefault, changedSummary, type SettingGroup } from './stepSettings'
 import { claudeEffort, harnessName, harnessOf, withHarness } from './harness'
+import { pageHash } from './address'
 
 // How often an open conversation of a step still going is refreshed.
 const CONVERSATION_REFRESH_MS = 1500
@@ -161,7 +162,7 @@ export function RunList({
   const search = (e: FormEvent) => {
     e.preventDefault()
     const q = query.trim()
-    window.location.hash = `#/flows/${flow}/data${q ? '?' + new URLSearchParams({ q }).toString().replace(/\+/g, '%20') : ''}`
+    window.location.hash = pageHash(`#/flows/${flow}/data${q ? '?' + new URLSearchParams({ q }).toString().replace(/\+/g, '%20') : ''}`)
   }
   const toggle = <K extends keyof RunFilter>(key: K, value: RunFilter[K][number]) => {
     const values = filter[key] as RunFilter[K][number][]
@@ -318,6 +319,7 @@ export type RunFocus = { kind: 'process' | 'object' | 'step'; id: number; name: 
 // a step, it opens. Its timeline and its log open in windows the board shows.
 export function RunPanel({
   run,
+  changes = true,
   focus,
   onClearFocus,
   onLogs,
@@ -339,6 +341,9 @@ export function RunPanel({
   onClose,
 }: {
   run: FlowRunDetail
+  // Whether whoever looks may act on the run, such as follow up its agents'
+  // steps: not when they may not change the flow, or only see the project.
+  changes?: boolean
   focus: RunFocus | null
   onClearFocus: () => void
   // Open the run's log and its timeline, which the board shows.
@@ -348,14 +353,16 @@ export function RunPanel({
   // list, and what starts or ends that.
   comparing: boolean
   onCompare: () => void
-  onStop: () => void
-  onStopStep: (id: number) => void
+  // Stop the run, or one of its steps; none for whoever may not.
+  onStop?: () => void
+  onStopStep?: (id: number) => void
   // Opens a step of a run in its panel, such as one a move to another server cut short.
   onOpenStep: (run: number, step: number) => void
   // Opens another run: the one a recording flow process ran as, or the one it ran in.
   onOpenRun: (id: number) => void
-  // Opens the dialog re-running this run from the step's process; see RerunDialog.
-  onRerun: (step: number) => void
+  // Opens the dialog re-running this run from the step's process; see
+  // RerunDialog. None for whoever may not start runs of the flow.
+  onRerun?: (step: number) => void
   // For a trial: opens the dialog trying its process again; see TrialDialog.
   onTryAgain?: (process: number) => void
   // Opens the flow's assistant with a question about the run to send,
@@ -492,7 +499,7 @@ export function RunPanel({
             Ask the assistant
           </button>
         )}
-        {run.status === 'running' && (
+        {run.status === 'running' && onStop && (
           <button className="run-stop" onClick={onStop} title="End the run where it is; steps still going are cancelled">
             Stop run
           </button>
@@ -524,11 +531,12 @@ export function RunPanel({
               <Step
                 run={run.id}
                 step={s}
+                changes={changes}
                 focused={focused(s)}
                 objects={run.objects.filter((o) => o.step === s.id)}
-                onStop={stoppable(s) ? () => onStopStep(s.id) : undefined}
+                onStop={onStopStep && stoppable(s) ? () => onStopStep(s.id) : undefined}
                 onOpenRun={onOpenRun}
-                onRerun={rerunnableFrom(run, s) ? () => onRerun(s.id) : undefined}
+                onRerun={onRerun && rerunnableFrom(run, s) ? () => onRerun(s.id) : undefined}
                 onAsk={
                   onAsk && s.status === 'error' ? () => onAsk(`Why did ${s.processName} fail in run #${run.id}?`) : undefined
                 }
@@ -632,6 +640,7 @@ export const stoppable = (s: { kind: ProcessKind | 'copied' | 'input' | 'loop'; 
 function Step({
   run,
   step: s,
+  changes,
   focused,
   objects,
   onStop,
@@ -648,6 +657,8 @@ function Step({
 }: {
   run: number
   step: RunStep
+  // Whether whoever looks may follow up its agent, or stop a follow-up.
+  changes: boolean
   // Its process, or an object it made, was picked on the board.
   focused: boolean
   objects: FlowRunDetail['objects']
@@ -886,9 +897,9 @@ function Step({
             the dialog while it stays modal. */}
         {terminal && createPortal(<StepTerminal run={run} step={s} onClose={() => setTerminal(false)} />, document.body)}
         {s.followUps.map((f) => (
-          <FollowUpItem key={f.id} run={run} step={s.id} followUp={f} onChanged={onChanged} />
+          <FollowUpItem key={f.id} run={run} step={s.id} followUp={f} changes={changes} onChanged={onChanged} />
         ))}
-        {s.canFollowUp && s.status !== 'active' && <FollowUpForm run={run} step={s.id} busy={busy} onSent={onChanged} />}
+        {changes && s.canFollowUp && s.status !== 'active' && <FollowUpForm run={run} step={s.id} busy={busy} onSent={onChanged} />}
       </div>
     </details>
   )
@@ -1022,7 +1033,19 @@ function ObjectInRun({
 }
 
 // A message sent to the agent once its step was over, and what came of it.
-function FollowUpItem({ run, step, followUp: f, onChanged }: { run: number; step: number; followUp: FollowUp; onChanged: () => void }) {
+function FollowUpItem({
+  run,
+  step,
+  followUp: f,
+  changes,
+  onChanged,
+}: {
+  run: number
+  step: number
+  followUp: FollowUp
+  changes: boolean
+  onChanged: () => void
+}) {
   const stop = async () => {
     try {
       await stopFollowUp(run, step, f.id)
@@ -1037,9 +1060,11 @@ function FollowUpItem({ run, step, followUp: f, onChanged }: { run: number; step
       {f.status === 'active' ? (
         <>
           <p className="panel-note">The agent is working on it…</p>
-          <button className="run-stop" onClick={stop}>
-            Stop
-          </button>
+          {changes && (
+            <button className="run-stop" onClick={stop}>
+              Stop
+            </button>
+          )}
         </>
       ) : (
         <>

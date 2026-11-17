@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { SearchFacet } from './api'
 import { bound, bounds, NONE, parse, quote, resolve, select, selection, type Facets, type Mark, type Node, type Sort } from './query'
+import { currentPage, currentProject, projectKey, replacePage } from './address'
 
 // The faceted search over a table page's rows: a query bar that colours what
 // is typed and suggests keys and values, the facets beside the table with
@@ -14,11 +15,12 @@ import { bound, bounds, NONE, parse, quote, resolve, select, selection, type Fac
 export type Display = (facet: SearchFacet, value: string) => string | undefined
 
 // The query and sort a table page keeps in its address and for next time: a
-// flow's data or records, or the audit log, which is no flow's (id 0).
+// flow's data or records, or the audit log, which is no flow's (id 0) but
+// its project's, so kept for each project apart.
 export function useSearch(page: 'data' | 'records' | 'audit', id: number) {
-  const storeKey = `search-${page}-${id}`
+  const storeKey = page === 'audit' ? projectKey(`search-${page}-${id}`, currentProject()) : `search-${page}-${id}`
   const [state, setState] = useState<{ query: string; sort: Sort | null }>(() => {
-    const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+    const params = new URLSearchParams(currentPage().split('?')[1] ?? '')
     if (params.has('q') || params.has('sort')) return { query: params.get('q') ?? '', sort: sortOf(params.get('sort')) }
     try {
       const saved = JSON.parse(localStorage.getItem(storeKey) ?? 'null') as { query?: string; sort?: string } | null
@@ -33,8 +35,7 @@ export function useSearch(page: 'data' | 'records' | 'audit', id: number) {
     if (state.query.trim() !== '') params.set('q', state.query)
     if (state.sort) params.set('sort', (state.sort.desc ? '-' : '') + state.sort.key)
     const base = page === 'audit' ? '#/settings/audit' : `#/flows/${id}/${page}`
-    const hash = `${base}${params.size > 0 ? '?' + params.toString().replace(/\+/g, '%20') : ''}`
-    if (window.location.hash !== hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + hash)
+    replacePage(`${base}${params.size > 0 ? '?' + params.toString().replace(/\+/g, '%20') : ''}`)
     try {
       localStorage.setItem(storeKey, JSON.stringify({ query: state.query, sort: params.get('sort') ?? undefined }))
     } catch {

@@ -6,6 +6,8 @@ import { exclude, indexFacets, parse as parseQuery, select } from './query'
 import { formatTime, RUN_LABELS } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch, type Display } from './Search'
 import ErrorBanner from './ErrorBanner'
+import { HomeCrumb } from './Projects'
+import { pageHash } from './address'
 
 // How often the table catches up with runs still going.
 const REFRESH_MS = 5000
@@ -112,13 +114,11 @@ export default function FlowDataPage({ id }: { id: number }) {
     <div className="flows-page data-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            Home
-          </a>
+          <HomeCrumb />
           <span className="crumb-separator" aria-hidden>
             /
           </span>
-          <a href={`#/flows/${id}`}>{flow?.name ?? '…'}</a>
+          <a href={pageHash(`#/flows/${id}`)}>{flow?.name ?? '…'}</a>
           <span className="crumb-separator" aria-hidden>
             /
           </span>
@@ -250,7 +250,7 @@ function Row({
   return (
     <tr>
       <td className="data-run">
-        <a href={`#/flows/${flow}/runs/${row.id}`} title="Open the run on the board">
+        <a href={pageHash(`#/flows/${flow}/runs/${row.id}`)} title="Open the run on the board">
           #{row.id}
         </a>
       </td>
@@ -267,7 +267,7 @@ function Row({
           {row.parent !== null && (
             <span className="data-parent">
               {' '}
-              in <a href={`#/flows/${flow}/runs/${row.parent}`}>#{row.parent}</a>
+              in <a href={pageHash(`#/flows/${flow}/runs/${row.parent}`)}>#{row.parent}</a>
             </span>
           )}
         </td>

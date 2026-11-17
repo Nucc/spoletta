@@ -5,6 +5,9 @@ import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
 import { HomeFrame } from './FlowList'
 import ErrorBanner from './ErrorBanner'
+import { HomeCrumb } from './Projects'
+import { pageHash } from './address'
+import { onlySees, useMe } from './Account'
 
 // The trash (#/trash): the flows, procedures and structs deleted that one
 // may change, the latest first, each saying when it went and by whom, and
@@ -12,7 +15,9 @@ import ErrorBanner from './ErrorBanner'
 // flows running a procedure there fail to. Restoring one brings it back as
 // it was, schedules and runs included, under another name if a flow out of
 // the trash took its own; deleting one for good, with its runs, asks first.
+// Someone who only sees the project restores and deletes nothing.
 export default function Trash() {
+  const changes = !onlySees(useMe())
   const [items, setItems] = useState<TrashedFlow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [restored, setRestored] = useState<{ id: number; name: string } | null>(null)
@@ -75,9 +80,7 @@ export default function Trash() {
     <div className="flows-page home">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            Home
-          </a>
+          <HomeCrumb />
           <span className="crumb-separator" aria-hidden>
             /
           </span>
@@ -87,7 +90,7 @@ export default function Trash() {
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {restored && (
         <div className="notice-banner" role="status">
-          Restored <a href={`#/flows/${restored.id}`}>{restored.name}</a>.
+          Restored <a href={pageHash(`#/flows/${restored.id}`)}>{restored.name}</a>.
         </div>
       )}
       <HomeFrame at="trash" changed={restores}>
@@ -108,7 +111,7 @@ export default function Trash() {
             ) : (
               <ul className="flow-list trash-list">
                 {items.map((t) => (
-                  <TrashRow key={t.id} item={t} onRestore={(name) => onRestore(t, name)} onDelete={() => onDelete(t)} />
+                  <TrashRow key={t.id} item={t} changes={changes} onRestore={(name) => onRestore(t, name)} onDelete={() => onDelete(t)} />
                 ))}
               </ul>
             )}
@@ -120,7 +123,18 @@ export default function Trash() {
   )
 }
 
-function TrashRow({ item: t, onRestore, onDelete }: { item: TrashedFlow; onRestore: (name?: string) => Promise<void>; onDelete: () => void }) {
+function TrashRow({
+  item: t,
+  changes,
+  onRestore,
+  onDelete,
+}: {
+  item: TrashedFlow
+  // Whether whoever looks restores and deletes it: not when they only see the project.
+  changes: boolean
+  onRestore: (name?: string) => Promise<void>
+  onDelete: () => void
+}) {
   // A name of its own to come back under, asked for once its own is taken.
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(t.name)
@@ -177,7 +191,7 @@ function TrashRow({ item: t, onRestore, onDelete }: { item: TrashedFlow; onResto
           </form>
         )}
       </div>
-      {!renaming && (
+      {!renaming && changes && (
         <span className="trash-actions">
           <button type="button" disabled={busy} onClick={() => (t.nameTaken ? setRenaming(true) : void restore())}>
             {t.nameTaken ? 'Restore as…' : 'Restore'}

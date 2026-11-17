@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { listDirectory, type ConnectorOperation, type ConnectorSettings, type DirectoryEntry, type MCPServer } from './api'
 import TabLink from './TabLink'
+import { pageHash } from './address'
 
 // What a connector process carries out: a connector, among those installed,
 // one of its operations, and the operation's arguments, in which
@@ -80,7 +81,7 @@ export function ConnectorFields({
     return (
       <p className="panel-note">
         No connector is installed. An admin installs one, such as GitHub, in{' '}
-        <TabLink hash="#/settings/connectors">Settings, under Connectors</TabLink>.
+        <TabLink hash={pageHash('#/settings/connectors')}>Settings, under Connectors</TabLink>.
       </p>
     )
   }

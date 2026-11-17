@@ -1,4 +1,5 @@
 import type { Flow, FlowOwner, Me, Team } from './api'
+import { configures, onlySees } from './Account'
 
 // What is owned as a flow is: a flow, or a skill or command.
 type Owned = Pick<Flow, 'name' | 'owner' | 'access'>
@@ -21,8 +22,8 @@ type Choice = { key: string; label: string; owner: { kind: 'global' } | { kind: 
 const keyOf = (o: FlowOwner | Choice['owner']) => (o.kind === 'global' ? 'global' : `${o.kind}:${o.id}`)
 
 // Who a flow can go to from whoever is signed in: themselves, their teams,
-// or everyone; an admin gives it to any team too. The owner it has now is
-// always among them.
+// or everyone; an owner of the project gives it to any team too. The owner
+// it has now is always among them.
 function choices(flow: Owned, me: Me, teams: Team[]): Choice[] {
   const user = me.user!
   const out: Choice[] = []
@@ -33,7 +34,7 @@ function choices(flow: Owned, me: Me, teams: Team[]): Choice[] {
   add({ key: `user:${user.id}`, label: 'Only me', owner: { kind: 'user', id: user.id } })
   for (const t of teams) {
     if (
-      user.admin ||
+      configures(me) ||
       t.members.some((m) => m.id === user.id) ||
       (flow.owner.kind === 'team' && flow.owner.id === t.id)
     ) {
@@ -45,11 +46,13 @@ function choices(flow: Owned, me: Me, teams: Team[]): Choice[] {
 }
 
 // Whether whoever is signed in can give the flow away at all: its owner, a
-// member of the team owning it, or an admin; nobody but an admin takes a
-// global one back.
+// member of the team owning it, or an owner of the project; nobody but an
+// owner of the project takes a global one back, and someone who only sees
+// the project gives nothing away.
 function canGive(flow: Owned, me: Me): boolean {
   const user = me.user!
-  if (user.admin) return true
+  if (onlySees(me)) return false
+  if (configures(me)) return true
   switch (flow.owner.kind) {
     case 'global':
       return false

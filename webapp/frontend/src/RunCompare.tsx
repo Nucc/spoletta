@@ -4,6 +4,8 @@ import { diffLines, fieldsOf, fieldText, outcomeOf, pairObjects, pairProcesses, 
 import { decisionText, formatTime, ORIGIN_LABELS, RUN_LABELS, STEP_LABELS } from './Runs'
 import { formatSpan } from './timeline'
 import ErrorBanner from './ErrorBanner'
+import { HomeCrumb } from './Projects'
+import { pageHash } from './address'
 
 // How often the page catches up with a run still going.
 const REFRESH_MS = 3000
@@ -51,19 +53,17 @@ export default function RunCompare({ flow, a: aId, b: bId }: { flow: number; a: 
     <div className="flows-page compare-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            Home
-          </a>
+          <HomeCrumb />
           <span className="crumb-separator" aria-hidden>
             /
           </span>
-          <a href={`#/flows/${a?.flow ?? flow}`}>{flowInfo?.name ?? '…'}</a>
+          <a href={pageHash(`#/flows/${a?.flow ?? flow}`)}>{flowInfo?.name ?? '…'}</a>
           <span className="crumb-separator" aria-hidden>
             /
           </span>
           Run #{aId} and #{bId}
         </h1>
-        <a className="compare-swap" href={`#/flows/${flow}/compare/${bId}/${aId}`} title="Put each run on the other side">
+        <a className="compare-swap" href={pageHash(`#/flows/${flow}/compare/${bId}/${aId}`)} title="Put each run on the other side">
           Swap sides
         </a>
         <button onClick={load} title="Fetch both runs again">
@@ -99,7 +99,7 @@ function Comparison({ a, b }: { a: FlowRunDetail; b: FlowRunDetail }) {
           <span />
           {[a, b].map((r) => (
             <h2 key={r.id}>
-              <a href={`#/flows/${r.flow}/runs/${r.id}`} title="Open the run on the board">
+              <a href={pageHash(`#/flows/${r.flow}/runs/${r.id}`)} title="Open the run on the board">
                 Run #{r.id}
               </a>{' '}
               <span className={`run-badge ${r.waiting ? 'waiting' : r.status}`}>{r.waiting ? 'Waiting' : RUN_LABELS[r.status]}</span>
@@ -278,7 +278,7 @@ function StepCompare({
     }
   }
   // A run of another flow, a subflow's, opens on that flow's board.
-  const child = (s?: RunStep) => (s?.childRun ? <a href={`#/flows/${flow}/runs/${s.childRun}`}>run #{s.childRun}</a> : '')
+  const child = (s?: RunStep) => (s?.childRun ? <a href={pageHash(`#/flows/${flow}/runs/${s.childRun}`)}>run #{s.childRun}</a> : '')
   return (
     <div className="compare-turn">
       {turns > 1 && (
@@ -304,7 +304,7 @@ function StepCompare({
             {a?.childRun && b?.childRun && (
               <>
                 {' '}
-                <a href={`#/flows/${flow}/compare/${a.childRun}/${b.childRun}`} title="Compare the runs of its board in turn">
+                <a href={pageHash(`#/flows/${flow}/compare/${a.childRun}/${b.childRun}`)} title="Compare the runs of its board in turn">
                   compare them
                 </a>
               </>

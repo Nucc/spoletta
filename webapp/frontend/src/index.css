@@ -4467,6 +4467,43 @@ body {
   font-weight: 400;
 }
 
+/* The project a page is in, first in its breadcrumb, opening a menu of the
+   person's projects to switch to; see ProjectSwitcher in Projects.tsx. It
+   reads as the crumbs after it do. */
+.toolbar h1 .project-switcher .toolbar-menu-button {
+  gap: 4px;
+  max-width: 240px;
+  padding: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+.toolbar h1 .project-switcher .toolbar-menu-button:hover,
+.toolbar h1 .project-switcher .toolbar-menu-button.open {
+  color: #0969da;
+  background: none;
+}
+
+.toolbar h1 .project-switcher .toolbar-menu-button svg {
+  flex-shrink: 0;
+  color: #8c959f;
+}
+
+.project-switcher-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar h1 .project-switcher .toolbar-menu-list {
+  font-weight: 400;
+}
+
 .toolbar h1 .flow-name {
   display: inline-flex;
   align-items: center;
@@ -12846,4 +12883,146 @@ select.flow-owner:not([multiple]):not([size]):disabled {
 .pick-states small {
   flex-basis: 100%;
   opacity: 0.7;
+}
+
+/* The projects, for the instance's admin; see ProjectsPage in Projects.tsx.
+   Laid out as the trash's, an archived one dimmed and marked. */
+.project-list li.archived .flow-card-name input,
+.project-list li.archived .flow-card-run {
+  color: #656d76;
+}
+
+.project-list .flow-card-name {
+  gap: 8px;
+}
+
+.project-tag {
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #656d76;
+  background: #eaeef2;
+  border-radius: 999px;
+}
+
+.trash-actions .project-open,
+.trash-actions .tab-link {
+  padding: 4px 12px;
+  font-size: 13px;
+  color: #1f2328;
+  text-decoration: none;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+}
+
+.trash-actions .project-open:hover,
+.trash-actions .tab-link:hover {
+  background: #eaeef2;
+}
+
+/* Someone who may enter no project, or not the one asked for. */
+.no-project h3 {
+  margin: 24px 0 12px;
+  font-size: 15px;
+}
+
+.no-project .flow-list {
+  margin-bottom: 16px;
+}
+
+/* Who enters a project, in its settings; see Access.tsx. */
+.project-access .access-name {
+  max-width: 360px;
+  margin-bottom: 8px;
+}
+
+.project-access .access-name input {
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+}
+
+.access-add select {
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+}
+
+.access-add select:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.access-list li {
+  align-items: center;
+}
+
+.access-list .access-level {
+  margin-top: 0;
+}
+
+.access-list .icon-button,
+.access-spacer {
+  width: 26px;
+  font-size: 16px;
+}
+
+.access-list .panel-button {
+  margin-top: 0;
+}
+
+.access-list.removed li {
+  background: #f6f8fa;
+}
+
+.access-apart {
+  margin: 20px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #656d76;
+}
+
+.access-others {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.access-other {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  font-size: 14px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.access-other:has(input:checked) {
+  border-color: #54aeff;
+  background: #f6fbff;
+}
+
+.access-other input {
+  margin-top: 3px;
+}
+
+.access-other span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.access-other .panel-note {
+  font-size: 13px;
+  font-weight: 400;
 }

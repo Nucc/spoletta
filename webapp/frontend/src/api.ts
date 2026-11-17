@@ -256,7 +256,63 @@ export type Link = {
 }
 
 // Requests changing what isn't a board, which leave boards' histories be.
-const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/webhooks', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials', '/api/taskboards']
+const NOT_BOARDS = ['/api/history', '/api/me', '/api/runs', '/api/schedules', '/api/webhooks', '/api/api-keys', '/api/mcp-servers', '/api/users', '/api/teams', '/api/model-keys', '/api/model-providers', '/api/model-default', '/api/credentials', '/api/taskboards', '/api/projects']
+
+// Every request to /api/ names the project of the page making it in this
+// header, so each tab works in its own (see docs/PROJECTS.md); signing in
+// and out are no project's. The page's project is found as main.tsx says
+// (address.ts reads it from the open tab's address); a request naming one
+// already, as one sent while its page goes, keeps it.
+const PROJECT_HEADER = 'X-Spoletta-Project'
+
+let projectOfPage: () => number | null = () => null
+
+// Says how the project of the page making a request is found.
+export function nameProjectsBy(find: () => number | null) {
+  projectOfPage = find
+}
+
+// The project the requests fn sends name, while it runs, in place of the
+// page's; none outside inProject.
+let sendingFor: { project: number | null } | null = null
+
+// Calls fn, every request it sends naming the project given rather than
+// the page's as the address now says: what a page saves as it goes, such
+// as what was typed and not saved yet, names the page's own project, taken
+// as it opened, as the tab may show another by then. A request takes its
+// project as it is sent, which the routes here do at once, so those fn
+// sends before it first waits on anything.
+export function inProject<T>(project: number | null, fn: () => T): T {
+  const before = sendingFor
+  sendingFor = { project }
+  try {
+    return fn()
+  } finally {
+    sendingFor = before
+  }
+}
+
+// The request's headers with its project named, for a request to /api/.
+function withProject(url: string, headers: HeadersInit | undefined, project: number | null = sendingFor ? sendingFor.project : projectOfPage()): Headers {
+  const h = new Headers(headers)
+  if (project !== null && url.startsWith('/api/') && !url.startsWith('/api/auth/') && !h.has(PROJECT_HEADER)) h.set(PROJECT_HEADER, String(project))
+  return h
+}
+
+// The paths of requests about the person or the projects themselves rather
+// than what is in a project, which go on whatever their project; the
+// server's outsideProjects.
+const outsideProjects = (url: string) => /^\/api\/(me|projects)(?=$|[/?])/.test(url)
+
+const REFUSED_HERE = 'project-refused'
+
+// Calls back when a request about what is in the page's project was
+// refused as forbidden or not found: the person may have lost the project,
+// which App.tsx asks /api/me again to tell.
+export function onRefusedHere(callback: () => void): () => void {
+  window.addEventListener(REFUSED_HERE, callback)
+  return () => window.removeEventListener(REFUSED_HERE, callback)
+}
 
 // What is told of each change the server took that may change a board.
 const changeListeners = new Set<(url: string) => void>()
@@ -419,7 +475,7 @@ async function answer(url: string, init?: RequestInit): Promise<Response> {
   const method = init?.method ?? 'GET'
   let res: Response
   try {
-    res = await fetch(url, init)
+    res = await fetch(url, { ...init, headers: withProject(url, init?.headers) })
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') throw err
     setConnection({ offline: true })
@@ -433,6 +489,9 @@ async function answer(url: string, init?: RequestInit): Promise<Response> {
     }
   }
   setConnection({ offline: false })
+  if ((res.status === 403 || res.status === 404) && url.startsWith('/api/') && !outsideProjects(url)) {
+    window.dispatchEvent(new Event(REFUSED_HERE))
+  }
   return res
 }
 
@@ -2256,6 +2315,11 @@ export async function answerLoop(run: number, id: number, goOn: boolean): Promis
 export type InboxItem = {
   step: number
   run: number
+  // The project its flow is in, and its name, where the server says: the
+  // inbox is the person's, across their projects, and an item opens in its
+  // own. Absent while the server lists the request's project alone.
+  project?: number
+  projectName?: string
   // The run's flow, and the run it is within, for a flow process's or a
   // subflow's run.
   flow: number
@@ -2297,7 +2361,8 @@ export async function countInbox(): Promise<number | null> {
   }
 }
 
-// Where the board opens on the step's run with its review showing.
+// Where the board opens on the step's run with its review showing, as
+// addressed within its project (address.ts puts it in one).
 export const reviewHash = (item: Pick<InboxItem, 'flow' | 'run' | 'step'>) =>
   `#/flows/${item.flow}/runs/${item.run}/steps/${item.step}`
 
@@ -2461,9 +2526,12 @@ export async function sayPresent(flow: number, client: string, since: number | n
 }
 
 // The tab leaves the board; sent as it closes too, so the others see it go
-// at once rather than once it is no longer heard from.
-export function leaveBoard(flow: number, client: string) {
-  fetch(`/api/flows/${flow}/presence?client=${encodeURIComponent(client)}`, { method: 'DELETE', keepalive: true }).catch(() => {})
+// at once rather than once it is no longer heard from. It goes as the
+// board's page does, by when the tab may show another project, so it names
+// the board's, taken as the board opened.
+export function leaveBoard(flow: number, client: string, project: number | null) {
+  const url = `/api/flows/${flow}/presence?client=${encodeURIComponent(client)}`
+  fetch(url, { method: 'DELETE', keepalive: true, headers: withProject(url, undefined, project) }).catch(() => {})
 }
 
 // The whole flow, every board of it, as the board's endpoints give it or a
@@ -2580,11 +2648,103 @@ export type User = {
   signedInAt: string | null
 }
 
-// Whether people sign in, and who is.
-export type Me = { signIn: boolean; user: User | null }
+// Whether people sign in, and who is; whether they are the instance's admin
+// (super), who makes projects, enters any as its owner and manages people,
+// as everyone is without sign-in; and the projects they may enter, by name.
+// Their user's admin says whether they own the project the request named,
+// which is the open tab's only by chance, so pages read the level of their
+// own project from projects instead (levelIn in Account.tsx).
+export type Me = { signIn: boolean; user: User | null; super: boolean; projects: Project[] }
 
 export function getMe(): Promise<Me> {
   return request('/api/me')
+}
+
+// How far someone may go in a project: everything, its settings and who
+// has access included; change and run its flows, task boards, procedures
+// and structs; or see them, changing and starting nothing.
+export type ProjectLevel = 'owner' | 'editor' | 'viewer'
+
+// What a project lets anyone signed in to the instance do in it.
+export type OthersAccess = 'none' | 'view' | 'edit'
+
+// A project, a space of its own with its own flows, settings and people, as
+// whoever asks may enter it: their level there; whether it is archived,
+// which only a super admin then enters; what anyone signed in may do there;
+// and whether it gets what the instance is configured with outside the
+// database, as Legacy, which held everything from before projects, does.
+export type Project = {
+  id: number
+  name: string
+  level: ProjectLevel
+  archived: boolean
+  othersAccess: OthersAccess
+  inheritsInstance: boolean
+}
+
+// The projects whoever asks may enter, by name; a super admin's are all of
+// them, archived too.
+export function listProjects(): Promise<Project[]> {
+  return request('/api/projects')
+}
+
+// Makes an empty project; a super admin's.
+export function createProject(name: string): Promise<Project> {
+  return request('/api/projects', { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+// Renames the project, or says what anyone signed in may do in it; its
+// owners'. A super admin brings an archived one back with archived false.
+export function updateProject(id: number, patch: { name?: string; othersAccess?: OthersAccess; archived?: false }): Promise<Project> {
+  return request(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+// Archives the project, which only a super admin then enters; once
+// archived, deletes it for good, with everything in it, when asked so. A
+// super admin's.
+export function deleteProject(id: number, forever = false): Promise<void> {
+  return request(`/api/projects/${id}${forever ? '?forever=true' : ''}`, { method: 'DELETE' })
+}
+
+// How someone came to be a project's member: given it by hand, through a
+// group of theirs, as anyone signed in may enter it, or as a super admin.
+export type MemberSource = 'manual' | 'group' | 'open' | 'super'
+
+// Someone who is or was a member of a project, with their level as a member
+// and how they came to be one; removed ones say when they were.
+export type ProjectMember = {
+  user: number
+  email: string
+  name: string
+  level: ProjectLevel
+  source: MemberSource
+  removedAt: string | null
+}
+
+// Everyone who is or was a member of the project, those removed last; its
+// owners'.
+export function listProjectMembers(project: number): Promise<ProjectMember[]> {
+  return request(`/api/projects/${project}/members`)
+}
+
+// Gives the project by hand to these people, at these levels, in place of
+// those it was given to by hand; those left out are removed, and someone
+// named who came in another way is a member by hand from then. Its owners'.
+export function setProjectMembers(project: number, members: { user: number; level: ProjectLevel }[]): Promise<ProjectMember[]> {
+  return request(`/api/projects/${project}/members`, { method: 'PUT', body: JSON.stringify(members) })
+}
+
+// A group of the identity provider's, by its name in people's sign-in, that
+// the project is given to, at a level.
+export type ProjectGroup = { group: string; level: ProjectLevel }
+
+export function listProjectGroups(project: number): Promise<ProjectGroup[]> {
+  return request(`/api/projects/${project}/groups`)
+}
+
+// Gives the project to these groups, in place of those it was given to.
+export function setProjectGroups(project: number, groups: ProjectGroup[]): Promise<ProjectGroup[]> {
+  return request(`/api/projects/${project}/groups`, { method: 'PUT', body: JSON.stringify(groups) })
 }
 
 // What the person signed in is told of, and how: by email and on Slack,

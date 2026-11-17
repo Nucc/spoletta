@@ -51,6 +51,9 @@ import { HomeFrame } from './FlowList'
 import ErrorBanner from './ErrorBanner'
 import { FlowStrip, type FlowChoice } from './TaskFlows'
 import { byState, conflicts, strip } from './boardflows'
+import { HomeCrumb } from './Projects'
+import { onlySees, useMe } from './Account'
+import { currentProject, pageHash, projectKey } from './address'
 
 // How often the board's records are asked for again, as flows and people
 // move them on; more often while it plays or runs go on its records, so a
@@ -59,11 +62,11 @@ const REFRESH_MS = 10_000
 const BUSY_REFRESH_MS = 2_000
 
 // Where whether task boards hide the side menu is remembered, for every
-// board in this browser.
+// board of a project in this browser (projectKey).
 const RAIL_KEY = 'spoletta.taskboard.rail'
 
 // Where whether task boards show their Flows strip is remembered, for every
-// board in this browser.
+// board of a project in this browser.
 const FLOWS_KEY = 'spoletta.taskboard.flows'
 
 // What went wrong, in the server's words.
@@ -121,8 +124,12 @@ const linkOf = (v: string | null): string | null => (v !== null && /^https?:\/\/
 // the board plays or runs go, or that the board skips it as stuck and why,
 // to try again, or when its column tries it again on its own. Over the
 // columns, how many records of the whole board run, wait, are to be tried
-// again or are stuck.
+// again or are stuck. Someone who only sees the project sees all of it,
+// and changes, plays and starts nothing.
 export default function TaskBoardPage({ id }: { id: number }) {
+  const changes = !onlySees(useMe())
+  const railKey = projectKey(RAIL_KEY, currentProject())
+  const flowsKey = projectKey(FLOWS_KEY, currentProject())
   const [board, setBoard] = useState<TaskBoard | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -142,7 +149,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
   // Whether the side menu is hidden, giving the columns the window's width.
   const [railHidden, setRailHidden] = useState(() => {
     try {
-      return localStorage.getItem(RAIL_KEY) === 'hidden'
+      return localStorage.getItem(railKey) === 'hidden'
     } catch {
       return false
     }
@@ -151,8 +158,8 @@ export default function TaskBoardPage({ id }: { id: number }) {
     const hidden = !railHidden
     setRailHidden(hidden)
     try {
-      if (hidden) localStorage.setItem(RAIL_KEY, 'hidden')
-      else localStorage.removeItem(RAIL_KEY)
+      if (hidden) localStorage.setItem(railKey, 'hidden')
+      else localStorage.removeItem(railKey)
     } catch {
       // Only remembered while it can be.
     }
@@ -160,7 +167,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
   // Whether the Flows strip shows over the columns.
   const [flowsShown, setFlowsShown] = useState(() => {
     try {
-      return localStorage.getItem(FLOWS_KEY) === 'shown'
+      return localStorage.getItem(flowsKey) === 'shown'
     } catch {
       return false
     }
@@ -169,8 +176,8 @@ export default function TaskBoardPage({ id }: { id: number }) {
     const shown = !flowsShown
     setFlowsShown(shown)
     try {
-      if (shown) localStorage.setItem(FLOWS_KEY, 'shown')
-      else localStorage.removeItem(FLOWS_KEY)
+      if (shown) localStorage.setItem(flowsKey, 'shown')
+      else localStorage.removeItem(flowsKey)
     } catch {
       // Only remembered while it can be.
     }
@@ -279,33 +286,56 @@ export default function TaskBoardPage({ id }: { id: number }) {
       }),
     )
 
+  // What the palette offers to change the board, and play or pause it,
+  // for whoever may.
+  const changeItems = (board: TaskBoard) => [
+    {
+      id: 'taskboard:add-column',
+      title: 'Add a column',
+      group: 'Task board',
+      hint: `To ${board.name}`,
+      words: 'task board new column',
+      run: () => setEditing('new'),
+    },
+    {
+      id: 'taskboard:states',
+      title: 'Add columns from states',
+      group: 'Task board',
+      hint: `A column for each state of a struct, to ${board.name}`,
+      words: 'task board columns states lifecycle',
+      run: () => setLaying(true),
+    },
+    {
+      id: 'taskboard:settings',
+      title: 'Task board settings',
+      group: 'Task board',
+      hint: `Rename ${board.name}, and pick what its cards show`,
+      words: 'task board settings rename name cards fields id url link',
+      run: () => setSetting(true),
+    },
+    board.playing
+      ? {
+          id: 'taskboard:pause',
+          title: 'Pause the task board',
+          group: 'Task board',
+          hint: 'Stop starting runs; those going go on',
+          words: 'task board pause stop',
+          run: pause,
+        }
+      : {
+          id: 'taskboard:play',
+          title: 'Play the task board',
+          group: 'Task board',
+          hint: 'Start each column’s flow on the records it holds',
+          words: 'task board play start run flows',
+          run: play,
+        },
+  ]
+
   usePaletteSource(() => ({
     items: board
       ? [
-          {
-            id: 'taskboard:add-column',
-            title: 'Add a column',
-            group: 'Task board',
-            hint: `To ${board.name}`,
-            words: 'task board new column',
-            run: () => setEditing('new'),
-          },
-          {
-            id: 'taskboard:states',
-            title: 'Add columns from states',
-            group: 'Task board',
-            hint: `A column for each state of a struct, to ${board.name}`,
-            words: 'task board columns states lifecycle',
-            run: () => setLaying(true),
-          },
-          {
-            id: 'taskboard:settings',
-            title: 'Task board settings',
-            group: 'Task board',
-            hint: `Rename ${board.name}, and pick what its cards show`,
-            words: 'task board settings rename name cards fields id url link',
-            run: () => setSetting(true),
-          },
+          ...(changes ? changeItems(board) : []),
           {
             id: 'taskboard:flows',
             title: flowsShown ? 'Hide the flows moving records on' : 'Show the flows moving records on',
@@ -324,23 +354,6 @@ export default function TaskBoardPage({ id }: { id: number }) {
             words: 'task board side menu sidebar rail hide show width',
             run: toggleRail,
           },
-          board.playing
-            ? {
-                id: 'taskboard:pause',
-                title: 'Pause the task board',
-                group: 'Task board',
-                hint: 'Stop starting runs; those going go on',
-                words: 'task board pause stop',
-                run: pause,
-              }
-            : {
-                id: 'taskboard:play',
-                title: 'Play the task board',
-                group: 'Task board',
-                hint: 'Start each column’s flow on the records it holds',
-                words: 'task board play start run flows',
-                run: play,
-              },
         ]
       : [],
   }))
@@ -364,9 +377,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
     <div className="flows-page data-page task-board-page home">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            Home
-          </a>
+          <HomeCrumb />
           <span className="crumb-separator" aria-hidden>
             /
           </span>
@@ -382,19 +393,23 @@ export default function TaskBoardPage({ id }: { id: number }) {
         >
           <SidebarIcon />
         </button>
-        <button onClick={() => setSetting(true)} disabled={!board} title="Rename the task board, and pick what its cards show">
-          <GearIcon /> Settings
-        </button>
-        <button onClick={() => setEditing('new')} disabled={!board} title="Add a column of a shared struct's records">
-          <PlusIcon /> Add column
-        </button>
-        <button
-          onClick={() => setLaying(true)}
-          disabled={!board}
-          title="Add a column for each state of a shared struct, its records going to the flow taking that state"
-        >
-          Columns from states
-        </button>
+        {changes && (
+          <>
+            <button onClick={() => setSetting(true)} disabled={!board} title="Rename the task board, and pick what its cards show">
+              <GearIcon /> Settings
+            </button>
+            <button onClick={() => setEditing('new')} disabled={!board} title="Add a column of a shared struct's records">
+              <PlusIcon /> Add column
+            </button>
+            <button
+              onClick={() => setLaying(true)}
+              disabled={!board}
+              title="Add a column for each state of a shared struct, its records going to the flow taking that state"
+            >
+              Columns from states
+            </button>
+          </>
+        )}
         <button
           className="task-board-flows"
           onClick={toggleFlows}
@@ -411,7 +426,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
         <button onClick={load} title="Fetch the latest records">
           Refresh
         </button>
-        {board && (
+        {board && changes && (
           <PlayControls
             board={board}
             onPlay={play}
@@ -436,9 +451,11 @@ export default function TaskBoardPage({ id }: { id: number }) {
               No columns yet. Each column holds the records of a shared struct that a query matches, such as the Jira tickets in state new,
               as the struct's Records page searches them; as flows and people move a record on, it moves from column to column.
             </p>
-            <button onClick={() => setEditing('new')}>
-              <PlusIcon /> Add a column
-            </button>
+            {changes && (
+              <button onClick={() => setEditing('new')}>
+                <PlusIcon /> Add a column
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -452,7 +469,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
                   centers={laidOut.centers}
                   width={laidOut.width}
                   runner={board.playing && board.playedBy ? board.playedBy : ''}
-                  onPick={pickFlow}
+                  onPick={changes ? pickFlow : undefined}
                 />
               )}
               <div className="task-columns" ref={row}>
@@ -462,10 +479,14 @@ export default function TaskBoardPage({ id }: { id: number }) {
                     column={c}
                     card={c.cards ? cardOf(board, c, c.cards) : null}
                     playing={board.playing}
-                    onEdit={() => setEditing(i)}
+                    onEdit={changes ? () => setEditing(i) : undefined}
                     onOpen={(record, tab) => setOpened({ column: i, record, tab })}
-                    onRun={(record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record, retries: c.retry !== null })}
-                    onRetry={retry}
+                    onRun={
+                      changes
+                        ? (record) => c.struct !== null && setRunning({ struct: c.struct, name: c.structName, record, retries: c.retry !== null })
+                        : undefined
+                    }
+                    onRetry={changes ? retry : undefined}
                   />
                 ))}
               </div>
@@ -523,14 +544,18 @@ export default function TaskBoardPage({ id }: { id: number }) {
           states={column.cards.states}
           record={opened.record}
           state={stateOf(column)}
-          onSave={async (content, state) => {
-            if (opened.record) await updateSharedRecord(struct, opened.record.id, { content, state })
-            else await addSharedRecord(struct, { content, state })
-            setOpened(null)
-            load()
-          }}
+          onSave={
+            changes
+              ? async (content, state) => {
+                  if (opened.record) await updateSharedRecord(struct, opened.record.id, { content, state })
+                  else await addSharedRecord(struct, { content, state })
+                  setOpened(null)
+                  load()
+                }
+              : undefined
+          }
           onDelete={
-            opened.record
+            changes && opened.record
               ? async () => {
                   await deleteSharedRecords(struct, [opened.record!.id])
                   setOpened(null)
@@ -646,7 +671,7 @@ function problemOf(c: TaskColumn) {
     case 'trash':
       return (
         <>
-          {c.structName} is in the trash; <a href="#/trash">restore it</a> to see its records again.
+          {c.structName} is in the trash; <a href={pageHash('#/trash')}>restore it</a> to see its records again.
         </>
       )
     case 'hidden':
@@ -667,7 +692,7 @@ function flowProblemOf(c: TaskColumn, runner: string) {
     case 'trash':
       return (
         <>
-          {flow} is in the trash, so the board starts nothing here; <a href="#/trash">restore it</a> to go on.
+          {flow} is in the trash, so the board starts nothing here; <a href={pageHash('#/trash')}>restore it</a> to go on.
         </>
       )
     case 'hidden':
@@ -722,11 +747,13 @@ function Column({
   card: TaskCard | null
   // Whether the board plays, retrying records as their columns say.
   playing: boolean
-  onEdit: () => void
+  // Changing it, running a flow on a record and trying one again; none for
+  // whoever only sees the project.
+  onEdit?: () => void
   // Opens a record of it, or a new one for none, on its fields or history.
   onOpen: (record: SharedRecord | null, tab?: RecordTab) => void
-  onRun: (record: number) => void
-  onRetry: (records: number[]) => void
+  onRun?: (record: number) => void
+  onRetry?: (records: number[]) => void
 }) {
   const cards = c.cards
   const shown = cards?.records.length ?? 0
@@ -752,14 +779,16 @@ function Column({
             )}
           </span>
         )}
-        <button
-          className="icon-button"
-          onClick={onEdit}
-          aria-label={`Change ${c.name}`}
-          title="Change the column: its name, struct, query, order, flow and place"
-        >
-          <PencilIcon />
-        </button>
+        {onEdit && (
+          <button
+            className="icon-button"
+            onClick={onEdit}
+            aria-label={`Change ${c.name}`}
+            title="Change the column: its name, struct, query, order, flow and place"
+          >
+            <PencilIcon />
+          </button>
+        )}
       </header>
       <div className="task-column-lane">
         {cards ? (
@@ -781,8 +810,8 @@ function Column({
                     onHistory={() => onOpen(r, 'history')}
                     referring={cards.referring?.[r.id]}
                     onReferring={() => onOpen(r, 'references')}
-                    onRun={() => onRun(r.id)}
-                    onRetry={() => onRetry([r.id])}
+                    onRun={onRun && (() => onRun(r.id))}
+                    onRetry={onRetry && (() => onRetry([r.id]))}
                   />
                 ))}
               </ol>
@@ -790,9 +819,11 @@ function Column({
             {cards.truncated && (
               <p className="task-column-note">Of the latest records written only, as there are more than a search reads.</p>
             )}
-            <button className="task-column-add" onClick={() => onOpen(null)} title="Add a record by hand">
-              <PlusIcon size={12} /> Add a record
-            </button>
+            {onEdit && (
+              <button className="task-column-add" onClick={() => onOpen(null)} title="Add a record by hand">
+                <PlusIcon size={12} /> Add a record
+              </button>
+            )}
           </>
         ) : (
           <p className="task-column-problem">{problemOf(c)}</p>
@@ -830,10 +861,10 @@ function CardWork({
   run: CardRun
   retry: ColumnRetry | null
   playing: boolean
-  onRetry: () => void
+  onRetry?: () => void
 }) {
   const link = (
-    <a href={`#/flows/${run.flow}/runs/${run.run}`} title="Open the run on its flow's board">
+    <a href={pageHash(`#/flows/${run.flow}/runs/${run.run}`)} title="Open the run on its flow's board">
       run #{run.run}
     </a>
   )
@@ -878,9 +909,11 @@ function CardWork({
       </span>
       {retried > 0 && <span>{spent ? `no retries left (${retried} of ${retry.times})` : tried}</span>}
       {link}
-      <button className="task-card-retry" onClick={onRetry} title="Start its column's flow on it again, from the board's next turn">
-        Try again
-      </button>
+      {onRetry && (
+        <button className="task-card-retry" onClick={onRetry} title="Start its column's flow on it again, from the board's next turn">
+          Try again
+        </button>
+      )}
     </div>
   )
 }
@@ -904,7 +937,7 @@ function RetryWork({
   playing: boolean
   short: string
   link: ReactNode
-  onRetry: () => void
+  onRetry?: () => void
 }) {
   // A board read anew gives a new run, so each read sets the time again.
   const due = useMemo(() => Date.now() + (run.retryIn ?? 0), [run])
@@ -932,9 +965,11 @@ function RetryWork({
       <span className="task-card-work-break" aria-hidden />
       <span>{short}</span>
       {link}
-      <button className="task-card-retry" onClick={onRetry} title="Start its column's flow on it now, from the board's next turn">
-        Retry now
-      </button>
+      {onRetry && (
+        <button className="task-card-retry" onClick={onRetry} title="Start its column's flow on it now, from the board's next turn">
+          Retry now
+        </button>
+      )}
     </div>
   )
 }
@@ -993,8 +1028,8 @@ function Card({
   onOpen: () => void
   onHistory: () => void
   onReferring: () => void
-  onRun: () => void
-  onRetry: () => void
+  onRun?: () => void
+  onRetry?: () => void
 }) {
   const content = isFields(record.content as Json) ? (record.content as { [key: string]: Json }) : {}
   const key = keyOf(record, cards)
@@ -1037,7 +1072,7 @@ function Card({
           )}
           {run &&
             (record.runFlow !== null ? (
-              <a href={`#/flows/${record.runFlow}/runs/${record.run}`} title="Open the run that last moved it on, on its flow's board">
+              <a href={pageHash(`#/flows/${record.runFlow}/runs/${record.run}`)} title="Open the run that last moved it on, on its flow's board">
                 run #{record.run}
               </a>
             ) : (
@@ -1065,9 +1100,11 @@ function Card({
         <button className="icon-button" aria-label={`Show how ${id} got here`} title="Show how this record got here" onClick={onHistory}>
           <HistoryIcon />
         </button>
-        <button className="icon-button" aria-label={`Run a flow on ${id}`} title="Run a flow on this record" onClick={onRun}>
-          <PlayIcon />
-        </button>
+        {onRun && (
+          <button className="icon-button" aria-label={`Run a flow on ${id}`} title="Run a flow on this record" onClick={onRun}>
+            <PlayIcon />
+          </button>
+        )}
       </div>
     </li>
   )

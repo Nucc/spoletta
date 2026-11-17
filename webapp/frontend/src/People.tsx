@@ -6,9 +6,11 @@ import { SettingsHead } from './SettingsHead'
 import { formatTime } from './Runs'
 import { useConfirm } from './Confirm'
 
-// The people who sign in, for admins: adding someone, before they first sign
-// in if need be, making them an admin or a team manager, giving them roles,
-// and removing them. A role is the name of the human objects whose processes
+// The people who sign in, for the instance's admins, in the settings'
+// Instance group: adding someone, before they first sign in if need be,
+// making them an admin of the instance (who makes projects and enters each
+// as its owner) or a team manager, giving them roles, and removing them.
+// Which projects they enter is each project's Access (Access.tsx). A role is the name of the human objects whose processes
 // its holders decide, such as Finance where "Finance handles Approve payment".
 export function PeopleSection({ onError }: { onError: (err: unknown) => void }) {
   const [people, setPeople] = useState<User[] | null>(null)
@@ -67,12 +69,13 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
     <section className="flow-section" aria-label="People">
       <SettingsHead
         title="People"
-        lead="Who signs in, the roles they hold and whether they are admins or team managers. Add someone to let them sign in from any domain."
+        lead="Who signs in to Spoletta, the roles they hold and whether they are admins or team managers. Add someone to let them sign in from any domain; each project's owners say who enters it."
         more={
           <>
             Someone holding a role decides the reviews of the processes that a person of that name handles on any
             board, such as Finance in “Finance handles Approve payment”, and sees those flows to do so. A review no
-            person handles is anyone's to decide; admins decide any. Team managers make teams and say who is in them.
+            person handles is anyone's to decide; admins decide any. Admins also make projects and enter each as its
+            owner. Team managers make teams and say who is in them.
           </>
         }
       />

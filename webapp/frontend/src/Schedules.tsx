@@ -15,6 +15,9 @@ import { formatTime, RUN_LABELS } from './Runs'
 import { useConfirm } from './Confirm'
 import { HomeFrame } from './FlowList'
 import ErrorBanner from './ErrorBanner'
+import { HomeCrumb } from './Projects'
+import { pageHash } from './address'
+import { onlySees, useMe } from './Account'
 
 // The common times, offered before writing a cron expression by hand.
 const PRESETS: { cron: string; label: string }[] = [
@@ -46,7 +49,9 @@ const REFRESH_MS = 5000
 
 // Every schedule, each running a flow on its own when its cron expression
 // comes round: the version the flow published, or its board as it is.
+// Someone who only sees the project sees them, and changes none.
 export default function Schedules() {
+  const changes = !onlySees(useMe())
   const [schedules, setSchedules] = useState<Schedule[] | null>(null)
   const [flows, setFlows] = useState<Flow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -96,9 +101,7 @@ export default function Schedules() {
     <div className="flows-page home">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            Home
-          </a>
+          <HomeCrumb />
           <span className="crumb-separator" aria-hidden>
             /
           </span>
@@ -117,7 +120,7 @@ export default function Schedules() {
               is while it publishes none, so publish a flow to go on editing it without a schedule running a half-made board.
               While its last run is still going, such as one waiting on a person, the times that come round are skipped.
             </p>
-            {runnable && (
+            {runnable && changes && (
               <ScheduleForm
                 flows={runnable}
                 initial={{ flow: runnable[0]?.id ?? 0, cron: PRESETS[0].cron, timezone: localZone() }}
@@ -155,9 +158,9 @@ export default function Schedules() {
                     <ScheduleRow
                       key={s.id}
                       schedule={s}
-                      onToggle={() => onUpdate(s.id, { enabled: !s.enabled }).catch(report)}
-                      onEdit={() => setEditing(s.id)}
-                      onDelete={() => onDelete(s)}
+                      onToggle={changes ? () => onUpdate(s.id, { enabled: !s.enabled }).catch(report) : undefined}
+                      onEdit={changes ? () => setEditing(s.id) : undefined}
+                      onDelete={changes ? () => onDelete(s) : undefined}
                     />
                   ),
                 )}
@@ -178,16 +181,17 @@ function ScheduleRow({
   onDelete,
 }: {
   schedule: Schedule
-  onToggle: () => void
-  onEdit: () => void
-  onDelete: () => void
+  // None for whoever only sees the project.
+  onToggle?: () => void
+  onEdit?: () => void
+  onDelete?: () => void
 }) {
   const running = s.lastRun?.status === 'running'
   return (
     <li className={s.enabled ? undefined : 'disabled'}>
       <div className="flow-card">
         <span className="flow-card-name">
-          <a href={`#/flows/${s.flow}`}>{s.flowName}</a>
+          <a href={pageHash(`#/flows/${s.flow}`)}>{s.flowName}</a>
         </span>
         <span className="schedule-when">
           {presetLabel(s.cron) ?? 'Custom'} · <code>{s.cron}</code> · {s.timezone}
@@ -197,7 +201,7 @@ function ScheduleRow({
           {s.lastRun && (
             <>
               {' · '}
-              <a className="schedule-last-run" href={`#/flows/${s.lastRun.flow}/runs/${s.lastRun.id}`}>
+              <a className="schedule-last-run" href={pageHash(`#/flows/${s.lastRun.flow}/runs/${s.lastRun.id}`)}>
                 <span className={`status-dot ${s.lastRun.status}`} aria-hidden />
                 Last run {RUN_LABELS[s.lastRun.status].toLowerCase()} · {formatTime(s.lastRun.startedAt)}
               </a>
@@ -206,21 +210,25 @@ function ScheduleRow({
         </span>
         {running && s.enabled && <span className="schedule-skipping">Skipping its times until this run ends.</span>}
       </div>
-      <label className="schedule-toggle" title={s.enabled ? 'Disable' : 'Enable'}>
-        <input type="checkbox" checked={s.enabled} onChange={onToggle} aria-label={`Run ${s.flowName} on schedule`} />
+      <label className="schedule-toggle" title={onToggle ? (s.enabled ? 'Disable' : 'Enable') : s.enabled ? 'Enabled' : 'Disabled'}>
+        <input type="checkbox" checked={s.enabled} disabled={!onToggle} onChange={onToggle} aria-label={`Run ${s.flowName} on schedule`} />
         <span aria-hidden />
       </label>
-      <button className="icon-button" onClick={onEdit} aria-label={`Edit the schedule of ${s.flowName}`} title="Edit">
-        <PencilIcon />
-      </button>
-      <button
-        className="icon-button flow-delete"
-        onClick={onDelete}
-        aria-label={`Delete the schedule of ${s.flowName}`}
-        title="Delete schedule"
-      >
-        <TrashIcon />
-      </button>
+      {onEdit && (
+        <button className="icon-button" onClick={onEdit} aria-label={`Edit the schedule of ${s.flowName}`} title="Edit">
+          <PencilIcon />
+        </button>
+      )}
+      {onDelete && (
+        <button
+          className="icon-button flow-delete"
+          onClick={onDelete}
+          aria-label={`Delete the schedule of ${s.flowName}`}
+          title="Delete schedule"
+        >
+          <TrashIcon />
+        </button>
+      )}
     </li>
   )
 }

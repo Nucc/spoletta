@@ -3,10 +3,11 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Handle, NodeResizer, NodeToolbar, Position, type Node, type NodeProps } from '@xyflow/react'
 import { useBoardActions } from './actions'
-import { NOTE_COLOURS, type NoteColour } from './api'
+import { inProject, NOTE_COLOURS, type NoteColour } from './api'
 import { TrashIcon } from './icons'
 import { MAC } from './Keyboard'
 import { shortcutOf, shortcutText } from './shortcuts'
+import { currentProject } from './address'
 
 export type NoteNodeData = {
   text: string
@@ -88,10 +89,14 @@ export default function NoteNode({ id, data, selected }: NodeProps<NoteNodeType>
     return () => cancelAnimationFrame(frame)
   }, [writing])
 
-  // What is typed and not saved yet is saved as the note goes.
+  // What is typed and not saved yet is saved as the note goes, to the
+  // board's project, as the tab may show another by then.
   const latest = useRef({ text, save })
   latest.current = { text, save }
-  useEffect(() => () => latest.current.save(latest.current.text), [])
+  useEffect(() => {
+    const project = currentProject()
+    return () => inProject(project, () => latest.current.save(latest.current.text))
+  }, [])
 
   return (
     <div

@@ -19,6 +19,7 @@ import { OwnerPicker } from './Owner'
 import { useConfirm } from './Confirm'
 import TabLink from './TabLink'
 import { SettingsEmpty, SettingsHead } from './SettingsHead'
+import { pageHash } from './address'
 
 // Skills and commands, written for agents in the settings: a skill an agent
 // process picks, a command its prompt names as /name. Each is its maker's
@@ -304,7 +305,7 @@ export function SkillPicker({
   return (
     <fieldset className="panel-field mcp-picker">
       <legend>
-        <TabLink hash="#/settings/skills" title="Write and change skills in Settings, in a new tab">
+        <TabLink hash={pageHash('#/settings/skills')} title="Write and change skills in Settings, in a new tab">
           Skills
         </TabLink>
       </legend>
@@ -312,7 +313,7 @@ export function SkillPicker({
         <p className="panel-note">
           None this flow may use.{' '}
           {!readOnly && (
-            <TabLink hash="#/settings/skills" title="Write skills in Settings, in a new tab">
+            <TabLink hash={pageHash('#/settings/skills')} title="Write skills in Settings, in a new tab">
               Write one in Settings
             </TabLink>
           )}

@@ -41,7 +41,8 @@ import {
   UploadIcon,
 } from './icons'
 import { formatTime, RUN_LABELS } from './Runs'
-import { Account, configures, useMe } from './Account'
+import { Account, configures, mayChange, onlySees, useMe } from './Account'
+import { HomeCrumb } from './Projects'
 import { OwnerPicker, ownerLabel } from './Owner'
 import { TemplateDialog, TemplateGallery } from './Templates'
 import { useConfirm } from './Confirm'
@@ -72,6 +73,7 @@ import {
   type View,
 } from './home'
 import ErrorBanner, { NoticeBanner } from './ErrorBanner'
+import { currentPage, currentProject, pageHash, projectKey, replacePage } from './address'
 
 // The main page: everything one sees, a block of each kind: the flows that
 // run, each a job of its own, such as fixing exceptions or bumping
@@ -90,12 +92,14 @@ import ErrorBanner, { NoticeBanner } from './ErrorBanner'
 // makes each kind, or a flow from a template, which are offered in place
 // while there is no flow at all. Deleting a flow moves it to the trash,
 // which can be undone, so it asks nothing first unless runs going on in it
-// would stop; deleting a task board can't be undone, so it asks.
+// would stop; deleting a task board can't be undone, so it asks. The list
+// is the project's, which the breadcrumb starts with; someone who only sees
+// the project makes, deletes and gives away nothing there.
 export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const me = useMe()
   const [all, setFlows] = useState<Flow[] | null>(null)
   const [allBoards, setBoards] = useState<TaskBoard[] | null>(null)
-  const [list, setList] = useState<ListState>(() => readList(window.location.hash))
+  const [list, setList] = useState<ListState>(() => readList(currentPage()))
   const [teams, setTeams] = useState<Team[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -110,11 +114,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const show = (patch: Partial<ListState>) => setList((s) => ({ ...s, ...patch }))
 
   // What the list shows goes in the address, in place, keeping the tab's entry.
-  useEffect(() => {
-    const hash = listHash(list)
-    const kept = hash === '#/' && window.location.hash === '' ? '' : hash
-    if (window.location.hash !== kept) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + kept)
-  }, [list])
+  useEffect(() => replacePage(listHash(list)), [list])
 
   const report = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), [])
   const refresh = useCallback(() => listFlows().then(setFlows).catch(report), [report])
@@ -182,9 +182,11 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   // Who new ones belong to: the team picked last, else the first of one's
   // teams, else oneself.
   const myTeams = teams.filter((t) => t.members.some((m) => m.id === me?.user?.id))
+  // Teams are the project's, so the pick is kept for each project.
+  const ownerKey = projectKey(NEW_OWNER_KEY, currentProject())
   const [picked, setPicked] = useState(() => {
     try {
-      return localStorage.getItem(NEW_OWNER_KEY) ?? ''
+      return localStorage.getItem(ownerKey) ?? ''
     } catch {
       return ''
     }
@@ -198,7 +200,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const pickNewOwner = (key: string) => {
     setPicked(key)
     try {
-      localStorage.setItem(NEW_OWNER_KEY, key)
+      localStorage.setItem(ownerKey, key)
     } catch {
       // Only remembered while it can be.
     }
@@ -216,7 +218,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const onMake = async (kind: Kind, name: string) => {
     if (kind === 'board') {
       const b = await createTaskBoard(name, newOwner())
-      window.location.hash = `#/taskboards/${b.id}`
+      window.location.hash = pageHash(`#/taskboards/${b.id}`)
       return
     }
     const f = await createFlow(name, kind, newOwner())
@@ -325,10 +327,11 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
   const narrowed = !!(list.q.trim() || list.tag || list.whose || list.need)
   const loaded = all !== null && allBoards !== null
   // Without a flow at all, the templates are offered in place of the flows.
-  const templates = all !== null && all.length === 0 && !narrowed && (list.view === 'all' || list.view === 'flow')
+  const sees = onlySees(me)
+  const templates = !sees && all !== null && all.length === 0 && !narrowed && (list.view === 'all' || list.view === 'flow')
 
   // Enter in the search opens the first found.
-  const first = shown[0] === 'board' ? `#/taskboards/${boards[0].id}` : shown[0] ? `#/flows/${ofKind(shown[0])[0].id}` : null
+  const first = shown[0] === 'board' ? pageHash(`#/taskboards/${boards[0].id}`) : shown[0] ? pageHash(`#/flows/${ofKind(shown[0])[0].id}`) : null
   const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && first) {
       e.preventDefault()
@@ -385,7 +388,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
     <div className="flows-page home">
       <header className="toolbar home-bar">
         <h1>
-          Home
+          <HomeCrumb here />
         </h1>
         <label className="home-search">
           <SearchIcon />
@@ -432,17 +435,19 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
               <input ref={picker} type="file" accept=".yaml,.yml,.json" hidden onChange={onImport} />
             </>
           )}
-          <ToolbarMenu
-            className="home-new"
-            buttonRef={newButton}
-            label={
-              <>
-                <PlusIcon size={14} /> New <ChevronDownIcon />
-              </>
-            }
-            title="Make a flow, task board, procedure or struct"
-            sections={newMenu}
-          />
+          {!sees && (
+            <ToolbarMenu
+              className="home-new"
+              buttonRef={newButton}
+              label={
+                <>
+                  <PlusIcon size={14} /> New <ChevronDownIcon />
+                </>
+              }
+              title="Make a flow, task board, procedure or struct"
+              sections={newMenu}
+            />
+          )}
         </div>
       </header>
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
@@ -502,7 +507,13 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
             <p className="flows-note">Loading…</p>
           ) : (
             shown.map((k) => (
-              <KindBlock key={k} kind={k} count={k === 'board' ? boards.length : ofKind(k).length} owned={signedIn} onNew={() => setMaking({ kind: k, name: '' })}>
+              <KindBlock
+                key={k}
+                kind={k}
+                count={k === 'board' ? boards.length : ofKind(k).length}
+                owned={signedIn}
+                onNew={sees ? undefined : () => setMaking({ kind: k, name: '' })}
+              >
                 {k === 'board'
                   ? boards.map((b) => (
                       <BoardRow key={b.id} b={b} query={list.q} me={me} teams={teams} now={now} onOwner={onBoardOwner} onDelete={onDeleteBoard} />
@@ -531,7 +542,7 @@ export default function FlowList({ onOpen }: { onOpen: (id: number) => void }) {
             <Nothing
               list={list}
               narrowed={narrowed}
-              onMake={(kind, name) => setMaking({ kind, name })}
+              onMake={sees ? undefined : (kind, name) => setMaking({ kind, name })}
               onClear={() => show({ q: '', tag: '', whose: '', need: '' })}
             />
           )}
@@ -605,7 +616,7 @@ function HomeRail({
     <a
       className={here === to ? 'home-rail-item on' : 'home-rail-item'}
       aria-current={here === to ? 'page' : undefined}
-      href={`#/${to}`}
+      href={pageHash(`#/${to}`)}
       title={title}
     >
       {icon}
@@ -713,7 +724,7 @@ export function HomeFrame({
           boards={boards}
           me={me}
           here={at}
-          onShow={(patch) => (window.location.hash = listHash({ ...EVERYTHING, ...patch }))}
+          onShow={(patch) => (window.location.hash = pageHash(listHash({ ...EVERYTHING, ...patch })))}
         />
       )}
       <div className="home-page">{children}</div>
@@ -890,7 +901,7 @@ function Name({ name, query }: { name: string; query: string }) {
 
 // A kind's block: its heading, saying what the kind is as it is pointed
 // at, with a button making another, the names of its columns, and its rows.
-function KindBlock({ kind, count, owned, onNew, children }: { kind: Kind; count: number; owned: boolean; onNew: () => void; children: ReactNode }) {
+function KindBlock({ kind, count, owned, onNew, children }: { kind: Kind; count: number; owned: boolean; onNew?: () => void; children: ReactNode }) {
   const info = KIND_INFO[kind]
   return (
     <section className="home-block" aria-label={info.title}>
@@ -901,9 +912,11 @@ function KindBlock({ kind, count, owned, onNew, children }: { kind: Kind; count:
           {info.gloss && <span className="flow-section-gloss">({info.gloss})</span>}
         </h3>
         <span className="home-count">{count}</span>
-        <button type="button" className="home-add" onClick={onNew}>
-          <PlusIcon /> New {info.one}
-        </button>
+        {onNew && (
+          <button type="button" className="home-add" onClick={onNew}>
+            <PlusIcon /> New {info.one}
+          </button>
+        )}
       </header>
       <div className={owned ? 'home-columns owned' : 'home-columns'} aria-hidden>
         <span />
@@ -950,8 +963,8 @@ function FlowRow({
   onDelete: (f: Flow) => void
 }) {
   const [tagging, setTagging] = useState(false)
-  const hash = `#/flows/${f.id}`
-  const editable = f.access === 'edit'
+  const hash = pageHash(`#/flows/${f.id}`)
+  const editable = mayChange(f, me)
   const items: ToolbarItem[] = [
     { id: 'tab', label: 'Open in a new tab', onSelect: () => openTab(hash) },
     { id: 'star', label: f.favourite ? 'Take the star away' : 'Star it', hint: f.favourite ? undefined : 'Listed first, and under Starred', onSelect: () => onStar(f) },
@@ -974,12 +987,12 @@ function FlowRow({
           <Name name={f.name} query={query} />
         </a>
         {(f.health?.waiting ?? 0) > 0 && (
-          <a className="home-waiting" href="#/inbox" title="Reviews, inputs and loop questions in its runs that you may decide, which the Inbox lists">
+          <a className="home-waiting" href={pageHash('#/inbox')} title="Reviews, inputs and loop questions in its runs that you may decide, which the Inbox lists">
             {f.health!.waiting} waiting on you
           </a>
         )}
         {kind === 'module' && <span className="home-quiet">{f.usedBy > 0 ? `used in ${flowsUsing(f.usedBy)}` : 'not used in a flow yet'}</span>}
-        <FlowTags f={f} known={known} adding={tagging} onAdding={setTagging} onTags={onTags} onTag={onTag} />
+        <FlowTags f={f} editable={editable} known={known} adding={tagging} onAdding={setTagging} onTags={onTags} onTag={onTag} />
       </div>
       <div className="home-detail">
         {kind === 'struct' ? (
@@ -1046,7 +1059,7 @@ function BoardRow({
   onOwner: (b: TaskBoard, owner: Parameters<typeof setTaskBoardOwner>[1]) => void
   onDelete: (b: TaskBoard) => void
 }) {
-  const hash = `#/taskboards/${b.id}`
+  const hash = pageHash(`#/taskboards/${b.id}`)
   return (
     <li className="home-row">
       <span />
@@ -1092,16 +1105,18 @@ function BoardRow({
         sections={[
           { items: [{ id: 'tab', label: 'Open in a new tab', onSelect: () => openTab(hash) }] },
           {
-            items: [
-              {
-                id: 'delete',
-                label: 'Delete…',
-                hint: 'Its columns go; the records stay',
-                icon: <TrashIcon />,
-                danger: true,
-                onSelect: () => onDelete(b),
-              },
-            ],
+            items: mayChange(b, me)
+              ? [
+                  {
+                    id: 'delete',
+                    label: 'Delete…',
+                    hint: 'Its columns go; the records stay',
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onSelect: () => onDelete(b),
+                  },
+                ]
+              : [],
           },
         ]}
       />
@@ -1133,7 +1148,7 @@ function RunStrip({ f }: { f: Flow }) {
           <a
             key={run.id}
             className={`run-tick ${look}`}
-            href={`#/flows/${f.id}/runs/${run.id}`}
+            href={pageHash(`#/flows/${f.id}/runs/${run.id}`)}
             tabIndex={-1}
             title={`Run ${run.id}: ${LOOK_WORDS[look]}, ${formatTime(run.startedAt)}`}
           />
@@ -1175,6 +1190,7 @@ function LastRun({ f, kind, now }: { f: Flow; kind: Kind; now: number }) {
 // flow take one away, or add another, from its menu.
 function FlowTags({
   f,
+  editable,
   known,
   adding,
   onAdding,
@@ -1182,6 +1198,8 @@ function FlowTags({
   onTag,
 }: {
   f: Flow
+  // Whether whoever looks may change the flow, so its tags.
+  editable: boolean
   known: string[]
   adding: boolean
   onAdding: (adding: boolean) => void
@@ -1189,7 +1207,6 @@ function FlowTags({
   onTag: (tag: string) => void
 }) {
   const [text, setText] = useState('')
-  const editable = f.access === 'edit'
   if (f.tags.length === 0 && !adding) return null
 
   const add = async () => {
@@ -1261,7 +1278,8 @@ function Nothing({
 }: {
   list: ListState
   narrowed: boolean
-  onMake: (kind: Kind, name: string) => void
+  // Makes one; none for someone who only sees the project.
+  onMake?: (kind: Kind, name: string) => void
   onClear: () => void
 }) {
   const kind: Kind = list.view === 'all' || list.view === 'starred' ? 'flow' : list.view
@@ -1272,7 +1290,7 @@ function Nothing({
         <h3>{q ? `Nothing is called “${q}”` : 'Nothing matches'}</h3>
         <p>{q ? 'The search looks at names and tags.' : 'Nothing listed has the tag, owner or look picked.'}</p>
         <div className="home-empty-actions">
-          {q && (
+          {q && onMake && (
             <button type="button" className="primary" onClick={() => onMake(kind, q)}>
               <PlusIcon /> New {KIND_INFO[kind].one} called “{q}”
             </button>
@@ -1296,11 +1314,13 @@ function Nothing({
     <div className="home-empty">
       <h3>No {KIND_INFO[kind].title.toLowerCase()} yet</h3>
       <p>{KIND_INFO[kind].note}</p>
-      <div className="home-empty-actions">
-        <button type="button" className="primary" onClick={() => onMake(kind, '')}>
-          <PlusIcon /> New {KIND_INFO[kind].one}
-        </button>
-      </div>
+      {onMake && (
+        <div className="home-empty-actions">
+          <button type="button" className="primary" onClick={() => onMake(kind, '')}>
+            <PlusIcon /> New {KIND_INFO[kind].one}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

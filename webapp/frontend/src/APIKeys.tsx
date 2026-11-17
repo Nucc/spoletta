@@ -3,6 +3,7 @@ import { createAPIKey, deleteAPIKey, getFlowAPI, listAPIKeys, type APIKey, type 
 import { PlusIcon } from './icons'
 import { useConfirm } from './Confirm'
 import { SettingsEmpty, SettingsHead } from './SettingsHead'
+import { pageHash } from './address'
 
 // The API keys of whoever is signed in, which other systems start flows
 // with as them. A new key shows once, as it is made.
@@ -154,7 +155,7 @@ export function FlowAPISection({ flowId, onError }: { flowId: number; onError: (
         <>
           <p className="panel-note">
             Other systems start it with a POST to <code>{api.url}</code> and an API key from{' '}
-            <a href="#/settings/api">the settings</a>, and read the run back from the <code>Location</code> it answers
+            <a href={pageHash('#/settings/api')}>the settings</a>, and read the run back from the <code>Location</code> it answers
             with. A run started this way runs the version the flow published, or its board as it is while it publishes
             none, and takes what that version takes.{' '}
             {api.inputs.length > 0

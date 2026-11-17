@@ -1,4 +1,5 @@
 import type { ReferringGroup } from './api'
+import { pageHash } from './address'
 
 // The records referring to a record, in its dialog's tab of its own: for
 // each struct and attribute naming it, such as a ticket's pull requests,
@@ -31,7 +32,7 @@ export function RecordReferences({ groups, hidden, onNavigate }: { groups: Refer
             {g.name} records whose {g.attribute} is {g.key}
             <a
               className="link-button"
-              href={`#/flows/${g.struct}/records?q=${encodeURIComponent(`${g.attribute}:${JSON.stringify(g.key)}`)}`}
+              href={pageHash(`#/flows/${g.struct}/records?q=${encodeURIComponent(`${g.attribute}:${JSON.stringify(g.key)}`)}`)}
               onClick={onNavigate}
             >
               Show on its Records page

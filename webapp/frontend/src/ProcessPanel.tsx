@@ -8,6 +8,7 @@ import {
   MAX_TIMEOUT,
   MAX_WAIT,
   THINKING_LEVELS,
+  inProject,
   listObjects,
   updateProcess,
   type CredentialChoice,
@@ -39,6 +40,7 @@ import { agentRows, atDefault, canUseRows, canUseSummary, changedSummary, durati
 import { ModelPicker, modelText } from './ModelPicker'
 import { CLAUDE_EFFORTS, claudeEffort, harnessName, harnessOf, offersClaude, switchHarness } from './harness'
 import type { RunStatus } from './ProcessNode'
+import { currentProject } from './address'
 
 type Fields = {
   name: string
@@ -244,7 +246,12 @@ export default function ProcessPanel({
     else timer.current = window.setTimeout(flush, SAVE_DELAY_MS)
   }, [name, kind, prompt, script, model, thinking, recording, settings])
 
-  useEffect(() => flush, [])
+  // What is left goes to the panel's project, as the tab may show another
+  // by the time it closes (inProject in api.ts).
+  useEffect(() => {
+    const project = currentProject()
+    return () => inProject(project, flush)
+  }, [])
 
   // What was typed is saved first, so undoing the switch keeps it. Only an
   // agent runs with Claude Code, so another kind goes back to pi with it.

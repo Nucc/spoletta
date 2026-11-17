@@ -21,6 +21,9 @@ import { formatTime } from './Runs'
 import { ariaSort, FacetList, QueryBar, SortButton, TimeRange, useSearch } from './Search'
 import { useConfirm } from './Confirm'
 import ErrorBanner from './ErrorBanner'
+import { HomeCrumb } from './Projects'
+import { pageHash } from './address'
+import { mayChange, useMe } from './Account'
 
 // How often the records are asked for again, as flows write them.
 const REFRESH_MS = 10_000
@@ -55,7 +58,7 @@ export function SharedRecords({ struct, keyName }: { struct: number; keyName: st
   if (error) return <p className="panel-warning">{error}</p>
   if (records === null) return null
   const table = (
-    <a className="link-button records-table-link" href={`#/flows/${struct}/records`}>
+    <a className="link-button records-table-link" href={pageHash(`#/flows/${struct}/records`)}>
       <TableIcon /> Show them in a table
     </a>
   )
@@ -133,6 +136,11 @@ export default function RecordsPage({ id }: { id: number }) {
   const [actionError, setActionError] = useState<string | null>(null)
   const [confirm, confirmDialog] = useConfirm()
   const columns = useColumnWidths(`records-columns-${id}`)
+  // Whether whoever looks may add, correct and delete the records and run
+  // flows on them: those who may change the struct, unless they only see
+  // the project.
+  const me = useMe()
+  const changes = flow !== null && mayChange(flow, me)
 
   useEffect(() => {
     getFlow(id)
@@ -219,21 +227,21 @@ export default function RecordsPage({ id }: { id: number }) {
     <div className="flows-page data-page">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            Home
-          </a>
+          <HomeCrumb />
           <span className="crumb-separator" aria-hidden>
             /
           </span>
-          <a href={`#/flows/${id}`}>{name}</a>
+          <a href={pageHash(`#/flows/${id}`)}>{name}</a>
           <span className="crumb-separator" aria-hidden>
             /
           </span>
           Records
         </h1>
-        <button onClick={() => setEditing('new')} disabled={records === null} title="Add a record by hand">
-          Add record
-        </button>
+        {changes && (
+          <button onClick={() => setEditing('new')} disabled={records === null} title="Add a record by hand">
+            Add record
+          </button>
+        )}
         <button onClick={load} title="Fetch the latest records">
           Refresh
         </button>
@@ -260,7 +268,7 @@ export default function RecordsPage({ id }: { id: number }) {
             <div className="search-body">
               <FacetList facets={facets} ast={ast} query={query} onChange={setQuery} rows={records.searched} />
               <div className="search-results">
-                {ticked.size > 0 && (
+                {changes && ticked.size > 0 && (
                   <div className="records-selection">
                     <span>
                       {ticked.size} {ticked.size === 1 ? 'record' : 'records'} ticked
@@ -284,13 +292,15 @@ export default function RecordsPage({ id }: { id: number }) {
                           {columns.fit(
                             'id',
                             <span className="records-tick">
-                              <input
-                                ref={tickAll}
-                                type="checkbox"
-                                checked={all}
-                                aria-label="Tick every record shown"
-                                onChange={() => setTicked(all ? new Set() : new Set(shown))}
-                              />
+                              {changes && (
+                                <input
+                                  ref={tickAll}
+                                  type="checkbox"
+                                  checked={all}
+                                  aria-label="Tick every record shown"
+                                  onChange={() => setTicked(all ? new Set() : new Set(shown))}
+                                />
+                              )}
                               {sortable('id', 'Record')}
                             </span>,
                           )}
@@ -316,24 +326,28 @@ export default function RecordsPage({ id }: { id: number }) {
                               {columns.fit(
                                 'id',
                                 <span className="records-tick">
-                                  <input
-                                    type="checkbox"
-                                    checked={ticked.has(r.id)}
-                                    aria-label={`Tick record ${r.id}`}
-                                    onChange={() => tick(r.id)}
-                                  />
-                                  <button
-                                    className="record-play"
-                                    aria-label={`Run a flow on record ${r.id}`}
-                                    title="Run a flow on this record"
-                                    onClick={() => setRunning([r.id])}
-                                  >
-                                    <PlayIcon />
-                                  </button>
+                                  {changes && (
+                                    <>
+                                      <input
+                                        type="checkbox"
+                                        checked={ticked.has(r.id)}
+                                        aria-label={`Tick record ${r.id}`}
+                                        onChange={() => tick(r.id)}
+                                      />
+                                      <button
+                                        className="record-play"
+                                        aria-label={`Run a flow on record ${r.id}`}
+                                        title="Run a flow on this record"
+                                        onClick={() => setRunning([r.id])}
+                                      >
+                                        <PlayIcon />
+                                      </button>
+                                    </>
+                                  )}
                                   <button className="link-button" title="Show all of it" onClick={() => setOpened(whole)}>
                                     {r.id}
                                   </button>
-                                  {isFields(content) && (
+                                  {changes && isFields(content) && (
                                     <button
                                       className="link-button records-edit"
                                       title="Correct this record"
@@ -378,7 +392,7 @@ export default function RecordsPage({ id }: { id: number }) {
                                   </button>
                                   {r.run !== null &&
                                     (r.runFlow !== null ? (
-                                      <a href={`#/flows/${r.runFlow}/runs/${r.run}`} title="Open the run on its flow's board">
+                                      <a href={pageHash(`#/flows/${r.runFlow}/runs/${r.run}`)} title="Open the run on its flow's board">
                                         #{r.run}
                                       </a>
                                     ) : (
@@ -420,9 +434,9 @@ export default function RecordsPage({ id }: { id: number }) {
           fields={records.fields}
           states={records.states}
           record={editing === 'new' ? null : editing}
-          onSave={(content, state) => save(editing === 'new' ? null : editing, content, state)}
+          onSave={changes ? (content, state) => save(editing === 'new' ? null : editing, content, state) : undefined}
           onDelete={
-            editing === 'new'
+            !changes || editing === 'new'
               ? undefined
               : async () => {
                   await deleteSharedRecords(id, [editing.id])
@@ -473,7 +487,7 @@ function Cell({
             <a
               key={String(v)}
               className="record-ref"
-              href={`#/flows/${refTo}/records?q=${encodeURIComponent(JSON.stringify(String(v)))}`}
+              href={pageHash(`#/flows/${refTo}/records?q=${encodeURIComponent(JSON.stringify(String(v)))}`)}
               title="Show the record it refers to"
             >
               {String(v)}

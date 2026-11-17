@@ -1,4 +1,5 @@
 import { createContext, useEffect, useRef, useState } from 'react'
+import { inTabsProject } from './address'
 
 // Tabs: several pages open at once in one browser tab, such as a flow's
 // board beside one of its runs, or a procedure it calls. Each tab keeps the
@@ -8,6 +9,10 @@ import { createContext, useEffect, useRef, useState } from 'react'
 // they were opened, and an entry of a tab since closed opens it again. The
 // tabs are kept for the browser tab's session, so a reload keeps them, as is
 // where each tab's board was looked at, so it opens there again unmoved.
+// Each tab's address names its project (address.ts), so each keeps its own;
+// an address naming none reached in a tab, as an old entry of its history
+// or a link from before projects, stays in the project the tab showed, and
+// one opened in a new tab in the project of the tab it was opened from.
 
 export type Tab = { id: number; hash: string; title: string }
 
@@ -51,6 +56,15 @@ export function keepTabView(tab: number, view: TabView | null) {
 
 const url = (hash: string) => window.location.pathname + window.location.search + hash
 
+// Puts the address in the project the tab showed before in place of the
+// window's, if it names none; the address the tab then has.
+function keepProject(before: string | undefined): string {
+  const hash = window.location.hash
+  const kept = inTabsProject(hash, before)
+  if (kept !== hash) window.history.replaceState(window.history.state, '', url(kept))
+  return kept
+}
+
 const tabOfEntry = (): number | undefined => {
   const tab = (window.history.state as { tab?: unknown } | null)?.tab
   return typeof tab === 'number' ? tab : undefined
@@ -67,7 +81,6 @@ const titleOf = (title: string) => title.replace(/ · Spoletta$/, '')
 const newId = (tabs: Tab[]) => Math.max(Date.now(), ...tabs.map((t) => t.id + 1))
 
 function load(): Tabs {
-  const hash = window.location.hash
   let saved: Tabs | null = null
   try {
     saved = JSON.parse(sessionStorage.getItem(STORE) ?? 'null') as Tabs | null
@@ -78,11 +91,12 @@ function load(): Tabs {
   let state: Tabs
   if (saved && Array.isArray(saved.tabs) && saved.tabs.length > 0) {
     const active = saved.tabs.some((t) => t.id === want) ? want! : want ?? saved.active
+    const hash = keepProject(saved.tabs.find((t) => t.id === active)?.hash)
     const tabs = saved.tabs.some((t) => t.id === active) ? saved.tabs : [...saved.tabs, { id: active, hash, title: '' }]
     state = { tabs: tabs.map((t) => (t.id === active ? { ...t, hash } : t)), active }
   } else {
     const id = want ?? 1
-    state = { tabs: [{ id, hash, title: titleOf(document.title) }], active: id }
+    state = { tabs: [{ id, hash: window.location.hash, title: titleOf(document.title) }], active: id }
   }
   stamp(state.active)
   return state
@@ -114,8 +128,9 @@ export function useTabs() {
   }
 
   // A new tab opens next to the open one, or last with the plus button.
-  const add = (hash: string, last = false) => {
+  const add = (asked: string, last = false) => {
     const tabs = kept()
+    const hash = inTabsProject(asked, window.location.hash)
     const tab = { id: newId(tabs), hash, title: '' }
     const at = last ? tabs.length : tabs.findIndex((t) => t.id === current.current.active) + 1
     window.history.pushState({ tab: tab.id }, '', url(hash))
@@ -144,13 +159,14 @@ export function useTabs() {
   useEffect(() => {
     const sync = () => {
       const s = current.current
-      const hash = window.location.hash
       const want = tabOfEntry()
       if (want === undefined) {
+        const hash = keepProject(s.tabs.find((t) => t.id === s.active)?.hash)
         stamp(s.active)
         set({ tabs: s.tabs.map((t) => (t.id === s.active ? { ...t, hash } : t)), active: s.active })
         return
       }
+      const hash = keepProject(s.tabs.find((t) => t.id === want)?.hash)
       const tabs = s.tabs.some((t) => t.id === want) ? s.tabs : [...s.tabs, { id: want, hash, title: '' }]
       set({ tabs: tabs.map((t) => (t.id === want ? { ...t, hash } : t)), active: want })
     }

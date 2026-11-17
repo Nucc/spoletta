@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { listFlows, listRuns, listTaskBoards, runOrigin, type Flow, type FlowRun, type TaskBoard } from './api'
-import { configures, useMe } from './Account'
+import { configures, managesProjects, useMe } from './Account'
+import { LEVEL_WORDS } from './Projects'
 import { formatTime, ORIGIN_LABELS, RUN_LABELS } from './Runs'
 import { tabsFor } from './Settings'
 import { Keys, MAC } from './Keyboard'
 import { picked, rank, shortcutOf, type ShortcutId } from './shortcuts'
 import { PROCEDURE_WORDS, STRUCT_WORDS } from './words'
+import { currentPage, currentProject, pageHash, projectKey, splitHash } from './address'
 
 // The command palette, Cmd-K or Ctrl-K anywhere: type to go to a flow,
 // procedure, struct or task board, one of the open flow's latest runs, a
@@ -14,7 +16,9 @@ import { PROCEDURE_WORDS, STRUCT_WORDS } from './words'
 // matches what is typed (fuzzy in shortcuts.ts), and what was picked lately
 // comes first. A page opens in a tab of its own, or in the tab already
 // showing it. It reads the flows, task boards and runs as it opens, from
-// the routes their pages use.
+// the routes their pages use. The person's projects are listed too, each
+// opening its home page, and for the instance's admin the Projects page.
+// What was picked lately is the project's own, as what it names is.
 
 export type PaletteItem = {
   // Kept to put what was picked lately first, so the same for the same thing.
@@ -62,7 +66,7 @@ const RECENT = 'palette-recent'
 
 function loadRecent(): string[] {
   try {
-    const saved = JSON.parse(localStorage.getItem(RECENT) ?? '[]') as unknown
+    const saved = JSON.parse(localStorage.getItem(projectKey(RECENT, currentProject())) ?? '[]') as unknown
     return Array.isArray(saved) ? saved.filter((s): s is string => typeof s === 'string') : []
   } catch {
     return []
@@ -71,7 +75,7 @@ function loadRecent(): string[] {
 
 function saveRecent(recent: string[]) {
   try {
-    localStorage.setItem(RECENT, JSON.stringify(recent))
+    localStorage.setItem(projectKey(RECENT, currentProject()), JSON.stringify(recent))
   } catch {
     // Nothing comes first next time.
   }
@@ -89,6 +93,7 @@ const GROUPS = [
   'Add to the board',
   'Runs',
   'Pages',
+  'Projects',
   'Task boards',
   'Flows',
   PROCEDURE_WORDS.many,
@@ -98,7 +103,7 @@ const GROUPS = [
 
 // The flow the page in the address is about, if any.
 const flowInHash = () => {
-  const m = /^#\/flows\/(\d+)/.exec(window.location.hash)
+  const m = /^#\/flows\/(\d+)/.exec(currentPage())
   return m ? Number(m[1]) : null
 }
 
@@ -109,7 +114,7 @@ export const runItem = (r: FlowRun, flowName: string, extra: Partial<PaletteItem
   group: 'Runs',
   hint: `${RUN_LABELS[r.status]}${r.waiting ? ', waiting for a person' : ''} · ${formatTime(r.startedAt)}${r.startedBy ? ` · ${r.startedBy}` : ''}`,
   words: `${flowName} ${RUN_LABELS[r.status]} ${ORIGIN_LABELS[runOrigin(r)]} ${r.startedBy}`,
-  hash: `#/flows/${r.flow}/runs/${r.id}`,
+  hash: pageHash(`#/flows/${r.flow}/runs/${r.id}`),
   ...extra,
 })
 
@@ -168,7 +173,7 @@ export default function CommandPalette({
         group: 'Pages',
         hint: 'Every flow, task board, procedure and struct',
         words: 'flows list procedures structs task boards',
-        hash: '#/',
+        hash: pageHash('#/'),
       },
       {
         id: 'page:inbox',
@@ -176,7 +181,7 @@ export default function CommandPalette({
         group: 'Pages',
         hint: 'The reviews, inputs and loop questions waiting on you',
         words: 'reviews waiting',
-        hash: '#/inbox',
+        hash: pageHash('#/inbox'),
       },
       {
         id: 'page:activity',
@@ -184,16 +189,16 @@ export default function CommandPalette({
         group: 'Pages',
         hint: 'What runs and fails across the flows, and what they spend',
         words: 'failures spending reviews',
-        hash: '#/activity',
+        hash: pageHash('#/activity'),
       },
-      { id: 'page:schedules', title: 'Schedules', group: 'Pages', hint: 'When flows run on their own', words: 'cron', hash: '#/schedules' },
+      { id: 'page:schedules', title: 'Schedules', group: 'Pages', hint: 'When flows run on their own', words: 'cron', hash: pageHash('#/schedules') },
       {
         id: 'page:trash',
         title: 'Trash',
         group: 'Pages',
         hint: 'Flows, procedures and structs deleted, to restore or delete for good',
         words: 'deleted restore bin',
-        hash: '#/trash',
+        hash: pageHash('#/trash'),
       },
     )
     if (configures(me)) {
@@ -203,7 +208,7 @@ export default function CommandPalette({
         group: 'Pages',
         hint: 'Tokens handed to steps, calls refused, changes to limits',
         words: 'security',
-        hash: '#/settings/audit',
+        hash: pageHash('#/settings/audit'),
       })
     }
     if (flow !== null && flowName && !flows?.find((f) => f.id === flow)?.struct) {
@@ -213,12 +218,35 @@ export default function CommandPalette({
         group: 'Pages',
         hint: 'What each run held of each object, a run per row',
         words: 'search table',
-        hash: `#/flows/${flow}/data`,
+        hash: pageHash(`#/flows/${flow}/data`),
+      })
+    }
+    // Each of the person's projects opens its home page; the one shown is
+    // its home already.
+    for (const p of me?.projects ?? []) {
+      if (p.id === currentProject()) continue
+      all.push({
+        id: `project:${p.id}`,
+        title: p.name,
+        group: 'Projects',
+        hint: `${LEVEL_WORDS[p.level].label}${p.archived ? ', archived' : ''}`,
+        words: 'project switch',
+        hash: pageHash('#/', p.id),
+      })
+    }
+    if (managesProjects(me)) {
+      all.push({
+        id: 'page:projects',
+        title: 'Every project',
+        group: 'Projects',
+        hint: 'Make, rename, archive and delete projects, and say who enters each',
+        words: 'projects tenants admin',
+        hash: pageHash('#/projects'),
       })
     }
     // The audit log is among the pages above, with what it holds.
     for (const t of me ? tabsFor(me).filter((t) => t.id !== 'audit') : []) {
-      all.push({ id: `settings:${t.id}`, title: t.label, group: 'Settings', words: 'settings', hash: `#/settings/${t.id}` })
+      all.push({ id: `settings:${t.id}`, title: t.label, group: 'Settings', words: 'settings', hash: pageHash(`#/settings/${t.id}`) })
     }
     for (const b of boards) {
       all.push({
@@ -227,7 +255,7 @@ export default function CommandPalette({
         group: 'Task boards',
         hint: b.columns.map((c) => c.name).join(' · ') || undefined,
         words: `task board kanban ${b.columns.map((c) => `${c.name} ${c.structName}`).join(' ')}`,
-        hash: `#/taskboards/${b.id}`,
+        hash: pageHash(`#/taskboards/${b.id}`),
       })
     }
     // Favourites first, as the flow list puts them.
@@ -240,7 +268,7 @@ export default function CommandPalette({
         group,
         hint: [f.favourite ? '★' : '', f.tags.join(', ')].filter(Boolean).join(' ') || undefined,
         words: `${f.tags.join(' ')} ${group}`,
-        hash: `#/flows/${f.id}`,
+        hash: pageHash(`#/flows/${f.id}`),
       })
     }
     return GROUPS.flatMap((g) => all.filter((i) => i.group === g)).concat(all.filter((i) => !GROUPS.includes(i.group)))
@@ -277,7 +305,7 @@ export default function CommandPalette({
       saveRecent(next)
     }
     // A run of the board's flow opens on it; anything else as a page.
-    const run = /^#\/flows\/(\d+)\/runs\/(\d+)$/.exec(item.hash ?? '')
+    const run = /^#\/flows\/(\d+)\/runs\/(\d+)$/.exec(splitHash(item.hash ?? '').page)
     const inPlace = run && page.some((s) => s.openRun?.(Number(run[1]), Number(run[2])))
     onClose()
     // The palette closes first, giving the focus back, so what opens next,

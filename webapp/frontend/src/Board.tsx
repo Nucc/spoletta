@@ -105,7 +105,7 @@ import Presence from './Presence'
 import { DiffPanel, diffCount, highlightsOf, noHighlights, type Highlights } from './Diff'
 import type { Quantity } from './quantity'
 import { MCPSettingsPanel } from './MCPSettings'
-import { configures, useMe } from './Account'
+import { configures, mayChange, onlySees, useMe } from './Account'
 import { OwnerPicker } from './Owner'
 import { onCopiedElsewhere, readCopied, writeCopied } from './clipboard'
 import { FlowSettingsPanel } from './FlowSettings'
@@ -124,6 +124,7 @@ import {
   deleteNote,
   listNotes,
   updateNote,
+  inProject,
   leaveBoard,
   sayPresent,
   type BoardViewer,
@@ -229,6 +230,8 @@ import {
   type Start,
 } from './api'
 import ErrorBanner from './ErrorBanner'
+import { HomeCrumb } from './Projects'
+import { currentProject, pageHash, replacePage } from './address'
 
 type FlowNode = ProcessNodeType | ObjectNodeType | StartNodeType | EndNodeType | NoteNodeType
 type FlowEdge = Edge<LinkEdgeData & { kind?: StructureKind }>
@@ -1228,8 +1231,13 @@ export default function Board({
   const [shownBoard, setShownBoard] = useState<BoardId>(null)
   const [shownUnfolded, setShownUnfolded] = useState<number | null>(null)
   const reviewing = shownVersion !== null
-  // Someone who only decides the flow's reviews sees it, and changes nothing.
-  const viewOnly = flow.access === 'review'
+  // Someone who only decides the flow's reviews sees it, and changes nothing;
+  // nor does someone who only sees the project it is in (Account.tsx), who
+  // starts nothing either. Every control on the board that changes or
+  // starts something asks this.
+  const viewOnly = !mayChange(flow, me)
+  // Why, as what can't be done says.
+  const onlySeeing = onlySees(me)
   const readOnly = reviewing || viewOnly
   const runShown = shownRun !== null
   useEffect(() => {
@@ -1396,7 +1404,7 @@ export default function Board({
     if (!o) return
     const from = o.shared ? (isStructRoot(id) ? flowId : moduleOf(o.id)?.id) : o.persistent ? flowId : undefined
     if (from === undefined) return
-    window.location.hash = o.shared ? `#/flows/${from}/records` : `#/flows/${from}/data?q=${encodeURIComponent('status:done')}`
+    window.location.hash = pageHash(o.shared ? `#/flows/${from}/records` : `#/flows/${from}/data?q=${encodeURIComponent('status:done')}`)
   }
   // On a shared struct's board, its object, whose records the sidebar lists.
   const sharedRoot = structBoard
@@ -1500,7 +1508,7 @@ export default function Board({
       const target = node.data.settings.flow
       if (target === undefined) return
       const child = shownRun?.steps.filter((s) => String(s.process) === id && s.childRun !== null).at(-1)?.childRun
-      openTab(child ? `#/flows/${target}/runs/${child}` : `#/flows/${target}`)
+      openTab(pageHash(child ? `#/flows/${target}/runs/${child}` : `#/flows/${target}`))
       return
     }
     setUnfolded(null)
@@ -2626,7 +2634,7 @@ export default function Board({
       if (!run) {
         run = await getRun(id)
         if (run.flow !== flowId) {
-          window.location.hash = `#/flows/${run.flow}/runs/${id}`
+          window.location.hash = pageHash(`#/flows/${run.flow}/runs/${id}`)
           return
         }
       }
@@ -2659,8 +2667,7 @@ export default function Board({
 
   // The address names the open run, so going back to this flow opens it again.
   useEffect(() => {
-    const want = runId === null ? `#/flows/${flowId}` : `#/flows/${flowId}/runs/${runId}`
-    if (window.location.hash !== want) window.history.replaceState(window.history.state, '', want)
+    replacePage(runId === null ? `#/flows/${flowId}` : `#/flows/${flowId}/runs/${runId}`)
   }, [runId, flowId])
 
   // The history entry keeps the process or object whose panel is open, and
@@ -2785,9 +2792,12 @@ export default function Board({
   // change after is a step of its own.
   useEffect(() => {
     let pending = false
+    // A step still to record as the board goes is the board's project's,
+    // as the tab may show another by then.
+    const project = currentProject()
     const record = () => {
       pending = false
-      queueHistory(() => recordHistory(flowId, client))
+      queueHistory(() => inProject(project, () => recordHistory(flowId, client)))
         .then(() => boardChanged.current(false))
         .catch(report)
     }
@@ -2866,7 +2876,10 @@ export default function Board({
     }
     say()
     const onShown = () => document.visibilityState === 'visible' && say()
-    const onLeave = () => leaveBoard(flowId, client)
+    // Leaving names the board's project, as the tab may show another by
+    // then.
+    const project = currentProject()
+    const onLeave = () => leaveBoard(flowId, client, project)
     document.addEventListener('visibilitychange', onShown)
     window.addEventListener('pagehide', onLeave)
     return () => {
@@ -2874,7 +2887,7 @@ export default function Board({
       window.clearTimeout(timer)
       document.removeEventListener('visibilitychange', onShown)
       window.removeEventListener('pagehide', onLeave)
-      leaveBoard(flowId, client)
+      leaveBoard(flowId, client, project)
     }
   }, [flowId, client])
   // Who changed the board, said for a while.
@@ -3323,7 +3336,11 @@ export default function Board({
 
   // What the board offers the command palette: its actions, its views, the
   // building blocks to add, and opening a run of the flow on it.
-  const cannotChange = viewOnly ? 'Only its owner changes the flow' : 'Not while a run or another version shows'
+  const cannotChange = onlySeeing
+    ? 'You only see this project, so you change nothing in it'
+    : viewOnly
+      ? 'Only its owner changes the flow'
+      : 'Not while a run or another version shows'
   usePaletteSource(() => {
     const items: PaletteItem[] = []
     const add = (item: Omit<PaletteItem, 'group'>, group = 'Board') => items.push({ ...item, group })
@@ -3490,7 +3507,7 @@ export default function Board({
         id: 'view:records',
         title: 'Records',
         hint: 'The records every flow using the struct wrote',
-        hash: `#/flows/${flowId}/records`,
+        hash: pageHash(`#/flows/${flowId}/records`),
       })
     for (const b of contents?.boards ?? []) {
       const p = contents?.processes.find((q) => q.id === b.process)
@@ -3518,7 +3535,7 @@ export default function Board({
           items: async () =>
             (await listRuns(flowId, undefined, undefined, COMPARE_RUNS))
               .filter((r) => r.id !== runDetail.id)
-              .map((r) => runItem(r, flow.name, { hash: `#/flows/${flowId}/compare/${runDetail.id}/${r.id}` })),
+              .map((r) => runItem(r, flow.name, { hash: pageHash(`#/flows/${flowId}/compare/${runDetail.id}/${r.id}`) })),
         },
       })
       run({ id: 'run:close', title: `Close run #${runDetail.id}`, hint: 'Back to the board', run: () => setRunId(null) })
@@ -3753,7 +3770,7 @@ export default function Board({
             label: 'Data',
             icon: <TableIcon />,
             hint: 'What each run held of each object, a run per row, on a page of its own',
-            onSelect: () => (window.location.hash = `#/flows/${flowId}/data`),
+            onSelect: () => (window.location.hash = pageHash(`#/flows/${flowId}/data`)),
           },
         ]),
     ...(sharedRoot
@@ -3763,7 +3780,7 @@ export default function Board({
             label: 'Records',
             icon: <TableIcon />,
             hint: 'The records every flow using the struct wrote, a record per row, on a page of its own',
-            onSelect: () => (window.location.hash = `#/flows/${flowId}/records`),
+            onSelect: () => (window.location.hash = pageHash(`#/flows/${flowId}/records`)),
           },
         ]
       : []),
@@ -3819,7 +3836,13 @@ export default function Board({
       onSelect: onTidy,
     },
   ]
-  const cannotRun = viewOnly ? 'Only those who may change the flow run it' : starting ? 'Starting…' : undefined
+  const cannotRun = onlySeeing
+    ? 'You only see this project, so you start nothing in it'
+    : viewOnly
+      ? 'Only those who may change the flow run it'
+      : starting
+        ? 'Starting…'
+        : undefined
   const runItems: ToolbarItem[] = [
     {
       id: 'run',
@@ -3861,16 +3884,14 @@ export default function Board({
     <div className="board">
       <header className="toolbar">
         <h1>
-          <a className="home" href="#/" title="Every flow, task board, procedure and struct">
-            Home
-          </a>
+          <HomeCrumb />
           <span className="crumb-separator" aria-hidden>
             /
           </span>
           <FlowName
             name={flow.name}
             // A struct's object is renamed with it.
-            onRename={(name) => onUpdate({ name }).then(() => (structBoard ? reload.current() : undefined))}
+            onRename={viewOnly ? undefined : (name) => onUpdate({ name }).then(() => (structBoard ? reload.current() : undefined))}
             onError={report}
           />
         </h1>
@@ -3951,7 +3972,7 @@ export default function Board({
               starting
                 ? 'Starting…'
                 : viewOnly
-                  ? 'Only those who may change the flow run it'
+                  ? cannotRun!
                   : runErrors > 0
                     ? `Run the board as it is: it has ${runErrors === 1 ? 'an error' : `${runErrors} errors`} to fix first, which clicking lists`
                     : `Run the board as it is (${shortcutText('run', MAC)})`
@@ -4009,7 +4030,7 @@ export default function Board({
                   onSelect={(id) => {
                     // The run picked to compare with opens beside the other, in a tab of its own.
                     if (comparing !== null) {
-                      if (id !== comparing) openTab(`#/flows/${flowId}/compare/${comparing}/${id}`)
+                      if (id !== comparing) openTab(pageHash(`#/flows/${flowId}/compare/${comparing}/${id}`))
                       setComparing(null)
                       return
                     }
@@ -4117,7 +4138,13 @@ export default function Board({
           )}
           {viewOnly && !openRun && (
             <div className="review-banner" role="status">
-              You decide this flow's reviews, so you see it, but only its owner{flow.owner.kind !== 'global' && `, ${flow.owner.name},`} changes it.
+              {onlySeeing ? (
+                'You only see this project: its boards, runs and records, changing and starting nothing; you decide the reviews your roles let you.'
+              ) : (
+                <>
+                  You decide this flow's reviews, so you see it, but only its owner{flow.owner.kind !== 'global' && `, ${flow.owner.name},`} changes it.
+                </>
+              )}
             </div>
           )}
           {compare && shownVersion === compare.to && (
@@ -4191,7 +4218,9 @@ export default function Board({
             credentials={credentials}
             readOnly={readOnly}
             readOnlyWhy={
-              viewOnly
+              onlySeeing
+                ? 'You only see this project, so the process’s settings are shown but not changed here.'
+                : viewOnly
                 ? 'You only decide this flow’s reviews, so its settings are shown but not changed here.'
                 : reviewing && openRun
                   ? `These are version ${shownVersion}’s settings, which run #${openRun.id} keeps to. Go back to the board to change the process for the runs after it.`
@@ -4274,6 +4303,7 @@ export default function Board({
           <MCPSettingsPanel
             servers={mcpServers ?? []}
             canConfigure={configures(me)}
+            canConnect={!onlySeeing}
             onChanged={refreshMCPServers}
             onClose={() => setMCPOpen(false)}
             onError={report}
@@ -4319,6 +4349,7 @@ export default function Board({
           <VersionPanel
             versions={versions}
             disabled={versioning}
+            readOnly={viewOnly}
             onRestore={onRestore}
             onPublish={onPublishVersion}
             onUnpublish={onUnpublish}
@@ -4353,8 +4384,9 @@ export default function Board({
         {!panelNode && !objectPanelNode && !mcpOpen && !settingsOpen && !oplOpen && !codeOpen && !versionsOpen && !(compare && diffListed) && runDetail && (
           <RunPanel
             run={runDetail}
-            onStop={() => onStop(runDetail.id)}
-            onStopStep={(step) => onStopStep(runDetail.id, step)}
+            changes={!viewOnly}
+            onStop={viewOnly ? undefined : () => onStop(runDetail.id)}
+            onStopStep={viewOnly ? undefined : (step) => onStopStep(runDetail.id, step)}
             onOpenStep={openStep}
             focus={runFocus}
             onClearFocus={() => setRunFocus(null)}
@@ -4363,7 +4395,7 @@ export default function Board({
             comparing={comparing === runDetail.id}
             onCompare={() => setComparing((c) => (c === runDetail.id ? null : runDetail.id))}
             onOpenRun={openRunById}
-            onRerun={setRerunning}
+            onRerun={viewOnly ? undefined : setRerunning}
             onTryAgain={viewOnly ? undefined : setTrying}
             onAsk={viewOnly || runDetail.flow !== flowId ? undefined : askAbout}
             onOpenReview={(process) =>
@@ -4460,19 +4492,22 @@ function FlowName({
   onError,
 }: {
   name: string
-  onRename: (name: string) => Promise<void>
+  // None for whoever may not change the flow.
+  onRename?: (name: string) => Promise<void>
   onError: (err: unknown) => void
 }) {
   const [draft, setDraft] = useState<string | null>(null)
-  if (draft === null) {
+  if (draft === null || !onRename) {
     return (
       <span className="flow-name">
         <span className="flow-name-text" title={name}>
           {name}
         </span>
-        <button className="icon-button" onClick={() => setDraft(name)} aria-label="Rename flow" title="Rename flow">
-          <PencilIcon />
-        </button>
+        {onRename && (
+          <button className="icon-button" onClick={() => setDraft(name)} aria-label="Rename flow" title="Rename flow">
+            <PencilIcon />
+          </button>
+        )}
       </span>
     )
   }

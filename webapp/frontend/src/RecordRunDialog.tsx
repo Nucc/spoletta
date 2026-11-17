@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { listRecordFlows, startRecordRuns, type FlowRun, type RecordFlow, type RecordRun } from './api'
+import { pageHash } from './address'
 
 // Starts a flow on records of a shared struct, a run on each: the flows
 // listed are those whose queries read the struct's records, and each run's
@@ -73,7 +74,7 @@ export function RecordRunDialog({
   const runLink = (r: RecordRun | FlowRun) => {
     const id = 'run' in r ? r.run : r.id
     return (
-      <a key={id} href={`#/flows/${r.flow}/runs/${id}`} onClick={onClose}>
+      <a key={id} href={pageHash(`#/flows/${r.flow}/runs/${id}`)} onClick={onClose}>
         #{id}
       </a>
     )

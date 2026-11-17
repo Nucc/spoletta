@@ -2,6 +2,7 @@ import type { DragEvent, ReactNode } from 'react'
 import type { Flow, MCPServer, ProcessKind, ProcessSettings } from './api'
 import { AgentIcon, HumanIcon, ObjectIcon, PlusIcon, SubflowIcon } from './icons'
 import { ServiceLogo } from './logos'
+import { pageHash } from './address'
 
 // Something the sidebar adds to the board: a node of an OPM element, or a
 // process of a kind that talks to a service.
@@ -150,7 +151,7 @@ export function ConnectorPalette({
     return (
       <p className="panel-note">
         No connectors installed. An admin installs them, such as GitHub, in{' '}
-        <a href="#/settings/connectors">Settings, under Connectors</a>.
+        <a href={pageHash('#/settings/connectors')}>Settings, under Connectors</a>.
       </p>
     )
   }

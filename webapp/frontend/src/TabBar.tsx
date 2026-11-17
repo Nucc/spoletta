@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { ActivityIcon, ClockIcon, DatabaseIcon, GearIcon, InboxIcon, TrashIcon } from './icons'
 import type { Tab } from './tabs'
+import { splitHash } from './address'
 
 // The tabs along the top of the page, the open one joined to the page below,
 // with Spoletta's mark first opening the home page, a plus to open another
@@ -111,8 +112,9 @@ const ColumnsIcon = () => (
   </svg>
 )
 
-// What kind of page the tab holds, by its address.
-function kindIcon(hash: string): ReactNode {
+// What kind of page the tab holds, by its address within its project.
+function kindIcon(address: string): ReactNode {
+  const hash = splitHash(address).page
   if (!hash || hash === '#/' || hash.startsWith('#/?')) return <SpolettaMark />
   if (/^#\/flows\/\d+\/(records|data)/.test(hash)) return <DatabaseIcon size={14} />
   if (hash.startsWith('#/flows/')) return <BoardIcon />
@@ -121,7 +123,7 @@ function kindIcon(hash: string): ReactNode {
   if (hash.startsWith('#/activity')) return <ActivityIcon />
   if (hash === '#/schedules') return <ClockIcon />
   if (hash === '#/trash') return <TrashIcon />
-  if (/^#\/(settings|people|audit)/.test(hash)) return <GearIcon />
+  if (/^#\/(settings|people|audit|projects)/.test(hash)) return <GearIcon />
   return <BoardIcon />
 }
 

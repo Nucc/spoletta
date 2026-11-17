@@ -16,6 +16,7 @@ import { ServiceLogo } from './logos'
 import { useConfirm } from './Confirm'
 import { SettingsHead } from './SettingsHead'
 import { serverNameProblem } from './MCPSettings'
+import { pageHash } from './address'
 
 // The order categories show in; any other comes after them.
 const CATEGORIES = ['Code', 'Communication', 'Ticketing', 'Support', 'Docs', 'Monitoring', 'Home', 'Other']
@@ -84,7 +85,7 @@ export function DirectorySection({ canConfigure, onError }: { canConfigure: bool
             A built-in connector is part of Spoletta and calls the service's API with a token an admin sets for
             everyone, so give it one limited to what flows need. Agents use its tools, only those that read unless their
             process picks others, and a connector process carries out one of them as a step. An MCP server is the
-            service's own, which each person connects by signing in, in <a href="#/settings/mcp">MCP servers</a>.
+            service's own, which each person connects by signing in, in <a href={pageHash('#/settings/mcp')}>MCP servers</a>.
           </>
         }
       />

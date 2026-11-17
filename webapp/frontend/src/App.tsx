@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useReducer, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
-import { countInbox, getFlow, onInboxChanged, updateFlow, type Flow } from './api'
+import { countInbox, getFlow, onInboxChanged, onRefusedHere, updateFlow, type Flow } from './api'
 import Board from './Board'
 import CommandPalette from './CommandPalette'
 import FlowData from './FlowData'
@@ -17,8 +17,22 @@ import TaskBoard from './TaskBoard'
 import Trash from './Trash'
 import { TabContext, useTabs } from './tabs'
 import ErrorBanner from './ErrorBanner'
+import { reloadMe, useMe } from './Account'
+import { NoProject, ProjectsPage } from './Projects'
+import {
+  currentPage,
+  hashIn,
+  lastProject,
+  outsideProjects,
+  pageHash,
+  projectFor,
+  rememberProject,
+  rewritten,
+  splitHash,
+} from './address'
 
-// The page the URL's hash names: #/flows/<id> for a flow's board,
+// The page the URL's hash names, within the project it starts with
+// (#/p/<id>, address.ts): #/flows/<id> for a flow's board,
 // #/flows/<id>/runs/<run> for it with one of its runs open, and with
 // /steps/<step> after it that step's review showing,
 // #/flows/<id>/compare/<run>/<run> for two of its runs side by side,
@@ -30,8 +44,9 @@ import ErrorBanner from './ErrorBanner'
 // what goes on across the flows, with ?days=<n> for its period, #/trash
 // for the flows deleted, anything else for the list of flows. #/people
 // and #/audit, where the people and the audit log were before the
-// settings, are their tabs now. The address is the open tab's; each tab
-// keeps its own (tabs.ts).
+// settings, are their tabs now. #/projects, outside any project, is where
+// projects are made and kept. The address is the open tab's; each tab
+// keeps its own (tabs.ts), so its own project.
 type Page =
   | { flow: number; run: number | null; step: number | null }
   | { compare: number; a: number; b: number }
@@ -43,36 +58,40 @@ type Page =
   | 'activity'
   | 'inbox'
   | 'trash'
+  | 'projects'
   | null
 
-const INBOX = '#/inbox'
-
 const pageInHash = (): Page => {
-  if (window.location.hash === '#/schedules') return 'schedules'
-  if (window.location.hash === INBOX) return 'inbox'
-  if (window.location.hash === '#/trash') return 'trash'
-  if (/^#\/activity(?:\?.*)?$/.test(window.location.hash)) return 'activity'
-  if (window.location.hash === '#/people') return { settings: 'people' }
-  if (/^#\/audit(?:\?.*)?$/.test(window.location.hash)) return { settings: 'audit' }
-  const s = /^#\/settings(?:\/(\w+))?(?:\?.*)?$/.exec(window.location.hash)
+  const hash = currentPage()
+  if (outsideProjects(hash)) return 'projects'
+  if (hash === '#/schedules') return 'schedules'
+  if (hash === '#/inbox') return 'inbox'
+  if (hash === '#/trash') return 'trash'
+  if (/^#\/activity(?:\?.*)?$/.test(hash)) return 'activity'
+  if (hash === '#/people') return { settings: 'people' }
+  if (/^#\/audit(?:\?.*)?$/.test(hash)) return { settings: 'audit' }
+  const s = /^#\/settings(?:\/(\w+))?(?:\?.*)?$/.exec(hash)
   if (s) return { settings: (s[1] as SettingsTab | undefined) ?? null }
-  const c = /^#\/flows\/(\d+)\/compare\/(\d+)\/(\d+)$/.exec(window.location.hash)
+  const c = /^#\/flows\/(\d+)\/compare\/(\d+)\/(\d+)$/.exec(hash)
   if (c) return { compare: Number(c[1]), a: Number(c[2]), b: Number(c[3]) }
-  const d = /^#\/flows\/(\d+)\/data(?:\?.*)?$/.exec(window.location.hash)
+  const d = /^#\/flows\/(\d+)\/data(?:\?.*)?$/.exec(hash)
   if (d) return { data: Number(d[1]) }
-  const r = /^#\/flows\/(\d+)\/records(?:\?.*)?$/.exec(window.location.hash)
+  const r = /^#\/flows\/(\d+)\/records(?:\?.*)?$/.exec(hash)
   if (r) return { records: Number(r[1]) }
-  const t = /^#\/taskboards\/(\d+)$/.exec(window.location.hash)
+  const t = /^#\/taskboards\/(\d+)$/.exec(hash)
   if (t) return { taskBoard: Number(t[1]) }
-  const m = /^#\/flows\/(\d+)(?:\/runs\/(\d+)(?:\/steps\/(\d+))?)?$/.exec(window.location.hash)
+  const m = /^#\/flows\/(\d+)(?:\/runs\/(\d+)(?:\/steps\/(\d+))?)?$/.exec(hash)
   return m ? { flow: Number(m[1]), run: m[2] ? Number(m[2]) : null, step: m[3] ? Number(m[3]) : null } : null
 }
 
 // How many steps wait on the person, asked every so often, again once they
-// decide one, and as they come back to the page; null until known.
-function useInboxCount(): number | null {
+// decide one, and as they come back to the page; null until known. The
+// server counts those of the open tab's project, so it asks again as that
+// changes.
+function useInboxCount(project: number | null): number | null {
   const [count, setCount] = useState<number | null>(null)
   useEffect(() => {
+    if (project === null) return
     const ask = () => void countInbox().then((n) => n !== null && setCount(n))
     ask()
     const t = window.setInterval(ask, INBOX_REFRESH_MS)
@@ -84,16 +103,62 @@ function useInboxCount(): number | null {
       document.removeEventListener('visibilitychange', onVisible)
       off()
     }
-  }, [])
+  }, [project])
   return count
 }
 
-// The list of flows has an address of #/ or none.
-const sameHash = (a: string, b: string) => (a || '#/') === (b || '#/')
+// Two addresses of the same page: the list of flows has an address of #/
+// or none, in its project or with none named.
+const sameHash = (a: string, b: string) => {
+  const same = (h: string) => {
+    const { project, page } = splitHash(h)
+    return hashIn(project, page === '' || page === '#' ? '#/' : page)
+  }
+  return same(a) === same(b)
+}
+
+// How long after asking /api/me again, as a request about the project was
+// refused, it isn't asked again for another.
+const REFUSED_ASK_MS = 10_000
 
 export default function App() {
   const { tabs, active, select, add, close } = useTabs()
-  const inbox = useInboxCount()
+  const me = useMe()
+  const [, redraw] = useReducer((n: number) => n + 1, 0)
+  const { project, page } = splitHash(window.location.hash)
+  const inbox = useInboxCount(project)
+
+  // An address naming no project, as an old bookmark's or a notification's,
+  // opens in the project last used, else the person's first, in place, once
+  // the projects they may enter are known, so one they lost since is passed
+  // over. (A link followed within a tab stays in the tab's project, tabs.ts.)
+  useLayoutEffect(() => {
+    if (project !== null || outsideProjects(page) || !me) return
+    const to = rewritten(window.location.hash, projectFor(null, lastProject(), me.projects.map((p) => p.id)))
+    if (to === null) return
+    window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search + to)
+    redraw()
+  })
+
+  // The project shown is the one an address naming none opens in next.
+  const enterable = project !== null && !!me?.projects.some((p) => p.id === project)
+  useEffect(() => {
+    if (enterable && project !== null) rememberProject(project)
+  }, [enterable, project])
+
+  // A request about what is in the project refused as forbidden or not
+  // found may mean the person was taken out of it, or it was archived:
+  // who they are is asked again, and the page gives way to saying so once
+  // the project is no longer among theirs.
+  useEffect(() => {
+    let asked = 0
+    return onRefusedHere(() => {
+      if (Date.now() - asked < REFUSED_ASK_MS) return
+      asked = Date.now()
+      reloadMe().catch(() => {})
+    })
+  }, [])
+
   // A page opens in the tab showing it, if one does, else in a new one.
   const openPage = (hash: string) => {
     if (sameHash(window.location.hash, hash)) return
@@ -101,7 +166,7 @@ export default function App() {
     if (open) select(open.id)
     else add(hash)
   }
-  const onInbox = () => openPage(INBOX)
+  const onInbox = () => openPage(pageHash('#/inbox'))
   // The command palette and the sheet of shortcuts, over any page.
   const [palette, setPalette] = useState(false)
   const [sheet, setSheet] = useState(false)
@@ -109,6 +174,15 @@ export default function App() {
     palette: () => setPalette((open) => !open),
     sheet: () => setSheet(true),
   })
+
+  // What shows in place of the page: nothing while the project an address
+  // naming none opens in isn't known, and that they may enter no project,
+  // or not the one the address names.
+  const outside = outsideProjects(page)
+  let shown: 'page' | 'wait' | 'none' = 'page'
+  if (!outside && project === null) shown = me && me.projects.length === 0 ? 'none' : 'wait'
+  else if (!outside && me && !enterable) shown = 'none'
+
   return (
     <>
       <TabBar
@@ -116,15 +190,17 @@ export default function App() {
         active={active}
         inbox={inbox}
         onSelect={select}
-        onAdd={() => add('#/', true)}
+        onAdd={() => add(pageHash('#/'), true)}
         onClose={close}
-        onHome={() => openPage('#/')}
+        onHome={() => openPage(pageHash('#/'))}
         onInbox={onInbox}
       />
       <div className="tab-page">
-        {/* A new page for each tab, so nothing of one shows on another. */}
+        {/* A new page for each tab, and for each project a tab goes to, so
+            nothing of one shows on another. */}
         <TabContext.Provider value={active}>
-          <Page key={active} />
+          {shown === 'page' && <Page key={`${active}:${project ?? ''}`} />}
+          {shown === 'none' && me && <NoProject me={me} project={project} />}
         </TabContext.Provider>
       </div>
       {palette && <CommandPalette onOpen={openPage} onShortcuts={() => setSheet(true)} onClose={() => setPalette(false)} />}
@@ -135,7 +211,8 @@ export default function App() {
 
 function Page() {
   const page = pageInHash()
-  if (page === null) return <FlowList onOpen={(id) => (window.location.hash = `#/flows/${id}`)} />
+  if (page === null) return <FlowList onOpen={(id) => (window.location.hash = pageHash(`#/flows/${id}`))} />
+  if (page === 'projects') return <ProjectsPage />
   if (page === 'schedules') return <Schedules />
   if (page === 'activity') return <Activity />
   if (page === 'inbox') return <Inbox />
@@ -176,7 +253,7 @@ function FlowPage({ id, run, step }: { id: number; run: number | null; step: num
       <div className="flows-page">
         <ErrorBanner error={error} />
         <p className="flows">
-          <a href="#/">Back to every flow</a>
+          <a href={pageHash('#/')}>Back to every flow</a>
         </p>
       </div>
     )

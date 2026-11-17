@@ -54,21 +54,22 @@ func TestTrashSweepEvery(t *testing.T) {
 	}
 }
 
-// Someone seeing every flow is held to those out of the trash by leaving
-// those in it out; anyone else by those they see.
+// Someone seeing every flow of the project is held to those out of the
+// trash by leaving those in it out; anyone else by those they see; both to
+// the project.
 func TestOfFlows(t *testing.T) {
 	for _, c := range []struct {
 		seen flowSet
 		cond string
 		args []any
 	}{
-		{flowSet{}, "TRUE", nil},
-		{flowSet{trashed: []int64{}}, "TRUE", nil},
-		{flowSet{trashed: []int64{4, 5}}, "r.flow_id NOT IN (?, ?)", []any{int64(4), int64(5)}},
-		{flowSet{ids: []int64{1}}, "r.flow_id IN (?)", []any{int64(1)}},
-		{flowSet{ids: []int64{}}, "r.flow_id IN (SELECT NULL FROM DUAL WHERE FALSE)", []any{}},
+		{flowSet{project: 3}, "r.project_id = ?", []any{int64(3)}},
+		{flowSet{project: 3, trashed: []int64{}}, "r.project_id = ?", []any{int64(3)}},
+		{flowSet{project: 3, trashed: []int64{4, 5}}, "r.project_id = ? AND r.flow_id NOT IN (?, ?)", []any{int64(3), int64(4), int64(5)}},
+		{flowSet{project: 3, ids: []int64{1}}, "r.project_id = ? AND r.flow_id IN (?)", []any{int64(3), int64(1)}},
+		{flowSet{project: 3, ids: []int64{}}, "r.project_id = ? AND r.flow_id IN (SELECT NULL FROM DUAL WHERE FALSE)", []any{int64(3)}},
 	} {
-		cond, args := ofFlows("r.flow_id", c.seen)
+		cond, args := ofFlows("r.", c.seen)
 		if cond != c.cond || (len(args) > 0 || len(c.args) > 0) && !reflect.DeepEqual(args, c.args) {
 			t.Errorf("ofFlows(%+v) = %q, %v; want %q, %v", c.seen, cond, args, c.cond, c.args)
 		}

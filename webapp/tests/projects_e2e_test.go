@@ -529,8 +529,7 @@ func TestProjectsAdminsOwnLegacy(t *testing.T) {
 // them in at once, as a member from their group; taking it away takes them
 // out, leaving what they made.
 func TestProjectsGroupsGiveAccessAtOnce(t *testing.T) {
-	a, prov := usersApp(t)
-	db := secretsDB(t)
+	a, prov := peopleApp(t)
 	gina := usersNewPerson("Gina")
 	usersSignIn(a, prov, gina)
 	usersSignIn(a, prov, usersAda)
@@ -541,12 +540,10 @@ func TestProjectsGroupsGiveAccessAtOnce(t *testing.T) {
 
 	usersSignIn(a, prov, gina)
 	a.refused("GET", "/api/flows", nil, http.StatusForbidden, "no access to this project")
-	// The groups she is in, as she signed in; reading the claim is
-	// sign-in's, so they are put there directly.
+	// The groups she is in, as she signs in; see projects_people_e2e_test.go.
 	group := fmt.Sprintf("engineering-%d", time.Now().UnixNano())
-	if _, err := db.Exec("INSERT INTO user_groups (user_id, group_name) VALUES (?, ?)", projectUserID(t, db, gina.email), group); err != nil {
-		t.Fatal(err)
-	}
+	peopleInGroups(prov, gina, []string{group})
+	usersSignIn(a, prov, gina)
 	a.refused("GET", "/api/flows", nil, http.StatusForbidden, "no access to this project")
 
 	usersSignIn(a, prov, usersAda)

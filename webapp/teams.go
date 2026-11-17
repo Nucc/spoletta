@@ -1,9 +1,14 @@
 package main
 
 // A team is a group of people, such as Payments or Platform, that can own
-// flows together; see owners.go. Admins, and people an admin made team
-// managers, make teams and say who is in them. Anyone signed in sees every
-// team, so they can give a flow to one of theirs and see who else has it.
+// flows together; see owners.go. Teams are a project's (see projects.go):
+// each is listed, made, renamed and deleted in the project the request names,
+// its name unique there, and its members are people who may enter the
+// project; flows, skills, task boards and credentials are given only to
+// teams of their own project, which the database checks too. The project's
+// owners, and people an admin of the instance made team managers, make
+// teams and say who is in them. Anyone in the project sees its teams, so
+// they can give a flow to one of theirs and see who else has it.
 //
 // Teams belong to people, not boards, so they stay out of versions and the
 // setup file. Without sign-in there are no people, so no teams either.
@@ -41,28 +46,31 @@ type teamRef struct {
 	Name string `json:"name"`
 }
 
-// The teams the user is in, by name.
-func userTeams(ctx context.Context, db rowsQuerier, id int64) ([]teamRef, error) {
+// The teams of the project the user is in, by name.
+func userTeams(ctx context.Context, db rowsQuerier, id, project int64) ([]teamRef, error) {
 	teams := []teamRef{}
-	err := scanAll(ctx, db, "SELECT t.id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.user_id = ? ORDER BY t.name", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, `SELECT t.id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.user_id = ? AND t.project_id = ? ORDER BY t.name`, func(rows *sql.Rows) error {
 		var t teamRef
 		err := rows.Scan(&t.ID, &t.Name)
 		teams = append(teams, t)
 		return err
-	}, id)
+	}, id, project)
 	return teams, err
 }
 
-// Whether the user is in the team.
-func inTeam(ctx context.Context, db querier, user, team int64) (bool, error) {
+// Whether the user is in the team, which is the project's; none of another
+// project's teams is theirs to give anything to there.
+func inTeam(ctx context.Context, db querier, user, team, project int64) (bool, error) {
 	var n int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM team_members WHERE team_id = ? AND user_id = ?", team, user).Scan(&n)
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM team_members WHERE team_id = ? AND user_id = ? AND project_id = ?", team, user, project).Scan(&n)
 	return n > 0, err
 }
 
-func getTeam(ctx context.Context, db dbQuerier, id int64) (team, error) {
+// The project's team; sql.ErrNoRows for none of that id in it.
+func getTeam(ctx context.Context, db dbQuerier, id, project int64) (team, error) {
 	t := team{ID: id, Members: []teamMember{}}
-	if err := db.QueryRowContext(ctx, "SELECT name FROM teams WHERE id = ?", id).Scan(&t.Name); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT name FROM teams WHERE id = ? AND project_id = ?", id, project).Scan(&t.Name); err != nil {
 		return t, err
 	}
 	err := scanAll(ctx, db, `SELECT u.id, u.email, u.name FROM team_members m JOIN users u ON u.id = m.user_id
@@ -81,7 +89,8 @@ type dbQuerier interface {
 	rowsQuerier
 }
 
-// Turns away a request from someone who may not make or change teams.
+// Turns away a request from someone who may not make or change the
+// project's teams: neither an owner of it nor a team manager.
 func refuseNonTeamManager(w http.ResponseWriter, r *http.Request) bool {
 	if u := requestUser(r); u == nil || !(u.Admin || u.TeamManager) {
 		http.Error(w, "only an admin or a team manager can do that", http.StatusForbidden)
@@ -113,12 +122,17 @@ func (b *teamBody) check() string {
 	return ""
 }
 
-func setMembers(ctx context.Context, tx *sql.Tx, team int64, members []int64) error {
+// Replaces the team's members, each someone who may enter its project
+// (memberOfProject).
+func setMembers(ctx context.Context, tx *sql.Tx, project, team int64, members []int64) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM team_members WHERE team_id = ?", team); err != nil {
 		return err
 	}
 	for _, u := range members {
-		_, err := tx.ExecContext(ctx, "INSERT INTO team_members (team_id, user_id) VALUES (?, ?)", team, u)
+		if err := memberOfProject(ctx, tx, project, u); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "INSERT INTO team_members (team_id, user_id, project_id) VALUES (?, ?, ?)", team, u, project)
 		if mysqlErrorIs(err, mysqlErrForeignKey) {
 			return errUnknownMember
 		}
@@ -136,8 +150,10 @@ func teamError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errUnknownMember):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, errNotInProject):
+		http.Error(w, "a member may not enter this project; give them access to it first", http.StatusBadRequest)
 	case mysqlErrorIs(err, mysqlErrDuplicate):
-		http.Error(w, "another team has that name", http.StatusConflict)
+		http.Error(w, "another team of the project has that name", http.StatusConflict)
 	case errors.Is(err, sql.ErrNoRows):
 		http.Error(w, "team not found", http.StatusNotFound)
 	default:
@@ -150,20 +166,22 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		return
 	}
 
+	// The project's teams, by name.
 	mux.HandleFunc("GET /api/teams", func(w http.ResponseWriter, r *http.Request) {
+		project := requestProject(r)
 		var ids []int64
-		if err := scanAll(r.Context(), db, "SELECT id FROM teams ORDER BY name", func(rows *sql.Rows) error {
+		if err := scanAll(r.Context(), db, "SELECT id FROM teams WHERE project_id = ? ORDER BY name", func(rows *sql.Rows) error {
 			var id int64
 			err := rows.Scan(&id)
 			ids = append(ids, id)
 			return err
-		}); err != nil {
+		}, project); err != nil {
 			serverError(w, err)
 			return
 		}
 		teams := []team{}
 		for _, id := range ids {
-			t, err := getTeam(r.Context(), db, id)
+			t, err := getTeam(r.Context(), db, id, project)
 			if err != nil {
 				serverError(w, err)
 				return
@@ -173,6 +191,7 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		writeJSON(w, http.StatusOK, teams)
 	})
 
+	// Makes a team in the project: {"name", "members"}.
 	mux.HandleFunc("POST /api/teams", func(w http.ResponseWriter, r *http.Request) {
 		if refuseNonTeamManager(w, r) {
 			return
@@ -189,9 +208,10 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		project := requestProject(r)
 		var id int64
 		err := inTx(r.Context(), db, func(tx *sql.Tx) error {
-			res, err := tx.ExecContext(r.Context(), "INSERT INTO teams (name) VALUES (?)", *body.Name)
+			res, err := tx.ExecContext(r.Context(), "INSERT INTO teams (name, project_id) VALUES (?, ?)", *body.Name, project)
 			if err != nil {
 				return err
 			}
@@ -201,13 +221,13 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			if body.Members == nil {
 				return nil
 			}
-			return setMembers(r.Context(), tx, id, *body.Members)
+			return setMembers(r.Context(), tx, project, id, *body.Members)
 		})
 		if err != nil {
 			teamError(w, err)
 			return
 		}
-		t, err := getTeam(r.Context(), db, id)
+		t, err := getTeam(r.Context(), db, id, project)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -215,7 +235,7 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		writeJSON(w, http.StatusCreated, t)
 	})
 
-	// Renames the team, or replaces its members.
+	// Renames the project's team, or replaces its members.
 	mux.HandleFunc("PATCH /api/teams/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if refuseNonTeamManager(w, r) {
 			return
@@ -234,9 +254,10 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		project := requestProject(r)
 		err = inTx(r.Context(), db, func(tx *sql.Tx) error {
 			var n int
-			if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM teams WHERE id = ? FOR UPDATE", id).Scan(&n); err != nil {
+			if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM teams WHERE id = ? AND project_id = ? FOR UPDATE", id, project).Scan(&n); err != nil {
 				return err
 			}
 			if n == 0 {
@@ -248,7 +269,7 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 				}
 			}
 			if body.Members != nil {
-				return setMembers(r.Context(), tx, id, *body.Members)
+				return setMembers(r.Context(), tx, project, id, *body.Members)
 			}
 			return nil
 		})
@@ -256,7 +277,7 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			teamError(w, err)
 			return
 		}
-		t, err := getTeam(r.Context(), db, id)
+		t, err := getTeam(r.Context(), db, id, project)
 		if err != nil {
 			serverError(w, err)
 			return
@@ -274,6 +295,16 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
 			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		project := requestProject(r)
+		var n int
+		if err := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM teams WHERE id = ? AND project_id = ?", id, project).Scan(&n); err != nil {
+			serverError(w, err)
+			return
+		}
+		if n == 0 {
+			http.Error(w, "team not found", http.StatusNotFound)
 			return
 		}
 		// Those in the trash too, which are the team's still (trash.go).
@@ -306,7 +337,7 @@ func registerTeamRoutes(mux *http.ServeMux, db *sql.DB, a *auth) {
 			http.Error(w, fmt.Sprintf("the team owns %d task boards; give them to someone else first", owned), http.StatusConflict)
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), "DELETE FROM teams WHERE id = ?", id); err != nil {
+		if _, err := db.ExecContext(r.Context(), "DELETE FROM teams WHERE id = ? AND project_id = ?", id, project); err != nil {
 			serverError(w, err)
 			return
 		}

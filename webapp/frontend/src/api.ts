@@ -2309,17 +2309,17 @@ export async function answerLoop(run: number, id: number, goOn: boolean): Promis
   inboxChanged()
 }
 
-// A step waiting on the person signed in: a review or input they may
-// decide, or a loop question of a flow they may edit; without sign-in,
-// every step waiting. See inbox.go.
+// A step waiting on the person signed in, in any project they may enter: a
+// review or input they may decide, or a loop question of a flow they may
+// edit; without sign-in, every step waiting in the page's project. See
+// inbox.go.
 export type InboxItem = {
   step: number
   run: number
-  // The project its flow is in, and its name, where the server says: the
-  // inbox is the person's, across their projects, and an item opens in its
-  // own. Absent while the server lists the request's project alone.
-  project?: number
-  projectName?: string
+  // The project its flow is in, and its name: the inbox is the person's,
+  // across every project they may enter, and an item opens in its own.
+  project: number
+  projectName: string
   // The run's flow, and the run it is within, for a flow process's or a
   // subflow's run.
   flow: number
@@ -2344,14 +2344,15 @@ export type InboxItem = {
   expires: string | null
 }
 
-// What waits on the person, newest first.
+// What waits on the person, newest first, in every project they may enter.
 export function listInbox(): Promise<InboxItem[]> {
   return request('/api/inbox')
 }
 
-// How many steps wait on the person, asked in the background: null when it
-// can't be told, without sending them to sign in as a page's own request
-// does, so a session ending doesn't pull them away from what they type.
+// How many steps wait on the person, in every project they may enter, asked
+// in the background: null when it can't be told, without sending them to
+// sign in as a page's own request does, so a session ending doesn't pull
+// them away from what they type.
 export async function countInbox(): Promise<number | null> {
   try {
     const res = await answer('/api/inbox')
@@ -2727,10 +2728,15 @@ export function listProjectMembers(project: number): Promise<ProjectMember[]> {
   return request(`/api/projects/${project}/members`)
 }
 
+// Someone given a project by hand: by their id, or by the email of someone
+// the instance has, as its owners needn't see everyone it has.
+export type ProjectGiven = ({ user: number } | { email: string }) & { level: ProjectLevel }
+
 // Gives the project by hand to these people, at these levels, in place of
 // those it was given to by hand; those left out are removed, and someone
 // named who came in another way is a member by hand from then. Its owners'.
-export function setProjectMembers(project: number, members: { user: number; level: ProjectLevel }[]): Promise<ProjectMember[]> {
+// An email nobody the instance has signs in with is refused, saying so.
+export function setProjectMembers(project: number, members: ProjectGiven[]): Promise<ProjectMember[]> {
   return request(`/api/projects/${project}/members`, { method: 'PUT', body: JSON.stringify(members) })
 }
 

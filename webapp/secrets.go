@@ -1,8 +1,9 @@
 package main
 
 // Secrets the webapp keeps for others, the model keys admins save, the
-// tokens of people's MCP connections, credentials' secrets and webhooks'
-// secrets, are sealed in the database with
+// tokens of people's MCP connections, credentials' secrets, webhooks'
+// secrets and the tokens sessions keep to read people's groups again
+// (users.go), are sealed in the database with
 // SECRET_KEY, so a copy of the database, a backup or a dump doesn't hand
 // them out. Each is sealed with AES-256-GCM under a key derived from
 // SECRET_KEY, and bound to where it is kept, its table, column and row, so
@@ -199,7 +200,7 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 	}
 	secrets = s
 	if s == nil {
-		log.Printf("WARNING: SECRET_KEY isn't set, so model keys, MCP tokens, credentials' and webhooks' secrets are kept in the database unsealed")
+		log.Printf("WARNING: SECRET_KEY isn't set, so model keys, MCP tokens, credentials' and webhooks' secrets and sign-ins' tokens are kept in the database unsealed")
 	}
 	ctx := context.Background()
 	// A secret, and how to seal it where it is unless it changed meanwhile.
@@ -269,6 +270,25 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 			if token.Valid {
 				all = append(all, secret{"UPDATE mcp_tokens SET " + column + " = ? WHERE server_id = ? AND user_id = ? AND " + column + " = ?",
 					mcpTokenPlace(column, server, user), token.String, []any{server, user, token.String}})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	// The tokens a session keeps to read its person's groups again; see
+	// users.go.
+	err = scanAll(ctx, db, "SELECT token_hash, refresh_token, access_token FROM sessions WHERE refresh_token IS NOT NULL OR access_token IS NOT NULL", func(rows *sql.Rows) error {
+		var hash string
+		var refresh, access sql.NullString
+		if err := rows.Scan(&hash, &refresh, &access); err != nil {
+			return err
+		}
+		for column, token := range map[string]sql.NullString{"refresh_token": refresh, "access_token": access} {
+			if token.Valid {
+				all = append(all, secret{"UPDATE sessions SET " + column + " = ? WHERE token_hash = ? AND " + column + " = ?",
+					sessionTokenPlace(column, hash), token.String, []any{hash, token.String}})
 			}
 		}
 		return nil

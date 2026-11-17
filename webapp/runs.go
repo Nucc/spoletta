@@ -785,7 +785,7 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 		}
 		var roles []string
 		if u := requestUser(r); u != nil {
-			if roles, err = userRoles(r.Context(), db, u.ID); err != nil {
+			if roles, err = userRoles(r.Context(), db, u.ID, requestProject(r)); err != nil {
 				serverError(w, err)
 				return
 			}

@@ -7,6 +7,7 @@ import {
   setProjectMembers,
   updateProject,
   type OthersAccess,
+  type ProjectGiven,
   type ProjectGroup,
   type ProjectLevel,
   type ProjectMember,
@@ -25,9 +26,11 @@ import { useUndoNotice } from './UndoNotice'
 // so whoever is in one enters as they sign in; and what anyone else signed
 // in may do. Someone who came in through a group, as anyone signed in, or
 // as an admin of Spoletta is listed with how; picking their level gives it
-// to them by hand from then. Taking someone or a group out is undone by
-// adding them back, so it asks nothing first but offers to undo it; those
-// taken out are listed apart.
+// to them by hand from then. Someone is added by the email they sign in
+// with, as an owner needn't see everyone Spoletta has; those the owner may
+// list are offered as it is typed. Taking someone or a group out is undone
+// by adding them back, so it asks nothing first but offers to undo it;
+// those taken out are listed apart.
 
 const LEVELS: ProjectLevel[] = ['owner', 'editor', 'viewer']
 
@@ -68,8 +71,9 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
   const here = me?.projects.find((p) => p.id === project)
   const [members, setMembers] = useState<ProjectMember[] | null>(null)
   const [groups, setGroups] = useState<ProjectGroup[] | null>(null)
-  // The instance's people to give access to; null when whoever asks may not
-  // list them.
+  // The people to offer as an email is typed: everyone, for an admin of
+  // Spoletta, else those who may enter the project another way; null when
+  // whoever asks may not list them.
   const [people, setPeople] = useState<User[] | null>(null)
   const [showUndo, , undoNotice] = useUndoNotice()
 
@@ -89,19 +93,25 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
 
   // Those given it by hand now, which a change of who has access replaces.
   const manual = (members ?? []).filter((m) => m.source === 'manual' && !m.removedAt).map((m) => ({ user: m.user, level: m.level }))
-  const give = async (to: { user: number; level: ProjectLevel }[]) => {
+  // Resolves to whether it was given, having said why not if it wasn't.
+  const give = async (to: ProjectGiven[]) => {
     try {
       setMembers(await setProjectMembers(project, to))
       // The person's own level may be what changed.
       reloadMe().catch(() => {})
+      return true
     } catch (err) {
       onError(err)
+      return false
     }
   }
   const setLevel = (m: ProjectMember, level: ProjectLevel) => give([...manual.filter((x) => x.user !== m.user), { user: m.user, level }])
   const takeOut = async (m: ProjectMember) => {
     await give(manual.filter((x) => x.user !== m.user))
-    showUndo({ message: `Took ${m.name || m.email} out`, undo: () => give([...manual.filter((x) => x.user !== m.user), { user: m.user, level: m.level }]) })
+    showUndo({
+      message: `Took ${m.name || m.email} out`,
+      undo: () => void give([...manual.filter((x) => x.user !== m.user), { user: m.user, level: m.level }]),
+    })
   }
 
   const putGroups = async (to: ProjectGroup[]) => {
@@ -130,7 +140,8 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
 
   const current = (members ?? []).filter((m) => !m.removedAt)
   const removed = (members ?? []).filter((m) => m.removedAt)
-  const others = (people ?? []).filter((p) => !current.some((m) => m.user === p.id && m.source === 'manual'))
+  const givenByHand = current.filter((m) => m.source === 'manual').map((m) => m.email.toLowerCase())
+  const others = (people ?? []).filter((p) => !givenByHand.includes(p.email.toLowerCase()))
 
   return (
     <section className="flow-section project-access" aria-label="Access">
@@ -149,7 +160,7 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
       <ProjectName name={here.name} onRename={(name) => change({ name })} />
 
       <SettingsHead title="People" level={3} lead={`${LEVEL_TEXT.owner} ${LEVEL_TEXT.editor} ${LEVEL_TEXT.viewer}`} />
-      {people !== null && others.length > 0 && <AddMember people={others} onAdd={(user, level) => give([...manual, { user, level }])} />}
+      <AddMember people={others} taken={givenByHand} onAdd={(email, level) => give([...manual, { email, level }])} />
       {members === null ? (
         <p className="flows-note">Loading…</p>
       ) : current.length === 0 ? (
@@ -181,9 +192,6 @@ export function AccessSection({ onError }: { onError: (err: unknown) => void }) 
             </li>
           ))}
         </ul>
-      )}
-      {people === null && (
-        <p className="flows-note">You can’t list the instance’s people to add someone here; an admin of Spoletta can.</p>
       )}
       {removed.length > 0 && (
         <>
@@ -291,26 +299,43 @@ function LevelPick({ level, label, title, onChange }: { level: ProjectLevel; lab
   )
 }
 
-// Gives someone of the instance's people access, at a level.
-function AddMember({ people, onAdd }: { people: User[]; onAdd: (user: number, level: ProjectLevel) => void }) {
-  const [user, setUser] = useState('')
+// Gives someone Spoletta has access, at a level, by the email they sign in
+// with, offering the people given as it is typed; the email stays to be
+// corrected if the server refuses it, as when nobody signs in with it yet.
+function AddMember({
+  people,
+  taken,
+  onAdd,
+}: {
+  people: User[]
+  taken: string[]
+  onAdd: (email: string, level: ProjectLevel) => Promise<boolean>
+}) {
+  const [email, setEmail] = useState('')
   const [level, setLevel] = useState<ProjectLevel>('editor')
-  const add = (e: FormEvent) => {
-    e.preventDefault()
-    if (!user) return
-    onAdd(Number(user), level)
-    setUser('')
+  const e = email.trim().toLowerCase()
+  const add = async (ev: FormEvent) => {
+    ev.preventDefault()
+    if (!e || taken.includes(e)) return
+    if (await onAdd(e, level)) setEmail('')
   }
   return (
-    <form className="flow-new access-add" onSubmit={add}>
-      <select aria-label="Someone to give access" value={user} onChange={(e) => setUser(e.target.value)}>
-        <option value="">Someone to give access…</option>
+    <form className="flow-new access-add" onSubmit={(ev) => void add(ev)}>
+      <input
+        type="email"
+        list="access-people"
+        placeholder="Email of someone to give access"
+        aria-label="Email of someone to give access"
+        value={email}
+        onChange={(ev) => setEmail(ev.target.value)}
+      />
+      <datalist id="access-people">
         {people.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name ? `${p.name} (${p.email})` : p.email}
+          <option key={p.id} value={p.email}>
+            {p.name || p.email}
           </option>
         ))}
-      </select>
+      </datalist>
       <select aria-label="Their level" value={level} onChange={(e) => setLevel(e.target.value as ProjectLevel)}>
         {LEVELS.map((l) => (
           <option key={l} value={l}>
@@ -318,7 +343,7 @@ function AddMember({ people, onAdd }: { people: User[]; onAdd: (user: number, le
           </option>
         ))}
       </select>
-      <button type="submit" disabled={!user}>
+      <button type="submit" disabled={!e || taken.includes(e)}>
         <PlusIcon /> Give access
       </button>
     </form>

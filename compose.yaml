@@ -135,6 +135,12 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # The claim of your identity provider's naming the groups people are
+      # in, which projects are given to; how long groups read hold, 24h
+      # unless set, for a session that can't read them again. See
+      # docs/INSTALL.md and webapp/users.go.
+      OIDC_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM:-}
+      GROUPS_MAX_AGE: ${GROUPS_MAX_AGE:-}
       PUBLIC_URL: ${PUBLIC_URL:-}
       # Telling people a review waits on them, reminding them, and telling
       # them their runs failed, by email: over SMTP to SMTP_HOST, on

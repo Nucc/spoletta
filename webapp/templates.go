@@ -10,7 +10,7 @@ package main
 // commands, structs or procedures, since importing those would make over
 // what the app already has of the same name, which is everyone's and only
 // admins change. For the same reason the flow is named apart from every
-// flow there is, seen or not. What it needs of the app is worked out from
+// flow of the project, seen or not. What it needs of the app is worked out from
 // it: the repositories its processes work on, which its flow then lacks
 // until someone adds them in its settings; the connectors its connector
 // processes use, named in the file by the connector, such as slack, and
@@ -18,7 +18,9 @@ package main
 // none, keeping the operation and its arguments; and the roles its people
 // name. What a flow made from one still lacks shows as its problems (see
 // problems.go). Its schedules come off, so nothing runs before someone
-// says so.
+// says so. All of it is the project's it is used in (projects.go): the
+// flow goes there, named apart from that project's flows alone, and takes
+// that project's connectors, and what it needs is what that project has.
 
 import (
 	"context"
@@ -186,20 +188,20 @@ func parseTemplate(name string, body []byte) (flowTemplate, error) {
 	return t, walk(&fl.setupBoard)
 }
 
-// The template as the app stands: which of its needs it meets.
-func (t flowTemplate) forApp(ctx context.Context, db *sql.DB, signIn bool) (flowTemplate, error) {
+// The template as the project stands: which of its needs it meets.
+func (t flowTemplate) forApp(ctx context.Context, db *sql.DB, project int64, signIn bool) (flowTemplate, error) {
 	needs := make([]templateNeed, len(t.Needs))
 	for i, n := range t.Needs {
 		var err error
 		switch n.Kind {
 		case needConnector:
-			err = db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM mcp_servers WHERE connector = ?)", n.Name).Scan(&n.Met)
+			err = db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM mcp_servers WHERE connector = ? AND project_id = ?)", n.Name, project).Scan(&n.Met)
 		case needRole:
 			// Without sign-in, anyone decides.
 			n.Met = !signIn
 			if signIn {
 				err = db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN users u ON u.id = ur.user_id
-					WHERE u.removed_at IS NULL AND LOWER(TRIM(ur.name)) = ?)`, roleKey(n.Name)).Scan(&n.Met)
+					WHERE u.removed_at IS NULL AND ur.project_id = ? AND LOWER(TRIM(ur.name)) = ?)`, project, roleKey(n.Name)).Scan(&n.Met)
 			}
 		}
 		if err != nil {
@@ -223,16 +225,17 @@ func findTemplate(id string) (flowTemplate, bool, error) {
 	return ts[i], true, nil
 }
 
-// The first name of the form name, name 2, name 3… no flow has, of those
-// out of the trash, which leaves its flows' names free (trash.go).
-func freeFlowName(ctx context.Context, tx *sql.Tx, name string) (string, error) {
+// The first name of the form name, name 2, name 3… no flow of the project
+// has, of those out of the trash, which leaves its flows' names free
+// (trash.go).
+func freeFlowName(ctx context.Context, tx *sql.Tx, project int64, name string) (string, error) {
 	taken := map[string]bool{}
-	err := scanAll(ctx, tx, "SELECT name FROM flows WHERE (name = ? OR name LIKE ?) AND deleted_at IS NULL", func(rows *sql.Rows) error {
+	err := scanAll(ctx, tx, "SELECT name FROM flows WHERE (name = ? OR name LIKE ?) AND deleted_at IS NULL AND project_id = ?", func(rows *sql.Rows) error {
 		var n string
 		err := rows.Scan(&n)
 		taken[n] = true
 		return err
-	}, name, escapeLike(name)+" %")
+	}, name, escapeLike(name)+" %", project)
 	if err != nil {
 		return "", err
 	}
@@ -248,10 +251,11 @@ func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(s)
 }
 
-// The template's setup file as it is imported into the app: its flow
-// named name, each connector process given the first installed connector
-// of the one it names, or none while none is, and its schedules off.
-func (t flowTemplate) setupFor(ctx context.Context, tx *sql.Tx, name string) (setupFile, error) {
+// The template's setup file as it is imported into the project: its flow
+// named name, each connector process given the project's first installed
+// connector of the one it names, or none while none is, and its schedules
+// off.
+func (t flowTemplate) setupFor(ctx context.Context, tx *sql.Tx, project int64, name string) (setupFile, error) {
 	f, err := parseSetup(t.setup)
 	if err != nil {
 		return f, err
@@ -270,7 +274,7 @@ func (t flowTemplate) setupFor(ctx context.Context, tx *sql.Tx, name string) (se
 			if c := p.Connector; c != nil {
 				server, ok := installed[c.Server]
 				if !ok {
-					err := tx.QueryRowContext(ctx, "SELECT name FROM mcp_servers WHERE connector = ? ORDER BY id LIMIT 1", c.Server).Scan(&server)
+					err := tx.QueryRowContext(ctx, "SELECT name FROM mcp_servers WHERE connector = ? AND project_id = ? ORDER BY id LIMIT 1", c.Server, project).Scan(&server)
 					if err != nil && !errors.Is(err, sql.ErrNoRows) {
 						return err
 					}
@@ -302,7 +306,7 @@ func registerTemplateRoutes(mux *http.ServeMux, db *sql.DB) {
 		}
 		out := []flowTemplate{}
 		for _, t := range ts {
-			t, err := t.forApp(r.Context(), db, requestUser(r) != nil)
+			t, err := t.forApp(r.Context(), db, requestProject(r), requestUser(r) != nil)
 			if err != nil {
 				serverError(w, err)
 				return
@@ -353,16 +357,17 @@ func registerTemplateRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		if name, err = freeFlowName(ctx, tx, name); err != nil {
+		project := requestProject(r)
+		if name, err = freeFlowName(ctx, tx, project, name); err != nil {
 			serverError(w, err)
 			return
 		}
-		f, err := t.setupFor(ctx, tx, name)
+		f, err := t.setupFor(ctx, tx, project, name)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		res, err := importSetup(ctx, tx, f, saving{by: requestUserID(r), reason: savedForImport})
+		res, err := importSetup(ctx, tx, project, f, saving{by: requestUserID(r), reason: savedForImport})
 		var p setupProblem
 		if errors.As(err, &p) {
 			http.Error(w, p.msg, http.StatusConflict)

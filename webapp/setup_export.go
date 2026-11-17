@@ -24,23 +24,26 @@ type exportedFlow struct {
 	schedules        []setupSchedule
 }
 
-// The setup as it is: every MCP server, skill, command, struct, procedure and
-// flow, by name, or with only set, that flow and what it refers to: the
-// procedures it runs, the structs and procedures its copies follow, on down,
-// and the MCP servers its processes use. Two flows can't share a name in the file, since it names
-// them to refer to them; with two that do, it says so instead.
-func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error) {
+// The setup of a project as it is: every MCP server, skill, command,
+// struct, procedure and flow of it, by name, or with only set, that flow
+// and what it refers to: the procedures it runs, the structs and procedures
+// its copies follow, on down, and the MCP servers its processes use. Two
+// flows can't share a name in the file, since it names them to refer to
+// them; with two that do, it says so instead. The file names no project,
+// and nothing of another, which a board can't refer to (board_projects.go):
+// one imports into any project.
+func exportSetup(ctx context.Context, tx *sql.Tx, project, only int64) (setupFile, error) {
 	f := setupFile{Spoletta: setupVersion}
 	var flows []*exportedFlow
 	// What is in the trash is left out, as if deleted (trash.go): copies of
 	// its objects are their flows' own, and the subflow processes running
 	// it run nothing.
-	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, settings FROM flows WHERE deleted_at IS NULL ORDER BY name, id", func(rows *sql.Rows) error {
+	err := scanAll(ctx, tx, "SELECT id, name, module, is_struct, settings FROM flows WHERE deleted_at IS NULL AND project_id = ? ORDER BY name, id", func(rows *sql.Rows) error {
 		e := &exportedFlow{}
 		err := rows.Scan(&e.id, &e.name, &e.module, &e.isStruct, &e.settings)
 		flows = append(flows, e)
 		return err
-	})
+	}, project)
 	if err != nil {
 		return f, err
 	}
@@ -110,7 +113,7 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 	}
 
 	mcpNames := map[int64]string{}
-	err = scanAll(ctx, tx, "SELECT id, name, url, description, auth, connector FROM mcp_servers ORDER BY name", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name, url, description, auth, connector FROM mcp_servers WHERE project_id = ? ORDER BY name", func(rows *sql.Rows) error {
 		var id int64
 		var s setupMCPServer
 		err := rows.Scan(&id, &s.Name, &s.URL, &s.Description, &s.Auth, &s.Connector)
@@ -128,14 +131,14 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 			f.MCPServers = append(f.MCPServers, s)
 		}
 		return err
-	})
+	}, project)
 	if err != nil {
 		return f, err
 	}
 	// Skills and commands are written out with the whole setup only: a flow
 	// alone names the skills it uses, and its assistant is told them apart.
 	skillNames := map[int64]string{}
-	err = scanAll(ctx, tx, "SELECT id, kind, name, description, argument_hint, content FROM skills ORDER BY name", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, kind, name, description, argument_hint, content FROM skills WHERE project_id = ? ORDER BY name", func(rows *sql.Rows) error {
 		var id int64
 		var kind string
 		var s setupSkill
@@ -150,19 +153,19 @@ func exportSetup(ctx context.Context, tx *sql.Tx, only int64) (setupFile, error)
 			f.Commands = append(f.Commands, s)
 		}
 		return err
-	})
+	}, project)
 	if err != nil {
 		return f, err
 	}
 	// Credentials are named, never written out: they are admins'.
 	credentialNames := map[int64]string{}
-	err = scanAll(ctx, tx, "SELECT id, name FROM credentials", func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, "SELECT id, name FROM credentials WHERE project_id = ?", func(rows *sql.Rows) error {
 		var id int64
 		var name string
 		err := rows.Scan(&id, &name)
 		credentialNames[id] = name
 		return err
-	})
+	}, project)
 	if err != nil {
 		return f, err
 	}

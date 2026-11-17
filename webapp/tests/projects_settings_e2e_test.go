@@ -1011,7 +1011,7 @@ func TestProjectSettingsAreItsOwnersAlone(t *testing.T) {
 	a.refused("PUT", fmt.Sprintf("/api/credentials/%d", legacyCred.ID), map[string]any{"name": "Taken", "baseUrl": "https://tracker.example.com",
 		"auth": "header", "everyone": true}, http.StatusNotFound, "credential not found")
 	a.refused("DELETE", fmt.Sprintf("/api/credentials/%d", legacyCred.ID), nil, http.StatusNotFound, "credential not found")
-	a.call("DELETE", fmt.Sprintf("/api/mcp-servers/%d", legacyServer), nil, http.StatusNoContent, nil)
+	a.refused("DELETE", fmt.Sprintf("/api/mcp-servers/%d", legacyServer), nil, http.StatusNotFound, "server not found")
 	var left int
 	db.QueryRow("SELECT COUNT(*) FROM mcp_servers WHERE id = ?", legacyServer).Scan(&left)
 	if left != 1 {

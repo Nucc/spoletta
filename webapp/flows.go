@@ -140,7 +140,7 @@ func describeFlows(ctx context.Context, db *sql.DB, r *http.Request, fs []flow) 
 	if err != nil {
 		return err
 	}
-	waiting, err := waitingOn(ctx, db, requestUser(r), ids)
+	waiting, err := waitingOn(ctx, db, requestUser(r), requestProject(r), ids)
 	if err != nil {
 		return err
 	}

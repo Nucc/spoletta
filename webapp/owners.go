@@ -253,7 +253,7 @@ func refuseOwner(ctx context.Context, db querier, u *user, now, to flowOwner) (s
 			return "only an admin gives it to someone else", nil
 		}
 	case ownerTeam:
-		in, err := inTeam(ctx, db, u.ID, to.ID)
+		in, err := inTeam(ctx, db, u.ID, to.ID, u.Project)
 		if err != nil || !in {
 			return "you can only give it to a team you are in", err
 		}

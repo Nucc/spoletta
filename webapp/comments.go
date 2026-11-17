@@ -117,7 +117,7 @@ func registerCommentRoutes(mux *http.ServeMux, db *sql.DB) {
 			}
 			var roles []string
 			if u != nil {
-				if roles, err = userRoles(r.Context(), db, u.ID); err != nil {
+				if roles, err = userRoles(r.Context(), db, u.ID, requestProject(r)); err != nil {
 					serverError(w, err)
 					return
 				}

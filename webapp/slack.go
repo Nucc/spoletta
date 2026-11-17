@@ -253,14 +253,14 @@ func slAddReaction(ctx context.Context, c connectorClient, a opArgs) (any, error
 	return map[string]any{"channel": a.str("channel"), "ts": a.str("ts"), "emoji": a.str("emoji")}, nil
 }
 
-// The installed Slack connector people are told on, the first installed
-// with a token, and whether there is one.
-func slackNotifier(ctx context.Context, db *sql.DB) (connectorClient, bool, error) {
+// The installed Slack connector people are told on of what is in the
+// project, its first installed with a token, and whether there is one.
+func slackNotifier(ctx context.Context, db *sql.DB, project int64) (connectorClient, bool, error) {
 	var servers []struct {
 		id  int64
 		url string
 	}
-	err := scanAll(ctx, db, "SELECT id, url FROM mcp_servers WHERE connector = ? ORDER BY id", func(rows *sql.Rows) error {
+	err := scanAll(ctx, db, "SELECT id, url FROM mcp_servers WHERE connector = ? AND project_id = ? ORDER BY id", func(rows *sql.Rows) error {
 		var s struct {
 			id  int64
 			url string
@@ -268,7 +268,7 @@ func slackNotifier(ctx context.Context, db *sql.DB) (connectorClient, bool, erro
 		err := rows.Scan(&s.id, &s.url)
 		servers = append(servers, s)
 		return err
-	}, slackConnector.Name)
+	}, slackConnector.Name, project)
 	if err != nil {
 		return connectorClient{}, false, err
 	}

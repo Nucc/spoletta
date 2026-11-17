@@ -15,9 +15,10 @@ import { currentPage, currentProject, projectKey, replacePage } from './address'
 export type Display = (facet: SearchFacet, value: string) => string | undefined
 
 // The query and sort a table page keeps in its address and for next time: a
-// flow's data or records, or the audit log, which is no flow's (id 0) but
-// its project's, so kept for each project apart.
-export function useSearch(page: 'data' | 'records' | 'audit', id: number) {
+// flow's data or records; the audit log, which is no flow's (id 0) but its
+// project's, so kept for each project apart; or the instance's events,
+// which are no project's, so kept once for every one.
+export function useSearch(page: 'data' | 'records' | 'audit' | 'events', id: number) {
   const storeKey = page === 'audit' ? projectKey(`search-${page}-${id}`, currentProject()) : `search-${page}-${id}`
   const [state, setState] = useState<{ query: string; sort: Sort | null }>(() => {
     const params = new URLSearchParams(currentPage().split('?')[1] ?? '')
@@ -34,7 +35,7 @@ export function useSearch(page: 'data' | 'records' | 'audit', id: number) {
     const params = new URLSearchParams()
     if (state.query.trim() !== '') params.set('q', state.query)
     if (state.sort) params.set('sort', (state.sort.desc ? '-' : '') + state.sort.key)
-    const base = page === 'audit' ? '#/settings/audit' : `#/flows/${id}/${page}`
+    const base = page === 'audit' || page === 'events' ? `#/settings/${page}` : `#/flows/${id}/${page}`
     replacePage(`${base}${params.size > 0 ? '?' + params.toString().replace(/\+/g, '%20') : ''}`)
     try {
       localStorage.setItem(storeKey, JSON.stringify({ query: state.query, sort: params.get('sort') ?? undefined }))

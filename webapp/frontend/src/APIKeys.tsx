@@ -5,9 +5,11 @@ import { useConfirm } from './Confirm'
 import { SettingsEmpty, SettingsHead } from './SettingsHead'
 import { pageHash } from './address'
 
-// The API keys of whoever is signed in, which other systems start flows
-// with as them. A new key shows once, as it is made.
-export function APIKeysSection({ onError }: { onError: (err: unknown) => void }) {
+// The API keys of whoever is signed in, in the project the settings are in,
+// which other systems start flows with as them. A new key shows once, as
+// it is made. Someone who only sees the project makes and deletes none
+// there (readOnly), but sees the keys they made before.
+export function APIKeysSection({ readOnly = false, onError }: { readOnly?: boolean; onError: (err: unknown) => void }) {
   const [keys, setKeys] = useState<APIKey[] | null>(null)
   const [name, setName] = useState('')
   const [made, setMade] = useState<APIKey | null>(null)
@@ -54,17 +56,23 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
         lead="Keys other systems start flows with, as you, each named after what uses it."
         more="They start the flows you may run, and their runs use your MCP connections. Each flow's settings say where to send the request and what it takes."
       />
-      <form className="flow-new" onSubmit={onCreate}>
-        <input
-          placeholder="Key name, such as Helpdesk"
-          aria-label="Key name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <button type="submit" disabled={!name.trim()}>
-          <PlusIcon /> New key
-        </button>
-      </form>
+      {readOnly ? (
+        <p className="flows-note">
+          You only see this project, so you make and delete no keys here; ask one of its owners to let you change it.
+        </p>
+      ) : (
+        <form className="flow-new" onSubmit={onCreate}>
+          <input
+            placeholder="Key name, such as Helpdesk"
+            aria-label="Key name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button type="submit" disabled={!name.trim()}>
+            <PlusIcon /> New key
+          </button>
+        </form>
+      )}
       {made?.key && (
         <div className="api-key-made" role="status">
           <p>
@@ -86,10 +94,14 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
       {keys === null ? (
         <p className="flows-note">Loading…</p>
       ) : keys.length === 0 ? (
-        <SettingsEmpty>
-          None yet. Make one for each system that starts flows, such as a helpdesk or a CI job, so one can be deleted
-          without stopping the others.
-        </SettingsEmpty>
+        readOnly ? (
+          <SettingsEmpty>You have no keys in this project.</SettingsEmpty>
+        ) : (
+          <SettingsEmpty>
+            None yet. Make one for each system that starts flows, such as a helpdesk or a CI job, so one can be deleted
+            without stopping the others.
+          </SettingsEmpty>
+        )
       ) : (
         <ul className="flow-list key-list">
           {keys.map((k) => (
@@ -103,9 +115,11 @@ export function APIKeysSection({ onError }: { onError: (err: unknown) => void })
                   Made {new Date(k.createdAt).toLocaleDateString()};{' '}
                   {k.lastUsedAt ? `last used ${new Date(k.lastUsedAt).toLocaleString()}` : 'never used'}
                 </span>
-                <button type="button" className="danger" onClick={() => onDelete(k)}>
-                  Delete
-                </button>
+                {!readOnly && (
+                  <button type="button" className="danger" onClick={() => onDelete(k)}>
+                    Delete
+                  </button>
+                )}
               </div>
             </li>
           ))}

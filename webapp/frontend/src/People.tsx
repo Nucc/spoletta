@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { addUser, listRoles, listUsers, removeUser, updateUser, type User } from './api'
+import { addUser, listUsers, removeUser, updateUser, type User } from './api'
 import { useMe } from './Account'
 import { PlusIcon, TrashIcon } from './icons'
 import { SettingsHead } from './SettingsHead'
@@ -9,21 +9,18 @@ import { useConfirm } from './Confirm'
 // The people who sign in, for the instance's admins, in the settings'
 // Instance group: adding someone, before they first sign in if need be,
 // making them an admin of the instance (who makes projects and enters each
-// as its owner) or a team manager, giving them roles, and removing them.
-// Which projects they enter is each project's Access (Access.tsx). A role is the name of the human objects whose processes
-// its holders decide, such as Finance where "Finance handles Approve payment".
+// as its owner) or a team manager, and removing them. What a person is in a
+// project, the projects they enter, the roles they hold and the teams they
+// are in, is each project's: its owners give access and roles in its
+// Access tab (Access.tsx) and keep its teams in its Teams tab, so none of
+// it shows here.
 export function PeopleSection({ onError }: { onError: (err: unknown) => void }) {
   const [people, setPeople] = useState<User[] | null>(null)
-  const [roles, setRoles] = useState<string[]>([])
   const [confirm, confirmDialog] = useConfirm()
   const me = useMe()
   const [email, setEmail] = useState('')
 
-  const refresh = useCallback(async () => {
-    const [ps, rs] = await Promise.all([listUsers(), listRoles()])
-    setPeople(ps)
-    setRoles(rs)
-  }, [])
+  const refresh = useCallback(async () => setPeople(await listUsers()), [])
 
   useEffect(() => {
     refresh().catch(onError)
@@ -40,11 +37,10 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
     }
   }
 
-  const onUpdate = async (id: number, patch: { admin?: boolean; teamManager?: boolean; roles?: string[] }) => {
+  const onUpdate = async (id: number, patch: { admin?: boolean; teamManager?: boolean }) => {
     try {
       const updated = await updateUser(id, patch)
       setPeople((ps) => ps && ps.map((p) => (p.id === id ? updated : p)))
-      setRoles((rs) => [...new Set([...rs, ...updated.roles])].sort((a, b) => a.localeCompare(b)))
     } catch (err) {
       onError(err)
     }
@@ -69,13 +65,12 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
     <section className="flow-section" aria-label="People">
       <SettingsHead
         title="People"
-        lead="Who signs in to Spoletta, the roles they hold and whether they are admins or team managers. Add someone to let them sign in from any domain; each project's owners say who enters it."
+        lead="Who signs in to Spoletta, and whether they are its admins or team managers. Add someone to let them sign in from any domain; each project's owners say who enters it and give its roles."
         more={
           <>
-            Someone holding a role decides the reviews of the processes that a person of that name handles on any
-            board, such as Finance in “Finance handles Approve payment”, and sees those flows to do so. A review no
-            person handles is anyone's to decide; admins decide any. Admins also make projects and enter each as its
-            owner. Team managers make teams and say who is in them.
+            Admins make projects, enter each as its owner and keep the people here. Team managers make teams and say who
+            is in them, in each project they enter. Which projects someone enters, the roles they hold there and the
+            teams they are in are each project's, kept in its settings' Access and Teams tabs.
           </>
         }
       />
@@ -91,11 +86,6 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
           <PlusIcon /> Add person
         </button>
       </form>
-      <datalist id="role-names">
-        {roles.map((r) => (
-          <option key={r} value={r} />
-        ))}
-      </datalist>
       {people === null ? (
         <p className="flows-note">Loading…</p>
       ) : (
@@ -109,9 +99,7 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
                   <span className="flows-note">
                     {p.name && `${p.email} · `}
                     {p.signedInAt ? `Signed in ${formatTime(p.signedInAt)}` : 'Hasn’t signed in yet'}
-                    {p.teams.length > 0 && ` · ${p.teams.map((t) => t.name).join(', ')}`}
                   </span>
-                  <RoleEditor roles={p.roles} onChange={(roles) => onUpdate(p.id, { roles })} />
                 </div>
                 <div className="person-flags">
                   <label className="person-admin" title={self ? 'Another admin can take this from you' : undefined}>
@@ -150,36 +138,5 @@ export function PeopleSection({ onError }: { onError: (err: unknown) => void }) 
       )}
       {confirmDialog}
     </section>
-  )
-}
-
-// A person's roles, each taken away with its ×, and one added by name.
-function RoleEditor({ roles, onChange }: { roles: string[]; onChange: (roles: string[]) => void }) {
-  const [name, setName] = useState('')
-  const onAdd = (e: FormEvent) => {
-    e.preventDefault()
-    const n = name.trim()
-    if (!n) return
-    if (!roles.some((r) => r.toLowerCase() === n.toLowerCase())) onChange([...roles, n])
-    setName('')
-  }
-  return (
-    <form className="person-roles" onSubmit={onAdd}>
-      {roles.map((r) => (
-        <span key={r} className="person-role">
-          {r}
-          <button type="button" aria-label={`Take away ${r}`} onClick={() => onChange(roles.filter((x) => x !== r))}>
-            ×
-          </button>
-        </span>
-      ))}
-      <input
-        list="role-names"
-        placeholder="Add a role"
-        aria-label="Add a role"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-    </form>
   )
 }

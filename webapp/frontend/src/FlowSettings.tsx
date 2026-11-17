@@ -3,6 +3,7 @@ import { getGitAccess, type FlowSettings, type GitAccess, type Repository } from
 import { FlowAPISection } from './APIKeys'
 import { BranchRuleField } from './BranchRuleField'
 import { FlowWebhooksSection } from './Webhooks'
+import { GitAccessNote } from './GitAccess'
 
 // What a repository is called in the workspace, from its URL: the last part
 // of its path, without .git.
@@ -351,7 +352,7 @@ export function FlowSettingsPanel({
           value={spend}
           readOnly={readOnly}
           inputMode="decimal"
-          placeholder="The instance's limit"
+          placeholder="The project's limit"
           onChange={(e) => setSpend(e.target.value)}
           onBlur={saveSpend}
           onKeyDown={(e) => e.key === 'Enter' && saveSpend()}
@@ -359,7 +360,7 @@ export function FlowSettingsPanel({
         {!spendOk && <small className="panel-warning">Write it as an amount of dollars, such as 5 or 2.50.</small>}
         <small className="panel-note">
           On its models, with its subflows, items and follow-ups. A run that spends it is stopped and fails. The
-          instance's limit, set in the settings, holds if it is lower.
+          project's limit, set in the settings under the instance's ceiling, holds if it is lower.
         </small>
       </label>
       <FlowAPISection flowId={flowId} onError={onError} />
@@ -451,29 +452,4 @@ export function RepositoryPicker({
       )}
     </fieldset>
   )
-}
-
-// How a step's git reaches the repositories: only a GitHub App's tokens are
-// for the run's repositories alone and end within the hour.
-function GitAccessNote({ access }: { access: GitAccess }) {
-  switch (access.source) {
-    case 'app':
-      return (
-        <p className="panel-note">
-          Each step gets a GitHub App's token for the run's repositories alone, which ends within the hour.
-          {access.otherHosts &&
-            ' Repositories elsewhere than its GitHub get the instance’s GIT_TOKEN instead, which isn’t short-lived.'}
-        </p>
-      )
-    case 'token':
-      return (
-        <p className="panel-warning">
-          Each step gets the instance’s GIT_TOKEN, which isn’t short-lived and reaches whatever it reaches, and agents
-          can read it while they work. A GitHub App’s tokens are made for the run’s repositories alone and end within
-          the hour.
-        </p>
-      )
-    default:
-      return <p className="panel-note">The instance has no git token, so only public repositories clone.</p>
-  }
 }

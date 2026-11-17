@@ -23,12 +23,23 @@ const CATEGORIES = ['Code', 'Communication', 'Ticketing', 'Support', 'Docs', 'Mo
 
 // The connectors built into the webapp and the MCP servers picked to go
 // with them, each a card with its logo and category, those installed first.
-// An admin installs one with its Install button, then sets it up on the
-// card: a connector's token, which everyone then uses, or an MCP server
-// everyone connects by signing in. The order is worked out once, as the
+// An owner of the project installs one with its Install button, then sets
+// it up on the card: a connector's token, which everyone then uses, or an
+// MCP server everyone connects by signing in. Someone who only sees the
+// project sees what is installed and connects nothing (canConnect). The order is worked out once, as the
 // directory first loads, so a card just installed stays where it is, its
 // setup open, rather than jumping to the top.
-export function DirectorySection({ canConfigure, onError }: { canConfigure: boolean; onError: (err: unknown) => void }) {
+export function DirectorySection({
+  canConfigure,
+  canConnect = true,
+  onError,
+}: {
+  canConfigure: boolean
+  // Whether they connect servers for themselves: not when they only see the
+  // project, as they run nothing there.
+  canConnect?: boolean
+  onError: (err: unknown) => void
+}) {
   const [entries, setEntries] = useState<DirectoryEntry[] | null>(null)
   const [servers, setServers] = useState<MCPServer[]>([])
   const [order, setOrder] = useState<{ installed: string[]; available: string[] } | null>(null)
@@ -68,6 +79,7 @@ export function DirectorySection({ canConfigure, onError }: { canConfigure: bool
           installed={installedAs(e)}
           taken={(name) => servers.some((s) => s.name.toLowerCase() === name.toLowerCase())}
           canConfigure={canConfigure}
+          canConnect={canConnect}
           onChanged={refresh}
           onError={onError}
         />
@@ -143,6 +155,7 @@ function DirectoryCard({
   installed,
   taken,
   canConfigure,
+  canConnect,
   onChanged,
   onError,
 }: {
@@ -152,6 +165,7 @@ function DirectoryCard({
   installed: MCPServer[]
   taken: (name: string) => boolean
   canConfigure: boolean
+  canConnect: boolean
   onChanged: () => void
   onError: (err: unknown) => void
 }) {
@@ -241,7 +255,7 @@ function DirectoryCard({
             {open === installed[0].id ? 'Done' : canConfigure ? 'Configure' : 'Details'}
           </button>
         )}
-        {!canConfigure && installed.length === 0 && <span className="panel-note">An admin installs it.</span>}
+        {!canConfigure && installed.length === 0 && <span className="panel-note">An owner of the project installs it.</span>}
         {e.operations && (
           <button className="link-button" onClick={() => setOpen(open === 'operations' ? null : 'operations')} aria-expanded={open === 'operations'}>
             {e.operations.length} operations
@@ -276,6 +290,7 @@ function DirectoryCard({
               entry={e}
               server={s}
               canConfigure={canConfigure}
+              canConnect={canConnect}
               onChanged={onChanged}
               onRemoved={() => (setOpen(null), onChanged())}
               onError={onError}
@@ -349,6 +364,7 @@ function ServerSetup({
   entry: e,
   server: s,
   canConfigure,
+  canConnect,
   onChanged,
   onRemoved,
   onError,
@@ -356,6 +372,7 @@ function ServerSetup({
   entry: DirectoryEntry
   server: MCPServer
   canConfigure: boolean
+  canConnect: boolean
   onChanged: () => void
   onRemoved: () => void
   onError: (err: unknown) => void
@@ -422,7 +439,9 @@ function ServerSetup({
           </span>
           <span>
             {s.connected ? 'You are connected. ' : 'Everyone connects it for themselves, by signing in to it. '}
-            {s.connected ? (
+            {!canConnect ? (
+              !s.connected && 'You only see this project, so you connect nothing here.'
+            ) : s.connected ? (
               <button className="link-button" disabled={busy} onClick={() => act(() => disconnectMCPServer(s.id))}>
                 Disconnect
               </button>

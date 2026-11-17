@@ -17,10 +17,16 @@ it starts counted under a lock of the board's row,
 payload starts, as the API's requests are by their `Idempotency-Key`, and
 the GitHub payloads they ignored), the tokens steps are handed for the proxies (only their SHA-256,
 [webapp/grants.go](../webapp/grants.go)), what runs and people spent, the
-steps each person has going, MCP sign-ins under way, and the limits, which
-each replica reads again every five seconds. So is who has a board open,
-each browser tab saying so every few seconds, and what changed boards
-lately, which tells the other tabs to load them again
+steps each person has going, MCP sign-ins under way, the projects and who
+may enter them, read at every request, and each project's limits and the
+ceilings over them, which each replica reads again every five seconds. A replica works out each
+project's routes to its model providers again after ten seconds, so a key or
+provider saved at another reaches it soon after. People's groups are read
+again from the identity provider while their sessions live, each session's
+next reading claimed by one replica, which moves it on
+([webapp/users.go](../webapp/users.go)). Who has a board open, each browser
+tab saying so every few seconds, and what changed boards lately, which
+tells the other tabs to load them again, are shared too
 ([webapp/presence.go](../webapp/presence.go)); both go by the database's
 clock.
 

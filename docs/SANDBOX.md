@@ -2,7 +2,8 @@
 
 Agents and scripts run code nobody reviewed: what a model decides to run,
 what a flow's author wrote, what a repository's build scripts do. This is how
-Spoletta keeps that code from the instance's secrets and from other runs.
+Spoletta keeps that code from the instance's secrets, from other runs and
+from other projects.
 
 1. [The threat model](#the-threat-model)
 2. [What every step gets, whatever the sandbox](#what-every-step-gets-whatever-the-sandbox)
@@ -25,19 +26,68 @@ whatever it can write. It must not be able to:
   secret, the instance's git token or any other secret;
 - read or change another run's workspace, files, session or home, or another
   step's private directory;
-- reach the internet other than the hosts an admin allowed;
+- reach the internet other than the hosts its project's owners allowed;
+- reach anything of another project: its models, MCP servers, credentials
+  and hosts, what its steps fetched, or its runs' branches;
 - make the trusted side (the worker, the webapp) run code of its choosing.
 
 The worker is a trusted launcher. It gets a step's workspace and directories
 ready, starts the step's program in a sandbox, and takes back what it made.
 The webapp holds every secret and hands out short-lived tokens instead.
 
+### Between projects
+
+Each project ([PROJECTS.md](PROJECTS.md)) is a tenant, and its steps are
+kept from every other project's as much as from other runs':
+
+- **Their proxies are their project's.** Each token a step is handed names
+  its run's project (`proxy_grants.project_id`), and the model, MCP,
+  credential and internet proxies reach only that project's providers and
+  keys, servers and tokens, credentials and allowed hosts.
+- **Their repositories are their project's.** The worker fetches each
+  repository once per project, into a shared repository of the project's
+  own (`sharedRepo` in `worker/workspace.go`): Legacy's in `.repos`, as
+  before projects, every other project's in `.projects/<id>/repos`. A run's
+  checkouts are cloned from its project's alone, and its branch, or the
+  commit a re-run starts from, is looked for only there, so two projects
+  reaching the same URL with different tokens never share what was fetched.
+  A workspace is bound to the project of its first step, and the worker
+  refuses a request naming another for it. No step's container is given a
+  shared repository.
+- **The worker's own configuration is Legacy's alone.** It is the
+  instance's, so a step of a project not inheriting it (every project but
+  Legacy) gets none of it: not the worker's pi config (`models.json`,
+  `settings.json`), its `AWS_*` variables, those `CHILD_ENV` names or
+  `CLAUDE_SMALL_MODEL`, nor its git config, global or system, for the
+  step's git or the worker's git for it (`stepEnv`, `workerEnv` in
+  `worker/env.go`). Nor does the webapp hand such a step `GIT_TOKEN` or the
+  GitHub App's tokens, only its project's own git token, if it has one.
+
+What this doesn't cover:
+
+- **`process` holds nothing**, between projects as between steps: a step
+  can read every project's workspaces and shared repositories, and the
+  worker's environment.
+- **The worker trusts the webapp** to say which project a step is of, and
+  whether it inherits the instance's configuration. A worker from before
+  projects ignores both, so deploy the worker before the webapp, or with
+  it.
+- **The URLs a project's owners set** are called from the webapp, not the
+  step, and aren't kept to public addresses: a model provider's, an MCP
+  server's or a connector's at any address, a credential's at any but the
+  ones [below](#credentials) says, so an owner of any project can have the
+  webapp call a service on its own network. The internet proxy keeps every
+  project but Legacy to public addresses.
+- **Disk.** Shared repositories count toward no run's disk limit, and
+  deleting a project for good leaves its `.projects/<id>/repos`.
+
 ## What every step gets, whatever the sandbox
 
 - **An environment from a list**, never the worker's own (`worker/env.go`):
   `PATH`, `HOME`, the locale, pi's settings, proxies and certificates, who
   commits. `CHILD_ENV` names more, for an instance that wants scripts to have
-  a token of its own, knowing agents can read it too.
+  a token of its own, knowing agents can read it too; only the Legacy
+  project's steps get them.
 - **No model keys.** The agent reaches every provider through the webapp's
   model proxy (`webapp/llm.go`) with a token of the step's, which the proxy
   swaps for the real key: pi as every provider's key, Claude Code as its
@@ -54,7 +104,8 @@ The webapp holds every secret and hands out short-lived tokens instead.
   at `$CREDENTIAL_<NAME>_URL` with `$CREDENTIALS_TOKEN`, which the proxy
   swaps for the credential's secret; see [Credentials](#credentials).
 - **A git token of its own**, for the run's repositories only and lasting an
-  hour when it comes from a GitHub App (`webapp/git_tokens.go`), in a file of
+  hour when it comes from a GitHub App, else its project's own or the
+  instance's `GIT_TOKEN` (`webapp/git_tokens.go`), in a file of
   the step's private directory that git finds through `GIT_CONFIG_*`.
 - **A pi agent directory of its own**, so pi's credentials and caches of one
   step are never another's.
@@ -86,7 +137,7 @@ config, hooks and attributes are the step's. Git runs what they say, such as
 `core.fsmonitor`, a filter or a hook, for whoever runs git there, so the
 worker never does. What a step left uncommitted is committed inside a
 sandbox, offline, seeing only the checkout. The worker then brings the branch
-back by *fetching* from the checkout into the shared repository, which runs
+back by *fetching* from the checkout into its project's shared repository, which runs
 none of the checkout's config or hooks, after checking the checkout and its
 `.git` are real directories and dropping any borrowed objects
 (`worker/workspace.go`). What the worker knows of a workspace, its branch and
@@ -298,14 +349,15 @@ proxy (`webapp/egress.go`), which its `HTTPS_PROXY` and `HTTP_PROXY` name with
 a token of the step's as the proxy's credentials, revoked with its open
 tunnels as the step ends. The proxy reaches:
 
-- the hosts an admin allowed in the settings, under Internet access: a name,
-  `*.example.com` for its subdomains, with `:port` for a port other than 80
-  and 443;
+- the hosts its project's owners allowed in the settings, under Internet
+  access: a name, `*.example.com` for its subdomains, with `:port` for a
+  port other than 80 and 443;
 - the step's own repositories' hosts, which its git pushes to.
 
-It dials only public addresses, unless an admin allowed the host by name, so
-neither an allowed name nor a repository URL can lead to the webapp's
-database or neighbours. An IPv6 address carrying an IPv4 one (NAT64's
+It dials only public addresses, unless the host is allowed by name in a
+project inheriting the instance's configuration (Legacy), whose network it
+is, so neither an allowed name nor a repository URL can lead to the
+webapp's database or neighbours. An IPv6 address carrying an IPv4 one (NAT64's
 `64:ff9b::/96` and `64:ff9b:1::/48`, the IPv4-compatible `::/96`, 6to4's
 `2002::/16`) is judged as the IPv4 address it carries, so the metadata
 service at `169.254.169.254` is out of reach written either way, while a
@@ -323,13 +375,13 @@ container; give it a Bedrock API key in the settings instead.
 ## Credentials
 
 A script or agent calling a service of its own, such as Jira or an internal
-API, uses a credential an admin keeps in the settings, under Credentials:
+API, uses a credential its project's owners keep in the settings, under Credentials:
 the service's base URL, how its secret goes on each request (a header whose
 value a template makes, basic auth's password, or a query parameter), and
 the secret, sealed with `SECRET_KEY` and never sent back to the browser,
-the worker or the step. Each is everyone's, or only given teams'; a flow
-uses those its owner may, checked as each step starts and as each call is
-made (`webapp/credentials.go`). Which ones a step gets is what its run's
+the worker or the step. Each is everyone's in the project, or only given
+teams'; a flow uses those of its project its owner may, checked as each
+step starts and as each call is made (`webapp/credentials.go`). Which ones a step gets is what its run's
 version picked, never the board as it is, so a draft can't hand a run, or
 its follow-ups, a credential the version it runs on didn't pick.
 
@@ -435,8 +487,9 @@ can't:
   headers. What comes back is sandboxed (`Content-Security-Policy:
   sandbox`, `X-Content-Type-Options: nosniff`), so an answer opened in a
   browser can't act as the app.
-- **reach the webapp's neighbours through it.** The base URL is an admin's,
-  https, or http only at the webapp's own machine (a sidecar), where the
+- **reach the webapp's neighbours through it.** The base URL is an owner's
+  of the project, https, or http only at the webapp's own machine (a
+  sidecar), where the
   secret crosses no network. The proxy never dials a link-local or
   multicast address, such as the cloud's metadata service, whatever the
   service's name resolves to, nor the machine's own unless the base URL
@@ -446,7 +499,7 @@ can't:
   no longer use: taking a credential from a team, or removing it, refuses
   the next call of every step using it.
 
-Nor can an admin's edit send a kept secret elsewhere: changing a
+Nor can an owner's edit send a kept secret elsewhere: changing a
 credential's base URL, even only its path, as a path at an origin many
 share may be another's service (`script.google.com/macros/s/<id>`), or
 where its secret goes (the way, the header, the parameter), needs the
@@ -503,25 +556,29 @@ What this leaves:
 ## Limits and the audit log
 
 Isolation keeps a step from what isn't its own; limits keep a run that
-goes wrong, or a person, from using up what is everyone's. Admins set them
-in the settings, under Spending & limits (`webapp/limits.go`), each off
-until set:
+goes wrong, or a person, from using up what is everyone's. A project's
+owners set them in its settings, under Spending & limits
+(`webapp/limits.go`), each off until set, and super admins set ceilings over
+every project's, under Ceilings: what holds is the lesser of a project's
+limit and the ceiling.
 
 - **What a run may spend on its models.** Every call goes through the
   model proxy, which prices it as it is recorded, cache reads and writes
-  included, at the price of the worker's models.json or pi's catalog, and
-  a model without a known price at the largest models' (`webapp/spend.go`).
+  included, at the price of the worker's models.json (for Legacy) or pi's
+  catalog, and a model without a known price at the largest models'
+  (`webapp/spend.go`).
   A run's subflows, list items and follow-ups count toward it. Once it has
   spent its limit, the proxy refuses its calls, saying it is out of budget,
   which neither pi nor Claude Code tries again, and the engine stops the run, which fails
   saying what it spent. A flow may hold its runs to less in its settings.
   Calls already going when a run passes its limit finish, so a run with
   steps running at once spends a little more than its limit.
-- **What a person may spend a month**, UTC's, on their runs, follow-ups and
-  flows' assistants; past it their calls are refused until the next month.
-- **How many steps a person's runs may have going at once**, at every
-  replica of the webapp, of their `PARALLEL_STEPS`, so one person's runs
-  can't take every slot.
+- **What a person may spend a month** in the project, UTC's, on their runs,
+  follow-ups and flows' assistants; past it their calls there are refused
+  until the next month.
+- **How many steps a person's runs in the project may have going at once**,
+  at every replica of the webapp, of their `PARALLEL_STEPS`, so one person's
+  runs can't take every slot.
   A step waiting for its person's turn holds none of the slots.
 - **How much disk a run may take**: its checkouts, sessions, home and
   files, measured after each step by the blocks they take, each file once
@@ -533,13 +590,17 @@ until set:
 Bedrock without a key, which signs in with the worker's AWS credentials,
 doesn't go through the proxy, so no spending limit covers it.
 
-The audit log (`webapp/audit.go`, `#/settings/audit` for admins) records each token
+Each project's audit log (`webapp/audit.go`, `#/settings/audit` for its
+owners) records each token
 a step is handed for its models, MCP servers, the internet, credentials and
 git, when the model, internet and credential ones end, each internet
 connection, allowed or refused, each call through the credential proxy,
 calls the proxies refused, runs stopped for spending what they may, and the
-limits, internet hosts, model keys and credentials admins changed: who,
-which run and step, and what, never a token or a secret. What each model call took and cost
+limits, internet hosts, model keys, credentials, git token and access its
+owners changed: who, which run and step, and what, never a token or a
+secret. What is no project's, such as a call with a token no grant has or a
+ceiling set, is in the instance's events, which super admins read
+(`#/settings/events`). What each model call took and cost
 is in `llm_usage`, shown in the Spending & limits tab and each run's panel.
 
 ## Adding a sandbox

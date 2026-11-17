@@ -172,6 +172,11 @@ ALTER TABLE runs DROP COLUMN label;
   ending runs a stopped replica left running, isn't a migration: it goes in
   `endStopped` in [webapp/replicas.go](../webapp/replicas.go).
 
+Numbers needn't follow one another, as `00053` and `00065` show, but goose
+runs migrations in order and refuses one numbered below the highest a
+database ran: a new migration is numbered above the highest on any database
+it will meet.
+
 A statement with semicolons inside it, such as a trigger, goes between
 `-- +goose StatementBegin` and `-- +goose StatementEnd`. A migration that
 can't be written in SQL can be one in Go, registered in
@@ -182,6 +187,55 @@ check with `webapp migrate status`, run `webapp migrate down-to` the
 version before it, and start again. From `webapp/`, `go run . migrate status`
 does the same as the binary. The e2e tests (`go test -race ./tests`) start
 the webapp on a new database, so they run every migration up.
+
+## Projects
+
+Everything below the projects is a project's ([PROJECTS.md](PROJECTS.md)),
+which the schema says, so a new table follows these rules:
+
+- It has `project_id BIGINT NOT NULL`, with **no default**, so a row
+  inserted without naming its project is refused. A table above the projects,
+  as `users` and `sessions` are, is listed in `aboveProjects` in
+  `webapp/tests/projects_e2e_test.go` with why; `TestProjectsEveryTableNamesItsProject`
+  fails for any other without the column, or with a default.
+- A table other rows refer to has `UNIQUE (id, project_id)`, and each
+  foreign key to a row of a project names the project beside the id,
+  `FOREIGN KEY (flow_id, project_id) REFERENCES flows (id, project_id)`, so
+  the database refuses a row in another project than its parent. One naming
+  a person as one of a project's, an owner or a member, refers to
+  `project_members (user_id, project_id)`.
+- MySQL can't null `project_id`, so such a key can't be `ON DELETE SET
+  NULL`: it takes no action, and the code nulls the column before deleting
+  what it refers to (`releaseGoing` and `deleteFlow` do).
+- A name unique before projects is unique within its project, the key
+  starting with `project_id`.
+- Deleting a project for good empties every table with a `project_id`
+  column, read from `information_schema` (`projectTables` in
+  `webapp/projects.go`), so a new table needs nothing more for it.
+
+Every migration from `00049`, which made the projects, on has the same check
+at the top of its Down, which fails while a project other than Legacy is
+left, since going back past any of them would lose which project everything
+was in:
+
+```sql
+-- +goose Down
+-- As every migration since projects came in, going down is refused while a
+-- project but Legacy is left, as going further down would lose which
+-- project everything was in: the row inserted fails its check, which says
+-- so.
+DROP TEMPORARY TABLE IF EXISTS projects_down;
+CREATE TEMPORARY TABLE projects_down (others BIGINT NOT NULL,
+  CONSTRAINT `delete every project but Legacy before migrating down` CHECK (others = 0));
+INSERT INTO projects_down SELECT COUNT(*) FROM projects WHERE id <> 1;
+DROP TEMPORARY TABLE projects_down;
+```
+
+A new migration's Down starts with it too. So undoing any of them while
+other projects exist is refused, naming the check: delete every project but
+Legacy for good first, from the Projects page.
+Going below `00049` drops the projects, who was given them and the groups
+people are in, and everything is the instance's again.
 
 ## Local migrations
 
@@ -201,6 +255,8 @@ yours would have been.
   Spoletta's tables, adding a column to `users`, say. Whoever merges a
   Spoletta release changing what a local migration changes looks out for
   it.
+- A table they make is a project's, or above the projects, by the same
+  rules as Spoletta's ([Projects](#projects)).
 - A webapp built as Spoletta ships it can take them from a directory
   instead: `LOCAL_MIGRATIONS=/path/to/dir` replaces the built-in ones (mount
   it into the container). Naming a directory that isn't there stops the
@@ -224,6 +280,9 @@ local migration may stand on what a Down of Spoletta's takes away:
 webapp migrate local down-to 1
 webapp migrate down-to 48
 ```
+
+The second, going below the projects, is refused while a project other than
+Legacy is left ([Projects](#projects)).
 
 A webapp without local migrations started on a database that ran some logs
 a warning saying so, and starts all the same.

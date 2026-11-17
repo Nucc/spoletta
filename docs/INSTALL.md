@@ -30,9 +30,14 @@ Agents never see a model key. The webapp holds the keys and reaches the
 providers for them, so the keys go to the webapp: `OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` and `OPENROUTER_API_KEY` are passed
 through from `.env` (a models.json naming other variables needs them added
-to compose.yaml). Admins can also add providers and their keys in the app's
-settings, under Model providers. Bedrock without a key signs in with the
-worker's AWS credentials, passed to the worker as `AWS_*`.
+to compose.yaml). A project's owners can also add providers and their keys
+in its settings, under Model providers. Bedrock without a key signs in with
+the worker's AWS credentials, passed to the worker as `AWS_*`.
+
+The pi config, the keys in the environment, `LLM_UPSTREAMS` and the worker's
+AWS credentials are what the instance is configured with, which only the
+Legacy project gets (see [Projects](#projects)); every other project has
+only the providers its owners add, with their keys saved in the app.
 
 ## Claude Code
 
@@ -53,8 +58,8 @@ that "Customers may not pay for, resell, or intermediate Claude usage on
 their end users' behalf"; it may not use Claude.ai (Free, Pro, Max) sign-ins
 on behalf of users. What it allows is an organisation using keys it
 provisions for its own authorised users, billed to it. So here Claude Code
-signs in only with the step's token, standing in for a key an admin
-configured (Anthropic's API key, an Anthropic-API gateway's added under
+signs in only with the step's token, standing in for a key configured for
+its project (Anthropic's API key, an Anthropic-API gateway's added under
 Model providers, or a Bedrock API key), through the webapp's model proxy
 like pi; never with anyone's Claude.ai account. The image installs Anthropic's package as it is, its own
 install script putting the platform's binary in place. Whether a hosted
@@ -70,7 +75,7 @@ only the Converse API pi calls). On Bedrock it also lists the inference
 profiles and calls two models of its own once with a token each as it
 starts, which the model proxy records and counts like any call. A process
 running with it without a model of its own takes the default model for
-Claude Code, which an admin picks in Settings, under Model providers, else
+Claude Code, which a project's owner picks in Settings, under Model providers, else
 the default model, failing when that isn't one Claude Code can use. It has no
 web search here, and runs only in steps' containers safely: it runs without
 asking permission, the sandbox holding it (see `docs/SANDBOX.md`).
@@ -83,21 +88,21 @@ never committed. The ones to know:
 | Variable | What it does |
 |---|---|
 | `WORKER_TOKEN` | The token only the webapp asks the worker with. Without one the worker answers anyone reaching it, and runs their bash. Make one with `openssl rand -hex 32`. |
-| `SECRET_KEY` | Seals the model keys, MCP tokens, credentials' and webhooks' secrets and sign-ins' tokens the webapp keeps in the database. Make one with `openssl rand -base64 32`. |
+| `SECRET_KEY` | Seals the model keys, MCP tokens, credentials' and webhooks' secrets, projects' git tokens and sign-ins' tokens the webapp keeps in the database. Make one with `openssl rand -base64 32`. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_NAME` | Signing in with your identity provider over OpenID Connect. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Signing in with Google. |
-| `ADMIN_EMAILS`, `OIDC_ALLOWED_DOMAINS` | Who may sign in, and who is an admin. |
+| `ADMIN_EMAILS`, `OIDC_ALLOWED_DOMAINS` | Who may sign in, and who is a super admin, who makes projects and enters every one as its owner. |
 | `OIDC_GROUPS_CLAIM`, `GROUPS_MAX_AGE` | The claim naming the groups people are in at your identity provider, which projects are given to, and how long groups read hold, `24h` by default, where they can't be read again. See [Groups](#groups). |
 | `PUBLIC_URL` | Where people reach the app, for sign-in's redirect and the links in messages. |
 | `PUBLISH_HOST` | `0.0.0.0` to reach the webapp from other machines, once people sign in. |
-| `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` | A GitHub App whose tokens steps clone and push the flows' repositories with. |
-| `GIT_TOKEN`, `GIT_USERNAME` | Otherwise, one token for every step's git. |
+| `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` | A GitHub App whose tokens the Legacy project's steps clone and push the flows' repositories with. |
+| `GIT_TOKEN`, `GIT_USERNAME` | Otherwise, one token for every Legacy step's git. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD` | Emailing people when a review waits on them, and when their runs fail. |
 | `RESUME_RUNS` | `false` ends the runs of a webapp that stopped, rather than having another carry them on. |
 | `TRASH_KEEP` | How long the trash keeps a deleted flow, such as `30d`, the default. |
 | `LOCAL_MIGRATIONS` | A directory of migrations of your own, run after Spoletta's in place of those built into `webapp/local_migrations/`; see [MIGRATIONS.md](MIGRATIONS.md#local-migrations). |
 | `CLAUDE_CODE_VERSION` | Builds the worker's and steps' images with Claude Code, at that exact version, so agent processes may run with it; empty, the default, leaves it out. See [Claude Code](#claude-code). |
-| `CHILD_ENV` | Variables of the worker's own to hand every step, comma-separated, each passed through in compose.yaml too. |
+| `CHILD_ENV` | Variables of the worker's own to hand every step of the Legacy project, comma-separated, each passed through in compose.yaml too. |
 | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | Compose's MySQL, which the webapp connects to as that user. |
 | `MYSQL_PUBLISH` | Where MySQL is published on the host, `127.0.0.1:3306` by default. |
 
@@ -112,10 +117,11 @@ or `PUBLIC_URL`'s, as the redirect URI of each client: your identity
 provider's, and for Google a web application's OAuth client in the Google
 Cloud console. `OIDC_NAME` names your provider on the page asking which to
 sign in with. Only people in `ADMIN_EMAILS`, at a domain in
-`OIDC_ALLOWED_DOMAINS`, or added by an admin may sign in. Google is taken at
+`OIDC_ALLOWED_DOMAINS`, or added by a super admin may sign in. Google is taken at
 its word only for Gmail addresses and for accounts of the Google Workspace
 at the email's domain, since anyone can make a Google account with any
-email. Admins add, remove and promote people in the app's settings.
+email. Those in `ADMIN_EMAILS` are super admins; super admins add, remove
+and promote people in the app's settings, under People.
 
 Once people sign in, set `PUBLISH_HOST=0.0.0.0` to reach the webapp from
 elsewhere.
@@ -144,10 +150,40 @@ tokens at your provider, or one listing the scope may refuse the sign-in.
 Where groups can't be read again, as the provider gave no refresh token, a
 session of someone in any group ends once their groups are older than
 `GROUPS_MAX_AGE` (`24h` unless set, a duration such as `8h` or `90m`), so
-they sign in again; someone in no group stays signed in as long as before.
-What runs on someone's behalf without a session, an API key's runs, a
+they sign in again; someone in no group stays signed in as long as before,
+and isn't read again, so a group they are put in counts from their next
+sign-in. What runs on someone's behalf without a session, an API key's runs, a
 webhook's, a schedule's or a task board's, keeps their groups as last read
 until they are read again.
+
+## Projects
+
+Everything in the app is in a project: flows, task boards, settings, people's
+access, the audit log. Each project is a space of its own, which nothing in
+another reaches; [PROJECTS.md](PROJECTS.md) says how.
+
+- **A new install** has one project, Legacy, empty. Super admins enter every
+  project as its owner, and make more on the Projects page (`#/projects`).
+  Anyone else who signs in is in no project, and is told to ask the super
+  admins, until a project's owner gives them access, in its settings under
+  Access, by their email, by a [group](#groups) they are in, or by letting
+  anyone signed in see or change it.
+- **Upgrading** from a version before projects puts everything there is in
+  Legacy, and makes everyone there was its member, admins as owners and
+  others as editors. People signing in for the first time afterwards are in
+  no project: set Legacy's access for anyone signed in to edit, under
+  Access, to let them in as before.
+- **Legacy alone** gets what the instance is configured with outside the
+  app: the worker's pi config and the model keys in the environment,
+  `LLM_UPSTREAMS`, the GitHub App and `GIT_TOKEN`, the worker's `AWS_*` and
+  `CHILD_ENV` variables and its git config. Another project has only what
+  its owners set in its settings, a git token of its own included.
+- **Deploy the worker before the webapp, or with it.** A worker from before
+  projects ignores which project a step is of: it would keep every
+  project's repositories together and hand every step what only Legacy's
+  may have. A new worker with an old webapp takes every step as Legacy's.
+- **Migrating down** past the projects' migrations is refused while a
+  project other than Legacy is left; see [MIGRATIONS.md](MIGRATIONS.md#projects).
 
 ## Sealing secrets
 
@@ -170,6 +206,13 @@ holding the key in `GITHUB_APP_PRIVATE_KEY_FILE`; GitHub Enterprise takes
 step as it is, which isn't short-lived; `GIT_USERNAME` defaults to
 `x-access-token`, which GitHub takes.
 
+Both are the instance's, which only the Legacy project's steps get. Each
+project's owners may set a git token of its own in its settings, under Git
+access, sealed with `SECRET_KEY`: Legacy's steps take it for repositories
+the GitHub App doesn't reach, before `GIT_TOKEN`, and another project's
+steps take it or nothing, so without one they clone only public
+repositories.
+
 ## Telling people
 
 A review waiting on someone, a reminder, or a run that failed for whoever
@@ -178,10 +221,11 @@ asked to know is sent by email over SMTP to `SMTP_HOST`, on `SMTP_PORT`
 `Spoletta <spoletta@example.com>`, signing in as `SMTP_USERNAME` with
 `SMTP_PASSWORD` (or a mounted file named by `SMTP_PASSWORD_FILE`, added to
 compose.yaml's webapp), with
-STARTTLS whenever the server offers it. With the Slack connector installed,
-people are told by a direct message from its app too. Each person picks how
-in their settings. The messages link to `PUBLIC_URL`, which should be set.
-Without sign-in nobody is told anything.
+STARTTLS whenever the server offers it. With the Slack connector installed
+in the run's project, people are told by a direct message from its app too.
+Each person picks how in their settings. Only people who may enter the
+run's project are told. The messages link to `PUBLIC_URL`, which should be
+set. Without sign-in nobody is told anything.
 
 ## Running steps in a sandbox
 
@@ -214,6 +258,8 @@ says how to migrate down before running an older version.
 
 ## Running it for a team
 
+- [PROJECTS.md](PROJECTS.md): projects, each a space of its own, who enters
+  them, and what keeps them apart.
 - [SANDBOX.md](SANDBOX.md): a container or pod per step, and the internet
   hosts steps may reach.
 - [REPLICAS.md](REPLICAS.md): any number of webapps on one database, such as

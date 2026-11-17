@@ -926,7 +926,8 @@ attributes. Each decision starts a fresh pass.
 Whoever may decide it finds it in their inbox, and is told it waits on them,
 by email and on Slack as they choose: the holders of the roles its human
 objects name, or for a review no human object handles, everyone who sees the
-flow; admins only when nobody else may. Name a role to say who is told.
+flow; the project's owners only when nobody else may. Name a role to say who
+is told.
 `remindAfter` reminds them every that long while it waits. `escalateAfter`
 hands it on to the roles `escalateTo` names, who may decide it too from then
 and are told so, as a team lead takes over a review left lying. While it
@@ -1058,7 +1059,8 @@ definitions do that.
   the proxy's URLs. Every call goes in the run's log. The service's host needn't be allowed for internet access, as
   the webapp makes the call.
 - A variable such as `$JIRA_TOKEN` is there only if the instance passes it
-  to every script with `CHILD_ENV`, which agents read too; prefer a
+  to every script with `CHILD_ENV`, which agents read too, and only in the
+  Legacy project, which inherits the instance's configuration; prefer a
   credential. For a service built in, a connector step or an agent with the
   service's MCP server does without either. In a workspace, its git (as an
   agent's) has a token for the run's repositories, which can push.
@@ -2028,7 +2030,9 @@ suggest starting from it and changing it, rather than writing it anew.
 
 ### 10.4 Import and verify
 
-1. `POST /api/setup` with the file. If it is refused, the message says what
+1. `POST /api/setup` with the file, naming the project in the
+   `X-Spoletta-Project` header, as every `/api/` request does: the file is
+   imported into that project alone. If it is refused, the message says what
    is wrong; fix it and import again. Nothing changed meanwhile.
 2. Read what is wrong with the board (`GET /api/flows/{id}/problems`), as
    the board shows beside Run. Errors are what a run can't get past as it

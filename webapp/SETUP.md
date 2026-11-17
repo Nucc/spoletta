@@ -1,16 +1,18 @@
 # Setup files
 
-A setup file describes everything built in the app as YAML. That covers the MCP servers, the skills and commands, the structs, the procedures and the flows, with every board, process, object, link, note and schedule on them. You can keep it under version control, edit it by hand, or have an LLM write it, and then import it into any instance of the app.
+A setup file describes everything built in the app as YAML. That covers the MCP servers, the skills and commands, the structs, the procedures and the flows, with every board, process, object, link, note and schedule on them. You can keep it under version control, edit it by hand, or have an LLM write it, and then import it into any project, of this instance of the app or another.
 
-It leaves out what runs produce: runs, versions and which of them a flow published, undo history, and the values that persistent objects stored. MCP servers' sign-ins and tokens stay out too, so after importing a server you sign in to it again, or an admin sets its token. Who a flow, skill or command belongs to stays out as well.
+A setup file is a project's: exporting writes out what the project you are in has, and importing makes over that project's flows, MCP servers, skills and commands by name, leaving every other project as it is. The file names no project, so one exported from a project imports into another.
+
+It leaves out what runs produce: runs, versions and which of them a flow published, undo history, and the values that persistent objects stored. MCP servers' sign-ins and tokens stay out too, so after importing a server you sign in to it again, or an owner of the project sets its token. Who a flow, skill or command belongs to stays out as well.
 
 ## Exporting and importing
 
-On the home page, the **⋯** menu beside **New** has **Export the setup**, which downloads `spoletta-setup.yaml`, and **Import a setup file**, which reads one back in. The API does the same:
+On the home page, the **⋯** menu beside **New** has **Export the setup**, which downloads `spoletta-setup.yaml`, and **Import a setup file**, which reads one back in; with sign-in, only the project's owners have them. The API does the same, naming the project in the `X-Spoletta-Project` header, as every request to `/api/` does (1 is Legacy):
 
 ```sh
-curl -o spoletta-setup.yaml http://localhost:8080/api/setup
-curl --data-binary @spoletta-setup.yaml -H 'Content-Type: application/yaml' http://localhost:8080/api/setup
+curl -o spoletta-setup.yaml -H 'X-Spoletta-Project: 1' http://localhost:8080/api/setup
+curl --data-binary @spoletta-setup.yaml -H 'Content-Type: application/yaml' -H 'X-Spoletta-Project: 1' http://localhost:8080/api/setup
 ```
 
 Import replies with the flows it created and the ones it updated. Since YAML takes JSON too, a JSON file works as well.
@@ -22,9 +24,9 @@ What importing does:
 - Flows that the file doesn't mention stay as they are. Import never deletes a flow.
 - A flow in the trash is left out, as if deleted: exporting leaves it out, with the copies of its objects written as their flows' own and the subflow processes running it with no `runs`, and importing a flow of its name creates a new one. Importing over a flow keeps what it had of one in the trash: a subflow process the file gives no `runs` keeps running the procedure in the trash it ran, and an object the file gives no `copyOf` stays a copy of the struct's or procedure's object in the trash it copied, so restoring that links them again.
 - An MCP server is matched by name. Its URL, description, auth and connector are set from the file. A server whose URL or auth changes is signed out, and loses its token.
-- A skill or command is matched by name. Its description, arguments and content are set from the file, and it keeps whoever it belongs to. One the app doesn't have is added as everyone's.
+- A skill or command is matched by name. Its description, arguments and content are set from the file, and it keeps whoever it belongs to. One the project doesn't have is added as everyone's in the project.
 - A flow's schedules become the file's. Schedules the flow already has with the same cron and time zone are kept; others are removed.
-- A flow's webhooks aren't in the file, and importing leaves them as they are: each holds a secret and runs as whoever added it, so they are added in the flow's settings, on each instance.
+- A flow's webhooks aren't in the file, and importing leaves them as they are: each holds a secret and runs as whoever added it, so they are added in the flow's settings, in each project.
 - A flow's, procedure's or struct's tags become the file's, so one the file gives none loses those it had.
 - The file is imported **whole or not at all**. If anything is wrong, the reply says what and where, and nothing changes. A flow that is running can't be updated.
 

@@ -1,15 +1,34 @@
 # Sealed secrets and rotating SECRET_KEY
 
-The webapp keeps four kinds of secret for others in MySQL: the model API
-keys admins save in the settings, the OAuth tokens of each person's MCP
-connections, the secrets of the credentials admins keep for scripts and
-agents (see [webapp/credentials.go](../webapp/credentials.go)), and the
-secrets other systems sign their deliveries to a flow's webhooks with, with
-the payload each webhook last took (see
-[webapp/webhooks.go](../webapp/webhooks.go)). With `SECRET_KEY` set, each is sealed with AES-256-GCM under a
-key derived from it, bound to the row it is kept in, so a dump or a backup
-of the database doesn't hand them out. How it works is described at the top
-of [webapp/secrets.go](../webapp/secrets.go).
+The webapp keeps these secrets for others in MySQL:
+
+- the model API keys a project's owners save in its settings, for the
+  worker's own providers (`model_keys`) and for the providers they add
+  (`model_providers`);
+- the OAuth tokens of each person's MCP connections, and the token an owner
+  sets for a server or connector taking one (`mcp_tokens`);
+- the secrets of the credentials a project's owners keep for scripts and
+  agents (see [webapp/credentials.go](../webapp/credentials.go));
+- the secrets other systems sign their deliveries to a flow's webhooks
+  with, with the payload each webhook last took (see
+  [webapp/webhooks.go](../webapp/webhooks.go));
+- the git token a project's owners set for its steps' repositories
+  (`project_git_tokens`, see [webapp/git_tokens.go](../webapp/git_tokens.go));
+- the refresh and access tokens a session keeps to read its person's groups
+  again from the identity provider (`sessions`, see
+  [webapp/users.go](../webapp/users.go)).
+
+With `SECRET_KEY` set, each is sealed with AES-256-GCM under a key derived
+from it, bound to where it is kept, its table, column and row, so a dump or
+a backup of the database doesn't hand them out, and one can't be moved to
+stand in for another. A secret kept under a name its project chose, a model
+key's variable or a provider's ID, is bound to its project too
+(`model_keys/<project>/<variable>`), so one project's can't stand in for
+another's of the same name, and so is a project's git token; Legacy's model
+keys and providers' keys are bound as they were before projects, so they
+open as they were sealed. The others are bound to rows whose ids are unique
+across projects. How it works is described at the top of
+[webapp/secrets.go](../webapp/secrets.go).
 
 ## Setting it up
 
@@ -47,7 +66,8 @@ empty string is the same as leaving it out.
 
    Secrets stay sealed with the primary meanwhile, so the webapps not yet
    restarted keep working. What a restarted webapp saves while the restart
-   goes on, such as a new model key or a refreshed MCP token, is sealed
+   goes on, such as a new model key, a refreshed MCP token or a session's
+   refreshed tokens, is sealed
    with the secondary, which those can't open: an agent step there using it
    fails until they restart too. A single replica, or in Kubernetes
    `strategy: Recreate`, avoids that window. Let every webapp restart before

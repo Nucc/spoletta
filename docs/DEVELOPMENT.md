@@ -34,6 +34,13 @@ The webapp migrates its database as it starts. [MIGRATIONS.md](MIGRATIONS.md)
 says how to write a migration and how to migrate down to run an older
 version.
 
+## Projects
+
+Everything is in a project, a tenant nothing in another reaches.
+[PROJECTS.md](PROJECTS.md) says what a new table, route or query must do to
+keep to its project; the e2e tests sweep every route across two projects,
+so a route added is tested for it as it is written.
+
 ## Replicas
 
 Any number of webapps can run on one database, such as a Deployment's pods

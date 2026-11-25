@@ -165,7 +165,8 @@ func importSetup(ctx context.Context, tx *sql.Tx, project int64, f setupFile, sa
 // Adds the file's MCP servers the app doesn't have, and gives the ones it
 // has by name the file's URL, description, auth and connector. One whose
 // URL or auth changes is signed out, since its sign-ins or token were for
-// the old one. A file never holds tokens: an admin sets those.
+// the old one, and one whose URL changes loses its headers, as the PATCH
+// route has it. A file never holds tokens or headers: an admin sets those.
 func (im *importer) mcpServers(servers []setupMCPServer) error {
 	type have struct {
 		id        int64
@@ -214,6 +215,11 @@ func (im *importer) mcpServers(servers []setupMCPServer) error {
 		if s.URL != h.url || s.Auth != h.auth {
 			q = "UPDATE mcp_servers SET name = ?, url = ?, description = ?, auth = ?, connector = ?, client_id = '', redirect_uri = '', token_endpoint = '', access_token = NULL, refresh_token = NULL, expires_at = NULL WHERE id = ?"
 			if _, err := im.tx.ExecContext(im.ctx, "DELETE FROM mcp_tokens WHERE server_id = ?", h.id); err != nil {
+				return err
+			}
+		}
+		if s.URL != h.url {
+			if _, err := im.tx.ExecContext(im.ctx, "DELETE FROM mcp_server_headers WHERE server_id = ?", h.id); err != nil {
 				return err
 			}
 		}

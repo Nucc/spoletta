@@ -7,6 +7,8 @@ The webapp keeps these secrets for others in MySQL:
   (`model_providers`);
 - the OAuth tokens of each person's MCP connections, and the token an owner
   sets for a server or connector taking one (`mcp_tokens`);
+- the headers an owner gives an MCP server, such as API keys
+  (`mcp_server_headers`, see [webapp/mcp_headers.go](../webapp/mcp_headers.go));
 - the secrets of the credentials a project's owners keep for scripts and
   agents (see [webapp/credentials.go](../webapp/credentials.go));
 - the secrets other systems sign their deliveries to a flow's webhooks

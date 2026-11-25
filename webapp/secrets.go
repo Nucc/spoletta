@@ -1,8 +1,9 @@
 package main
 
 // Secrets the webapp keeps for others, the model keys owners save, the
-// tokens of people's MCP connections, credentials' secrets, webhooks'
-// secrets, projects' git tokens and the tokens sessions keep to read
+// tokens of people's MCP connections, the headers owners give MCP servers,
+// credentials' secrets, webhooks' secrets, projects' git tokens and the
+// tokens sessions keep to read
 // people's groups again (users.go), are sealed in the database with
 // SECRET_KEY, so a copy of the database, a backup or a dump doesn't hand
 // them out. Each is sealed with AES-256-GCM under a key derived from
@@ -161,8 +162,7 @@ func (s *sealer) openAged(where, stored string) (string, bool, error) {
 	return "", false, errors.New("SECRET_KEY doesn't open this secret; it was sealed with another")
 }
 
-// Where a project's model key is kept, and an MCP connection's token,
-// which column says.
+// Where a project's model key is kept.
 func modelKeyPlace(project int64, env string) string {
 	if project == legacyProject {
 		return "model_keys/" + env
@@ -186,6 +186,8 @@ func gitTokenPlace(project int64) string { return fmt.Sprintf("project_git_token
 // its person sign in again.
 func mcpSignInPlace(state string) string { return "mcp_sign_ins/" + hashToken(state) }
 
+// Where an MCP connection's token is kept, which column says; a server's
+// header is kept at mcpHeaderPlace (mcp_headers.go).
 func mcpTokenPlace(column string, server, user int64) string {
 	return fmt.Sprintf("mcp_tokens/%s/%d/%d", column, server, user)
 }
@@ -217,7 +219,7 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 	}
 	secrets = s
 	if s == nil {
-		log.Printf("WARNING: SECRET_KEY isn't set, so model keys, MCP tokens, credentials' and webhooks' secrets, git tokens and sign-ins' tokens are kept in the database unsealed")
+		log.Printf("WARNING: SECRET_KEY isn't set, so model keys, MCP tokens and headers, credentials' and webhooks' secrets, git tokens and sign-ins' tokens are kept in the database unsealed")
 	}
 	ctx := context.Background()
 	// A secret, and how to seal it where it is unless it changed meanwhile.
@@ -303,6 +305,19 @@ func setUpSecrets(db *sql.DB, reseal bool) (int, error) {
 					mcpTokenPlace(column, server, user), token.String, []any{server, user, token.String}})
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	err = scanAll(ctx, db, "SELECT server_id, name, value FROM mcp_server_headers", func(rows *sql.Rows) error {
+		var server int64
+		var name, value string
+		if err := rows.Scan(&server, &name, &value); err != nil {
+			return err
+		}
+		all = append(all, secret{"UPDATE mcp_server_headers SET value = ? WHERE server_id = ? AND name = ? AND value = ?",
+			mcpHeaderPlace(server, name), value, []any{server, name, value}})
 		return nil
 	})
 	if err != nil {

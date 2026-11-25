@@ -484,6 +484,8 @@ func (c *problemCheck) agent(p process) {
 		case server.connected:
 		case server.auth == authToken:
 			c.onProcess(problemWarning, "mcp", p, "The MCP server %s has no token yet, so %s fails until an admin sets it in Settings, under MCP servers.", server.name, quote(p.Name))
+		case server.auth == authHeaders:
+			c.onProcess(problemWarning, "mcp", p, "The MCP server %s has no headers yet, so %s fails until an admin sets them in Settings, under MCP servers.", server.name, quote(p.Name))
 		default:
 			c.onProcess(problemWarning, "mcp", p, "You haven't connected the MCP server %s, so %s fails in runs you start: connect it in Settings, under MCP servers.", server.name, quote(p.Name))
 		}

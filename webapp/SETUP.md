@@ -56,10 +56,15 @@ mcpServers:
   - name: home
     url: https://home.example.com/api/mcp
     auth: token         # oauth (default): each person signs in; token: an admin sets one for everyone
+  - name: metrics
+    url: https://metrics.example.com/mcp
+    auth: headers       # nothing but the headers an admin sets, such as API keys
   - name: github
     connector: github   # a connector built into the app; it takes a token an admin sets
     url: https://ghe.example.com/api/v3   # its service's API; the connector's own if absent
 ```
+
+Any server but a connector may also be given headers an admin sets in the app, such as `X-Api-Key`, which go on every request agents make to it; a server with `auth: headers` takes nothing else. Like tokens, headers never go in the file, and changing a server's `url` drops them.
 
 A connector is a service the app itself works with, such as GitHub. Agents use it as an MCP server, its operations being its tools, and a `connector` process carries out one of its operations as a step. The app has the connectors `github`, `slack`, `telegram`, `google` (Sheets and Docs), `homeassistant` (whose `url` is the installation's, which it needs) and `http` (any JSON API, at its `url`, installed once for each under its own name). docs/FLOWS.md lists their operations.
 

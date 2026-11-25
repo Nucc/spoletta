@@ -7,6 +7,7 @@ import {
   deleteMCPServer,
   disconnectMCPServer,
   listMCPTools,
+  setMCPHeaders,
   setMCPToken,
   updateMCPServer,
   type MCPAuth,
@@ -22,6 +23,9 @@ import { onlySees, useMe } from './Account'
 // What pi and Claude Code take as a server name; they name the tools
 // mcp__<name>__<tool>.
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+
+// What a header's name may be, as the server says too.
+const HEADER_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/
 
 // The name of the worker's own server, through which agents hand in what
 // their process generates, which no other may take, whatever its case.
@@ -144,8 +148,8 @@ export function MCPServers({
       {confirmDialog}
       {note && (
         <p className="panel-note">
-          Servers agents can use. Connect each by signing in, or for one taking a token, have an admin set it for
-          everyone; then pick, in an agent process's panel, the ones it may use and, if you like, which of their tools.
+          Servers agents can use. Connect each by signing in, or for one taking a token or headers, have an admin set
+          them for everyone; then pick, in an agent process's panel, the ones it may use and, if you like, which of their tools.
           Agents use none unless picked, and reach them as whoever their run is for, with that person's connection.
           Built-in connectors, such as GitHub's, are added from Connectors.
         </p>
@@ -171,6 +175,7 @@ export function MCPServers({
               onDisconnect={() => act(() => disconnectMCPServer(s.id))}
               onSetToken={(token) => act(() => setMCPToken(s.id, token))}
               onClearToken={() => act(() => clearMCPToken(s.id))}
+              onSetHeaders={(headers) => act(() => setMCPHeaders(s.id, headers))}
               onDescribe={(d) => act(() => updateMCPServer(s.id, { description: d }).then(() => undefined))}
               onRemove={() => remove(s)}
             />
@@ -218,6 +223,7 @@ export function MCPServers({
             <select value={auth} onChange={(e) => setAuth(e.target.value as MCPAuth)}>
               <option value="oauth">Each person signing in</option>
               <option value="token">A token an owner sets, such as an API key</option>
+              <option value="headers">Only headers an owner sets, such as API keys</option>
             </select>
           </label>
           <button className="panel-button" type="submit" disabled={!nameOk || !urlOk || adding}>
@@ -237,6 +243,7 @@ function MCPServerItem({
   onDisconnect,
   onSetToken,
   onClearToken,
+  onSetHeaders,
   onDescribe,
   onRemove,
 }: {
@@ -247,6 +254,7 @@ function MCPServerItem({
   onDisconnect: () => void
   onSetToken: (token: string) => void
   onClearToken: () => void
+  onSetHeaders: (headers: Record<string, string | null>) => void
   onDescribe: (description: string) => void
   onRemove: () => void
 }) {
@@ -254,14 +262,24 @@ function MCPServerItem({
   const [token, setToken] = useState('')
   const save = () => description.trim() !== s.description && onDescribe(description.trim())
   const takesToken = s.auth === 'token'
+  const onlyHeaders = s.auth === 'headers'
+  const status = takesToken
+    ? s.connected
+      ? 'Token set'
+      : 'No token'
+    : onlyHeaders
+      ? s.connected
+        ? 'Headers set'
+        : 'No headers'
+      : s.connected
+        ? 'Connected'
+        : 'Not connected'
   return (
     <li className="mcp-item">
       <div className="mcp-item-head">
         <span className="mcp-item-name">{s.name}</span>
         {s.connector && <span className="mcp-badge">Built-in connector</span>}
-        <span className={`mcp-status${s.connected ? ' connected' : ''}`}>
-          {takesToken ? (s.connected ? 'Token set' : 'No token') : s.connected ? 'Connected' : 'Not connected'}
-        </span>
+        <span className={`mcp-status${s.connected ? ' connected' : ''}`}>{status}</span>
       </div>
       <span className="mcp-item-url" title={s.url}>
         {s.url}
@@ -307,9 +325,12 @@ function MCPServerItem({
           {s.connected ? 'Everyone uses the token an owner of the project set.' : 'An owner of the project sets its token for everyone.'}
         </small>
       )}
+      {!s.connector && (canConfigure || s.headers.length > 0) && (
+        <MCPHeaders server={s} canConfigure={canConfigure} onSet={onSetHeaders} />
+      )}
       <div className="mcp-item-actions">
-        {!takesToken && canConnect && <button onClick={onConnect}>{s.connected ? 'Sign in again' : 'Connect'}</button>}
-        {!takesToken && canConnect && s.connected && <button onClick={onDisconnect}>Disconnect</button>}
+        {s.auth === 'oauth' && canConnect && <button onClick={onConnect}>{s.connected ? 'Sign in again' : 'Connect'}</button>}
+        {s.auth === 'oauth' && canConnect && s.connected && <button onClick={onDisconnect}>Disconnect</button>}
         {takesToken && canConfigure && s.connected && <button onClick={onClearToken}>Clear token</button>}
         {canConfigure && (
           <button className="danger" onClick={onRemove}>
@@ -318,6 +339,96 @@ function MCPServerItem({
         )}
       </div>
     </li>
+  )
+}
+
+// The headers a server is given, which go on every request agents make to
+// it, such as an API key in a header of the server's own: their names, and
+// for those who configure servers, setting one (which replaces one of the
+// same name) and removing one. Values are never shown again. A server
+// taking nothing but headers has the form open; others behind a button.
+function MCPHeaders({
+  server: s,
+  canConfigure,
+  onSet,
+}: {
+  server: MCPServer
+  canConfigure: boolean
+  onSet: (headers: Record<string, string | null>) => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [value, setValue] = useState('')
+  const nameOk = HEADER_PATTERN.test(name.trim())
+  const open = canConfigure && (adding || s.auth === 'headers')
+  const replaces = s.headers.some((h) => h.toLowerCase() === name.trim().toLowerCase())
+  return (
+    <div className="mcp-headers">
+      {s.headers.length > 0 && (
+        <ul className="mcp-header-list" aria-label={`Headers of ${s.name}`}>
+          {s.headers.map((h) => (
+            <li key={h}>
+              <code>{h}</code>
+              <span className="mcp-header-set">set</span>
+              {canConfigure && (
+                <button className="link-button" onClick={() => onSet({ [h]: null })} aria-label={`Remove the header ${h}`}>
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {open ? (
+        <form
+          className="mcp-token mcp-header-form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!nameOk || value.trim() === '') return
+            onSet({ [name.trim()]: value.trim() })
+            setName('')
+            setValue('')
+            setAdding(false)
+          }}
+        >
+          <input
+            className="mcp-header-name"
+            value={name}
+            placeholder="X-Api-Key"
+            spellCheck={false}
+            autoComplete="off"
+            aria-label={`Name of a header of ${s.name}`}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            type="password"
+            value={value}
+            autoComplete="off"
+            placeholder={replaces ? 'Its new value' : 'Its value'}
+            aria-label={`Value of the header of ${s.name}`}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <button type="submit" disabled={!nameOk || value.trim() === ''}>
+            {replaces ? 'Replace' : 'Set header'}
+          </button>
+        </form>
+      ) : (
+        canConfigure && (
+          <button className="link-button mcp-header-add" onClick={() => setAdding(true)}>
+            Add a header
+          </button>
+        )
+      )}
+      {open && name.trim() !== '' && !nameOk && (
+        <small className="panel-warning">Letters, digits, -, _ and . only.</small>
+      )}
+      {open && (
+        <small className="panel-note">
+          Sent with every request agents make to it{s.auth === 'headers' ? ', which takes nothing else' : ''}. Nobody sees a
+          value again, and changing its URL drops them.
+        </small>
+      )}
+    </div>
   )
 }
 
@@ -385,7 +496,8 @@ export function MCPServerPicker({
               <span>{s.name}</span>
             </label>
             {on && !s.connected && s.auth === 'token' && <span className="mcp-status">No token yet</span>}
-            {on && !s.connected && s.auth !== 'token' && (
+            {on && !s.connected && s.auth === 'headers' && <span className="mcp-status">No headers yet</span>}
+            {on && !s.connected && s.auth === 'oauth' && (
               <>
                 <span className="mcp-status">Not connected</span>
                 {!sees && (

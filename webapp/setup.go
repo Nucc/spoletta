@@ -58,7 +58,8 @@ type setupMCPServer struct {
 	Name        string `yaml:"name"`
 	URL         string `yaml:"url,omitempty"`
 	Description string `yaml:"description,omitempty"`
-	// oauth or token; oauth when absent, but for a connector.
+	// oauth, token or headers; oauth when absent, but for a connector. A
+	// server's token and headers stay out of the file.
 	Auth string `yaml:"auth,omitempty"`
 	// The built-in connector it is, if any; its URL is then its service's
 	// API, the connector's own when absent.

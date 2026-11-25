@@ -1619,7 +1619,8 @@ export function listModels(): Promise<Models> {
 // the browser; each agent process picks the ones it uses. With sign-in,
 // connected says whether whoever asked connected it for themselves.
 // A server taking a token, a connector among them, has one an admin sets
-// for everyone instead, and connected says whether it is set.
+// for everyone instead, and connected says whether it is set; one taking
+// only headers is connected once an admin sets one.
 export type MCPServer = {
   id: number
   name: string
@@ -1629,9 +1630,12 @@ export type MCPServer = {
   // The built-in connector it is, if it is one; its URL is then its service's API.
   connector?: string
   connected: boolean
+  // The names of the headers an admin set, which go on every request to
+  // it; their values are never sent back.
+  headers: string[]
 }
 
-export type MCPAuth = 'oauth' | 'token'
+export type MCPAuth = 'oauth' | 'token' | 'headers'
 
 export function listMCPServers(): Promise<MCPServer[]> {
   return request('/api/mcp-servers')
@@ -1650,6 +1654,12 @@ export function setMCPToken(id: number, token: string): Promise<void> {
 
 export function clearMCPToken(id: number): Promise<void> {
   return request(`/api/mcp-servers/${id}/token`, { method: 'DELETE' })
+}
+
+// Sets a server's headers, each name given a value, and removes those given
+// null; those not named stay as they are. Nobody sees a value again.
+export function setMCPHeaders(id: number, headers: Record<string, string | null>): Promise<void> {
+  return request(`/api/mcp-servers/${id}/headers`, { method: 'PUT', body: JSON.stringify({ headers }) })
 }
 
 // A tool of a server, as an agent process picks those it uses.

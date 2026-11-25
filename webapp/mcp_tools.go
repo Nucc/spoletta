@@ -318,8 +318,8 @@ type mcpTool struct {
 // a connector's operations, or what an MCP server lists, asked as an agent
 // would. A server of another project is none.
 func (b *mcpBroker) tools(ctx context.Context, project, id, user int64) ([]mcpTool, error) {
-	var serverURL, connector string
-	err := b.db.QueryRowContext(ctx, "SELECT url, connector FROM mcp_servers WHERE id = ? AND project_id = ?", id, project).Scan(&serverURL, &connector)
+	var serverURL, connector, auth string
+	err := b.db.QueryRowContext(ctx, "SELECT url, connector, auth FROM mcp_servers WHERE id = ? AND project_id = ?", id, project).Scan(&serverURL, &connector, &auth)
 	if err != nil {
 		return nil, errNotFound
 	}
@@ -331,21 +331,36 @@ func (b *mcpBroker) tools(ctx context.Context, project, id, user int64) ([]mcpTo
 		return tools, nil
 	}
 	access, err := b.accessToken(ctx, id, user, "")
+	if errors.Is(err, errMCPNotConnected) && auth == authHeaders {
+		return nil, errMCPNoHeaders
+	}
+	if err != nil {
+		return nil, err
+	}
+	headers, err := mcpHeaders(ctx, b.db, id)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	c := &mcpClient{url: serverURL, token: access}
+	c := &mcpClient{url: serverURL, token: access, headers: headers}
+	// A server taking only headers turning a request away turned them away;
+	// there is no connection to make again.
+	refused := func(err error) error {
+		if errors.Is(err, errMCPNotConnected) && auth == authHeaders {
+			return errMCPHeadersRefused
+		}
+		return err
+	}
 	if _, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "spoletta", "version": "1"},
 	}); err != nil {
-		return nil, err
+		return nil, refused(err)
 	}
 	if err := c.notify(ctx, "notifications/initialized"); err != nil {
-		return nil, err
+		return nil, refused(err)
 	}
 	defer c.close()
 	tools := []mcpTool{}
@@ -357,7 +372,7 @@ func (b *mcpBroker) tools(ctx context.Context, project, id, user int64) ([]mcpTo
 		}
 		raw, err := c.call(ctx, "tools/list", params)
 		if err != nil {
-			return nil, err
+			return nil, refused(err)
 		}
 		var res struct {
 			Tools []struct {
@@ -386,10 +401,20 @@ func (b *mcpBroker) tools(ctx context.Context, project, id, user int64) ([]mcpTo
 // The version of MCP the webapp speaks when it asks a server for its tools.
 const mcpProtocolVersion = "2025-06-18"
 
-// Talks to an MCP server over streamable HTTP, for the webapp's own requests.
+// Talks to an MCP server over streamable HTTP, for the webapp's own requests,
+// with its token, if it has one, and the headers its owners set.
 type mcpClient struct {
 	url, token, session string
+	headers             map[string]string
 	next                int
+}
+
+// Puts the server's headers and token on a request to it.
+func (c *mcpClient) authorize(req *http.Request) {
+	putMCPHeaders(req.Header, c.headers)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 }
 
 func (c *mcpClient) post(ctx context.Context, m rpcMessage) (*http.Response, error) {
@@ -400,7 +425,7 @@ func (c *mcpClient) post(ctx context.Context, m rpcMessage) (*http.Response, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	c.authorize(req)
 	req.Header.Set("Mcp-Protocol-Version", mcpProtocolVersion)
 	if c.session != "" {
 		req.Header.Set("Mcp-Session-Id", c.session)
@@ -493,7 +518,7 @@ func (c *mcpClient) close() {
 	if err != nil {
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	c.authorize(req)
 	req.Header.Set("Mcp-Session-Id", c.session)
 	if resp, err := http.DefaultClient.Do(req); err == nil {
 		resp.Body.Close()

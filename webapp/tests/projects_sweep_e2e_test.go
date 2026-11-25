@@ -477,6 +477,8 @@ func sweepBody(t *testing.T, pattern string, side, guard *sweepSide) map[string]
 		return map[string]any{"name": "Swept", "inputs": []any{map[string]any{"object": side.id(t, "copy"), "content": "{}"}}}
 	case pattern == "PUT /api/mcp-servers/{id}/token":
 		return map[string]any{"token": "swept-token"}
+	case pattern == "PUT /api/mcp-servers/{id}/headers":
+		return map[string]any{"headers": map[string]any{"X-Swept": "swept-header"}}
 	case pattern == "PUT /api/objects/{id}/follows":
 		return map[string]any{"follows": map[string]any{"object": side.id(t, "copy"), "attribute": "ticket"}}
 	case pattern == "PUT /api/links/{id}/states":

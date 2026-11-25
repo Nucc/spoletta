@@ -1220,7 +1220,7 @@ the full reference; the essentials are below.
 
 ```yaml
 spoletta: 1              # the format's version, always first
-mcpServers: [...]        # name, url, description, auth, connector (sign-in and tokens happen in the app)
+mcpServers: [...]        # name, url, description, auth, connector (sign-in, tokens and headers happen in the app)
 structs: [...]           # objects, each its own struct named as the object
 procedures: [...]        # flows other flows run through subflow processes
 flows: [...]             # job flows

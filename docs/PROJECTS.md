@@ -155,10 +155,10 @@ The column alone proves nothing, so the database checks it:
   schedules, shared records, teams, credentials, MCP servers, task boards
   and webhooks.
 - **Each foreign key to a row of a project names the project too**
-  (`00053`, `00065`, `00091`): `(flow_id, project_id) REFERENCES flows (id,
+  (`00053`, `00065`, `00091`, `00092`): `(flow_id, project_id) REFERENCES flows (id,
   project_id)`, so a row can't be in another project than its parent. So
   are a flow's versions and owner team, a credential's teams, an MCP token's
-  server, a copy's source, the object an object specializes, what a note
+  and header's server, a copy's source, the object an object specializes, what a note
   points at, a task board column's struct and flow, and the record a run
   takes, starts on or a task board runs on.
 - **A row naming a person as one of a project's** refers to

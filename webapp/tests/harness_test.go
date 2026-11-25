@@ -406,6 +406,12 @@ func parallel(t *testing.T) {
 		testDBs.mu.Lock()
 		delete(testDBs.taken, t.Name())
 		testDBs.mu.Unlock()
+		// A task board left playing, such as the one the routes sweep plays,
+		// would start runs in the next test's webapp, of flows its fake
+		// worker knows nothing of.
+		if _, err := testDBs.root.Exec("UPDATE " + name + ".task_boards SET playing = FALSE WHERE playing"); err != nil {
+			t.Errorf("pausing the task boards left playing on %s: %v", name, err)
+		}
 		testDBs.free <- name
 	})
 }

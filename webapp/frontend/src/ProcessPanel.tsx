@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import {
   DEFAULT_LOOPS,
   DEFAULT_ROUNDS,
@@ -906,43 +906,54 @@ export type QueryLink = {
 }
 
 // A query's text setting, saved as it loses the focus if it changed; empty
-// leaves it out.
+// leaves it out. Its name has a ? beside it unfolding how to write it.
 function QueryTextField({
   label,
-  title,
   placeholder,
   value,
   readOnly,
   onSave,
+  help,
+  helpKey,
+  helpText,
 }: {
   label: string
-  title: string
   placeholder: string
   value: string | undefined
   readOnly: boolean
   onSave: (v: string | undefined) => void
+  help: ReturnType<typeof useHelp>
+  helpKey: string
+  helpText: ReactNode
 }) {
+  const id = useId()
   const [text, setText] = useState(value ?? '')
   useEffect(() => setText(value ?? ''), [value])
   return (
-    <label className="panel-field" title={title}>
-      <span>{label}</span>
-      <input
-        type="text"
-        value={text}
-        placeholder={placeholder}
-        readOnly={readOnly}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => text.trim() !== (value ?? '') && onSave(text.trim() || undefined)}
-      />
-    </label>
+    <>
+      <div className="panel-field">
+        <span className="help-head">
+          <label htmlFor={id}>{label}</label>
+          {help.button(helpKey, label)}
+        </span>
+        <input
+          id={id}
+          type="text"
+          value={text}
+          placeholder={placeholder}
+          readOnly={readOnly}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={() => text.trim() !== (value ?? '') && onSave(text.trim() || undefined)}
+        />
+      </div>
+      {help.note(helpKey, helpText)}
+    </>
   )
 }
 
 function QueryLinkFields({ q, readOnly, onQuery }: { q: QueryLink; readOnly: boolean; onQuery: (link: number, query: LinkQuery | null) => void }) {
   const query = q.query
-  const [where, setWhere] = useState(query?.where ?? '')
-  useEffect(() => setWhere(query?.where ?? ''), [query?.where])
+  const help = useHelp()
   const set = (patch: LinkQuery) => onQuery(q.link, { ...query, ...patch })
   const ranked = Boolean(query?.like?.trim())
   return (
@@ -956,34 +967,67 @@ function QueryLinkFields({ q, readOnly, onQuery }: { q: QueryLink; readOnly: boo
       </label>
       {query && (
         <>
-          <label className="panel-field" title="A rule its fields must hold, as a state's: comparisons joined by and. Empty takes them all.">
-            <span>Where</span>
-            <input
-              type="text"
-              value={where}
-              placeholder='score >= 4 and kind == "bug"'
-              readOnly={readOnly}
-              onChange={(e) => setWhere(e.target.value)}
-              onBlur={() => where.trim() !== (query.where ?? '') && set({ where: where.trim() || undefined })}
-            />
-          </label>
+          <QueryTextField
+            label="Where"
+            placeholder='score >= 4 and kind == "bug"'
+            value={query.where}
+            readOnly={readOnly}
+            onSave={(where) => set({ where })}
+            help={help}
+            helpKey="where"
+            helpText={
+              <>
+                A rule the records&apos; fields must hold, written as a state&apos;s: comparisons joined by <code>and</code>, such as{' '}
+                <code>score &gt;= 4 and kind == &quot;bug&quot;</code>. The operators are <code>==</code>, <code>!=</code>,{' '}
+                <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> and <code>contains</code>, which finds text
+                in text or an item in a list. A field of a part is <code>part.field</code>, and a value that isn&apos;t JSON is text.
+                Empty takes them all.
+              </>
+            }
+          />
           {q.shared && (
             <QueryTextField
               label="Search"
-              title={`The records ${q.object}'s Records page finds with this search, such as state:open @created:>now-7d. {@Object.attribute} puts in, quoted, a value of what the process takes.`}
               placeholder="state:open @created:>now-7d"
               value={query.search}
               readOnly={readOnly}
               onSave={(search) => set({ search })}
+              help={help}
+              helpKey="search"
+              helpText={
+                <>
+                  Written as on {q.object}&apos;s Records page, so try it there first: what the page lists is what the query reads.
+                  A word finds the records holding it in any field, <code>&quot;a phrase&quot;</code> too; <code>@summary:login</code>{' '}
+                  matches a field&apos;s value, ignoring case, with <code>*</code> for any text; <code>-@priority:low</code> (or{' '}
+                  <code>NOT</code>) leaves out what matches; <code>state:(new OR open)</code> takes either, as <code>OR</code> and
+                  brackets do; <code>@points:&gt;3</code> and <code>@points:[1 TO 5]</code> compare; <code>@created:&gt;now-7d</code>{' '}
+                  is a time, minutes, hours, days or weeks ago (<code>m</code>, <code>h</code>, <code>d</code>, <code>w</code>), for{' '}
+                  <code>updated</code> and fields typed Date and time; <code>@owner:*</code> has any value; and{' '}
+                  <code>@ticket.state:open</code> reaches through a reference. <code>{'{@Incoming.component}'}</code> puts in a value of
+                  what the process takes, quoted for you, so don&apos;t quote it. Its <code>state:</code> terms tell a task board which
+                  states this flow takes.
+                </>
+              }
             />
           )}
           <QueryTextField
             label="Most like"
-            title="Ranks the records by the words they have in common with this, rarer words counting more, the most like first; records sharing no word with it aren't taken. {@Object.attribute} puts in what the process takes, {@Object} all it holds. Leaves out the record the run works on."
             placeholder="{@Incoming.summary} {@Incoming.description}"
             value={query.like}
             readOnly={readOnly}
             onSave={(like) => set({ like })}
+            help={help}
+            helpKey="like"
+            helpText={
+              <>
+                Ranks the records it selects by the words they share with this, rarer words counting more, and hands in the most like
+                first; a record sharing no word with it isn&apos;t taken. Name the text fields of what the process takes, such as{' '}
+                <code>{'{@Incoming.summary} {@Incoming.description}'}</code>, rather than <code>{'{@Incoming}'}</code> whole, whose
+                dates and numbers nearly every record shares; plain words work too. It matches words alone, so sign-in isn&apos;t
+                login: have the agent judge what it gets, and raise At most to give it more. It leaves out the record this run works
+                on, and when At most cuts what it selected, the step is told how many it selected.
+              </>
+            }
           />
           <div className="panel-row">
             <select aria-label="In which state" value={query.state ?? ''} disabled={readOnly} onChange={(e) => set({ state: e.target.value || undefined })}>

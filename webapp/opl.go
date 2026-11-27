@@ -444,21 +444,29 @@ func registerOPLRoutes(mux *http.ServeMux, db *sql.DB) {
 }
 
 // What a query link looks up, such as the latest 5 stored records of
-// Review in approved where score >= 4.
+// Review in approved where score >= 4, or the 20 stored records of Ticket
+// most like "{@Incoming.summary}" found by "state:open @created:>now-7d".
 func queryPhrase(object string, q *linkQuery) string {
-	which := "latest"
+	which := "latest "
 	if q.Oldest {
-		which = "earliest"
+		which = "earliest "
 	}
-	s := fmt.Sprintf("the %s %d stored records of %s", which, q.limit(), object)
+	like := ""
+	if q.lookup() {
+		which, like = "", " most like "+strconv.Quote(q.Like)
+	}
+	s := fmt.Sprintf("the %s%d stored records of %s%s", which, q.limit(), object, like)
 	if q.limit() == 1 {
-		s = fmt.Sprintf("the %s stored record of %s", which, object)
+		s = fmt.Sprintf("the %sstored record of %s%s", which, object, like)
 	}
 	if q.State != "" {
 		s += " in " + q.State
 	}
 	if q.Where != "" {
 		s += " where " + q.Where
+	}
+	if q.Search != "" {
+		s += " found by " + strconv.Quote(q.Search)
 	}
 	return s
 }

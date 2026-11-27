@@ -480,7 +480,7 @@ func (w *walk) try(id int64, values map[int64]value) {
 		given = append(given, w.inputOf(id, i.object))
 	}
 	w.mu.Unlock()
-	records, err := w.queried(id)
+	records, err := w.queried(id, given)
 	if err != nil {
 		runLog(w.e.db, w.run, 0, logError, "the records for process %d couldn't be queried: %v", id, err)
 		w.note(id, stepError, queryFailure(err))

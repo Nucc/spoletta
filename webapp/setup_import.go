@@ -1746,6 +1746,8 @@ func (b *builder) checkQuery(l blink, takes map[[2]int64]int, queries map[[2]int
 		return "only an agent or a script queries records"
 	case !l.obj.o.Persistent && !b.shared(l.obj):
 		return "only a persistent or shared object has records to query"
+	case l.query.Search != "" && !b.shared(l.obj):
+		return searchUnshared
 	}
 	return ""
 }

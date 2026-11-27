@@ -109,6 +109,7 @@ func boardProblems(s snapshot, f problemFacts) []problem {
 	c.processes()
 	c.objects()
 	c.picked()
+	c.queries()
 	c.followed()
 	c.unreached()
 	c.branchRule()
@@ -202,6 +203,130 @@ func generatesOutput(kind string, inState, decides, takes bool) bool {
 		return false
 	}
 	return true
+}
+
+// A query's search and like (queries.go). A value either names that no
+// object of the flow is fails every step of its process, and one its
+// process doesn't take plainly fails it unless it is given it otherwise, as
+// a flow's start gives what its flow process takes. A search of what isn't
+// a shared struct's records fails its steps, and one naming what its
+// records have no field of matches nothing there, so may select none,
+// which an agent deciding whether a ticket is new would read as none like
+// it.
+func (c *problemCheck) queries() {
+	for _, p := range c.s.Processes {
+		for _, l := range c.links[p.ID] {
+			if l.Query == nil || l.Direction != directionInput {
+				continue
+			}
+			o := c.objs[l.Object]
+			for _, text := range []string{l.Query.Search, l.Query.Like} {
+				parts, msg := queryValues("", text)
+				if msg != "" {
+					continue
+				}
+				for _, part := range parts {
+					if part.object == "" {
+						continue
+					}
+					var named []snapshotObject
+					for _, n := range c.s.Objects {
+						if strings.EqualFold(slug(n.Name), slug(part.object)) {
+							named = append(named, n)
+						}
+					}
+					i := slices.IndexFunc(named, func(n snapshotObject) bool { return c.takes(p.ID, n.ID) })
+					switch {
+					case len(named) == 0:
+						c.onProcess(problemError, "query-value", p, "%s's query of %s names %s, which no object of the flow is, so its steps fail: name one %s takes.",
+							quote(p.Name), quote(o.Name), quote(part.object), quote(p.Name))
+					case i < 0:
+						c.onProcess(problemWarning, "query-value", p, "%s's query of %s names %s, which it doesn't take, so its steps fail unless it is given it: link %s to it.",
+							quote(p.Name), quote(o.Name), quote(part.object), quote(part.object))
+					case part.attribute != "" && !c.hasField(named[i].ID, part.attribute):
+						c.onProcess(problemWarning, "query-value", p, "%s's query of %s names %s's %s, which it has no attribute of.",
+							quote(p.Name), quote(o.Name), quote(named[i].Name), quote(part.attribute))
+					}
+				}
+			}
+			if l.Query.Search == "" {
+				continue
+			}
+			if o.Store == nil {
+				c.onProcess(problemError, "query-search", p, "%s searches %s's records, but only a shared struct's records are searched, so its steps fail: take the search out, or select them by a rule.",
+					quote(p.Name), quote(o.Name))
+				continue
+			}
+			for _, key := range c.unknownKeys(o, parseSearch(blankValues(l.Query.Search))) {
+				c.onProcess(problemWarning, "query-search", p, "%s's search of %s names %s, which its records have no field of, so that part of it matches nothing.",
+					quote(p.Name), quote(o.Name), quote(key))
+			}
+		}
+	}
+}
+
+// Whether the object has a field of the name, as a search's facets match
+// names: an attribute, or an object it is made of. One with neither, whose
+// content is any value, is taken to have it.
+func (c *problemCheck) hasField(object int64, name string) bool {
+	fields := c.fields(object)
+	return len(fields) == 0 || slices.ContainsFunc(fields, func(f string) bool { return strings.EqualFold(slug(f), slug(name)) })
+}
+
+// The fields a record of the object holds: its attributes, then the objects
+// it is made of.
+func (c *problemCheck) fields(object int64) []string {
+	var fields []string
+	for _, a := range c.s.Attributes {
+		if a.Object == object {
+			fields = append(fields, a.Name)
+		}
+	}
+	for _, o := range c.s.Objects {
+		if o.Owner != nil && *o.Owner == object {
+			fields = append(fields, o.Name)
+		}
+	}
+	return fields
+}
+
+// The keys of the search, each once, that none of the shared object's
+// records' facets has (readRecordTable): not the record's own (id, state,
+// updated, run), a field, nor one reached through a reference. With a
+// reference, a key naming no field may name one of the record it refers
+// to, as title does @ticket.title, so passes.
+func (c *problemCheck) unknownKeys(o snapshotObject, n *searchNode) []string {
+	fields := c.fields(o.ID)
+	var refs []string
+	for _, a := range c.s.Attributes {
+		if a.Object == o.ID && a.Ref != nil {
+			refs = append(refs, strings.ToLower(slug(a.Name)))
+		}
+	}
+	var unknown []string
+	var walk func(n *searchNode)
+	walk = func(n *searchNode) {
+		for _, inner := range n.nodes {
+			walk(inner)
+		}
+		if n.kind != "term" || !n.hasKey {
+			return
+		}
+		k := strings.ToLower(strings.TrimPrefix(n.key, "@"))
+		head, _, dotted := strings.Cut(k, ".")
+		switch {
+		case slices.Contains([]string{"id", "state", "updated", "run"}, k):
+		case slices.ContainsFunc(fields, func(f string) bool { return strings.ToLower(slug(f)) == k }):
+		case dotted && slices.Contains(refs, head):
+		case !dotted && len(refs) > 0:
+		default:
+			if !slices.Contains(unknown, n.key) {
+				unknown = append(unknown, n.key)
+			}
+		}
+	}
+	walk(n)
+	return unknown
 }
 
 // Whether the process takes the object, by a link other than a query.
@@ -1126,7 +1251,7 @@ func (c *problemCheck) heldAtStart(o snapshotObject) bool {
 	}
 	for _, ls := range c.links {
 		for _, l := range ls {
-			if l.Query == nil {
+			if l.Query == nil || l.Query.lookup() {
 				continue
 			}
 			for _, q := range c.s.Objects {

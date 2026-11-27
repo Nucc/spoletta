@@ -230,6 +230,9 @@ func limit(ms int64, fallback time.Duration) time.Duration {
 type scriptInput struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
+	// For a query's records its limit cut, how many it selected, with a +
+	// for at least so many; see runScript.
+	Matched string `json:"matched,omitempty"`
 }
 
 // Scripts' inputs and outputs can be lists of many items, so they may be
@@ -689,11 +692,14 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // and whose checkouts are on the branch $BRANCH names, or else in a fresh
 // scratch directory. Each object it takes is a file in the directory $INPUTS
 // points to, named after the object: spaces and other characters unsafe in a
-// file name become underscores, so Jira Ticket is $INPUTS/Jira_Ticket. Files
-// it generates go in the directory $OUTPUTS points to, which is kept. In a
-// scheduled run, $SINCE and its alias $LAST_RUN hold when the schedule's
-// last run that got through started, as a Unix timestamp, and are empty
-// when there was none, so the script can fetch only what changed since. What
+// file name become underscores, so Jira Ticket is $INPUTS/Jira_Ticket. When
+// a query's limit cut the records it hands in, a file of the same name in
+// the directory $MATCHED points to says how many it selected, with a + for
+// at least so many. Files it generates go in the directory $OUTPUTS points
+// to, which is kept. In a scheduled run, $SINCE and its alias $LAST_RUN hold
+// when the schedule's last run that got through started, as a Unix
+// timestamp, and are empty when there was none, so the script can fetch only
+// what changed since. What
 // the script prints is its output; a non-zero exit fails it, with what it
 // printed to stderr as the error. Like pi, it runs in a process group of its own,
 // which a cancelled request or the timeout kills.
@@ -723,6 +729,10 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	if err := os.Mkdir(inputs, 0o700); err != nil {
 		return runResult{Error: "create inputs directory: " + err.Error()}
 	}
+	matched := filepath.Join(private, "matched")
+	if err := os.Mkdir(matched, 0o700); err != nil {
+		return runResult{Error: "create matched directory: " + err.Error()}
+	}
 	for _, in := range run.Inputs {
 		name := strings.Trim(unsafeName.ReplaceAllString(in.Name, "_"), "._")
 		if name == "" {
@@ -730,6 +740,11 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 		}
 		if err := os.WriteFile(filepath.Join(inputs, name), []byte(in.Content), 0o600); err != nil {
 			return runResult{Error: "write input " + in.Name + ": " + err.Error()}
+		}
+		if in.Matched != "" {
+			if err := os.WriteFile(filepath.Join(matched, name), []byte(in.Matched), 0o600); err != nil {
+				return runResult{Error: "write how many records " + in.Name + " was cut from: " + err.Error()}
+			}
 		}
 	}
 	script := filepath.Join(private, "script")
@@ -752,7 +767,7 @@ func runScript(ctx context.Context, run scriptRequest, timeout time.Duration, l 
 	if len(credVars) > 0 {
 		l.infof("calling %s through the webapp's credential proxy", credentialNames(run.Credentials))
 	}
-	spec.Env = stepEnv(run.inherits(), append(append(gitEnv, "INPUTS="+inputs, "SINCE="+since, "LAST_RUN="+since, "PYTHONUNBUFFERED=1"), credVars...)...)
+	spec.Env = stepEnv(run.inherits(), append(append(gitEnv, "INPUTS="+inputs, "MATCHED="+matched, "SINCE="+since, "LAST_RUN="+since, "PYTHONUNBUFFERED=1"), credVars...)...)
 	if run.Workspace != nil {
 		spec.Env = append(spec.Env, "WORKSPACE="+cwd, "BRANCH="+run.Workspace.checkoutBranch())
 	}

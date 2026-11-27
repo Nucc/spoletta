@@ -18,8 +18,11 @@ import (
 // last got through, so the script can fetch only what changed since; an
 // agent's prompt naming them has them filled in (withSince). Each
 // credential its process picks is reached at $CREDENTIAL_<NAME>_URL, with
-// $CREDENTIALS_TOKEN as a bearer token; see credentials.go. What it prints
-// is kept as it prints it, for reading; see script_output.go.
+// $CREDENTIALS_TOKEN as a bearer token; see credentials.go. When a query's
+// limit cut the records it hands in, a file named as the object's in
+// $INPUTS says in the directory $MATCHED points to how many it selected,
+// with a + for at least so many (see queries.go). What it prints is kept
+// as it prints it, for reading; see script_output.go.
 
 // What the worker runs.
 type scriptRun struct {
@@ -73,6 +76,9 @@ func (run scriptRun) tokens() []string {
 type scriptInput struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
+	// How many records a query selected when it hands in fewer; see
+	// runInput.cutFrom.
+	Matched string `json:"matched,omitempty"`
 }
 
 // Executes a script process as a step of the run, which records its script
@@ -88,7 +94,7 @@ func runScriptStep(ctx context.Context, db *sql.DB, workerURL string, ws *runWor
 	flow, settings := b.flow, p.Settings
 	run.ProcessName, run.Script = p.Name, p.Script
 	for _, in := range inputs {
-		run.Inputs = append(run.Inputs, scriptInput{Name: in.Name, Content: in.Content})
+		run.Inputs = append(run.Inputs, scriptInput{Name: in.Name, Content: in.Content, Matched: in.cutFrom()})
 	}
 	contract, msg := b.contractFor(id, true)
 	// The credentials the run's version of the process picked.

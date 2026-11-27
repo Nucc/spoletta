@@ -363,48 +363,6 @@ func storeOf(ctx context.Context, db querier, object int64) (int64, error) {
 	return store.Int64, err
 }
 
-// The records of a store the query of a run in project selects, as a list
-// of it, the latest written first, or the earliest with oldest; none of
-// another project's store.
-func querySharedRecords(ctx context.Context, db *sql.DB, project, store int64, q *linkQuery) (string, error) {
-	where, err := parseRule(q.Where)
-	if err != nil {
-		return "", err
-	}
-	order := "DESC"
-	if q.Oldest {
-		order = "ASC"
-	}
-	args := []any{store, project}
-	state := ""
-	if q.State != "" {
-		state = " AND state = ?"
-		args = append(args, q.State)
-	}
-	rows, err := db.QueryContext(ctx,
-		"SELECT content FROM shared_records WHERE object_id = ? AND project_id = ? AND deleted_at IS NULL"+state+" ORDER BY updated_at "+order+", id "+order, args...)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-	records := []json.RawMessage{}
-	for len(records) < q.limit() && rows.Next() {
-		var content string
-		if err := rows.Scan(&content); err != nil {
-			return "", err
-		}
-		if !json.Valid([]byte(content)) || (len(where) > 0 && !where.holds(content)) {
-			continue
-		}
-		records = append(records, json.RawMessage(content))
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-	b, err := json.Marshal(records)
-	return string(b), err
-}
-
 // A record as the struct's records list it.
 type sharedRecord struct {
 	ID      int64           `json:"id"`
@@ -535,13 +493,25 @@ func readRecordTable(ctx context.Context, db *sql.DB, root int64) (*recordTable,
 	if rt.markdown, err = structMarkdown(ctx, db, root); err != nil {
 		return nil, err
 	}
+	// A field typed datetime is searched as a time, so @created:>now-7d
+	// finds those of the last week.
+	dates := map[string]bool{}
+	err = scanAll(ctx, db, "SELECT name FROM object_attributes WHERE object_id = ? AND value_type = ?", func(rows *sql.Rows) error {
+		var name string
+		err := rows.Scan(&name)
+		dates[name] = true
+		return err
+	}, root, typeDatetime)
+	if err != nil {
+		return nil, err
+	}
 	t := rt.table
 	idFacet := t.facet("id", facet{Key: "id", Label: "Record", Group: "Record", Hidden: true})
 	state := t.facet("state", facet{Key: "state", Label: "State", Group: "Record"})
 	updated := t.facet("updated", facet{Key: "updated", Label: "Updated", Group: "Record", Date: true, Hidden: true})
 	runFacet := t.facet("run", facet{Key: "run", Label: "Run", Group: "Record"})
 	field := func(f string) int {
-		return t.facet("."+f, facet{Key: "@" + slug(f), Label: f, Group: "Fields", Kind: "field", Field: f})
+		return t.facet("."+f, facet{Key: "@" + slug(f), Label: f, Group: "Fields", Kind: "field", Field: f, Date: dates[f]})
 	}
 	for _, f := range rt.fields {
 		field(f)

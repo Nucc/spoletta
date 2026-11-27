@@ -27,7 +27,7 @@ func TestScriptsGetOnlyTheirEnvironment(t *testing.T) {
 		t.Fatalf("script failed: %s", res.Error)
 	}
 	allowed := append(slices.Clone(childVars), "GIT_TERMINAL_PROMPT", "SHARED_TOKEN",
-		"INPUTS", "SINCE", "LAST_RUN", "WORKSPACE", "BRANCH", "OUTPUTS", "PYTHONUNBUFFERED",
+		"INPUTS", "MATCHED", "SINCE", "LAST_RUN", "WORKSPACE", "BRANCH", "OUTPUTS", "PYTHONUNBUFFERED",
 		// What bash sets itself.
 		"PWD", "OLDPWD", "SHLVL", "_")
 	var names []string
@@ -43,6 +43,23 @@ func TestScriptsGetOnlyTheirEnvironment(t *testing.T) {
 	}
 	if !slices.Contains(names, "SHARED_TOKEN") || !slices.Contains(names, "INPUTS") || !slices.Contains(names, "PYTHONUNBUFFERED") {
 		t.Errorf("the script didn't get what it should: %v", names)
+	}
+}
+
+// A query's records its limit cut come with how many it selected, in a
+// file named as the input's in $MATCHED; others have none there.
+func TestScriptsAreToldHowManyRecordsMatched(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	run := scriptRequest{Script: `cat "$INPUTS/Jira_Ticket"; echo; cat "$MATCHED/Jira_Ticket"; echo; ls "$MATCHED"`,
+		Inputs: []scriptInput{{Name: "Jira Ticket", Content: "[]", Matched: "340"}, {Name: "Incoming", Content: "{}"}}}
+	res := runScript(context.Background(), run, time.Minute, newStepLogger("test", nil), nil)
+	if !res.OK {
+		t.Fatalf("script failed: %s", res.Error)
+	}
+	if want := "[]\n340\nJira_Ticket"; strings.TrimSpace(res.Output) != want {
+		t.Errorf("the script printed %q, want %q", res.Output, want)
 	}
 }
 

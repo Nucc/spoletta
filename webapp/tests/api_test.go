@@ -316,6 +316,8 @@ type linkQuery struct {
 	State  string `json:"state,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
 	Oldest bool   `json:"oldest,omitempty"`
+	Search string `json:"search,omitempty"`
+	Like   string `json:"like,omitempty"`
 }
 
 // An MCP server as the worker registers it with pi for one agent step.
@@ -591,6 +593,10 @@ type runInput struct {
 	// How the process takes it: as an instrument, consumed, or affected,
 	// to hand in changed; empty when it just takes it.
 	Role string `json:"role,omitempty"`
+	// For a query's records, how many it selected; with MatchedMore, at
+	// least so many.
+	Matched     int  `json:"matched,omitempty"`
+	MatchedMore bool `json:"matchedMore,omitempty"`
 }
 
 const (
@@ -644,6 +650,8 @@ type logLine struct {
 type scriptInput struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
+	// How many records a query selected when it hands in fewer.
+	Matched string `json:"matched,omitempty"`
 }
 
 // What the worker runs.

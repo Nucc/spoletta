@@ -386,6 +386,7 @@ A link that says nothing but the object is written as just the object's name.
 | `takes: [Notes]` + `yields: [Notes]` (agent or script) | **effect**: hands in a changed Notes |
 | `yields: [Ticket]` on a human process that doesn't take Ticket | a person **fills in** Ticket |
 | `takes: [{object: Review, query: {where: 'score >= 4', state: approved, limit: 5}}]` | **looks up** Review's stored records, not waiting for it |
+| `takes: [Incoming, {object: Ticket, query: {search: 'state:open @created:>now-7d', like: '{@Incoming.summary}'}}]` | looks up the open tickets of the last week **most like** Incoming |
 
 A **query** link (agent or script only) takes what earlier runs stored of a
 persistent object rather than the object in this run (for a shared struct's
@@ -401,6 +402,68 @@ record, and with `oldest: true` the first. Each query reads the store anew,
 so two processes querying `limit: 1` may get different records if the store
 changed in between; to have every process of a run work on the same record
 of a shared struct, have the object **pick** it instead (3.8).
+
+A shared struct's query can also **search** its records as its Records page
+does: `search: 'state:open @created:>now-7d'` (a field typed `datetime` is
+searched as a time, `now-7d` being a week ago), narrowing what `state` and
+`where` select. And any query can **rank** what it selects by how like it is
+to some text: `like: '{@Incoming.summary} {@Incoming.description}'` hands in
+the records sharing the most words with it first, rarer words counting
+more, and leaves out those sharing none. Nothing is stemmed or translated
+("sign-in" isn't "login"), so have the agent judge what it is handed, and
+widen the search or raise the limit to hand it more. Both may name what the
+process takes by a plain link as `{@Object.attribute}`, or `{@Object}` for
+all it holds, filled in as the step starts: into a search as one quoted
+value, so don't quote it yourself; into `like` as the words it holds. A
+value of an object the process isn't given fails its step.
+
+A query with `like` **looks records up** rather than picking what the run
+works on: it leaves out the record its run picked, followed or was started
+on, so a ticket isn't found like itself; Run… on a record and a task board
+don't count its flow as one working on the struct's records.
+
+When the limit cuts what a query selected, the step is told how many it
+selected: the agent's input says `matched="340"`, and a script finds `340`
+in `$MATCHED/<Name>` (the file name as in `$INPUTS`, there only when cut).
+To search, count or rank, a query reads at most the latest 20000 records
+(with `oldest: true` too), and says `340+` when there may be more. So a
+flow given a bug report (by a webhook, say) files it in Jira only when no
+open ticket of the last month reports the same, with a shared `Jira
+Ticket` struct whose `created` is typed `datetime`:
+
+```yaml
+flows:
+  - name: File a bug
+    start: {next: Check duplicates}
+    processes:
+      - name: Check duplicates
+        prompt: >
+          Decide whether Incoming reports the same problem as one of the
+          open Jira tickets: duplicate if one does, else new.
+        takes:
+          - Incoming
+          - object: Jira Ticket
+            query:
+              search: 'state:open @created:>now-30d'
+              like: '{@Incoming.summary} {@Incoming.description}'
+              limit: 20
+        yields: [{object: Incoming, states: [duplicate, new]}]
+      - name: Create in Jira
+        prompt: Create Incoming as a Jira ticket and hand in the ticket.
+        takes: [{object: Incoming, state: new}]
+        yields: [Jira Ticket]
+    objects:
+      - name: Incoming
+        states: [duplicate, new]
+        attributes:
+          - {name: summary}
+          - {name: description}
+      - copyOf: {flow: Jira Ticket}
+```
+
+`Create in Jira` only generates the ticket, so adds it to the store, where
+the next run's query finds it. A query claims nothing: two runs at once may
+both decide `new`, so don't let such a flow's runs overlap if that matters.
 
 A process tells its objects apart by name: no two it takes may share one,
 nor two it yields, compared as file names in `$INPUTS` (`Jira Ticket` and
@@ -548,9 +611,12 @@ repositories:
   - What gets worked on, or worked on again, is up to **queries**: `takes:
     [{object: Exception, query: {state: new, limit: 1, oldest: true}}]`
     reads the records in that state, whichever flow wrote them, and a rule
-    on their fields narrows them, such as `attempts < 3`. To retry what
+    on their fields narrows them, such as `attempts < 3`, or a search, such
+    as `search: 'state:new @severity:(high OR critical)'`, whose `state:`
+    terms a task board reads as the states the flow takes. To retry what
     failed, have the failure handler take it and yield it `failed`, and
-    query that state too.
+    query that state too. A query with `like` looks records up instead
+    (3.4), so doesn't decide what gets worked on.
   - Or the object **picks** the record each run works on: `pick: {states:
     [new, reopened], oldest: true}` (and `where:`, a rule on its fields) on the copy of
     the struct on a job flow's top board. As a run starts it takes one
@@ -644,8 +710,9 @@ repositories:
   - A person can pick the record a flow works on: **Run…** on a record (or
     on those ticked) starts a flow querying the struct on it, a run per
     record, and each of that run's queries of the struct reads the record
-    alone, whatever its state and rule select, as does an object picking
-    one. So a flow implementing "the
+    alone, whatever its state, rule and search select, as does an object
+    picking one, but a query with `like`, which looks up the others like
+    it. So a flow implementing "the
     open Jira ticket" its query gives it implements the one picked; write
     its query for the scheduled case, and it serves both.
   - A **task board** (`#/taskboards/<id>`, listed on the home page) lays

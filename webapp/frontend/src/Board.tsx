@@ -3118,7 +3118,7 @@ export default function Board({
       if (!l || l.direction !== 'input' || String(l.process) !== id || l.state !== null || l.role === 'consumption') return []
       const object = getNode(objectNodeId(l.object))
       if (object?.type !== 'object' || !(object.data.persistent || object.data.shared) || object.data.human) return []
-      return [{ link: l.id, object: object.data.name, states: object.data.states.map((s) => s.name), query: l.query }]
+      return [{ link: l.id, object: object.data.name, states: object.data.states.map((s) => s.name), shared: object.data.shared, query: l.query }]
     })
 
   const linkedNames = (id: string, direction: 'input' | 'output'): string[] => [

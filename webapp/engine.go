@@ -1180,7 +1180,7 @@ func (w *walk) runProcessWith(id int64, p *pass, trigger int64, extra []runInput
 	w.mu.Unlock()
 
 	if !human {
-		records, err := w.queried(id)
+		records, err := w.queried(id, given)
 		if err != nil {
 			runLog(w.e.db, w.run, 0, logError, "the records for process %d couldn't be queried: %v", id, err)
 			w.note(id, stepError, queryFailure(err))

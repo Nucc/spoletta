@@ -154,14 +154,15 @@ type stateFlows struct {
 // both or neither.
 func (f *recordFlow) takes(state, content string) (named, any bool) {
 	for _, q := range f.queries {
-		if q.State != "" && q.State != state {
+		states := q.states()
+		if len(states) > 0 && !takesState(states, state) {
 			continue
 		}
 		where, err := parseRule(q.Where)
 		if err != nil || content != "" && len(where) > 0 && !where.holds(content) {
 			continue
 		}
-		if q.State == "" {
+		if len(states) == 0 {
 			any = true
 		} else {
 			named = true

@@ -1450,13 +1450,18 @@ export function listLinks(flow: number): Promise<Link[]> {
 }
 
 // Which stored records a query link takes: those whose fields hold the rule
-// (all when empty) in the state (any when empty), newest first unless
-// oldest, at most limit (20 when absent, 100 at most).
+// (all when empty) in the state (any when empty), and of a shared struct
+// those its Records page's search finds, newest first unless oldest, or the
+// most like its like first, those sharing no word with it left out, at
+// most limit (20 when absent, 100 at most). Search and like may name what
+// the process takes as {@Object.attribute}; see queries.go.
 export type LinkQuery = {
   where?: string
   state?: string
   limit?: number
   oldest?: boolean
+  search?: string
+  like?: string
 }
 
 // Without a state, the link names none; without states, it lists none.
@@ -1749,6 +1754,26 @@ export type RunInput = {
   name: string
   state?: string
   content: string
+  // For a query's records, how many it selected, more than it holds when
+  // its limit cut them; with matchedMore, at least so many.
+  matched?: number
+  matchedMore?: boolean
+}
+
+// How many records a query's records were cut from, said after them, such
+// as "20 of 340", or null when they hold all it selected.
+export function recordsCut(input: RunInput): string | null {
+  if (!input.matched && !input.matchedMore) return null
+  let held: number
+  try {
+    const list: unknown = JSON.parse(input.content)
+    if (!Array.isArray(list)) return null
+    held = list.length
+  } catch {
+    return null
+  }
+  if (input.matchedMore) return `${held} of at least ${input.matched}`
+  return input.matched !== undefined && input.matched > held ? `${held} of ${input.matched}` : null
 }
 
 // Sent to a process taking an object in the state a human set it to, when

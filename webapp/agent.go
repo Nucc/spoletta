@@ -15,6 +15,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -49,6 +50,32 @@ type runInput struct {
 	// How the process takes it: as an instrument, consumed, or affected,
 	// to hand in changed; empty when it just takes it.
 	Role string `json:"role,omitempty"`
+	// For a query's records, how many records it selected, more than the
+	// list holds when its limit cut it; with MatchedMore, at least so many,
+	// as it read no further (see queries.go).
+	Matched     int  `json:"matched,omitempty"`
+	MatchedMore bool `json:"matchedMore,omitempty"`
+}
+
+// How many records a query's records were cut from, as the step is told
+// it: "" when the list holds all its query selected, else how many it
+// selected, "340", or for a query reading no further, at least how many,
+// "340+".
+func (in runInput) cutFrom() string {
+	if in.Role != inputRecords || (in.Matched == 0 && !in.MatchedMore) {
+		return ""
+	}
+	var list []json.RawMessage
+	if json.Unmarshal([]byte(in.Content), &list) != nil {
+		return ""
+	}
+	switch {
+	case in.MatchedMore:
+		return strconv.Itoa(in.Matched) + "+"
+	case in.Matched > len(list):
+		return strconv.Itoa(in.Matched)
+	}
+	return ""
 }
 
 // The roles of a run's input, as the agent is told them.
@@ -578,11 +605,18 @@ func withInputs(prompt string, inputs []runInput) string {
 		fmt.Fprintf(&b, " One whose role is %s is yours to change: what you hand in for it is its new version.", inputAffected)
 	}
 	if roles[inputRecords] {
-		fmt.Fprintf(&b, " One whose role is %s is a JSON array of what earlier runs stored of the object, as its query selects them; it may be empty.", inputRecords)
+		fmt.Fprintf(&b, " One whose role is %s is a JSON array of what earlier runs stored of the object, as its query selects them, the most like what it compares them with first if it ranks them; it may be empty.", inputRecords)
+		if slices.ContainsFunc(inputs, func(in runInput) bool { return in.cutFrom() != "" }) {
+			b.WriteString(" One with a matched attribute holds only the first of the records its query selected, which were as many as it says (with a +, at least so many); the rest were left out.")
+		}
 	}
 	b.WriteString("\n")
 	for _, in := range inputs {
-		fmt.Fprintf(&b, "\n<input name=\"%s\"%s%s>\n%s\n</input>\n", html.EscapeString(in.Name), stateAttr(in.State), roleAttr(in.Role), in.Content)
+		matched := ""
+		if n := in.cutFrom(); n != "" {
+			matched = fmt.Sprintf(" matched=\"%s\"", n)
+		}
+		fmt.Fprintf(&b, "\n<input name=\"%s\"%s%s%s>\n%s\n</input>\n", html.EscapeString(in.Name), stateAttr(in.State), roleAttr(in.Role), matched, in.Content)
 	}
 	return b.String()
 }

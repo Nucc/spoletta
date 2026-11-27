@@ -186,7 +186,9 @@ func unpublishedLeaves(ctx context.Context, db *sql.DB, store int64) (map[int64]
 
 // The flows querying the store's records, a job flow's own boards, or
 // picking one (see picks.go), which the user may start, by name, with a
-// pick read as the query taking the one record it selects. A flow that
+// pick read as the query taking the one record it selects. A query ranking
+// records like what its process takes looks them up rather than taking
+// them, so doesn't count (see queries.go). A flow that
 // published a version runs that on records (see publish.go), so its queries
 // and picks are that version's. Only flows of the store's project, whoever
 // asks, nobody signing in too.
@@ -211,7 +213,7 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 			}
 			b := newRunBoard(f.ID, s)
 			for _, l := range s.Links {
-				if l.Direction == directionInput && l.Query != nil && b.store(l.Object) == store {
+				if l.Direction == directionInput && l.Query != nil && !l.Query.lookup() && b.store(l.Object) == store {
 					f.queries = append(f.queries, *l.Query)
 				}
 			}
@@ -248,6 +250,9 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 			var q linkQuery
 			if err := json.Unmarshal(query, &q); err != nil {
 				return err
+			}
+			if q.lookup() {
+				return nil
 			}
 			qs = []linkQuery{q}
 		} else {
@@ -292,8 +297,14 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 		}
 		f.States = []string{}
 		for _, q := range f.queries {
-			if !slices.Contains(f.States, q.State) {
-				f.States = append(f.States, q.State)
+			states := q.states()
+			if len(states) == 0 {
+				states = []string{""}
+			}
+			for _, st := range states {
+				if !slices.Contains(f.States, st) {
+					f.States = append(f.States, st)
+				}
 			}
 		}
 		if f.Leaves == nil {
@@ -305,16 +316,22 @@ func recordFlows(ctx context.Context, db *sql.DB, u *user, store int64) ([]*reco
 }
 
 // Why none of the queries would select a record in state holding content,
-// or "" if one would.
+// or "" if one would, by their states, those their searches name too, and
+// rules; what else a search says isn't looked into.
 func offQuery(queries []linkQuery, content, state string) string {
 	var why string
 	for _, q := range queries {
 		where, err := parseRule(q.Where)
+		states := q.states()
 		switch {
 		case err != nil:
 			why = "its rule doesn't read"
-		case q.State != "" && q.State != state:
-			why = fmt.Sprintf("it takes records in state %s", quote(q.State))
+		case len(states) > 0 && !takesState(states, state):
+			quoted := make([]string, len(states))
+			for i, st := range states {
+				quoted[i] = quote(st)
+			}
+			why = fmt.Sprintf("it takes records in state %s", strings.Join(quoted, " or "))
 		case len(where) > 0 && !where.holds(content):
 			why = fmt.Sprintf("it takes records where %s", strings.TrimSpace(q.Where))
 		default:
@@ -322,6 +339,12 @@ func offQuery(queries []linkQuery, content, state string) string {
 		}
 	}
 	return why
+}
+
+// Whether a query naming states takes records in state: one of them, as a
+// search names it, ignoring case.
+func takesState(states []string, state string) bool {
+	return slices.ContainsFunc(states, func(st string) bool { return strings.EqualFold(st, state) })
 }
 
 // A run going on a record: one started on it, one that took it (see

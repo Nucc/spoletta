@@ -22,6 +22,7 @@ import {
   type StepMessage,
   type StepStatus,
   type StepUsage,
+  recordsCut,
 } from './api'
 import { ClockIcon, ExternalIcon, TerminalIcon } from './icons'
 import StepTerminal, { formatLogTime, StepScreen, useStepLogs } from './StepTerminal'
@@ -734,7 +735,7 @@ function Step({
         {going && s.kind === 'connector' && <StepActivity run={run} step={s.id} />}
         {reviewForm ??
           s.inputs.map((input, i) => (
-            <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}`} text={input.content} data />
+            <Block key={i} label={`Input: ${input.name}${input.state ? ` (${input.state})` : ''}${recordsCut(input) ? ` · ${recordsCut(input)} records` : ''}`} text={input.content} data />
           ))}
         {s.changeRequest && (
           <>

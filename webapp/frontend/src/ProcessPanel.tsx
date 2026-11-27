@@ -886,8 +886,9 @@ function SettingsGroup({ title, summary, children }: { title: string; summary: s
 function queryText(q: QueryLink): string {
   if (q.query === null) return 'the object in the run'
   const parts = [`stored records${q.query.where ? ` where ${q.query.where}` : ''}`]
+  if (q.query.search) parts.push(`found by ${q.query.search}`)
   parts.push(q.query.state ? `in ${q.query.state}` : 'in any state')
-  parts.push(q.query.oldest ? 'oldest first' : 'newest first')
+  parts.push(q.query.like?.trim() ? `most like ${q.query.like} first` : q.query.oldest ? 'oldest first' : 'newest first')
   parts.push(`at most ${q.query.limit ?? 20}`)
   return parts.join(', ')
 }
@@ -899,7 +900,43 @@ export type QueryLink = {
   object: string
   // The object's states, by name, to pick which records by.
   states: string[]
+  // Whether it is a shared struct's copy, whose records a search finds.
+  shared: boolean
   query: LinkQuery | null
+}
+
+// A query's text setting, saved as it loses the focus if it changed; empty
+// leaves it out.
+function QueryTextField({
+  label,
+  title,
+  placeholder,
+  value,
+  readOnly,
+  onSave,
+}: {
+  label: string
+  title: string
+  placeholder: string
+  value: string | undefined
+  readOnly: boolean
+  onSave: (v: string | undefined) => void
+}) {
+  const [text, setText] = useState(value ?? '')
+  useEffect(() => setText(value ?? ''), [value])
+  return (
+    <label className="panel-field" title={title}>
+      <span>{label}</span>
+      <input
+        type="text"
+        value={text}
+        placeholder={placeholder}
+        readOnly={readOnly}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => text.trim() !== (value ?? '') && onSave(text.trim() || undefined)}
+      />
+    </label>
+  )
 }
 
 function QueryLinkFields({ q, readOnly, onQuery }: { q: QueryLink; readOnly: boolean; onQuery: (link: number, query: LinkQuery | null) => void }) {
@@ -907,6 +944,7 @@ function QueryLinkFields({ q, readOnly, onQuery }: { q: QueryLink; readOnly: boo
   const [where, setWhere] = useState(query?.where ?? '')
   useEffect(() => setWhere(query?.where ?? ''), [query?.where])
   const set = (patch: LinkQuery) => onQuery(q.link, { ...query, ...patch })
+  const ranked = Boolean(query?.like?.trim())
   return (
     <div className="query-link">
       <label
@@ -929,6 +967,24 @@ function QueryLinkFields({ q, readOnly, onQuery }: { q: QueryLink; readOnly: boo
               onBlur={() => where.trim() !== (query.where ?? '') && set({ where: where.trim() || undefined })}
             />
           </label>
+          {q.shared && (
+            <QueryTextField
+              label="Search"
+              title={`The records ${q.object}'s Records page finds with this search, such as state:open @created:>now-7d. {@Object.attribute} puts in, quoted, a value of what the process takes.`}
+              placeholder="state:open @created:>now-7d"
+              value={query.search}
+              readOnly={readOnly}
+              onSave={(search) => set({ search })}
+            />
+          )}
+          <QueryTextField
+            label="Most like"
+            title="Ranks the records by the words they have in common with this, rarer words counting more, the most like first; records sharing no word with it aren't taken. {@Object.attribute} puts in what the process takes, {@Object} all it holds. Leaves out the record the run works on."
+            placeholder="{@Incoming.summary} {@Incoming.description}"
+            value={query.like}
+            readOnly={readOnly}
+            onSave={(like) => set({ like })}
+          />
           <div className="panel-row">
             <select aria-label="In which state" value={query.state ?? ''} disabled={readOnly} onChange={(e) => set({ state: e.target.value || undefined })}>
               <option value="">In any state</option>
@@ -938,15 +994,17 @@ function QueryLinkFields({ q, readOnly, onQuery }: { q: QueryLink; readOnly: boo
                 </option>
               ))}
             </select>
-            <select
-              aria-label="Which first"
-              value={query.oldest ? 'oldest' : 'newest'}
-              disabled={readOnly}
-              onChange={(e) => set({ oldest: e.target.value === 'oldest' || undefined })}
-            >
-              <option value="newest">Newest first</option>
-              <option value="oldest">Oldest first</option>
-            </select>
+            {!ranked && (
+              <select
+                aria-label="Which first"
+                value={query.oldest ? 'oldest' : 'newest'}
+                disabled={readOnly}
+                onChange={(e) => set({ oldest: e.target.value === 'oldest' || undefined })}
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
+            )}
             <NumberSetting
               label="At most"
               title="How many records it takes"

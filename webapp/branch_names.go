@@ -51,6 +51,13 @@ var branchValue = regexp.MustCompile(`\{@([^{}]*)\}`)
 
 // The rule's parts, or what is wrong with it.
 func parseBranchRule(rule string) ([]branchPart, error) {
+	return parseValueParts(rule, "feature/{@Ticket.key}")
+}
+
+// Text naming values as {@Object.attribute}, as a branch rule or a query's
+// search and like do (queries.go), in parts, or what is wrong with it: a
+// brace that isn't part of one, which example shows how to write.
+func parseValueParts(rule, example string) ([]branchPart, error) {
 	var parts []branchPart
 	at := 0
 	for _, m := range branchValue.FindAllStringSubmatchIndex(rule, -1) {
@@ -70,7 +77,7 @@ func parseBranchRule(rule string) ([]branchPart, error) {
 	}
 	for _, p := range parts {
 		if strings.ContainsAny(p.text, "{}") {
-			return nil, fmt.Errorf("write each value as {@Object.attribute}, such as feature/{@Ticket.key}")
+			return nil, fmt.Errorf("write each value as {@Object.attribute}, such as %s", example)
 		}
 	}
 	return parts, nil

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getRunLogs, getStepChanges, getStepOutput, type AgentMessage, type OutputChunk, type RunLogLine, type FileChange, type MessageBlock, type RepoChanges, type RunStep, type StepMessage } from './api'
+import { getRunLogs, getStepChanges, getStepOutput, recordsCut, type AgentMessage, type OutputChunk, type RunLogLine, type FileChange, type MessageBlock, type RepoChanges, type RunStep, type StepMessage } from './api'
 import { formatTime, formatUsage, STEP_LABELS, useStepMessages } from './Runs'
 import { ExpandIcon } from './icons'
 import { harnessOf, withHarness } from './harness'
@@ -304,6 +304,7 @@ function ScriptScreen({
             <pre>
               $INPUTS/{input.name}
               {input.state && ` · ${input.state}`}
+              {recordsCut(input) && ` · ${recordsCut(input)} records`}
             </pre>
           </div>
           <div className="term-result">

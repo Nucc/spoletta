@@ -236,6 +236,22 @@ func TestBoardProblems(t *testing.T) {
 		}, level: problemWarning, rule: "credential", process: 3, says: "The credential Jira has no secret"},
 		{name: "copy of what is gone", change: func(s *snapshot, f *problemFacts) { s.Objects[0].Source = versionID(500) },
 			level: problemWarning, rule: "copy", object: 10, says: "is gone"},
+		{name: "query naming what isn't there", change: func(s *snapshot, f *problemFacts) {
+			pastTickets(s, linkQuery{Like: "{@Bug.summary}"}, true)
+		}, level: problemError, rule: "query-value", process: 2, says: `names "Bug", which no object of the flow is`},
+		{name: "query naming what its process doesn't take", change: func(s *snapshot, f *problemFacts) {
+			pastTickets(s, linkQuery{Like: "{@Fix}"}, true)
+		}, level: problemWarning, rule: "query-value", process: 2, says: `names "Fix", which it doesn't take`},
+		{name: "query naming a field its object lacks", change: func(s *snapshot, f *problemFacts) {
+			s.Attributes = append(s.Attributes, attribute{ID: 80, Object: 10, Name: "summary"})
+			pastTickets(s, linkQuery{Search: "@summary:{@Ticket.title}"}, true)
+		}, level: problemWarning, rule: "query-value", process: 2, says: `names "Ticket"'s "title"`},
+		{name: "search of what isn't shared", change: func(s *snapshot, f *problemFacts) {
+			pastTickets(s, linkQuery{Search: "state:open"}, false)
+		}, level: problemError, rule: "query-search", process: 2, says: "only a shared struct's records are searched"},
+		{name: "search naming no field", change: func(s *snapshot, f *problemFacts) {
+			pastTickets(s, linkQuery{Search: "state:open @sumary:login"}, true)
+		}, level: problemWarning, rule: "query-search", process: 2, says: `names "@sumary"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,6 +274,18 @@ func TestBoardProblems(t *testing.T) {
 	}
 }
 
+// Has Classify query Past ticket, a copy of a struct with a summary,
+// shared or only persistent.
+func pastTickets(s *snapshot, q linkQuery, shared bool) {
+	o := snapshotObject{ID: 14, Name: "Past ticket", Persistent: !shared}
+	if shared {
+		o.Store = versionID(600)
+	}
+	s.Objects = append(s.Objects, o)
+	s.Attributes = append(s.Attributes, attribute{ID: 81, Object: 14, Name: "summary"})
+	s.Links = append(s.Links, snapshotLink{ID: 50, Process: 2, Object: 14, Direction: directionInput, Query: &q})
+}
+
 func idOrNil(id int64) any {
 	if id == 0 {
 		return nil
@@ -268,6 +296,16 @@ func idOrNil(id int64) any {
 // What the board doesn't count as wrong: what a flow process gives its
 // board, a procedure's inputs, people, queries and roles without sign-in.
 func TestBoardProblemsLeaveAlone(t *testing.T) {
+	t.Run("a query looking up records like what it takes", func(t *testing.T) {
+		s, f := soundBoard(), soundFacts()
+		pastTickets(&s, linkQuery{Search: `state:open @summary:* @updated:>now-7d id:>3 -run:1 "a phrase" @pull_request.state:open title:x`, Like: "{@Ticket} {@ticket.title}"}, true)
+		// A key naming no field of its own may name one of the record a
+		// reference names.
+		s.Attributes = append(s.Attributes, attribute{ID: 82, Object: 14, Name: "pull request", Ref: versionID(700)})
+		if ps := boardProblems(s, f); len(ps) != 0 {
+			t.Errorf("problems:%s", describeProblems(ps))
+		}
+	})
 	t.Run("a flow process's board", func(t *testing.T) {
 		s, f := soundBoard(), soundFacts()
 		// Each fix is checked inside a flow process: Check takes Fix, which

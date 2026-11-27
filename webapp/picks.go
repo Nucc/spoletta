@@ -556,8 +556,10 @@ func moveTaken(ctx context.Context, db *sql.DB, run, step, object int64, state s
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE shared_records SET state = ?, run_id = ?, step_id = ?, edited_by = NULL, edited_at = NULL,
-		updated_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND deleted_at IS NULL`, state, run, step, t.record); err != nil {
+	// When it was written moves on only if its state does, compared before
+	// it is set, as MySQL assigns left to right.
+	if _, err := tx.ExecContext(ctx, `UPDATE shared_records SET updated_at = IF(state = ?, updated_at, CURRENT_TIMESTAMP(3)), state = ?, run_id = ?, step_id = ?,
+		edited_by = NULL, edited_at = NULL WHERE id = ? AND deleted_at IS NULL`, state, state, run, step, t.record); err != nil {
 		return err
 	}
 	by, err := stepChanger(ctx, tx, step)

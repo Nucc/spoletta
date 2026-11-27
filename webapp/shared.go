@@ -289,19 +289,29 @@ func insertRecord(ctx context.Context, tx *sql.Tx, store int64, by recordChanger
 }
 
 // Refreshes a record with the fields content has, keeping those it leaves
-// out, and with affects moves it into state, unless that is none.
+// out, and with affects moves it into state, unless that is none. When it
+// was written moves on only when that changes it, its fields as JSON or its
+// state, so it says when the record last changed: a refresh handing back
+// what the record holds leaves it be, as its history does.
 func updateRecord(ctx context.Context, tx *sql.Tx, store, record int64, by recordChanger, attrs []attribute, content, state string, affects bool) error {
-	var old string
-	if err := tx.QueryRowContext(ctx, "SELECT content FROM shared_records WHERE id = ? FOR UPDATE", record).Scan(&old); err != nil {
+	var old, was string
+	if err := tx.QueryRowContext(ctx, "SELECT content, state FROM shared_records WHERE id = ? FOR UPDATE", record).Scan(&old, &was); err != nil {
 		return err
 	}
 	content = mergeFields(old, content)
+	changed := !sameContent(old, content)
+	// A step taking the object makes the record its own even unchanged, so
+	// the state it comes out in reaches it; see recordSharedState.
+	if !affects && !changed {
+		return nil
+	}
 	q := "UPDATE shared_records SET content = ?, updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?"
 	args := []any{content, record}
 	if affects {
+		changed = changed || (state != "" && state != was)
 		q = `UPDATE shared_records SET content = ?, state = IF(? = '', state, ?), run_id = ?, step_id = ?, edited_by = NULL, edited_at = NULL,
-			updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?`
-		args = []any{content, state, state, by.run, by.step, record}
+			updated_at = IF(?, CURRENT_TIMESTAMP(3), updated_at) WHERE id = ?`
+		args = []any{content, state, state, by.run, by.step, changed, record}
 	}
 	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
 		return err
@@ -365,7 +375,10 @@ func recordSharedState(ctx context.Context, db *sql.DB, step, store int64, state
 	if err != nil || len(records) == 0 {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE shared_records SET state = ? WHERE id IN "+placeholders(len(records)), append([]any{state}, int64Args(records)...)...); err != nil {
+	// When each was written moves on if its state does; MySQL assigns left
+	// to right, so the state compared is the one it was in.
+	if _, err := tx.ExecContext(ctx, "UPDATE shared_records SET updated_at = IF(state = ?, updated_at, CURRENT_TIMESTAMP(3)), state = ? WHERE id IN "+placeholders(len(records)),
+		append([]any{state, state}, int64Args(records)...)...); err != nil {
 		return err
 	}
 	by, err := stepChanger(ctx, tx, step)

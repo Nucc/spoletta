@@ -419,6 +419,40 @@ func TestSharedRecordsKeptAsStored(t *testing.T) {
 		t.Errorf("the synced ticket = %s in %q, updated %s; want it refreshed, still new", r.Content, r.State, r.Updated)
 	}
 
+	// Synced again with nothing new, its fields in another order, it isn't
+	// written, so when it was says when it last changed.
+	refreshed := records()["T-1"]
+	runFlow(syncing.ID, "Sync", `{"summary": "Login fails on Safari", "id": "T-1"}`)
+	if r := records()["T-1"]; r.Updated != refreshed.Updated {
+		t.Errorf("the ticket synced again unchanged was written at %s, want it left at %s", r.Updated, refreshed.Updated)
+	}
+
+	// A process taking it and handing it back as it was, but in another
+	// state, writes it, as it moved.
+	finishing := a.newFlow("Finish tickets")
+	toFinish := use(finishing.ID)
+	finisher := a.newProcess(finishing.ID, map[string]any{"name": "Finish", "kind": kindScript, "script": "finish"})
+	a.link(map[string]any{"process": finisher.ID, "object": toFinish.ID, "direction": directionInput, "query": linkQuery{Where: `id == "T-1"`}})
+	var done int64
+	for _, st := range toFinish.States {
+		if st.Name == "done" {
+			done = st.ID
+		}
+	}
+	a.link(map[string]any{"process": finisher.ID, "object": toFinish.ID, "direction": directionOutput, "state": done})
+	a.startAt(finishing.ID, finisher.ID)
+	a.worker.onScript("Finish", func(_ context.Context, run scriptRun) runResult {
+		var records []json.RawMessage
+		if len(run.Inputs) != 1 || json.Unmarshal([]byte(run.Inputs[0].Content), &records) != nil || len(records) != 1 {
+			return runResult{Error: fmt.Sprintf("given %+v", run.Inputs)}
+		}
+		return runResult{OK: true, Output: string(records[0])}
+	})
+	runFlow(finishing.ID, "Finish", "")
+	if r := records()["T-1"]; r.State != "done" || summary(r.sharedRecord) != "Login fails on Safari" || r.Updated == refreshed.Updated {
+		t.Errorf("the finished ticket = %s in %q, updated %s; want it done and written after %s", r.Content, r.State, r.Updated, refreshed.Updated)
+	}
+
 	// The board says it as the run's version holds it.
 	var opl struct {
 		Text string `json:"text"`

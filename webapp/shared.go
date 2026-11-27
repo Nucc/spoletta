@@ -26,7 +26,11 @@ import (
 // holds none is a record of its own. A process that only generates the
 // object adds the records that are new and refreshes the fields of those
 // that aren't, leaving their state alone, so fetching an exception again
-// doesn't undo how far it got. A process that also takes it, by any input
+// doesn't undo how far it got; its output link may keep what is stored
+// (`keep_stored`), so it adds only the records that are new and leaves the
+// others as they are, fields and when they were written too, as an import
+// fetching tickets again does while another flow syncs them. A process that
+// also takes it, by any input
 // link or a query, moves the records it generates into the state it comes
 // out in. A list holds a record per item, all in the state the list comes
 // out in.
@@ -78,6 +82,21 @@ func checkShared(ctx context.Context, db *sql.DB, object int64) (string, error) 
 	return "", nil
 }
 
+// What's wrong with a link keeping the records already stored, if anything:
+// only a process generating a shared object alone writes records it could
+// leave as they are.
+func keepStoredProblem(direction string, shared, takes bool) string {
+	switch {
+	case direction != directionOutput:
+		return "only a link to what the process generates keeps the records already stored"
+	case !shared:
+		return "only a shared struct's object has records already stored to keep"
+	case takes:
+		return "the process takes that object too, so it writes back the records it took; only a process generating it alone keeps the records already stored"
+	}
+	return ""
+}
+
 // Writes the records of shared objects a step generated, as the run's board
 // has them, into their stores. A copy of a struct deleted since writes none,
 // having no unique attribute to tell them apart by; it still reads what was
@@ -85,7 +104,7 @@ func checkShared(ctx context.Context, db *sql.DB, object int64) (string, error) 
 func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int64) error {
 	type generated struct {
 		object, store  int64
-		affects        bool
+		affects, keep  bool
 		content, state string
 	}
 	var objects []generated
@@ -101,6 +120,9 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 			}
 			if g.store = b.store(g.object); g.store != 0 {
 				g.affects = process.Valid && b.takes(process.Int64, g.object)
+				// Only a process generating the object alone keeps what is
+				// stored; one taking it writes back what it took.
+				g.keep = process.Valid && !g.affects && b.keepsStored(process.Int64, g.object)
 				objects = append(objects, g)
 			}
 			return nil
@@ -168,7 +190,7 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 			}
 		}
 		for _, item := range items {
-			if err := writeRecord(ctx, tx, g.store, by, attrs, item, g.state, g.affects); err != nil {
+			if err := writeRecord(ctx, tx, g.store, by, attrs, item, g.state, g.affects, g.keep); err != nil {
 				return err
 			}
 		}
@@ -179,13 +201,18 @@ func storeShared(ctx context.Context, tx *sql.Tx, b *runBoard, runID, stepID int
 // Writes one record of a store, as the step by changes it: the record
 // holding one of its unique values, or a new one. A step that took the
 // object moves the record into state and makes it the step's, so the state
-// the step comes out in later reaches it too; see recordState.
-func writeRecord(ctx context.Context, tx *sql.Tx, store int64, by recordChanger, attrs []attribute, content, state string, affects bool) error {
+// the step comes out in later reaches it too; see recordState. With keep,
+// a record already holding one of its unique values is left as it is,
+// fields, state and when it was written, and only a new one is added.
+func writeRecord(ctx context.Context, tx *sql.Tx, store int64, by recordChanger, attrs []attribute, content, state string, affects, keep bool) error {
 	// Another step adding the same new record first makes this one find it.
 	for attempt := 1; ; attempt++ {
 		record, err := recordHolding(ctx, tx, store, attrs, content)
 		if err != nil {
 			return err
+		}
+		if record != 0 && keep {
+			return nil
 		}
 		if record != 0 {
 			return updateRecord(ctx, tx, store, record, by, attrs, content, state, affects)

@@ -870,6 +870,7 @@ func (d *boardDiff) diffLinks(a, b snapshot, m diffMatch) {
 		before, _ := json.Marshal(o.Query)
 		after, _ := json.Marshal(l.Query)
 		fs.add("query", jsonText(before), jsonText(after))
+		fs.add("keeps stored records", yesNo(o.KeepStored), yesNo(l.KeepStored))
 		fs.add("states", sa.listed(o), sb.listed(l))
 		if !sameJSON(o.Route, l.Route) || !samePoint(o.At, l.At) {
 			d.Layout = true

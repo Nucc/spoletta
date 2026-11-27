@@ -110,6 +110,7 @@ func boardProblems(s snapshot, f problemFacts) []problem {
 	c.objects()
 	c.picked()
 	c.queries()
+	c.keptRecords()
 	c.followed()
 	c.unreached()
 	c.branchRule()
@@ -260,6 +261,29 @@ func (c *problemCheck) queries() {
 			for _, key := range c.unknownKeys(o, parseSearch(blankValues(l.Query.Search))) {
 				c.onProcess(problemWarning, "query-search", p, "%s's search of %s names %s, which its records have no field of, so that part of it matches nothing.",
 					quote(p.Name), quote(o.Name), quote(key))
+			}
+		}
+	}
+}
+
+// Output links keeping the records already stored (shared.go) that keep
+// none, as the board came to be drawn since: their object isn't shared any
+// more, or their process takes it too and so writes back what it took.
+func (c *problemCheck) keptRecords() {
+	for _, p := range c.s.Processes {
+		for _, l := range c.links[p.ID] {
+			if !l.KeepStored || l.Direction != directionOutput {
+				continue
+			}
+			o := c.objs[l.Object]
+			takes := slices.ContainsFunc(c.links[p.ID], func(i snapshotLink) bool { return i.Object == l.Object && i.Direction == directionInput })
+			switch {
+			case o.Store == nil:
+				c.onProcess(problemWarning, "keep-stored", p, "%s keeps the records of %s already stored, but %s isn't a shared struct's object, so it keeps none.",
+					quote(p.Name), quote(o.Name), quote(o.Name))
+			case takes:
+				c.onProcess(problemWarning, "keep-stored", p, "%s takes %s too, so it writes back the records it took and refreshes those it finds stored, whatever its link to it says: take that out, or generate %s alone.",
+					quote(p.Name), quote(o.Name), quote(o.Name))
 			}
 		}
 	}

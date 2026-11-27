@@ -248,6 +248,9 @@ export type Link = {
   // For an input link: which stored records of a persistent object it takes,
   // rather than the object in the run; see queries.go.
   query: LinkQuery | null
+  // For an output link to a shared object: whether its process leaves the
+  // records already stored as they are, adding only new ones; see shared.go.
+  keepStored: boolean
   // Where the link's segments run, if moved by hand; see route.ts.
   route: number[] | null
   // Where the object shows on the process's own board, if moved there by
@@ -1466,7 +1469,7 @@ export type LinkQuery = {
 
 // Without a state, the link names none; without states, it lists none.
 export function createLink(
-  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at' | 'role' | 'condition' | 'query'> & {
+  l: Omit<Link, 'id' | 'state' | 'states' | 'route' | 'at' | 'role' | 'condition' | 'query' | 'keepStored'> & {
     state?: number | null
     states?: number[]
     role?: LinkRole
@@ -1497,6 +1500,12 @@ export function setLinkCondition(id: number, condition: boolean): Promise<void> 
 // Makes an input link a query, or with null a plain link again.
 export function setLinkQuery(id: number, query: LinkQuery | null): Promise<void> {
   return request(`/api/links/${id}/query`, { method: 'PUT', body: JSON.stringify({ query }) })
+}
+
+// Has an output link's process leave the shared object's records already
+// stored as they are, adding only new ones, or refresh them again.
+export function setLinkKeepStored(id: number, keepStored: boolean): Promise<void> {
+  return request(`/api/links/${id}/keep-stored`, { method: 'PUT', body: JSON.stringify({ keepStored }) })
 }
 
 // Which record each run of the flow works on: the latest written (or the

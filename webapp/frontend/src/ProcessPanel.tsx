@@ -136,6 +136,8 @@ export default function ProcessPanel({
   generates,
   queries,
   onQuery,
+  keeps,
+  onKeepStored,
   shapes,
   onOpenMCPSettings,
   repositories,
@@ -182,6 +184,10 @@ export default function ProcessPanel({
   // Its input links an agent or script can take as queries of stored records.
   queries: QueryLink[]
   onQuery: (link: number, query: LinkQuery | null) => void
+  // Its output links to shared objects it generates alone, which may leave
+  // the records already stored as they are.
+  keeps: KeepLink[]
+  onKeepStored: (link: number, keep: boolean) => void
   // The shape of what each of those objects holds, by name; see shapeOf.
   shapes: Record<string, string>
   onOpenMCPSettings: () => void
@@ -604,18 +610,24 @@ export default function ProcessPanel({
           )}
         </SettingsGroup>
       )}
-      {(kind === 'agent' || kind === 'script') &&
-        queries.length > 0 &&
+      {(((kind === 'agent' || kind === 'script') && queries.length > 0) || keeps.length > 0) &&
         (readOnly ? (
           <div className="panel-queries">
             <span className="panel-label">Stored records</span>
-            <SettingLines rows={queries.map((q) => [q.object, queryText(q)])} />
+            <SettingLines
+              rows={[
+                ...(kind === 'agent' || kind === 'script' ? queries.map((q): [string, string] => [q.object, queryText(q)]) : []),
+                ...keeps.map((k): [string, string] => [`Writes ${k.object}`, keepText(k)]),
+              ]}
+            />
           </div>
         ) : (
           <div className="panel-queries">
             <span className="panel-label">Stored records</span>
-            {queries.map((q) => (
-              <QueryLinkFields key={q.link} q={q} readOnly={false} onQuery={onQuery} />
+            {(kind === 'agent' || kind === 'script') &&
+              queries.map((q) => <QueryLinkFields key={q.link} q={q} readOnly={false} onQuery={onQuery} />)}
+            {keeps.map((k) => (
+              <KeepStoredField key={k.link} k={k} onKeepStored={onKeepStored} />
             ))}
           </div>
         ))}
@@ -903,6 +915,47 @@ export type QueryLink = {
   // Whether it is a shared struct's copy, whose records a search finds.
   shared: boolean
   query: LinkQuery | null
+}
+
+// An output link to a shared object the process generates alone, which may
+// leave the records already stored as they are; see shared.go.
+export type KeepLink = {
+  link: number
+  object: string
+  keepStored: boolean
+}
+
+// What a process generating a shared object does with the records already
+// stored, said in a line.
+function keepText(k: KeepLink): string {
+  return k.keepStored ? 'adds new records only, leaving those already stored as they are' : 'adds new records and refreshes those already stored'
+}
+
+// Whether a process generating a shared object leaves the records already
+// stored as they are, with what that means behind a ? beside it.
+function KeepStoredField({ k, onKeepStored }: { k: KeepLink; onKeepStored: (link: number, keep: boolean) => void }) {
+  const help = useHelp()
+  return (
+    <div className="query-link">
+      <div className="help-head">
+        <label className="panel-check">
+          <input type="checkbox" checked={k.keepStored} onChange={(e) => onKeepStored(k.link, e.target.checked)} />
+          <span>Leave {k.object} records already stored as they are</span>
+        </label>
+        {help.button('keep', 'leaving stored records as they are')}
+      </div>
+      {help.note(
+        'keep',
+        <>
+          {k.object} records are told apart by their unique attributes. When this process generates one holding a unique value a stored record
+          holds already, it refreshes that record&apos;s fields, keeping its state, so a flow syncing tickets keeps them up to date. Ticked, it
+          adds only the records that are new and leaves the others as they were: their fields, state, history and when they were last written,
+          as an import fetching the same tickets again should. Each process writing {k.object} says so for itself, so an import can leave
+          records be while another flow refreshes them.
+        </>,
+      )}
+    </div>
+  )
 }
 
 // A query's text setting, saved as it loses the focus if it changed; empty

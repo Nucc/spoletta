@@ -114,6 +114,10 @@ type snapshotLink struct {
 	Condition bool   `json:"condition,omitempty"`
 	// Versions from before queries have none.
 	Query *linkQuery `json:"query,omitempty"`
+	// For an output link to a shared object: whether its process leaves the
+	// records already stored as they are, adding only new ones; left out
+	// when not, as in versions from before it could. See shared.go.
+	KeepStored bool `json:"keepStored,omitempty"`
 }
 
 type snapshotLinkState struct {
@@ -241,12 +245,12 @@ func takeSnapshot(ctx context.Context, tx *sql.Tx, flow int64) (snapshot, error)
 	if err != nil {
 		return s, err
 	}
-	err = scanAll(ctx, tx, `SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role, l.is_condition, l.query FROM object_links l
-		JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, func(rows *sql.Rows) error {
+	err = scanAll(ctx, tx, `SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role, l.is_condition, l.query, l.keep_stored
+		FROM object_links l JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, func(rows *sql.Rows) error {
 		var l snapshotLink
 		var route, query []byte
 		var atX, atY sql.NullFloat64
-		if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &l.State, &route, &atX, &atY, &l.Role, &l.Condition, &query); err != nil {
+		if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &l.State, &route, &atX, &atY, &l.Role, &l.Condition, &query, &l.KeepStored); err != nil {
 			return err
 		}
 		var err error
@@ -578,8 +582,8 @@ func restoreSnapshot(ctx context.Context, tx *sql.Tx, flow int64, s snapshot) er
 		if l.At != nil {
 			atX, atY = sql.NullFloat64{Float64: l.At.X, Valid: true}, sql.NullFloat64{Float64: l.At.Y, Valid: true}
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			l.ID, l.Process, l.Object, l.Direction, l.State, storedRoute(l.Route), atX, atY, l.Role, l.Condition, storedQuery(l.Query), project)
+		_, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query, keep_stored, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			l.ID, l.Process, l.Object, l.Direction, l.State, storedRoute(l.Route), atX, atY, l.Role, l.Condition, storedQuery(l.Query), l.KeepStored && l.Direction == directionOutput, project)
 		if err != nil {
 			return err
 		}

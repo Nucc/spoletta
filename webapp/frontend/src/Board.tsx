@@ -63,7 +63,7 @@ import NoteEdge from './NoteEdge'
 import ReferenceEdge from './ReferenceEdge'
 import { drawnReference, REFERENCE_PREFIX, referenceEdgeId, type DrawnReference, type ReferenceEnd } from './references'
 import ObjectPanel from './ObjectPanel'
-import ProcessPanel, { ReviewForm, type EntryObject, type QueryLink, type Review } from './ProcessPanel'
+import ProcessPanel, { ReviewForm, type EntryObject, type KeepLink, type QueryLink, type Review } from './ProcessPanel'
 import { settingGroups, type SettingNames } from './stepSettings'
 import ReviewDialog from './ReviewDialog'
 import StartNode, { type StartNodeType } from './StartNode'
@@ -180,6 +180,7 @@ import {
   setLinkRoute,
   setLinkCondition,
   setLinkQuery,
+  setLinkKeepStored,
   setObjectPick,
   setObjectFollows,
   setStateRule,
@@ -2298,6 +2299,19 @@ export default function Board({
     setEdges((es) => es.map((e) => (e.data?.link?.id === linkId ? { ...e, data: { ...e.data, link: { ...e.data.link, query } } } : e)))
   }
 
+  // Has a process generating a shared object leave its records already
+  // stored as they are, or refresh them again; see shared.go.
+  const setKeepStored = async (linkId: number, keepStored: boolean) => {
+    if (readOnly) return
+    try {
+      await setLinkKeepStored(linkId, keepStored)
+    } catch (err) {
+      report(err)
+      return
+    }
+    setEdges((es) => es.map((e) => (e.data?.link?.id === linkId ? { ...e, data: { ...e.data, link: { ...e.data.link, keepStored } } } : e)))
+  }
+
   const setRole = async (edgeId: string, role: LinkRole) => {
     const edge = edges.find((e) => e.id === edgeId)
     const l = edge?.data?.link
@@ -3119,6 +3133,22 @@ export default function Board({
       const object = getNode(objectNodeId(l.object))
       if (object?.type !== 'object' || !(object.data.persistent || object.data.shared) || object.data.human) return []
       return [{ link: l.id, object: object.data.name, states: object.data.states.map((s) => s.name), shared: object.data.shared, query: l.query }]
+    })
+
+  // The process's output links to shared objects it generates alone, which
+  // may leave the records already stored as they are; a process taking the
+  // object too writes back what it took. One set so before the board came
+  // to be drawn otherwise is listed too, so it can be turned off. See
+  // shared.go.
+  const keepLinks = (id: string): KeepLink[] =>
+    edges.flatMap((e) => {
+      const l = e.data?.link
+      if (!l || l.direction !== 'output' || String(l.process) !== id) return []
+      const object = getNode(objectNodeId(l.object))
+      if (object?.type !== 'object' || object.data.human) return []
+      const takes = edges.some((t) => t.data?.link?.direction === 'input' && t.data.link.process === l.process && t.data.link.object === l.object)
+      if (!l.keepStored && (!object.data.shared || takes)) return []
+      return [{ link: l.id, object: object.data.name, keepStored: l.keepStored }]
     })
 
   const linkedNames = (id: string, direction: 'input' | 'output'): string[] => [
@@ -4343,6 +4373,8 @@ export default function Board({
             takes={linkedNames(panelNode.id, 'input')}
             queries={queryLinks(panelNode.id)}
             onQuery={(link, query) => void setQuery(link, query)}
+            keeps={keepLinks(panelNode.id)}
+            onKeepStored={(link, keep) => void setKeepStored(link, keep)}
             generates={linkedNames(panelNode.id, 'output')}
             shapes={Object.fromEntries(
               (contents?.objects ?? [])

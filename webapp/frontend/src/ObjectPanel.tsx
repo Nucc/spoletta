@@ -357,7 +357,8 @@ export default function ObjectPanel({
             <>
               Every copy of {name}, in whatever flow, reads and writes the same records, told apart by its unique
               attributes, so mark one unique first. A process only generating it adds new records and refreshes the
-              fields of known ones, keeping their state; one that takes or queries it too moves the records it generates
+              fields of known ones, keeping their state, unless its panel says to leave the records already stored as
+              they are, as an import fetching the same ones again does; one that takes or queries it too moves the records it generates
               into the state it comes out in. Which records get worked on, or worked on again, is up to the processes'
               queries, which claim none, so runs querying the same state at once may take the same one; or to a copy
               picking the record each run works on, which its run holds until it ends.
@@ -374,7 +375,8 @@ export default function ObjectPanel({
         <p className="panel-note">
           Shared by {module?.name ?? 'its struct'}: every flow using it reads and writes the same records. A process
           taking or querying it moves the records it generates into the state it comes out in; one only generating it
-          adds and refreshes records, keeping their state.
+          adds and refreshes records, keeping their state, or adds only new ones if its panel says to leave those
+          already stored as they are.
         </p>
       )}
       {!owner && !human && !structRoot && shared && module && (

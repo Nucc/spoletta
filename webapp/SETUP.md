@@ -200,7 +200,10 @@ yields:
   - Summary                         # generates it
   - {object: Ticket, state: open}   # generates it in that state
   - {object: Ticket, states: [approved, rejected]}  # a human or agent decides between these
+  - {object: Ticket, keepStored: true}  # a shared struct's copy: adds only new records, leaving those already stored as they are
 ```
+
+`keepStored` is only for a process that generates a shared struct's copy without taking it, such as an import fetching the same tickets again; without it, the process refreshes the fields of the records it finds already stored.
 
 The app's own rules apply. A human process lists the states it decides between and never names a single state. Only human and agent processes list states. Any other process generates an object at most once. A person (an object with `human: true`) is taken only by human processes. `condition` needs a `state`.
 

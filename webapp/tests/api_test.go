@@ -304,6 +304,9 @@ type link struct {
 	Condition bool    `json:"condition"`
 	// Which stored records of the object it takes, for a query link.
 	Query *linkQuery `json:"query"`
+	// For an output link to a shared object: whether its process leaves the
+	// records already stored as they are.
+	KeepStored bool `json:"keepStored"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
 	// Where the object shows on the process's own board, if moved there by

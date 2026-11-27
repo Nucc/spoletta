@@ -287,6 +287,209 @@ flows:
 	}
 }
 
+// An import whose output link keeps the records already stored adds only
+// the tickets that are new, leaving one it fetches again as it was, fields,
+// history and when it was written, while a flow syncing them refreshes it.
+// Only a process generating a shared object alone keeps what is stored; the
+// run's version, OPL, the diff and the problems say so.
+func TestSharedRecordsKeptAsStored(t *testing.T) {
+	parallel(t)
+	a := newApp(t)
+	var s structFlow
+	a.call("POST", "/api/flows", map[string]any{"name": "Ticket", "struct": true}, http.StatusCreated, &s)
+	root := modObjects(a, s.ID)[0]
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", root.ID), map[string]any{"name": "id", "unique": true}, http.StatusCreated, nil)
+	a.call("POST", fmt.Sprintf("/api/objects/%d/attributes", root.ID), map[string]any{"name": "summary"}, http.StatusCreated, nil)
+	rulesState(a, root.ID, "new", `id != ""`)
+	a.newState(root.ID, "done")
+	a.call("PATCH", fmt.Sprintf("/api/objects/%d", root.ID), map[string]any{"shared": true}, http.StatusOK, nil)
+	use := func(f int64) modObject {
+		a.call("POST", fmt.Sprintf("/api/structs/%d/copies", s.ID), map[string]any{"flow": f, "x": 0, "y": 0}, http.StatusCreated, nil)
+		return modNamed(t, modObjects(a, f), "Ticket")
+	}
+	keep := func(l int64, on bool) {
+		t.Helper()
+		a.call("PUT", fmt.Sprintf("/api/links/%d/keep-stored", l), map[string]any{"keepStored": on}, http.StatusNoContent, nil)
+	}
+
+	imp := a.newFlow("Import tickets")
+	imported := use(imp.ID)
+	a.call("PATCH", fmt.Sprintf("/api/objects/%d", imported.ID), map[string]any{"many": true}, http.StatusOK, nil)
+	importer := a.newProcess(imp.ID, map[string]any{"name": "Import", "kind": kindScript, "script": "import"})
+	out := a.output(importer.ID, imported.ID)
+	a.startAt(imp.ID, importer.ID)
+	if out.KeepStored {
+		t.Fatalf("a new link keeps the records already stored")
+	}
+	keep(out.ID, true)
+	var links []link
+	a.call("GET", fmt.Sprintf("/api/links?flow=%d", imp.ID), nil, http.StatusOK, &links)
+	if len(links) != 1 || !links[0].KeepStored {
+		t.Fatalf("the import's links = %+v, want its output link keeping what is stored", links)
+	}
+
+	syncing := a.newFlow("Sync tickets")
+	synced := use(syncing.ID)
+	syncer := a.newProcess(syncing.ID, map[string]any{"name": "Sync", "kind": kindScript, "script": "sync"})
+	a.output(syncer.ID, synced.ID)
+	a.startAt(syncing.ID, syncer.ID)
+
+	// Only a process generating a shared object alone keeps what is stored.
+	closer := a.newProcess(syncing.ID, map[string]any{"name": "Close", "kind": kindScript, "script": "close"})
+	in := a.link(map[string]any{"process": closer.ID, "object": synced.ID, "direction": directionInput, "query": linkQuery{State: "new"}})
+	closed := a.output(closer.ID, synced.ID)
+	a.refused("PUT", fmt.Sprintf("/api/links/%d/keep-stored", in.ID), map[string]any{"keepStored": true}, http.StatusBadRequest, "only a link to what the process generates")
+	a.refused("PUT", fmt.Sprintf("/api/links/%d/keep-stored", closed.ID), map[string]any{"keepStored": true}, http.StatusBadRequest, "takes that object too")
+	note := a.newObject(syncing.ID, "Note")
+	plain := a.output(closer.ID, note.ID)
+	a.refused("PUT", fmt.Sprintf("/api/links/%d/keep-stored", plain.ID), map[string]any{"keepStored": true}, http.StatusBadRequest, "shared struct's object")
+	keep(closed.ID, false)
+
+	var mu sync.Mutex
+	outputs := map[string]string{}
+	for _, name := range []string{"Import", "Sync"} {
+		a.worker.onScript(name, func(context.Context, scriptRun) runResult {
+			mu.Lock()
+			defer mu.Unlock()
+			return runResult{OK: true, Output: outputs[name]}
+		})
+	}
+	runFlow := func(f int64, name, output string) run {
+		t.Helper()
+		mu.Lock()
+		outputs[name] = output
+		mu.Unlock()
+		d := a.finish(a.startRun(f).ID)
+		if d.Status != runDone {
+			t.Fatalf("%s %s ended %s; steps %s", name, output, d.Status, describeSteps(d))
+		}
+		return d.run
+	}
+	summary := func(r sharedRecord) string {
+		var fields struct {
+			Summary string `json:"summary"`
+		}
+		json.Unmarshal(r.Content, &fields)
+		return fields.Summary
+	}
+	type listed struct {
+		sharedRecord
+		Updated string `json:"updated"`
+	}
+	records := func() map[string]listed {
+		t.Helper()
+		var rs struct {
+			Records []listed `json:"records"`
+		}
+		a.call("GET", fmt.Sprintf("/api/structs/%d/records", s.ID), nil, http.StatusOK, &rs)
+		byID := map[string]listed{}
+		for _, r := range rs.Records {
+			var fields struct {
+				ID string `json:"id"`
+			}
+			json.Unmarshal(r.Content, &fields)
+			byID[fields.ID] = r
+		}
+		return byID
+	}
+
+	first := runFlow(imp.ID, "Import", `[{"id": "T-1", "summary": "Login fails"}]`)
+	was := records()["T-1"]
+	if summary(was.sharedRecord) != "Login fails" || was.State != "new" {
+		t.Fatalf("the imported ticket = %s in %q", was.Content, was.State)
+	}
+	history := len(recordChangesOf(a, s.ID, was.ID))
+
+	// Fetched again beside a new one, it is left as it was.
+	runFlow(imp.ID, "Import", `[{"id": "T-1", "summary": "Login fails on Safari"}, {"id": "T-2", "summary": "Export is slow"}]`)
+	now := records()
+	if r := now["T-1"]; summary(r.sharedRecord) != "Login fails" || r.Updated != was.Updated || r.Run == nil || *r.Run != first.ID {
+		t.Errorf("the ticket imported again = %s, updated %s by run %v; want it as run %d left it, updated %s", r.Content, r.Updated, r.Run, first.ID, was.Updated)
+	}
+	if n := len(recordChangesOf(a, s.ID, was.ID)); n != history {
+		t.Errorf("the ticket imported again has %d changes, want %d", n, history)
+	}
+	if r, ok := now["T-2"]; !ok || summary(r.sharedRecord) != "Export is slow" {
+		t.Errorf("the new ticket wasn't added: %+v", now)
+	}
+
+	// The sync refreshes it.
+	runFlow(syncing.ID, "Sync", `{"id": "T-1", "summary": "Login fails on Safari"}`)
+	if r := records()["T-1"]; summary(r.sharedRecord) != "Login fails on Safari" || r.State != "new" || r.Updated == was.Updated {
+		t.Errorf("the synced ticket = %s in %q, updated %s; want it refreshed, still new", r.Content, r.State, r.Updated)
+	}
+
+	// The board says it as the run's version holds it.
+	var opl struct {
+		Text string `json:"text"`
+	}
+	a.call("GET", fmt.Sprintf("/api/flows/%d/opl", imp.ID), nil, http.StatusOK, &opl)
+	if !strings.Contains(opl.Text, "adds only new records of") {
+		t.Errorf("OPL doesn't say the import keeps what is stored:\n%s", opl.Text)
+	}
+	if first.Version == nil {
+		t.Fatalf("the import's run has no version")
+	}
+	keep(out.ID, false)
+	d := pubDiffOf(a, fmt.Sprintf("/api/versions/%d/diff", *first.Version))
+	if len(d.Links) != 1 || len(d.Links[0].Fields) != 1 || d.Links[0].Fields[0].Field != "keeps stored records" || d.Links[0].Fields[0].Before != "yes" {
+		t.Errorf("the diff after turning it off = %+v, want the link no longer keeping what is stored", d.Links)
+	}
+	keep(out.ID, true)
+
+	// Taking the object too, it keeps nothing, which the problems say.
+	a.input(importer.ID, imported.ID)
+	var warned bool
+	for _, p := range prbGet(a, imp.ID).Problems {
+		warned = warned || (p.Rule == "keep-stored" && p.Level == "warning")
+	}
+	if !warned {
+		t.Errorf("no warning of a link keeping what is stored whose process takes the object: %s", prbDescribe(prbGet(a, imp.ID).Problems))
+	}
+}
+
+// A setup file keeps a link keeping the records already stored, and refuses
+// one that can't.
+func TestKeepStoredInSetup(t *testing.T) {
+	parallel(t)
+	a := setupApp(t)
+	const file = `spoletta: 1
+structs:
+  - name: KPS Ticket
+    shared: true
+    attributes:
+      - name: id
+        unique: true
+flows:
+  - name: KPS Import
+    start:
+      next: Import
+    objects:
+      - copyOf: {flow: KPS Ticket}
+    processes:
+      - name: Import
+        kind: script
+        script: import
+        yields:
+          - object: KPS Ticket
+            keepStored: true
+`
+	setupImportOK(a, file)
+	if out := setupExport(a, "KPS "); !strings.Contains(out, "keepStored: true") {
+		t.Errorf("the export doesn't keep what is stored:\n%s", out)
+	}
+	takes := strings.Replace(file, "        yields:\n", "        takes:\n          - KPS Ticket\n        yields:\n", 1)
+	status, body := setupImport(a, takes)
+	if status != http.StatusBadRequest || !strings.Contains(string(body), "takes that object too") {
+		t.Errorf("importing a link keeping what is stored whose process takes the object = %d %s", status, body)
+	}
+	input := strings.Replace(file, "        yields:\n", "        takes:\n", 1)
+	status, body = setupImport(a, input)
+	if status != http.StatusBadRequest || !strings.Contains(string(body), "only a link to what the process generates") {
+		t.Errorf("importing an input link keeping what is stored = %d %s", status, body)
+	}
+}
+
 // A shared list: a fetching script adds a record per item, new by its
 // output link, and an agent querying one new record decides the state it
 // comes out in, which a rule on every record doesn't undo.

@@ -663,6 +663,7 @@ type blink struct {
 	role      string
 	condition bool
 	query     *linkQuery
+	keep      bool
 	at        *point
 	route     []byte
 	where     string
@@ -1502,7 +1503,7 @@ func (b *builder) resolveLink(bp *bproc, l setupLink, direction string) error {
 	if bo.owner != nil {
 		return problemf("%s: that object makes up another, so it isn't on a board of processes", at)
 	}
-	bl := blink{proc: bp, obj: bo, direction: direction, role: l.Role, condition: l.Condition, query: l.Query, where: at}
+	bl := blink{proc: bp, obj: bo, direction: direction, role: l.Role, condition: l.Condition, query: l.Query, keep: l.KeepStored, where: at}
 	if l.State != "" {
 		if bl.state = bo.states[l.State]; bl.state == 0 {
 			return problemf("%s: the object has no state %s", at, quote(l.State))
@@ -1660,6 +1661,11 @@ func (b *builder) checkLinks() error {
 		if msg := b.checkQuery(l, takes, queries); msg != "" {
 			return problemf("%s: %s", l.where, msg)
 		}
+		if l.keep {
+			if msg := keepStoredProblem(l.direction, b.shared(l.obj), takes[[2]int64{l.proc.id, l.obj.id}] > 0); msg != "" {
+				return problemf("%s: %s", l.where, msg)
+			}
+		}
 		if l.direction == directionInput {
 			if kind != kindHuman && l.obj.o.Human {
 				return problemf("%s: %s", l.where, agentLinkMessage)
@@ -1785,8 +1791,8 @@ func (b *builder) write() error {
 		if l.at != nil {
 			atX, atY = sql.NullFloat64{Float64: l.at.X, Valid: true}, sql.NullFloat64{Float64: l.at.Y, Valid: true}
 		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			id, l.proc.id, l.obj.id, l.direction, l.state, storedRoute(l.route), atX, atY, l.role, l.condition, storedQuery(l.query), b.project)
+		res, err := tx.ExecContext(ctx, "INSERT INTO object_links (id, process_id, object_id, direction, state_id, route, at_x, at_y, role, is_condition, query, keep_stored, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id, l.proc.id, l.obj.id, l.direction, l.state, storedRoute(l.route), atX, atY, l.role, l.condition, storedQuery(l.query), l.keep, b.project)
 		if err != nil {
 			return err
 		}

@@ -416,7 +416,8 @@ func (x exporter) process(p process) setupProcess {
 		if l.Process != p.ID {
 			continue
 		}
-		sl := setupLink{Object: x.e.objIDs[l.Object], Role: l.Role, Condition: l.Condition, Query: l.Query, Route: exportRoute(l.Route)}
+		sl := setupLink{Object: x.e.objIDs[l.Object], Role: l.Role, Condition: l.Condition, Query: l.Query, KeepStored: l.KeepStored,
+			Route: exportRoute(l.Route)}
 		if l.State != 0 {
 			sl.State = x.e.stateIDs[l.State]
 		}

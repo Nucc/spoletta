@@ -343,6 +343,10 @@ func (o *oplWriter) processSentences(p process, indent string) {
 		default:
 			o.line(indent, "%s yields %s.", name, ob)
 		}
+		// As the run writes it; see shared.go.
+		if l.KeepStored && !takesIt && o.objects[l.Object].Store != nil {
+			o.line(indent, "%s adds only new records of %s, leaving those already stored as they are.", name, ob)
+		}
 	}
 
 	st := p.Settings

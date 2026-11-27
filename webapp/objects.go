@@ -97,6 +97,10 @@ type link struct {
 	// Which stored records of the object it takes, for a query link; see
 	// queries.go.
 	Query *linkQuery `json:"query"`
+	// For an output link to a shared object: whether its process leaves the
+	// records already stored as they are, adding only new ones; see
+	// shared.go.
+	KeepStored bool `json:"keepStored"`
 	// Where the link's drawn segments run, if moved by hand; see route.ts.
 	Route json.RawMessage `json:"route"`
 	// Where the object shows on the process's own board, if moved there by
@@ -607,7 +611,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		rows, err := db.QueryContext(r.Context(),
-			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role, l.is_condition, l.query
+			`SELECT l.id, l.process_id, l.object_id, l.direction, l.state_id, l.route, l.at_x, l.at_y, l.role, l.is_condition, l.query, l.keep_stored
 			FROM object_links l JOIN processes p ON p.id = l.process_id WHERE p.flow_id = ? ORDER BY l.id`, f)
 		if err != nil {
 			serverError(w, err)
@@ -621,7 +625,7 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			var state int64
 			var route, query []byte
 			var atX, atY sql.NullFloat64
-			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY, &l.Role, &l.Condition, &query); err != nil {
+			if err := rows.Scan(&l.ID, &l.Process, &l.Object, &l.Direction, &state, &route, &atX, &atY, &l.Role, &l.Condition, &query, &l.KeepStored); err != nil {
 				serverError(w, err)
 				return
 			}
@@ -681,6 +685,8 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			http.Error(w, "direction must be output or input", http.StatusBadRequest)
 			return
 		}
+		// Set once it is drawn, through keep-stored.
+		l.KeepStored = false
 		if msg, err := checkLink(r.Context(), db, l); err != nil {
 			serverError(w, err)
 			return
@@ -816,6 +822,48 @@ func registerObjectRoutes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if _, err := db.ExecContext(r.Context(), "UPDATE object_links SET is_condition = ? WHERE id = ?", l.Condition, id); err != nil {
+			serverError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Has an output link's process leave the records of a shared object
+	// already stored as they are, adding only new ones, or refresh them
+	// again; see shared.go.
+	mux.HandleFunc("PUT /api/links/{id}/keep-stored", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			KeepStored bool `json:"keepStored"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var direction string
+		var shared, takes bool
+		err = db.QueryRowContext(r.Context(), `SELECT l.direction, o.store_id IS NOT NULL,
+				EXISTS (SELECT 1 FROM object_links i WHERE i.process_id = l.process_id AND i.object_id = l.object_id AND i.direction = ?)
+			FROM object_links l JOIN objects o ON o.id = l.object_id WHERE l.id = ?`, directionInput, id).Scan(&direction, &shared, &takes)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "link not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		if body.KeepStored {
+			if msg := keepStoredProblem(direction, shared, takes); msg != "" {
+				http.Error(w, msg, http.StatusBadRequest)
+				return
+			}
+		}
+		if _, err := db.ExecContext(r.Context(), "UPDATE object_links SET keep_stored = ? WHERE id = ?", body.KeepStored, id); err != nil {
 			serverError(w, err)
 			return
 		}

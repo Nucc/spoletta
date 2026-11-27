@@ -382,6 +382,7 @@ A link that says nothing but the object is written as just the object's name.
 | `yields: [Patch]` | generates Patch, in no state (or the first state whose rule holds) |
 | `yields: [{object: Patch, state: draft}]` | generates Patch in `draft` |
 | `yields: [{object: Ticket, states: [bug, feature]}]` | an agent generates Ticket and **decides** which state it is in |
+| `yields: [{object: Ticket, keepStored: true}]` (shared struct's copy) | adds only **new** Ticket records, leaving those already stored as they are (see 3.8) |
 | `takes: [Post]` + `yields: [{object: Post, states: [good, weak]}]` | a **review**: the agent or person keeps Post's content and only decides its state |
 | `takes: [Notes]` + `yields: [Notes]` (agent or script) | **effect**: hands in a changed Notes |
 | `yields: [Ticket]` on a human process that doesn't take Ticket | a person **fills in** Ticket |
@@ -600,7 +601,13 @@ repositories:
     the fields of those it knows, **keeping their state**. Fetching an issue
     again doesn't undo how far it got. Name the state new records start in
     on the link, `yields: [{object: Exception, state: new}]`, rather than by
-    a rule that holds of every record.
+    a rule that holds of every record. With `keepStored: true` on its link,
+    `yields: [{object: Ticket, keepStored: true}]`, it adds only the
+    records that are new and leaves those it knows **as they are**, fields,
+    history and when they were written too: an import fetching the same
+    tickets again, while another flow syncing them refreshes them. Each
+    process writing the store says so for itself; one that also takes the
+    object can't, as it writes back what it took.
   - A process that also **takes** it, by any input link or a query, moves
     the records it generates into the state it comes out in: `yields:
     [{object: Exception, state: completed}]`, a rule, or an agent's decision.

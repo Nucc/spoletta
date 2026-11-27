@@ -112,6 +112,15 @@ func (b *runBoard) takes(process, object int64) bool {
 	})
 }
 
+// Whether the process, by an output link to the object, leaves the records
+// of its store already stored as they are, adding only new ones; see
+// shared.go.
+func (b *runBoard) keepsStored(process, object int64) bool {
+	return slices.ContainsFunc(b.links[process], func(l snapshotLink) bool {
+		return l.Object == object && l.Direction == directionOutput && l.KeepStored
+	})
+}
+
 // Whether a human process's output link is to an object it fills in: one
 // listing no states to decide between, of an object it doesn't take; see
 // entries.go.

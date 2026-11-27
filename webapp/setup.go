@@ -248,9 +248,12 @@ type setupLink struct {
 	Role      string   `yaml:"role,omitempty"`
 	Condition bool     `yaml:"condition,omitempty"`
 	// Which stored records it takes; see queries.go.
-	Query *linkQuery  `yaml:"query,omitempty"`
-	At    *setupPoint `yaml:"at,omitempty"`
-	Route any         `yaml:"route,omitempty"`
+	Query *linkQuery `yaml:"query,omitempty"`
+	// Of a process only generating a shared object: it adds only new
+	// records, leaving those already stored as they are; see shared.go.
+	KeepStored bool        `yaml:"keepStored,omitempty"`
+	At         *setupPoint `yaml:"at,omitempty"`
+	Route      any         `yaml:"route,omitempty"`
 }
 
 type setupObject struct {
@@ -325,7 +328,7 @@ type setupAttribute struct {
 }
 
 func (l setupLink) MarshalYAML() (any, error) {
-	if l.State == "" && l.States == nil && l.Role == "" && !l.Condition && l.Query == nil && l.At == nil && l.Route == nil {
+	if l.State == "" && l.States == nil && l.Role == "" && !l.Condition && l.Query == nil && !l.KeepStored && l.At == nil && l.Route == nil {
 		return l.Object, nil
 	}
 	type plain setupLink

@@ -42,6 +42,7 @@ function attributeSchema(a: Attribute): TSchema {
 	if (a.many) return Type.Array(Type.Any(), { description, ...bounds(a) });
 	switch (a.type) {
 		case "text":
+		case "markdown":
 		case "datetime":
 			return Type.String({ description });
 		case "integer":

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { type Json } from './Data'
-import { searchable, ValueDialog, type Opened } from './FlowData'
+import { MarkdownFields, type Json } from './Data'
+import { cellText, searchable, ValueDialog, type Opened } from './FlowData'
 import {
   addSharedRecord,
   deleteSharedRecords,
@@ -214,6 +214,8 @@ export default function RecordsPage({ id }: { id: number }) {
     setQuery(out ? exclude(facets, query, key, value) : select(facets, query, key, [value]))
     setOpened(null)
   }
+  // The fields typed Markdown, rendered as such where a record shows whole.
+  const markdown = useMemo(() => new Set(records?.markdown ?? []), [records])
   const sortable = (key: string | undefined, label: string, newestFirst = false) =>
     key ? (
       <SortButton facet={key} sort={sort} onSort={setSort} newestFirst={newestFirst}>
@@ -223,7 +225,7 @@ export default function RecordsPage({ id }: { id: number }) {
       label
     )
 
-  return (
+  const page = (
     <div className="flows-page data-page">
       <header className="toolbar">
         <h1>
@@ -372,6 +374,7 @@ export default function RecordsPage({ id }: { id: number }) {
                                 width={columns.style('.' + f)}
                                 whole={whole}
                                 refTo={records?.refs?.[f]}
+                                markdown={markdown.has(f)}
                                 onOpen={setOpened}
                               />
                             ))}
@@ -433,6 +436,7 @@ export default function RecordsPage({ id }: { id: number }) {
           tab={editTab}
           fields={records.fields}
           states={records.states}
+          markdown={markdown}
           record={editing === 'new' ? null : editing}
           onSave={changes ? (content, state) => save(editing === 'new' ? null : editing, content, state) : undefined}
           onDelete={
@@ -452,10 +456,12 @@ export default function RecordsPage({ id }: { id: number }) {
       {opened && <ValueDialog opened={opened} onOpen={setOpened} onClose={() => setOpened(null)} onFilter={filterBy} />}
     </div>
   )
+  return <MarkdownFields.Provider value={markdown}>{page}</MarkdownFields.Provider>
 }
 
-// A field of a record: text as it is, a list as its number of items,
-// anything else as JSON, cut to a line; clicking it shows all of it.
+// A field of a record: text as it is, Markdown as the text it reads as, a
+// list as its number of items, anything else as JSON, cut to a line;
+// clicking it shows all of it, Markdown rendered.
 function Cell({
   value,
   title,
@@ -463,6 +469,7 @@ function Cell({
   width,
   whole,
   refTo,
+  markdown,
   onOpen,
 }: {
   value: Json | undefined
@@ -474,6 +481,8 @@ function Cell({
   // The struct whose records the field refers to, whose Records page the
   // value links to, searching for it; see references.go.
   refTo?: number
+  // Whether the field is typed Markdown; see attribute_types.go.
+  markdown: boolean
   onOpen: (o: Opened) => void
 }) {
   if (value === undefined || value === null || value === '') return <td className="data-cell empty" style={width} />
@@ -497,7 +506,8 @@ function Cell({
       </td>
     )
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
-  const label = Array.isArray(value) ? `${value.length} ${value.length === 1 ? 'item' : 'items'}` : text
+  const typed = markdown && typeof value === 'string'
+  const label = Array.isArray(value) ? `${value.length} ${value.length === 1 ? 'item' : 'items'}` : typeof value === 'string' ? cellText(value, typed) : text
   return (
     <td className="data-cell" style={width}>
       <button
@@ -509,6 +519,7 @@ function Cell({
           onOpen({
             title,
             text,
+            markdown: typed,
             whole,
             ...(s !== null && facet !== undefined && { filter: { key: facet, value: s } }),
           })

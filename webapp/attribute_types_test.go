@@ -19,8 +19,10 @@ func TestCheckAttributeType(t *testing.T) {
 		{in: attribute{Type: "text", Pattern: " [A-Z]+-\\d+ "}, wantType: "text", wantPat: `[A-Z]+-\d+`},
 		// A pattern alone makes it text.
 		{in: attribute{Pattern: `\d+`}, wantType: "text", wantPat: `\d+`},
-		{in: attribute{Type: "string"}, wantError: `"string" isn't a type of attribute: it is one of text, integer, number, boolean, datetime`},
+		{in: attribute{Type: "string"}, wantError: `"string" isn't a type of attribute: it is one of text, markdown, integer, number, boolean, datetime`},
 		{in: attribute{Type: "integer", Pattern: `\d+`}, wantError: "only text has a pattern"},
+		{in: attribute{Type: " markdown "}, wantType: "markdown"},
+		{in: attribute{Type: "markdown", Pattern: `#.*`}, wantError: "only text has a pattern"},
 		{in: attribute{Type: "text", Pattern: "[A-Z"}, wantError: "the pattern isn't a regular expression: missing closing ]: `[A-Z`"},
 		{in: attribute{Type: "text", Pattern: strings.Repeat("a", maxPatternLength+1)}, wantError: "a pattern is at most 1000 characters"},
 		{in: attribute{Type: "number", File: true}, wantError: "a file attribute holds the path of a file, so it has no type"},
@@ -50,6 +52,8 @@ func TestCheckTyped(t *testing.T) {
 		// The pattern is matched whole, but may say otherwise itself.
 		{"text", `.*TALK.*`, `"see TALK-1"`},
 		{"text", `TALK|PROJ`, `"PROJ"`},
+		{"markdown", "", `"# Findings\n\n- one\n- **two**"`},
+		{"markdown", "", `""`},
 		{"integer", "", `3`},
 		{"integer", "", `-12`},
 		{"integer", "", `3.0`},
@@ -73,6 +77,8 @@ func TestCheckTyped(t *testing.T) {
 		{"text", "", `null`, "it must be text, a JSON string"},
 		{"text", `[A-Z]+-\d+`, `"TALK-123 again"`, `"TALK-123 again" doesn't match its pattern [A-Z]+-\d+`},
 		{"text", `TALK|PROJ`, `"PROJECT"`, `"PROJECT" doesn't match its pattern TALK|PROJ`},
+		{"markdown", "", `{"title": "Findings"}`, "it must be text, a JSON string"},
+		{"markdown", "", `3`, "it must be text, a JSON string"},
 		{"integer", "", `"3"`, "it must be an integer, a JSON number such as 3"},
 		{"integer", "", `3.5`, "it must be an integer, a JSON number such as 3"},
 		{"integer", "", `null`, "it must be an integer, a JSON number such as 3"},
@@ -127,6 +133,7 @@ func TestSpecTyped(t *testing.T) {
 		{name: "key", definition: "Its key", kind: typeText, pattern: `[A-Z]+-\d+`},
 		{name: "points", kind: typeInteger},
 		{name: "notes", definition: "Anything"},
+		{name: "report", definition: "What was found", kind: typeMarkdown},
 	}}}}
 	as := c.spec().Objects[0].Attributes
 	if as[0].Type != "text" || as[0].Pattern != `^(?:[A-Z]+-\d+)$` || as[0].Description != `Text matching the regular expression ^(?:[A-Z]+-\d+)$. Its key` {
@@ -138,11 +145,15 @@ func TestSpecTyped(t *testing.T) {
 	if as[2].Type != "" || as[2].Description != "Anything" {
 		t.Errorf("attribute = %+v", as[2])
 	}
+	if as[3].Type != "markdown" || !strings.HasPrefix(as[3].Description, "Text in Markdown, ") || !strings.HasSuffix(as[3].Description, ". What was found") {
+		t.Errorf("Markdown attribute = %+v", as[3])
+	}
 	text := c.withContract("Do it.")
 	for _, want := range []string{
 		`- "key": text matching the regular expression ^(?:[A-Z]+-\d+)$. Its key`,
 		`- "points": an integer.`,
 		`- "notes": Anything`,
+		`- "report": text in Markdown, `,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("contract lacks %q:\n%s", want, text)
@@ -156,13 +167,14 @@ func TestFieldsSchemaTyped(t *testing.T) {
 		{name: "key", kind: typeText, pattern: `[A-Z]+-\d+`, definition: "Its key"},
 		{name: "points", kind: typeInteger},
 		{name: "due", kind: typeDatetime},
+		{name: "report", kind: typeMarkdown},
 		{name: "notes"},
 	})
 	b, err := json.Marshal(s["properties"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"due":{"anyOf":[{"format":"date"},{"format":"date-time"}],"type":"string"},"key":{"description":"Its key","pattern":"^(?:[A-Z]+-\\d+)$","type":"string"},"notes":{},"points":{"type":"integer"}}`
+	want := `{"due":{"anyOf":[{"format":"date"},{"format":"date-time"}],"type":"string"},"key":{"description":"Its key","pattern":"^(?:[A-Z]+-\\d+)$","type":"string"},"notes":{},"points":{"type":"integer"},"report":{"contentMediaType":"text/markdown","type":"string"}}`
 	if string(b) != want {
 		t.Errorf("properties = %s\nwant %s", b, want)
 	}
@@ -196,5 +208,23 @@ func TestTypedProblems(t *testing.T) {
 		if msg != want.msg || asJSON != want.asJSON {
 			t.Errorf("typedProblems(%s) = %q, %v; want %q, %v", content, msg, asJSON, want.msg, want.asJSON)
 		}
+	}
+}
+
+// The attributes typed Markdown are named once each, in order, whichever
+// objects have them.
+func TestMarkdownNames(t *testing.T) {
+	got := markdownNames([]attribute{
+		{Name: "summary", Type: typeMarkdown},
+		{Name: "key", Type: typeText},
+		{Name: "details", Type: typeMarkdown},
+		{Name: "summary", Type: typeMarkdown},
+		{Name: "notes"},
+	})
+	if strings.Join(got, ",") != "details,summary" {
+		t.Errorf("markdownNames = %q", got)
+	}
+	if got := markdownNames(nil); got == nil || len(got) != 0 {
+		t.Errorf("markdownNames(nil) = %#v, want an empty list", got)
 	}
 }

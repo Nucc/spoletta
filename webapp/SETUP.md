@@ -241,7 +241,7 @@ A process taking an object and yielding it too affects it: it hands the object i
     - name: ticket
       ref: Jira Ticket  # holds the unique value of a record of that shared struct, or a list of them
     - name: key
-      type: text        # text, integer, number, boolean or datetime; none takes any value
+      type: text        # text, markdown, integer, number, boolean or datetime; none takes any value
       pattern: "[A-Z]+-\\d+"   # a regular expression the whole text matches; alone it makes the attribute text
   parts:                # objects making it up, shaped like objects
     - name: comments

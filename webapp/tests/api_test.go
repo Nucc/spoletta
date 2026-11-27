@@ -742,6 +742,7 @@ type specAttribute struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	File        bool            `json:"file"`
+	Type        string          `json:"type,omitempty"`
 	Many        bool            `json:"many,omitempty"`
 	MinItems    int             `json:"minItems,omitempty"`
 	MaxItems    *int            `json:"maxItems,omitempty"`

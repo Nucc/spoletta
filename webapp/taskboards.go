@@ -182,6 +182,9 @@ const (
 type taskCards struct {
 	Fields []string `json:"fields"`
 	States []string `json:"states"`
+	// The fields typed Markdown, at any depth, which a card shows as plain
+	// text and correcting a record renders; see attribute_types.go.
+	Markdown []string `json:"markdown"`
 	// The struct's first unique attribute, which names a record.
 	Key     string         `json:"key"`
 	Records []sharedRecord `json:"records"`
@@ -411,7 +414,7 @@ func fillCards(ctx context.Context, db *sql.DB, u *user, columns []taskColumn, s
 		}
 		key, desc := sortParam(c.Sort)
 		matched := rt.table.search().run(parseSearch(c.Query), key, desc)
-		cards := &taskCards{Fields: rt.fields, States: rt.states, Key: keys[root], Records: []sharedRecord{},
+		cards := &taskCards{Fields: rt.fields, States: rt.states, Markdown: rt.markdown, Key: keys[root], Records: []sharedRecord{},
 			Matched: len(matched), Truncated: rt.truncated, Runs: map[string]cardRun{}, Referring: map[string][]referringCount{}}
 		for _, i := range matched[:min(len(matched), maxColumnCards)] {
 			cards.Records = append(cards.Records, rt.records[i])

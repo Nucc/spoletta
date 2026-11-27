@@ -748,12 +748,19 @@ func registerRunRoutes(mux *http.ServeMux, db *sql.DB, eng *engine) {
 			// Each time it moved to another replica, as the one walking
 			// it stopped; see adopt.go.
 			Moves []runMove `json:"moves"`
+			// The fields its version types Markdown, which its panel
+			// renders as such; see attribute_types.go.
+			Markdown []string `json:"markdown"`
 		}{run: rn, Steps: []step{}, Objects: []runObject{}}
 		if detail.Spent, detail.SpendLimit, err = runSpent(r.Context(), db, id); err != nil {
 			serverError(w, err)
 			return
 		}
 		if detail.Moves, err = runMoves(r.Context(), db, id); err != nil {
+			serverError(w, err)
+			return
+		}
+		if detail.Markdown, err = runMarkdown(r.Context(), db, id); err != nil {
 			serverError(w, err)
 			return
 		}

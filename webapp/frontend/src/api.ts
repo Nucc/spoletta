@@ -213,7 +213,7 @@ export type ObjectAttribute = {
   pattern?: string
 }
 
-export type AttributeType = 'text' | 'integer' | 'number' | 'boolean' | 'datetime'
+export type AttributeType = 'text' | 'markdown' | 'integer' | 'number' | 'boolean' | 'datetime'
 
 // A situation an object can be in, such as approved or changes requested.
 export type ObjectState = {
@@ -872,7 +872,9 @@ export function getInstanceEvents(search?: Search): Promise<AuditLog> {
 // the fields its object has in the board's order. more: more than these match.
 // refs names the fields referring to another struct's records, with that
 // struct's id; see references.go.
-export type SharedRecords = { fields: string[]; states: string[]; records: SharedRecord[]; more: boolean; refs?: Record<string, number> } & SearchResult
+// markdown names the fields typed Markdown, at any depth, rendered as such;
+// see attribute_types.go.
+export type SharedRecords = { fields: string[]; states: string[]; records: SharedRecord[]; more: boolean; refs?: Record<string, number>; markdown?: string[] } & SearchResult
 
 // What a person writes of a record: all its fields, replacing what it held,
 // and its state, one of the object's or none.
@@ -1026,6 +1028,9 @@ export type TaskColumn = {
 export type TaskCards = {
   fields: string[]
   states: string[]
+  // The fields typed Markdown, at any depth, which a card shows as plain
+  // text and correcting a record renders; see attribute_types.go.
+  markdown?: string[]
   // The struct's first unique attribute, which names a record.
   key: string
   records: SharedRecord[]
@@ -1938,7 +1943,9 @@ export type RunMove = {
 
 // spent is what the run, with its subflows' and items' runs, spent on its
 // models, in dollars, and spendLimit the most it may, 0 for no limit.
-export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[]; spent: number; spendLimit: number; moves: RunMove[] }
+// markdown names the fields its version types Markdown, which its panel
+// renders as such; see attribute_types.go.
+export type FlowRunDetail = FlowRun & { steps: RunStep[]; objects: RunObject[]; spent: number; spendLimit: number; moves: RunMove[]; markdown?: string[] }
 
 // Runs a flow on its own whenever its cron expression comes round, on the
 // board as it is, as the Run button does. A time that comes round while its
@@ -2169,8 +2176,10 @@ export type DataObject = { id: number; name: string; many: boolean; attributes: 
 
 // The flow's objects and what the latest of its runs the search matches
 // held of them, newest first or as sorted; and how many of the runs searched
-// were trials it left out, its query not naming the trial facet.
-export type FlowData = { objects: DataObject[]; rows: DataRow[]; trials: number } & SearchResult
+// were trials it left out, its query not naming the trial facet; markdown
+// names the fields typed Markdown on its boards, rendered as such (see
+// attribute_types.go).
+export type FlowData = { objects: DataObject[]; rows: DataRow[]; trials: number; markdown?: string[] } & SearchResult
 
 export function getFlowData(flow: number, search?: Search): Promise<FlowData> {
   const p = searchParams(search)

@@ -1,7 +1,8 @@
 package main
 
 // What an attribute holds, beyond any JSON value: text, maybe matching a
-// pattern, an integer, a number, a yes or no, or a date and time. A value of
+// pattern, Markdown, an integer, a number, a yes or no, or a date and time.
+// A value of
 // another type is refused wherever one is handed in: an agent is told what
 // is wrong and fixes it, a script's step fails, and a person entering one, a
 // request starting a run and a hand edit of a record are refused (checkTyped,
@@ -14,9 +15,19 @@ package main
 // "TALK-123 again". It is Go's syntax (RE2), which every check here uses;
 // the worker checks it again in JavaScript as an agent hands its output in,
 // skipping one JavaScript can't read, since this check has the last word.
+//
+// Markdown is text a person reads formatted, such as an agent's report: it
+// is checked as text, an agent is told to write it in Markdown, the API
+// describes it as text/markdown, and wherever a run's objects or a record's
+// fields are shown, a field of that name is rendered as Markdown rather than
+// shown as it is, at whatever depth of a value it is found (markdownNames;
+// Data.tsx in the frontend). Text not typed so is rendered only when it
+// reads as Markdown, as every text was before the type.
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,13 +42,14 @@ import (
 const (
 	typeAny      = ""
 	typeText     = "text"
+	typeMarkdown = "markdown"
 	typeInteger  = "integer"
 	typeNumber   = "number"
 	typeBoolean  = "boolean"
 	typeDatetime = "datetime"
 )
 
-var attributeTypes = []string{typeText, typeInteger, typeNumber, typeBoolean, typeDatetime}
+var attributeTypes = []string{typeText, typeMarkdown, typeInteger, typeNumber, typeBoolean, typeDatetime}
 
 // The longest pattern, as its column holds it.
 const maxPatternLength = 1000
@@ -96,7 +108,7 @@ func checkTyped(kind, pattern string, v json.RawMessage) error {
 		return nil
 	}
 	switch kind {
-	case typeText:
+	case typeText, typeMarkdown:
 		var s string
 		if v[0] != '"' || json.Unmarshal(v, &s) != nil {
 			return errors.New("it must be text, a JSON string")
@@ -166,6 +178,8 @@ func typeWords(kind, pattern string) string {
 			return "text matching the regular expression " + anchored(pattern)
 		}
 		return "text"
+	case typeMarkdown:
+		return "text in Markdown, as a report is written for a person to read: headings, lists, tables, emphasis and links where they help"
 	case typeInteger:
 		return "an integer"
 	case typeNumber:
@@ -183,6 +197,8 @@ func typeLabel(kind string) string {
 	switch kind {
 	case typeAny:
 		return "any"
+	case typeMarkdown:
+		return "Markdown"
 	case typeBoolean:
 		return "yes or no"
 	case typeDatetime:
@@ -199,6 +215,9 @@ func typeSchema(kind, pattern string) map[string]any {
 			return map[string]any{"type": "string", "pattern": anchored(pattern)}
 		}
 		return map[string]any{"type": "string"}
+	case typeMarkdown:
+		// JSON Schema's own word for what a string holds.
+		return map[string]any{"type": "string", "contentMediaType": "text/markdown"}
 	case typeInteger:
 		return map[string]any{"type": "integer"}
 	case typeNumber:
@@ -256,4 +275,58 @@ func typedProblems(fs []field, content map[string]json.RawMessage) (string, bool
 func isEmptyValue(v json.RawMessage) bool {
 	s := string(bytes.TrimSpace(v))
 	return s == "null" || s == `""`
+}
+
+// The names of the attributes typed Markdown, each once, in order: what
+// the run's panel, the Records page, task boards and the Data page render
+// as Markdown wherever a value holds a field of that name. By name alone,
+// since a run's content doesn't say which object a field deep in it is of;
+// two objects with a field of one name, one Markdown and one not, are rare.
+func markdownNames(as []attribute) []string {
+	names := []string{}
+	for _, a := range as {
+		if a.Type == typeMarkdown && !slices.Contains(names, a.Name) {
+			names = append(names, a.Name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// The names of the attributes typed Markdown on the flow's boards as they
+// are, as markdownNames says.
+func flowMarkdown(ctx context.Context, db rowsQuerier, flow int64) ([]string, error) {
+	var as []attribute
+	err := scanAll(ctx, db, `SELECT a.name, a.value_type FROM object_attributes a JOIN objects o ON o.id = a.object_id
+		WHERE o.flow_id = ? AND a.value_type = ?`, func(rows *sql.Rows) error {
+		var a attribute
+		err := rows.Scan(&a.Name, &a.Type)
+		as = append(as, a)
+		return err
+	}, flow, typeMarkdown)
+	return markdownNames(as), err
+}
+
+// The names of the attributes typed Markdown in the version the run ran,
+// as markdownNames says; for a run from before versions, on its flow's
+// boards as they are.
+func runMarkdown(ctx context.Context, db *sql.DB, run int64) ([]string, error) {
+	var flow int64
+	var versioned bool
+	var body []byte
+	err := db.QueryRowContext(ctx, `SELECT r.flow_id, v.id IS NOT NULL, JSON_EXTRACT(v.snapshot, '$.attributes') FROM runs r
+		LEFT JOIN flow_versions v ON v.id = r.version_id WHERE r.id = ?`, run).Scan(&flow, &versioned, &body)
+	if err != nil {
+		return nil, err
+	}
+	if !versioned {
+		return flowMarkdown(ctx, db, flow)
+	}
+	var as []attribute
+	if body != nil {
+		if err := json.Unmarshal(body, &as); err != nil {
+			return nil, err
+		}
+	}
+	return markdownNames(as), nil
 }

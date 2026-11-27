@@ -36,7 +36,7 @@ function output(object: number): Link {
 check('a name as a facet writes it', slug(' Pull request '), 'Pull_request')
 
 const objects = [
-  object(1, 'Name', [attr(1, 'first'), attr(1, 'surname'), attr(1, 'born', { type: 'datetime' }), attr(1, 'photo', { file: true })]),
+  object(1, 'Name', [attr(1, 'first'), attr(1, 'surname'), attr(1, 'born', { type: 'datetime' }), attr(1, 'photo', { file: true }), attr(1, 'bio', { type: 'markdown' })]),
   object(2, 'Greeting', [attr(2, 'text')]),
   object(3, 'Pull request', [attr(3, 'branch')], { shared: true, pick: { state: 'open', where: '', oldest: true } as FlowObject['pick'] }),
   object(4, 'Key', []),

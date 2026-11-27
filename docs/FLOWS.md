@@ -178,10 +178,16 @@ Other object flags:
   wrote. A script writes the file in `$OUTPUTS`; an agent writes it in its
   step's files directory. A person can't enter a file by hand.
 - `type:` on an attribute says what each of its values must be: `text` (a
-  JSON string), `integer` (a whole JSON number, such as `3`), `number`
-  (such as `0.8`), `boolean` (`true` or `false`) or `datetime` (a date such
-  as `"2026-11-03"`, or a date and time in RFC 3339 such as
-  `"2026-11-03T09:00:00Z"`). Without one it holds any JSON value. Text may
+  JSON string), `markdown` (a JSON string written in Markdown), `integer`
+  (a whole JSON number, such as `3`), `number` (such as `0.8`), `boolean`
+  (`true` or `false`) or `datetime` (a date such as `"2026-11-03"`, or a
+  date and time in RFC 3339 such as `"2026-11-03T09:00:00Z"`). Without one
+  it holds any JSON value. Give `markdown` to what a person reads, such as
+  an agent's report or summary: the agent is told to write it in Markdown,
+  and it is shown formatted wherever runs, records and reviews show it
+  (other text only when it happens to read as Markdown). A report is best
+  an attribute of its own, such as `report` on a `Findings` object beside
+  its `severity`, since an object without attributes has no type. Text may
   have a `pattern:`, a regular expression in Go's syntax (RE2) that the
   **whole** of it must match: `pattern: "[A-Z]+-\\d+"` takes `TALK-123` but not
   `TALK-123 again`. A pattern without a type makes the attribute text. A

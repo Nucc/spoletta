@@ -452,6 +452,9 @@ type sharedRecords struct {
 	// The fields referring to another struct's records, each with that
 	// struct's id, whose records it links to; see references.go.
 	Refs map[string]int64 `json:"refs"`
+	// The fields typed Markdown, at any depth, which the page renders as
+	// such; see attribute_types.go.
+	Markdown []string `json:"markdown"`
 	// More records than these match.
 	More bool `json:"more"`
 	// The facets the records were searched by; how many records the search
@@ -473,8 +476,10 @@ const maxListedRecords = 1000
 // columns (taskboards.go).
 type recordTable struct {
 	fields, states []string
-	records        []sharedRecord
-	table          *searchTable
+	// The fields typed Markdown, at any depth; see attribute_types.go.
+	markdown []string
+	records  []sharedRecord
+	table    *searchTable
 	// More records are stored than these.
 	truncated bool
 }
@@ -496,6 +501,21 @@ func recordFields(ctx context.Context, db rowsQuerier, root int64) ([]string, er
 	return fields, err
 }
 
+// The fields typed Markdown of the struct whose object is root, as
+// markdownNames says: its attributes' and those of the objects it is made
+// of, at any depth, all on the struct's board.
+func structMarkdown(ctx context.Context, db rowsQuerier, root int64) ([]string, error) {
+	var as []attribute
+	err := scanAll(ctx, db, `SELECT a.name, a.value_type FROM object_attributes a JOIN objects o ON o.id = a.object_id
+		JOIN objects r ON r.flow_id = o.flow_id WHERE r.id = ? AND a.value_type = ?`, func(rows *sql.Rows) error {
+		var a attribute
+		err := rows.Scan(&a.Name, &a.Type)
+		as = append(as, a)
+		return err
+	}, root, typeMarkdown)
+	return markdownNames(as), err
+}
+
 // The records of the struct whose object is root, to search.
 func readRecordTable(ctx context.Context, db *sql.DB, root int64) (*recordTable, error) {
 	rt := &recordTable{states: []string{}, table: newSearchTable()}
@@ -510,6 +530,9 @@ func readRecordTable(ctx context.Context, db *sql.DB, root int64) (*recordTable,
 		return nil, err
 	}
 	if rt.fields, err = recordFields(ctx, db, root); err != nil {
+		return nil, err
+	}
+	if rt.markdown, err = structMarkdown(ctx, db, root); err != nil {
 		return nil, err
 	}
 	t := rt.table
@@ -617,7 +640,7 @@ func registerSharedRoutes(mux *http.ServeMux, db *sql.DB) {
 			serverError(w, err)
 			return
 		}
-		out := sharedRecords{Fields: rt.fields, States: rt.states, Records: []sharedRecord{}, Truncated: rt.truncated}
+		out := sharedRecords{Fields: rt.fields, States: rt.states, Markdown: rt.markdown, Records: []sharedRecord{}, Truncated: rt.truncated}
 		s := rt.table.search()
 		q := parseSearch(r.URL.Query().Get("q"))
 		key, desc := sortParam(r.URL.Query().Get("sort"))

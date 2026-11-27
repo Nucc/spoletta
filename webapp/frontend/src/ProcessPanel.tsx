@@ -1513,8 +1513,9 @@ function EntryItem({ fields, value, onChange }: { fields: Field[]; value: Draft;
 }
 
 // One field the person types, as its type has it: a number in a number box,
-// a yes or no a checkbox, a date and time or a text matching a pattern as
-// text, the pattern or the form a date takes showing until something is.
+// a yes or no a checkbox, Markdown in a box of lines, a date and time or a
+// text matching a pattern as text, the pattern or the form a date takes
+// showing until something is.
 function EntryInput({ field: f, value, onChange }: { field: Field; value: Draft | undefined; onChange: (v: Draft) => void }) {
   const type = f.attribute?.type
   if (type === 'boolean')
@@ -1522,6 +1523,19 @@ function EntryInput({ field: f, value, onChange }: { field: Field; value: Draft 
       <label className="panel-check" title={f.definition || undefined}>
         <input type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
         <span>{f.name}</span>
+      </label>
+    )
+  if (type === 'markdown')
+    return (
+      <label className="panel-field">
+        <span>{f.name}</span>
+        <textarea
+          rows={6}
+          value={typeof value === 'string' ? value : ''}
+          placeholder={f.definition || 'In Markdown'}
+          title={[f.definition, 'In Markdown'].filter(Boolean).join('. ')}
+          onChange={(e) => onChange(e.target.value)}
+        />
       </label>
     )
   const number = type === 'integer' || type === 'number'

@@ -868,9 +868,10 @@ function AttributeRow({
                 <>
                   What each of its values must be. A process handing in another is told what is wrong: an agent fixes it, a
                   script's step fails; a person entering one, a request starting a run and a hand edit of a record are
-                  refused. Integer and Number are JSON numbers, Yes or no is true or false, and Date and time a date such as
-                  2026-11-03, or a date and time such as 2026-11-03T09:00:00Z. Any value takes whatever fits its definition.
-                  A file or an attribute referring to records has no type.
+                  refused. Markdown is text an agent is told to write in Markdown, such as a report, shown formatted wherever
+                  runs and records are. Integer and Number are JSON numbers, Yes or no is true or false, and Date and time a
+                  date such as 2026-11-03, or a date and time such as 2026-11-03T09:00:00Z. Any value takes whatever fits its
+                  definition. A file or an attribute referring to records has no type.
                 </>,
               )}
             </>
@@ -982,9 +983,10 @@ function AttributeRow({
 }
 
 // The types an attribute can have, beside any value, as they are named.
-const ATTRIBUTE_TYPES: AttributeType[] = ['text', 'integer', 'number', 'boolean', 'datetime']
+const ATTRIBUTE_TYPES: AttributeType[] = ['text', 'markdown', 'integer', 'number', 'boolean', 'datetime']
 const TYPE_NAMES: Record<AttributeType, string> = {
   text: 'Text',
+  markdown: 'Markdown',
   integer: 'Integer',
   number: 'Number',
   boolean: 'Yes or no',
@@ -1022,6 +1024,7 @@ function attributeChips(a: ObjectAttribute, stored: boolean, structs: TaskStruct
 // What a value of each type is, in words and as an example.
 const TYPE_WORDS: Record<AttributeType, string> = {
   text: 'text',
+  markdown: 'text in Markdown, shown formatted',
   integer: 'a whole number',
   number: 'a number',
   boolean: 'true or false',
@@ -1029,6 +1032,7 @@ const TYPE_WORDS: Record<AttributeType, string> = {
 }
 const TYPE_EXAMPLES: Record<AttributeType, string> = {
   text: '"…"',
+  markdown: '"# …"',
   integer: '3',
   number: '0.8',
   boolean: 'true',

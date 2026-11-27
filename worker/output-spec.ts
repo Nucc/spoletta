@@ -34,8 +34,10 @@ export type Attribute = Bounds & {
 	name: string;
 	description: string;
 	file: boolean;
-	// What it holds, if typed: text, integer, number, boolean or datetime;
-	// for text, maybe a pattern, anchored, that the whole of it matches.
+	// What it holds, if typed: text, markdown, integer, number, boolean or
+	// datetime; for text, maybe a pattern, anchored, that the whole of it
+	// matches. Markdown is text, its description saying to write Markdown;
+	// no contentMediaType, which not every model's provider takes.
 	type?: string;
 	pattern?: string;
 	many?: boolean;
@@ -208,6 +210,7 @@ function attributeSchema(a: Attribute): JSONSchema {
 	if (a.many) return arrayOf({}, a, description);
 	switch (a.type) {
 		case "text":
+		case "markdown":
 		case "datetime":
 			return typed("string", description);
 		case "integer":

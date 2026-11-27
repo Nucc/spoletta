@@ -24,6 +24,7 @@ import { BoardActionsContext, StructFlowsContext, type BoardActions } from './ac
 import { ColumnResizer, useColumnWidth } from './ColumnResizer'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import { useConfirm } from './Confirm'
+import { MarkdownFields } from './Data'
 import { useUndoNotice } from './UndoNotice'
 import {
   ChevronDownIcon,
@@ -3967,7 +3968,19 @@ export default function Board({
     },
   ]
 
-  return (
+  // The fields typed Markdown, rendered as such where the board's panels and
+  // reviews show what runs held: the open run's version's, else the board's
+  // as shown, inner boards' too. The run's panel gives its run's own.
+  const markdownKey = runDetail?.markdown
+    ? runDetail.markdown.join('\n')
+    : [...new Set([...(contents?.objects ?? []), ...nodes.flatMap((n) => (n.type === 'object' ? [n.data] : []))].flatMap((o) =>
+        o.attributes.filter((a) => a.type === 'markdown').map((a) => a.name),
+      ))]
+        .sort()
+        .join('\n')
+  const markdownFields = useMemo(() => new Set(markdownKey === '' ? [] : markdownKey.split('\n')), [markdownKey])
+
+  const boardView = (
     <div className="board">
       <header className="toolbar">
         <h1>
@@ -4569,6 +4582,7 @@ export default function Board({
       {undoNotice}
     </div>
   )
+  return <MarkdownFields.Provider value={markdownFields}>{boardView}</MarkdownFields.Provider>
 }
 
 // The flow's name, which a click on the pencil edits; Enter or leaving the

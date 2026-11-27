@@ -2454,10 +2454,16 @@ body {
   gap: 8px;
 }
 
-.data-head > .data-toggle {
+.data-head .data-toggle {
   float: none;
   margin-left: 0;
   font-weight: 400;
+}
+
+.data-head-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 10px;
 }
 
 /* Fields as names and values in two columns, the values as text, since
@@ -6702,6 +6708,16 @@ input.record-field-name {
   border: 1px solid #d8dee4;
   border-radius: 6px;
   resize: vertical;
+}
+
+/* A field typed Markdown as it reads, in the box its text is edited in. */
+.record-field-rendered {
+  max-height: 320px;
+  padding: 6px 8px;
+  overflow: auto;
+  font-size: 13px;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
 }
 
 .record-add-field {

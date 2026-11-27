@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Data, parse, type Json } from './Data'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Data, MarkdownFields, parse, type Json } from './Data'
+import { isMarkdown, plainText } from './markdown'
 import { getFlow, getFlowData, type DataCell, type DataRow, type Flow, type FlowData, type FlowRunStatus, type SearchFacet } from './api'
 import { TableIcon } from './icons'
 import { exclude, indexFacets, parse as parseQuery, select } from './query'
@@ -19,8 +20,21 @@ type Column = { id: string; object: string; label: string; field: string | null;
 // The columns of an object, by what tells it apart in the rows.
 type Group = { key: string; name: string; columns: Column[] }
 
-// What a cell opens in full, and the facet value it is, to search by.
-export type Opened = { title: string; text: string; whole?: { title: string; text: string }; filter?: { key: string; value: string } }
+// What a cell opens in full, and the facet value it is, to search by;
+// markdown says it is the value of a field typed Markdown.
+export type Opened = {
+  title: string
+  text: string
+  markdown?: boolean
+  whole?: { title: string; text: string }
+  filter?: { key: string; value: string }
+}
+
+// A field's text as a cell shows it on a line: Markdown as the text it reads
+// as, a field typed so or text reading as it; other text as it is.
+export function cellText(text: string, markdown: boolean): string {
+  return markdown || isMarkdown(text) ? plainText(text) : text
+}
 
 // What a run held of an object, its content parsed.
 type Held = { cell: DataCell; value: Json | undefined }
@@ -90,6 +104,7 @@ export default function FlowDataPage({ id }: { id: number }) {
   const items = data?.rows.some((r) => r.itemKey !== '' || r.parent !== null) ?? false
   const facets = useMemo(() => indexFacets(data?.facets ?? []), [data])
   const keys = useMemo(() => keysOf(groups, data?.facets ?? []), [groups, data])
+  const markdown = useMemo(() => new Set(data?.markdown ?? []), [data])
   const ast = useMemo(() => parseQuery(query).ast, [query])
   const searching = search.q !== ''
 
@@ -110,7 +125,7 @@ export default function FlowDataPage({ id }: { id: number }) {
     .map((g) => ({ ...g, columns: g.columns.filter((c) => !hidden.has(c.id)) }))
     .filter((g) => g.columns.length > 0)
 
-  return (
+  const page = (
     <div className="flows-page data-page">
       <header className="toolbar">
         <h1>
@@ -229,6 +244,7 @@ export default function FlowDataPage({ id }: { id: number }) {
       )}
     </div>
   )
+  return <MarkdownFields.Provider value={markdown}>{page}</MarkdownFields.Provider>
 }
 
 function Row({
@@ -297,6 +313,7 @@ function Cell({
   facet: string | undefined
   onOpen: (o: Opened) => void
 }) {
+  const typed = useContext(MarkdownFields)
   if (!held) return <td className="data-cell empty" />
   const { cell, value } = held
   const whole = { title: `Run #${run} · ${group.name}`, text: cell.content }
@@ -309,7 +326,7 @@ function Cell({
   if (column.kind === 'whole') {
     // A list is its number of items; fields show in their own columns.
     if (isFields(value)) return <td className="data-cell empty" />
-    const label = Array.isArray(value) ? `${value.length} ${value.length === 1 ? 'item' : 'items'}` : cell.content
+    const label = Array.isArray(value) ? `${value.length} ${value.length === 1 ? 'item' : 'items'}` : cellText(cell.content, false)
     return (
       <td className={`data-cell${given}`}>
         <button
@@ -328,7 +345,8 @@ function Cell({
   if (!isFields(value) || !(column.field! in value)) return <td className="data-cell empty" />
   const v = value[column.field!]
   const text = asText(v)
-  const label = Array.isArray(v) ? `${v.length} ${v.length === 1 ? 'item' : 'items'}` : text
+  const markdown = typeof v === 'string' && typed.has(column.field!)
+  const label = Array.isArray(v) ? `${v.length} ${v.length === 1 ? 'item' : 'items'}` : typeof v === 'string' ? cellText(v, markdown) : text
   return (
     <td className={`data-cell${given}`}>
       <button
@@ -339,6 +357,7 @@ function Cell({
           onOpen({
             title: `Run #${run} · ${group.name}: ${column.label}`,
             text,
+            markdown,
             whole,
             ...(s !== null && facet !== undefined && { filter: { key: facet, value: s } }),
           })
@@ -394,7 +413,7 @@ export function ValueDialog({
         </button>
       </header>
       {/* A new view for each value, so one shown raw doesn't carry over. */}
-      <Data key={opened.title} text={opened.text} />
+      <Data key={opened.title} text={opened.text} markdown={opened.markdown} />
     </dialog>
   )
 }

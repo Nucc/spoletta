@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { getRecordReferences, type ReferringGroup, type SharedRecord } from './api'
 import { useConfirm } from './Confirm'
+import { MarkdownText } from './Data'
 import { RecordHistory } from './RecordHistory'
 import { RecordReferences, referencesTabLabel } from './RecordReferences'
 
@@ -11,7 +12,8 @@ import { RecordReferences, referencesTabLabel } from './RecordReferences'
 // A record there is has its history beside, in a tab of its own; one that
 // isn't fields, which the form would write over, shows its history alone.
 // Records of other structs referring to it have a tab too; see
-// RecordReferences.tsx.
+// RecordReferences.tsx. A field typed Markdown (attribute_types.go) shows
+// rendered until Edit opens its text, and is written as text, like any.
 
 export type RecordTab = 'fields' | 'history' | 'references'
 type Tab = RecordTab
@@ -22,11 +24,14 @@ type Field = {
   text: string
   json: boolean
   own: boolean
+  // Typed Markdown, and whether it shows rendered rather than to edit.
+  markdown: boolean
+  rendered: boolean
 }
 
 let nextKey = 0
 
-function draftOf(fields: string[], record: SharedRecord | null): Field[] {
+function draftOf(fields: string[], record: SharedRecord | null, markdown: ReadonlySet<string>): Field[] {
   const content =
     record && typeof record.content === 'object' && record.content !== null && !Array.isArray(record.content)
       ? (record.content as Record<string, unknown>)
@@ -35,12 +40,15 @@ function draftOf(fields: string[], record: SharedRecord | null): Field[] {
   return names.map((name) => {
     const v = content[name]
     const json = v !== undefined && v !== null && typeof v !== 'string'
+    const typed = !json && fields.includes(name) && markdown.has(name)
     return {
       key: nextKey++,
       name,
       text: v === undefined || v === null ? '' : json ? JSON.stringify(v, null, 2) : (v as string),
       json,
       own: fields.includes(name),
+      markdown: typed,
+      rendered: typed && typeof v === 'string' && v.trim() !== '',
     }
   })
 }
@@ -52,6 +60,7 @@ export function RecordDialog({
   struct,
   tab: initialTab = 'fields',
   fields,
+  markdown = new Set(),
   states,
   record,
   state: initialState = '',
@@ -64,8 +73,9 @@ export function RecordDialog({
   struct?: number
   // The tab it opens on.
   tab?: Tab
-  // The struct's own fields, in the board's order.
+  // The struct's own fields, in the board's order, and those typed Markdown.
   fields: string[]
+  markdown?: ReadonlySet<string>
   states: string[]
   // The record corrected, or none for a new one.
   record: SharedRecord | null
@@ -79,7 +89,7 @@ export function RecordDialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   // Taken once, so the records asked for again meanwhile don't undo what is typed.
-  const [draft, setDraft] = useState(() => draftOf(fields, record))
+  const [draft, setDraft] = useState(() => draftOf(fields, record, markdown))
   const [state, setState] = useState(record?.state ?? initialState)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -249,6 +259,16 @@ export function RecordDialog({
                       onChange={(e) => change(f.key, { name: e.target.value })}
                     />
                   )}
+                  {f.markdown && !f.json && f.text.trim() !== '' && (
+                    <button
+                      type="button"
+                      className="link-button"
+                      title={f.rendered ? 'Edit its Markdown' : 'Show it as it reads'}
+                      onClick={() => change(f.key, { rendered: !f.rendered })}
+                    >
+                      {f.rendered ? 'Edit' : 'Preview'}
+                    </button>
+                  )}
                   <label className="record-field-json" title="Write the value as JSON: a number, true or false, a list or fields">
                     <input type="checkbox" checked={f.json} onChange={(e) => change(f.key, { json: e.target.checked })} /> JSON
                   </label>
@@ -261,20 +281,26 @@ export function RecordDialog({
                     {f.own ? 'Clear' : 'Remove'}
                   </button>
                 </div>
-                <textarea
-                  value={f.text}
-                  rows={Math.min(8, Math.max(1, f.text.split('\n').length))}
-                  spellCheck={false}
-                  aria-label={f.name || 'Field value'}
-                  onChange={(e) => change(f.key, { text: e.target.value })}
-                />
+                {f.markdown && f.rendered && !f.json && f.text.trim() !== '' ? (
+                  <div className="record-field-rendered" aria-label={f.name}>
+                    <MarkdownText text={f.text} />
+                  </div>
+                ) : (
+                  <textarea
+                    value={f.text}
+                    rows={Math.min(f.markdown ? 14 : 8, Math.max(1, f.text.split('\n').length))}
+                    spellCheck={f.markdown}
+                    aria-label={f.name || 'Field value'}
+                    onChange={(e) => change(f.key, { text: e.target.value })}
+                  />
+                )}
               </div>
             ))}
           </div>
           <button
             type="button"
             className="link-button record-add-field"
-            onClick={() => setDraft((d) => [...d, { key: nextKey++, name: '', text: '', json: false, own: false }])}
+            onClick={() => setDraft((d) => [...d, { key: nextKey++, name: '', text: '', json: false, own: false, markdown: false, rendered: false }])}
           >
             + Add a field
           </button>

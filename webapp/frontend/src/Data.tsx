@@ -1,28 +1,39 @@
-import { useState, type ReactNode } from 'react'
-import Markdown from 'react-markdown'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { isMarkdown } from './markdown'
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
 // How deep strings holding JSON are unwrapped, so odd content can't recurse forever.
 const maxDepth = 8
 
+// The names of the fields typed Markdown (attribute_types.go), whose text is
+// rendered as Markdown wherever content holds them, at any depth, where other
+// text is only when it reads as Markdown. A page showing a run's objects or a
+// struct's records gives the names its run's version or struct has.
+export const MarkdownFields = createContext<ReadonlySet<string>>(new Set())
+
 // Content as the fields and items it holds when it is a JSON object or array,
 // the way processes hand objects in, without the envelope an object without
 // attributes holds its value in; Markdown rendered; other text as it is. Raw
 // shows the text as it is. A label heads it, with Raw beside it rather than
-// over the content.
-export function Data({ text, label }: { text: string; label?: ReactNode }) {
+// over the content, and Open, for content too long to read where it is, to
+// read it in a dialog of its own. markdown says the text is the value of a
+// field typed Markdown, rendered as such whatever it reads as.
+export function Data({ text, label, markdown = false }: { text: string; label?: ReactNode; markdown?: boolean }) {
   const [raw, setRaw] = useState(false)
-  const parsed = parse(text)
-  const formatted = parsed !== undefined || isMarkdown(text)
+  const [open, setOpen] = useState(false)
+  const parsed = markdown ? undefined : parse(text)
+  const formatted = markdown || parsed !== undefined || isMarkdown(text)
   const toggle = formatted && (
-    <button className="link-button data-toggle" onClick={() => setRaw(!raw)}>
+    <button type="button" className="link-button data-toggle" onClick={() => setRaw(!raw)}>
       {raw ? 'Formatted' : 'Raw'}
     </button>
   )
   const body =
-    !formatted || raw ? <pre>{text}</pre> : parsed === undefined ? <Text text={text} /> : <Value value={held(parsed)} />
+    !formatted || raw ? <pre>{text}</pre> : parsed === undefined ? <Text text={text} markdown={markdown} /> : <Value value={held(parsed)} />
   if (label === undefined) {
     if (!formatted) return body
     return (
@@ -32,14 +43,68 @@ export function Data({ text, label }: { text: string; label?: ReactNode }) {
       </div>
     )
   }
+  const long = text.length > longText || text.split('\n').length > longLines
   return (
     <>
       <div className="data-head">
         <span>{label}</span>
-        {toggle}
+        <span className="data-head-actions">
+          {long && (
+            <button type="button" className="link-button data-toggle" onClick={() => setOpen(true)} title="Read all of it in a window of its own">
+              Open
+            </button>
+          )}
+          {toggle}
+        </span>
       </div>
       {formatted ? <div className="data">{body}</div> : body}
+      {open && <DataDialog label={label} text={text} markdown={markdown} onClose={() => setOpen(false)} />}
     </>
+  )
+}
+
+// How long a content is, in characters or lines, before Open offers to read
+// it in a dialog, as a panel shows only so much of it.
+const longText = 400
+const longLines = 8
+
+// A labelled content in full, as wide as a dialog, formatted as it is where
+// it was opened from. It goes in the page's body, so the panel it was opened
+// from doesn't cut it to its own height, and its keys and clicks stay its
+// own, so Escape closes it and not the panel under it.
+function DataDialog({ label, text, markdown, onClose }: { label: ReactNode; text: string; markdown: boolean; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const dialog = ref.current
+    if (!dialog) return
+    dialog.showModal()
+    return () => dialog.close()
+  }, [])
+  return createPortal(
+    <dialog
+      ref={ref}
+      className="data-dialog"
+      // React hands a dialog's close up to the dialogs it was opened in,
+      // such as a review's, which would close with it.
+      onClose={(e) => {
+        e.stopPropagation()
+        onClose()
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (e.target === ref.current) onClose()
+      }}
+    >
+      <header>
+        <h2>{label}</h2>
+        <button type="button" className="panel-close" onClick={onClose} aria-label="Close" title="Close">
+          ×
+        </button>
+      </header>
+      <Data text={text} markdown={markdown} />
+    </dialog>,
+    document.body,
   )
 }
 
@@ -59,26 +124,31 @@ function held(v: Json): Json {
   return v
 }
 
-// Lines that only Markdown starts with: headings, list items, quotes, fences
-// and table rules.
-const markdownLine = /^(#{1,6} \S|\s*[-*+] \S|\s*\d+[.)] \S|> |```|\|?\s*:?-{3,}:?\s*\|)/m
-// Inline marks: bold, links and code.
-const markdownInline = /\*\*\S[^*\n]*\*\*|\[[^\]\n]+\]\([^)\s]+\)|`[^`\n]+`/g
-
-// Whether the text reads as Markdown: a heading, list, quote, fence or table,
-// or a few inline marks, so a stray asterisk or backtick doesn't count.
-function isMarkdown(text: string): boolean {
-  return markdownLine.test(text) || (text.match(markdownInline)?.length ?? 0) >= 2
+// Text, rendered as Markdown when it is a field typed so or reads as it.
+function Text({ text, markdown = false }: { text: string; markdown?: boolean }) {
+  if (!markdown && !isMarkdown(text)) return <span className="data-text">{text}</span>
+  return <MarkdownText text={text} />
 }
 
-function Text({ text }: { text: string }) {
-  if (!isMarkdown(text)) return <span className="data-text">{text}</span>
+// How Markdown a run or a person wrote is rendered: links open in a tab of
+// their own, and an image is a link to it rather than loaded, since loading
+// it would have whoever reads an agent's output fetch whatever address the
+// agent wrote, past the hosts its project allows (egress.go). Raw HTML is
+// never rendered, as react-markdown leaves it out.
+const markdownComponents: Components = {
+  a: ({ node: _, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+  img: ({ src, alt }) => (
+    <a href={typeof src === 'string' ? src : undefined} target="_blank" rel="noreferrer">
+      {alt ? `Image: ${alt}` : 'Image'}
+    </a>
+  ),
+}
+
+// Markdown text rendered, as content shows it.
+export function MarkdownText({ text }: { text: string }) {
   return (
     <div className="data-markdown">
-      <Markdown
-        remarkPlugins={[remarkGfm]}
-        components={{ a: ({ node: _, ...props }) => <a {...props} target="_blank" rel="noreferrer" /> }}
-      >
+      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
         {text}
       </Markdown>
     </div>
@@ -125,9 +195,11 @@ function unwrap(v: Json, depth: number): Json {
   return v
 }
 
-function Value({ value }: { value: Json }) {
+// A value, which markdown says is held by a field typed Markdown.
+function Value({ value, markdown = false }: { value: Json; markdown?: boolean }) {
+  const typed = useContext(MarkdownFields)
   if (value === null) return <span className="data-scalar">null</span>
-  if (typeof value === 'string') return value === '' ? <span className="data-scalar">(empty)</span> : <Text text={value} />
+  if (typeof value === 'string') return value === '' ? <span className="data-scalar">(empty)</span> : <Text text={value} markdown={markdown} />
   if (typeof value !== 'object') return <span className="data-scalar">{String(value)}</span>
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="data-scalar">(none)</span>
@@ -136,7 +208,7 @@ function Value({ value }: { value: Json }) {
         <ul className="data-list">
           {value.map((e, i) => (
             <li key={i}>
-              <Value value={e} />
+              <Value value={e} markdown={markdown} />
             </li>
           ))}
         </ul>
@@ -146,7 +218,7 @@ function Value({ value }: { value: Json }) {
       <ol className="data-items">
         {value.map((e, i) => (
           <li key={i}>
-            <Value value={e} />
+            <Value value={e} markdown={markdown} />
           </li>
         ))}
       </ol>
@@ -159,10 +231,10 @@ function Value({ value }: { value: Json }) {
       {entries.map(([k, e]) => (
         // A value beside its name; one with fields of its own, or a text to
         // read, under it.
-        <div key={k} className={isNested(e) || isProse(e) ? 'data-wide' : undefined}>
+        <div key={k} className={isNested(e) || isProse(e, typed.has(k)) ? 'data-wide' : undefined}>
           <dt>{k}</dt>
           <dd>
-            <Value value={e} />
+            <Value value={e} markdown={typed.has(k)} />
           </dd>
         </div>
       ))}
@@ -173,10 +245,10 @@ function Value({ value }: { value: Json }) {
 // How long a line of text may be and still show beside its name.
 const shortText = 160
 
-// Whether the value is a text to read rather than a value: lines, Markdown or
-// a long line.
-function isProse(v: Json): boolean {
-  return typeof v === 'string' && (v.includes('\n') || v.length > shortText || isMarkdown(v))
+// Whether the value is a text to read rather than a value: lines, Markdown, a
+// field typed Markdown or a long line.
+function isProse(v: Json, markdown: boolean): boolean {
+  return typeof v === 'string' && v !== '' && (markdown || v.includes('\n') || v.length > shortText || isMarkdown(v))
 }
 
 // Whether the value holds fields of its own, as an object or a list of them.

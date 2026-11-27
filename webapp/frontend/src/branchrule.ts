@@ -18,7 +18,8 @@ export function slug(name: string): string {
 // The values runs start with, by the top board's objects: what a run is
 // given (an object no process generates), the record a shared struct's copy
 // picks or follows, or the one a run was started on. Each attribute holding
-// text or a number is one; an object without attributes is one whole.
+// text or a number is one, but Markdown, a text to read; an object without
+// attributes is one whole.
 // People and lists hold no one value.
 export function branchValues(objects: FlowObject[], links: Link[]): BranchValue[] {
   const generated = new Set(links.filter((l) => l.direction === 'output').map((l) => l.object))
@@ -38,7 +39,7 @@ export function branchValues(objects: FlowObject[], links: Link[]): BranchValue[
       continue
     }
     for (const a of o.attributes) {
-      if (a.file || a.type === 'boolean' || a.type === 'datetime') continue
+      if (a.file || a.type === 'boolean' || a.type === 'datetime' || a.type === 'markdown') continue
       values.push({ insert: `{@${slug(o.name)}.${slug(a.name)}}`, label: `${o.name}.${a.name}`, hint })
     }
   }

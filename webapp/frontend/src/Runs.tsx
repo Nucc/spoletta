@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Data } from './Data'
+import { Data, MarkdownFields } from './Data'
 import {
   fileUrl,
   getStepMessages,
@@ -410,7 +410,11 @@ export function RunPanel({
   // items' runs with it, else, for a run from before the proxy counted, what
   // its agents' replies said.
   const spent = run.spent > 0 ? run.spent : (totalUsage(run.steps)?.cost ?? 0)
-  return (
+  // The fields its version types Markdown, rendered as such in what its
+  // steps took and handed back, the same set while the run refreshes.
+  const markdownKey = (run.markdown ?? []).join('\n')
+  const markdown = useMemo(() => new Set(markdownKey === '' ? [] : markdownKey.split('\n')), [markdownKey])
+  const aside = (
     // Escape in a field, such as a review's instructions, leaves the run open.
     <aside
       ref={panel}
@@ -562,6 +566,7 @@ export function RunPanel({
       )}
     </aside>
   )
+  return <MarkdownFields.Provider value={markdown}>{aside}</MarkdownFields.Provider>
 }
 
 // A run can be re-run from a step's process once it ended, unless the step

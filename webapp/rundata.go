@@ -66,8 +66,11 @@ const dataChunk = 500
 // were searched by.
 type dataResult struct {
 	Objects []dataObject `json:"objects"`
-	Rows    []dataRow    `json:"rows"`
-	Facets  []facet      `json:"facets"`
+	// The fields typed Markdown on the flow's boards, at any depth, which
+	// the page renders as such; see attribute_types.go.
+	Markdown []string  `json:"markdown"`
+	Rows     []dataRow `json:"rows"`
+	Facets   []facet   `json:"facets"`
 	// How many runs the search matched among how many it read, and whether
 	// the flow has more runs than a search reads.
 	Matched   int  `json:"matched"`
@@ -86,6 +89,9 @@ func flowData(ctx context.Context, db *sql.DB, flow int64, query, sortBy string)
 		return dataResult{}, err
 	}
 	out := dataResult{Objects: objects, Rows: []dataRow{}, Facets: []facet{}}
+	if out.Markdown, err = flowMarkdown(ctx, db, flow); err != nil {
+		return dataResult{}, err
+	}
 	var runs []dataRow
 	err = scanAll(ctx, db, "SELECT "+runColumns+" FROM runs WHERE flow_id = ? ORDER BY id DESC LIMIT ?",
 		func(r *sql.Rows) error {

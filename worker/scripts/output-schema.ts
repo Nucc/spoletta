@@ -159,6 +159,7 @@ const specs: Record<string, Spec> = {
 					attr("ratio", { type: "number" }),
 					attr("valid", { type: "boolean", description: "Whether it holds" }),
 					attr("taken", { type: "datetime", description: "When" }),
+					attr("report", { type: "markdown", description: "Text in Markdown. What was found" }),
 					attr("raw", { description: "Anything" }),
 					attr("unknown", { type: "colour" }),
 				],

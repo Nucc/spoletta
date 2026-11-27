@@ -25,6 +25,7 @@ import {
   type TaskStruct,
 } from './api'
 import { type Json } from './Data'
+import { isMarkdown, plainText } from './markdown'
 import {
   AlertIcon,
   ExternalIcon,
@@ -541,6 +542,7 @@ export default function TaskBoardPage({ id }: { id: number }) {
           struct={struct}
           tab={opened.tab}
           fields={column.cards.fields}
+          markdown={new Set(column.cards.markdown ?? [])}
           states={column.cards.states}
           record={opened.record}
           state={stateOf(column)}
@@ -590,12 +592,14 @@ function textOf(v: Json | undefined): string | null {
   return null
 }
 
-// Any field's value as a card shows it: as textOf says, a list as its
-// number of items, fields as JSON; nothing for none.
-function shownOf(v: Json | undefined): string | null {
+// Any field's value as a card shows it: as textOf says, but Markdown, a
+// field typed so or text reading as it, as the text it reads as; a list as
+// its number of items, fields as JSON; nothing for none.
+function shownOf(v: Json | undefined, markdown: boolean): string | null {
   if (v === undefined || v === null) return null
   if (Array.isArray(v)) return v.length === 0 ? null : `${v.length} ${v.length === 1 ? 'item' : 'items'}`
   if (typeof v === 'object') return JSON.stringify(v)
+  if (typeof v === 'string' && (markdown || isMarkdown(v))) return plainText(v) || null
   return textOf(v)
 }
 
@@ -1036,7 +1040,9 @@ function Card({
   const idField = card.key || cards.key
   const id = textOf(content[idField]) ?? key
   const href = card.url ? linkOf(textOf(content[card.url])) : null
-  const [title, ...rest] = card.fields.filter((f) => f !== idField).map((f) => [f, shownOf(content[f])] as const)
+  const [title, ...rest] = card.fields
+    .filter((f) => f !== idField)
+    .map((f) => [f, shownOf(content[f], cards.markdown?.includes(f) ?? false)] as const)
   const heading = title?.[1] ?? null
   const run = card.run && record.run !== null
   const look = work ? ` ${work.status}` : ''

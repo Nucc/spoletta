@@ -151,7 +151,7 @@ export function BlocksHint() {
 
 // What the board shows a tip about: what is selected, or what a link is
 // being drawn from.
-export type BoardTip = 'process' | 'object' | 'note' | 'input' | 'output' | 'connection' | 'state' | 'several' | 'struct'
+export type BoardTip = 'process' | 'object' | 'note' | 'input' | 'output' | 'connection' | 'reference' | 'state' | 'several' | 'struct'
 
 // The tip for what is selected or being drawn, if any.
 export function BoardTips({ tip }: { tip: BoardTip | null }) {
@@ -177,7 +177,8 @@ const TIPS: Record<BoardTip, ReactNode> = {
       Double-click an object to give it attributes, which agents generating it reply with as JSON, and right-click it to rename it, add
       states and more. Unfold it
       with its magnifier to build what it is made of: attributes and parts that are objects of their own, nested in what it holds. In its
-      settings, pick an object it specializes, whose fields it has too.
+      settings, pick an object it specializes, whose fields it has too. Drag an object holding a reference, such as a pull request’s
+      ticket, onto a copy of the struct it refers to, to have that copy be the record it names.
     </>
   ),
   note: (
@@ -205,6 +206,13 @@ const TIPS: Record<BoardTip, ReactNode> = {
     <>
       The process it leads to runs right after, or once it fails, instead. Press Delete to remove it; drag its segments to route it, and
       double-click it to reset its route.
+    </>
+  ),
+  reference: (
+    <>
+      In each run, the object the line points at is the record the other’s attribute names, such as the ticket a pull request is for: every
+      process linked to it gets that record, and one changing it changes that record. Another copy of the struct, with no line, is a record
+      of its own. Press Delete to remove the line; drag an object onto another to draw one.
     </>
   ),
   state: <>Drop it on a process that takes the object in this state: the process runs when the object enters it.</>,

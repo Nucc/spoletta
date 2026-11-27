@@ -5,6 +5,7 @@ import { AggregationIcon, ExhibitionIcon, GeneralizationIcon, TableIcon, TrashIc
 import { pickText } from './ObjectNode'
 import { quantityText, type Quantity } from './quantity'
 import QuantityInput from './QuantityInput'
+import { holdsReferences } from './references'
 import { fieldsOf, ownedBy, type Field } from './structure'
 import { openTab } from './tabs'
 import { Hint, useHelp } from './Hints'
@@ -132,9 +133,10 @@ export default function ObjectPanel({
   // record.
   // Or of one runs are given as they start: a plain object on the top
   // board, such as the ticket key a person enters.
+  // See references.ts, which the board's lines between them go by too.
   const references = shared && object?.source
     ? objects
-        .filter((o) => o.id !== id && o.parent === null && o.owner === null && (o.pick || (!o.shared && !o.human && !o.many)))
+        .filter((o) => o.id !== id && holdsReferences(o))
         .flatMap((o) => o.attributes.filter((a) => a.ref === object.source).map((a) => ({ object: o, attribute: a.name })))
     : []
   // Whether its attributes may refer to a shared struct's records: a
@@ -424,7 +426,10 @@ export default function ObjectPanel({
               (Run with inputs, the API, a webhook), it takes the {name} record that reference names too, such as
               the ticket a pull request is for, or the one whose key a person entered. Every process linked to {name} gets it,
               and a process taking and generating {name} changes it, failing if someone else moved it on meanwhile. Other
-              runs may follow the same record at once. A record naming none starts no run.
+              runs may follow the same record at once. A record naming none starts no run. On the board, a dashed line
+              tagged with the attribute leads from the object holding the reference to {name}; drag one onto the other
+              to draw it, and delete the line to stop following it. Another copy of the struct, with no line, is a record
+              of its own.
             </>,
           )}
           <select

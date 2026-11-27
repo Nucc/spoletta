@@ -59,6 +59,8 @@ import ObjectNode, {
 import ProcessNode, { KIND_LABELS, type ProcessNodeData, type ProcessNodeType } from './ProcessNode'
 import NoteNode, { type NoteNodeType } from './NoteNode'
 import NoteEdge from './NoteEdge'
+import ReferenceEdge from './ReferenceEdge'
+import { drawnReference, REFERENCE_PREFIX, referenceEdgeId, type DrawnReference, type ReferenceEnd } from './references'
 import ObjectPanel from './ObjectPanel'
 import ProcessPanel, { ReviewForm, type EntryObject, type QueryLink, type Review } from './ProcessPanel'
 import { settingGroups, type SettingNames } from './stepSettings'
@@ -234,10 +236,10 @@ import { HomeCrumb } from './Projects'
 import { currentProject, pageHash, replacePage } from './address'
 
 type FlowNode = ProcessNodeType | ObjectNodeType | StartNodeType | EndNodeType | NoteNodeType
-type FlowEdge = Edge<LinkEdgeData & { kind?: StructureKind }>
+type FlowEdge = Edge<LinkEdgeData & { kind?: StructureKind; attribute?: string }>
 
 const nodeTypes = { process: ProcessNode, object: ObjectNode, start: StartNode, end: EndNode, note: NoteNode }
-const edgeTypes = { link: LinkEdge, structure: StructureEdge, note: NoteEdge }
+const edgeTypes = { link: LinkEdge, structure: StructureEdge, note: NoteEdge, reference: ReferenceEdge }
 
 // The panel open on a flow's board, as its history entry keeps it: the
 // node's id, on the board and unfolded object it is on.
@@ -434,8 +436,18 @@ const pointerEdge = (note: string, target: string): FlowEdge => ({
   focusable: false,
 })
 
+// From the object holding a reference to the copy of a struct standing for
+// the record it names in each run; see references.ts.
+const referenceEdge = (holder: number, followed: number, attribute: string): FlowEdge => ({
+  id: referenceEdgeId(followed),
+  type: 'reference',
+  source: objectNodeId(holder),
+  target: objectNodeId(followed),
+  data: { attribute },
+})
+
 // From the whole to what makes it up, or from the general to what specializes it.
-const structureEdge = (source: number, target: number, kind: StructureKind): FlowEdge => ({
+const structureEdge =(source: number, target: number, kind: StructureKind): FlowEdge => ({
   id: `${STRUCTURE_PREFIX}${source}-${target}`,
   type: 'structure',
   source: objectNodeId(source),
@@ -943,6 +955,12 @@ export default function Board({
         ...ins.map((o) => boundaryEdge(objectNodeId(o), START_ID)),
         ...ends.map((o) => boundaryEdge(objectNodeId(o), END_ID)),
         ...(inner ? [] : own.filter((o) => o.end).map((o) => endEdge(o.id))),
+        // The references the top board's objects follow, from what holds each.
+        ...(inner
+          ? []
+          : own.flatMap((o) =>
+              o.follows && own.some((h) => h.id === o.follows?.object) ? [referenceEdge(o.follows.object, o.id, o.follows.attribute)] : [],
+            )),
         ...notes.flatMap((n) => {
           const target = pointedAt(n)
           return target !== null && shown.has(target) ? [pointerEdge(noteNodeId(n.id), target)] : []
@@ -1693,9 +1711,10 @@ export default function Board({
       tidyObject()
       return
     }
-    // Notes stay out of the layout, and move with what they point at.
+    // Notes stay out of the layout, and move with what they point at; a
+    // reference says which record an object is, not what comes after what.
     const nodes = getNodes().filter((n) => n.type !== 'note')
-    const links = edges.filter((e) => !e.id.startsWith(POINTER_PREFIX))
+    const links = edges.filter((e) => !e.id.startsWith(POINTER_PREFIX) && !e.id.startsWith(REFERENCE_PREFIX))
     const leads = links.some((e) => e.target === END_ID)
       ? []
       : nodes
@@ -1735,6 +1754,30 @@ export default function Board({
     return node?.type === 'process' && node.data.kind === 'human'
   }
 
+  // An object of the board as a reference's end: what the board loaded,
+  // with what its panel may have changed since.
+  const referenceEnd = (id: string): ReferenceEnd | null => {
+    const node = getNode(id)
+    const o = contents?.objects.find((x) => x.id === objectIdOf(id))
+    if (node?.type !== 'object' || !o) return null
+    const { shared, many, human, attributes } = node.data
+    return { ...o, shared, many, human, attributes, pick: node.data.pick ?? null }
+  }
+
+  // The reference a line dragged from one object onto another on a job
+  // flow's top board makes, either way round; null if none, or if the one
+  // following it follows it already. See references.ts.
+  const referenceDrawn = (from: string, onto: string): DrawnReference | null => {
+    if (boardId !== null || objectBoard || flow.module || flow.struct) return null
+    const a = referenceEnd(from)
+    const b = referenceEnd(onto)
+    const drawn = a && b ? drawnReference(a, b) : null
+    if (!drawn) return null
+    const followed = getNode(objectNodeId(drawn.followed))
+    const now = followed?.type === 'object' ? followed.data.follows : null
+    return now?.object === drawn.holder && drawn.attributes.includes(now.attribute) ? null : drawn
+  }
+
   // As in OPM, processes connect through objects: a process generates an
   // object, which another process takes as input. Either end can be one of
   // the object's states, except a human's link out: it goes to the object,
@@ -1757,6 +1800,9 @@ export default function Board({
       const node = getNode(source)
       return boardId === null && node?.type === 'object' && !node.data.human && stateOfHandle(sourceHandle) === null
     }
+    // An object dropped on another makes one follow a reference the other
+    // holds, such as the ticket a pull request names.
+    if (isObject(source) && isObject(target)) return referenceDrawn(source, target) !== null
     if (source === START_ID || isObject(source)) return isProcess(target)
     // A process dropped on another handles its failure, if it can fail: a
     // person's past its time limit.
@@ -1773,6 +1819,15 @@ export default function Board({
   const onConnect: OnConnect = async ({ source, target, sourceHandle, targetHandle }) => {
     if (isNote(source)) {
       pointNote(source, target)
+      return
+    }
+    // Through the first attribute that can; with several, the panel of the
+    // one following it opens on its picker, to choose another.
+    if (isObject(source) && isObject(target)) {
+      const drawn = referenceDrawn(source, target)
+      if (!drawn) return
+      const followed = objectNodeId(drawn.followed)
+      if ((await setFollows(followed, { object: drawn.holder, attribute: drawn.attributes[0] })) && drawn.attributes.length > 1) setPanelId(followed)
       return
     }
     try {
@@ -1815,9 +1870,16 @@ export default function Board({
   const [linkingTo, setLinkingTo] = useState<'process' | 'object' | null>(null)
   // Whether it is drawn from a state, which a tip explains.
   const [fromState, setFromState] = useState(false)
+  // While a line is drawn from an object, the objects it would make a
+  // reference with if dropped on them, which are outlined.
+  const [referring, setReferring] = useState<Set<string> | null>(null)
   const onConnectStart: OnConnectStart = (_, { nodeId, handleId, handleType }) => {
     if (!nodeId || isNote(nodeId)) return
     setFromState(stateOfHandle(handleId) !== null)
+    if (isObject(nodeId)) {
+      const onto = getNodes().filter((n) => n.type === 'object' && referenceDrawn(nodeId, n.id) !== null)
+      if (onto.length > 0) setReferring(new Set(onto.map((n) => n.id)))
+    }
     if (handleType === 'source') setLinkingTo(isProcess(nodeId) ? 'object' : 'process')
     else if (stateOfHandle(handleId) !== null) setLinkingTo('process')
   }
@@ -1830,6 +1892,7 @@ export default function Board({
   const onConnectEnd: OnConnectEnd = (event, { isValid, fromHandle }) => {
     setLinkingTo(null)
     setFromState(false)
+    setReferring(null)
     if (isValid || !fromHandle) return
     let sourceHandle = fromHandle.id ?? null
     if (fromHandle.type === 'target') {
@@ -1864,15 +1927,27 @@ export default function Board({
           ? updateObject(Number(e.id.slice(END_EDGE_PREFIX.length)), { end: false })
           : e.id.startsWith(LINK_PREFIX)
             ? deleteLink(Number(e.id.slice(LINK_PREFIX.length)))
-            : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length))),
+            : e.id.startsWith(REFERENCE_PREFIX)
+              ? unfollow(Number(e.id.slice(REFERENCE_PREFIX.length)))
+              : deleteConnection(Number(e.id.slice(CONNECTION_PREFIX.length))),
     )
     Promise.all(reqs)
       .then(() => queueHistory(() => recordHistory(flowId, client)))
       .then((h) => {
         held.current = h.held
-        if (!told) deleted(gone.length === 1 ? 'the link' : `${gone.length} links`)
+        if (!told) deleted(linksWord(gone))
       }, report)
   }
+
+  // An object no longer following the reference its line drew.
+  const unfollow = async (object: number) => {
+    await setObjectFollows(object, null)
+    updateObjectData(objectNodeId(object), { follows: null })
+  }
+
+  // The links deleted, as the board names them: a reference is one too.
+  const linksWord = (es: FlowEdge[]) =>
+    es.length === 1 ? (es[0].id.startsWith(REFERENCE_PREFIX) ? 'the reference' : 'the link') : `${es.length} links`
 
   const newProcess = (position: XYPosition, kind: ProcessKind = 'agent') =>
     createProcess({ flow: flowId, name: NEW_PROCESS, kind, prompt: '', script: '', model: '', thinking: '', parent: boardId, ...position })
@@ -2349,11 +2424,18 @@ export default function Board({
     }
   }
 
+  // Its line on the top board, from what holds the reference, goes with it.
   const setFollows = async (objectId: string, follows: ObjectFollow | null) => {
     if (readOnly) return false
     try {
-      await setObjectFollows(objectIdOf(objectId), follows)
+      const id = objectIdOf(objectId)
+      await setObjectFollows(id, follows)
       updateObjectData(objectId, { follows })
+      const drawn = follows !== null && boardRef.current === null && unfoldedRef.current === null && getNode(objectNodeId(follows.object))
+      setEdges((es) => [
+        ...es.filter((e) => e.id !== referenceEdgeId(id)),
+        ...(follows && drawn ? [referenceEdge(follows.object, id, follows.attribute)] : []),
+      ])
       return true
     } catch (err) {
       report(err)
@@ -3270,7 +3352,7 @@ export default function Board({
     if (doomed.size === 0 && links.length === 0) return false
     const deleteLinks = () => void (links.length > 0 && deleteElements({ edges: links }))
     if (doomed.size > 0) void removeNodes([...doomed], deleteLinks, links.length)
-    else void mayDelete(links.length === 1 ? 'the link' : `${links.length} links`, '').then((yes) => yes && deleteLinks())
+    else void mayDelete(linksWord(links), '').then((yes) => yes && deleteLinks())
   }
 
   // Closes what Escape closes first: a version's note being written, the
@@ -3606,6 +3688,7 @@ export default function Board({
       const e = pickedEdges[0]
       if (e.data?.link) return e.data.link.direction === 'input' ? 'input' : 'output'
       if (e.id.startsWith(CONNECTION_PREFIX)) return 'connection'
+      if (e.id.startsWith(REFERENCE_PREFIX)) return 'reference'
     }
     return structBoard && picked.length === 0 ? 'struct' : null
   })()
@@ -3652,7 +3735,7 @@ export default function Board({
   }, [nodes, edges])
   const shownNodes = useMemo(
     () =>
-      highlights.nodes.size === 0 && found.size === 0 && !focus
+      highlights.nodes.size === 0 && found.size === 0 && !focus && !referring
         ? nodes
         : nodes.map((n) => {
             const change = highlights.nodes.get(n.id)
@@ -3660,10 +3743,11 @@ export default function Board({
             const focused = focus && n.type !== 'note'
               ? focus.selected.has(n.id) ? undefined : focus.near.has(n.id) ? 'focus-near' : 'focus-dim'
               : undefined
-            if (!change && !match && !focused) return n
-            return { ...n, className: [n.className, change && `diff-${change}`, match, focused].filter(Boolean).join(' ') }
+            const refers = referring?.has(n.id) ? 'reference-target' : undefined
+            if (!change && !match && !focused && !refers) return n
+            return { ...n, className: [n.className, change && `diff-${change}`, match, focused, refers].filter(Boolean).join(' ') }
           }),
-    [nodes, highlights, found, foundAt, focus],
+    [nodes, highlights, found, foundAt, focus, referring],
   )
   // Where links run by default, clear of the nodes and of each other.
   const linkRoutes = useLinkRoutes(edges)

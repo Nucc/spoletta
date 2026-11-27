@@ -27,6 +27,7 @@ import QuantityLabel from './QuantityLabel'
 import EdgeLabel, { EdgeDimmed } from './EdgeLabel'
 import type { ObjectNodeType } from './ObjectNode'
 import type { ProcessNodeType } from './ProcessNode'
+import { referenceEnds, referenceHandle } from './references'
 import {
   lanesOf,
   moveSegment,
@@ -87,7 +88,7 @@ type Geometry = {
 }
 
 // Where React Flow puts a link's end on a handle: the middle of its outer side.
-function handleEnd(x: number, y: number, h: { x: number; y: number; width: number; height: number; position: Position }): End {
+export function handleEnd(x: number, y: number, h: { x: number; y: number; width: number; height: number; position: Position }): End {
   const [left, top] = [x + h.x, y + h.y]
   switch (h.position) {
     case Position.Top:
@@ -119,11 +120,13 @@ function geometryOf(s: ReactFlowState): Geometry {
 }
 
 // Routes the board's links, again whenever its nodes move or change size or
-// its links change.
+// its links change. References between objects are routed with them, from
+// the row of the attribute they go through into the top of the object
+// following it (referenceEnds), spread along it with the links there.
 export function useLinkRoutes(edges: Edge[]): Map<string, LinkRoute> {
   const geometry = useStore(geometryOf, (a, b) => a.key === b.key)
   const links = edges
-    .filter((e) => e.type === 'link')
+    .filter((e) => e.type === 'link' || e.type === 'reference')
     .map((e) => ({
       id: e.id,
       source: e.source,
@@ -131,6 +134,7 @@ export function useLinkRoutes(edges: Edge[]): Map<string, LinkRoute> {
       sourceHandle: e.sourceHandle ?? null,
       targetHandle: e.targetHandle ?? null,
       route: (e.data as LinkEdgeData | undefined)?.route ?? null,
+      attribute: e.type === 'reference' ? ((e.data as { attribute?: string } | undefined)?.attribute ?? '') : null,
     }))
   const linksKey = JSON.stringify(links)
   const before = useRef(new Map<string, LinkRoute>())
@@ -139,7 +143,16 @@ export function useLinkRoutes(edges: Edge[]): Map<string, LinkRoute> {
       const all = geometry.handles.get(node)?.[type] ?? []
       return (id === null ? all[0] : all.find((h) => h.id === id))?.end
     }
-    const ends: LinkEnds[] = links.flatMap((l) => {
+    const boxes = new Map(geometry.boxes.map((b) => [b.id, b]))
+    const ends = links.flatMap((l): LinkEnds[] => {
+      if (l.attribute !== null) {
+        const holder = boxes.get(l.source)
+        const followed = boxes.get(l.target)
+        if (!holder || !followed) return []
+        const along = handle(l.source, 'source', referenceHandle(l.attribute))
+        const [from, to] = referenceEnds(holder, followed, along, handle(l.target, 'target', null))
+        return [{ id: l.id, source: l.source, target: l.target, from, to, spreadFrom: false, spreadTo: true }]
+      }
       const from = handle(l.source, 'source', l.sourceHandle)
       const to = handle(l.target, 'target', l.targetHandle)
       if (!from || !to) return []

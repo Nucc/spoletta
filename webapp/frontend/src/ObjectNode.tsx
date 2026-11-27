@@ -1,10 +1,11 @@
 import { useContext, useEffect, useState } from 'react'
-import { Handle, Position, useNodeConnections, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useNodeConnections, useStore, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react'
 import { StructFlowsContext, useBoardActions } from './actions'
 import { pickStates, type ObjectAttribute, type ObjectFollow, type ObjectPick, type ObjectState, type Relation } from './api'
 import { AggregationIcon, DatabaseIcon, ExhibitionIcon, GearIcon, HumanIcon, ObjectIcon, TrashIcon, ZoomInIcon } from './icons'
 import { AppendButton, NameInput, Subtitle } from './ProcessNode'
 import { quantityText, type Quantity } from './quantity'
+import { REFERENCE_PREFIX, referenceHandle } from './references'
 import WidthResizer from './WidthResizer'
 
 export type ObjectNodeData = {
@@ -88,12 +89,25 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
   const actions = useBoardActions()
   const structs = useContext(StructFlowsContext)
   const draft = id.startsWith('draft-')
-  const leaf = useNodeConnections({ handleType: 'source' }).length === 0
+  // A reference it holds leads to no process.
+  const leaf = useNodeConnections({ handleType: 'source' }).every((c) => c.edgeId.startsWith(REFERENCE_PREFIX))
+  // The attributes the references it holds go through, whose rows lead to
+  // their lines.
+  const referred = useStore((s) =>
+    [...(s.connectionLookup.get(`${id}-source`)?.values() ?? [])]
+      .filter((c) => c.edgeId.startsWith(REFERENCE_PREFIX))
+      .map((c) => (s.edgeLookup.get(c.edgeId)?.data as { attribute?: string } | undefined)?.attribute ?? '')
+      .join('\n'),
+  )
   const updateNodeInternals = useUpdateNodeInternals()
   const stateKey = data.states.map((s) => `${s.id}:${s.name}`).join() + (data.addingState ? '+' : '')
+  const attributeKey = data.attributes.map((a) => `${a.id}:${a.name}:${a.ref ?? ''}`).join()
+  const plain = data.attributes.filter((a) => a.ref === undefined)
+  const referring = data.attributes.filter((a) => a.ref !== undefined)
 
-  // Each state has its own handles, which move as states come and go.
-  useEffect(() => updateNodeInternals(id), [id, stateKey, updateNodeInternals])
+  // Each state, and each attribute referring to another struct, has its own
+  // handles, which move as they come and go.
+  useEffect(() => updateNodeInternals(id), [id, stateKey, attributeKey, updateNodeInternals])
 
   return (
     <div
@@ -188,15 +202,22 @@ export default function ObjectNode({ id, data, selected, width }: NodeProps<Obje
         </div>
       )}
       {data.attributes.length > 0 && (
-        <div className="object-attributes" title="Attributes: what an agent generating this object replies with">
-          <ExhibitionIcon />
-          <ul>
-            {data.attributes.map((a) => (
-              <li key={a.id} title={a.definition || undefined}>
-                {a.name}
-              </li>
-            ))}
-          </ul>
+        <div className="object-attributes attribute-rows" title="Attributes: what an agent generating this object replies with">
+          {plain.length > 0 && (
+            <div className="attribute-row">
+              <ExhibitionIcon />
+              <ul>
+                {plain.map((a) => (
+                  <li key={a.id} title={a.definition || undefined}>
+                    {a.name}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {referring.map((a) => (
+            <ReferenceRow key={a.id} attribute={a} leading={referred.split('\n').includes(a.name)} />
+          ))}
         </div>
       )}
       {data.parts && data.parts.length > 0 && (
@@ -281,6 +302,23 @@ function StatePill({
         )}
       </span>
       {linkedOut && <span className="state-leader" />}
+    </div>
+  )
+}
+
+// An attribute referring to another struct's records, such as a pull
+// request's ticket, on a row of its own as a state is, so the line of a
+// reference through it (ReferenceEdge.tsx) leaves from the handle on its
+// right, on the object's edge, which a light dotted line leads to while it
+// does. The handle shows nothing and takes no links: dropping one object on
+// the other draws a reference.
+function ReferenceRow({ attribute, leading }: { attribute: ObjectAttribute; leading: boolean }) {
+  return (
+    <div className="attribute-row reference-row" title={attribute.definition || undefined}>
+      <Handle type="source" position={Position.Right} id={referenceHandle(attribute.name)} isConnectable={false} />
+      <ExhibitionIcon />
+      <span className="reference-attribute">{attribute.name}</span>
+      {leading && <span className="attribute-leader" />}
     </div>
   )
 }

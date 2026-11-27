@@ -589,7 +589,12 @@ repositories:
     meanwhile, as with a picked one. A followed record isn't held: runs of
     several pull requests of one ticket go at once, and the one moving it
     second fails rather than undo the first. A picked record naming no
-    ticket, or one no record holds, starts no run.
+    ticket, or one no record holds, starts no run. The board draws it as a
+    dashed line from the Pull Request's `ticket` row into the top of the
+    Ticket, tagged `ticket`, so
+    another Ticket copy beside it, with no line (say a `New Ticket` a
+    process makes), is told apart as a ticket of its own; drag one object
+    onto the other to draw the line, and delete it to stop following.
   - A job flow's own object on its top board can refer too: an attribute
     with `ref: Ticket`, such as the `key` of an `Entered ticket` a run is
     given as it starts (Run with inputs, `/v1`, a webhook). A key naming
